@@ -3969,6 +3969,77 @@ describe('swarm cards', () => {
     } finally { await session.stop() }
   })
 
+  it('a Swarm tab with no project open still takes the dial into that Swarm: a focus with no Lead, again after away and back', async () => {
+    const state = { cards: [card('st1')], open: null as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      state.open = { superTabId: 'st1', projectId: '', fromDevice: false }
+      await session.syncSwarmCards(true)
+      expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: '' }])
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      expect(ofType(port, 'supertab.focus')).toHaveLength(1)   // the same Swarm: not again
+      state.open = null
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      state.open = { superTabId: 'st1', projectId: '', fromDevice: false }
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(2), NEXT_TICKS)
+      // A project opened on it later is a change, and names its Lead.
+      state.open = { superTabId: 'st1', projectId: 'proj2', fromDevice: false }
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(3), NEXT_TICKS)
+      expect(ofType(port, 'supertab.focus')[2]).toEqual({ t: 'supertab.focus', tab: 'st1', lead: 'lead2' })
+    } finally { await session.stop() }
+  })
+
+  it('a Swarm the list does not hold yet sends no focus at all, and is entered when it arrives', async () => {
+    const state = { cards: [] as SwarmCard[], open: { superTabId: 'st1', projectId: '', fromDevice: false } }
+    const { session, port } = await connect(cardHost(state))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertabs')).toHaveLength(1))
+      expect(ofType(port, 'supertab.focus')).toEqual([])
+      state.cards = [card('st1')]
+      void session.syncSwarmCards()
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toEqual([{ t: 'supertab.focus', tab: 'st1', lead: '' }]), NEXT_TICKS)
+    } finally { await session.stop() }
+  })
+
+  it('logs why each Swarm focus was or was not sent, once per change', async () => {
+    const lines: string[] = []
+    const state = { cards: [] as SwarmCard[], open: null as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const { session, port } = await connect(cardHost(state, { log: (l) => lines.push(l) }))
+    const focusLines = () => lines.filter((l) => l.startsWith('cable: swarm focus'))
+    try {
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertabs')).toHaveLength(1))
+      expect(focusLines()).toEqual(['cable: swarm focus · not a Swarm tab'])
+      state.open = { superTabId: 'st1', projectId: 'proj2', fromDevice: false }
+      await session.syncSwarmCards(true)
+      await session.syncSwarmCards(true)   // the same answer again is not logged again
+      expect(focusLines()).toEqual(['cable: swarm focus · not a Swarm tab', 'cable: swarm focus st1/proj2 · held: no such Swarm in the list'])
+      state.cards = [card('st1', [lead(1)])]
+      await session.syncSwarmCards(true)
+      expect(focusLines().at(-1)).toBe('cable: swarm focus st1/proj2 · held: no Lead for that project')
+      state.cards = [card('st1')]
+      await session.syncSwarmCards(true)
+      expect(focusLines().at(-1)).toBe('cable: swarm focus st1/proj2 → lead2')
+      void session.syncSwarmCards()
+      await new Promise((r) => setTimeout(r, 450))
+      expect(focusLines().at(-1)).toBe('cable: swarm focus st1/proj2 · already sent')
+      state.open = { superTabId: 'st1', projectId: '', fromDevice: false }
+      await session.syncSwarmCards(true)
+      expect(focusLines().at(-1)).toBe('cable: swarm focus st1 (no project) → its Leads')
+      state.open = null
+      await session.syncSwarmCards(true)
+      expect(focusLines().at(-1)).toBe('cable: swarm focus · not a Swarm tab')
+      expect(focusLines()).toHaveLength(7)
+    } finally { await session.stop() }
+  })
+
   it('a project the list does not hold yet is followed when the list arrives', async () => {
     const state = { cards: [] as SwarmCard[], open: { superTabId: 'st1', projectId: 'proj1', fromDevice: false } }
     const { session, port } = await connect(cardHost(state))

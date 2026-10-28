@@ -151,6 +151,11 @@ int main(void) {
     assert(focus_calls==1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2"));
     feed(handle_supertab_focus,"{\"tab\":\"s1\"}");
     assert(focus_calls==1);
+    // An empty Lead is the window on that Swarm with no project open: still a focus, for the Swarm.
+    feed(handle_supertab_focus,"{\"tab\":\"s1\",\"lead\":\"\"}");
+    assert(focus_calls==2 && !strcmp(got_tab,"s1") && !got_lead[0]);
+    feed(handle_supertab_focus,"{\"tab\":\"\",\"lead\":\"\"}");
+    assert(focus_calls==2);
 
     // A Super Tab wait goes to ui_supertab_wait, never to the question screen, and beeps only when the UI says so.
     feed_agent(handle_question,"{\"agentId\":\"h1\",\"name\":\"Lead\",\"id\":\"supertab:a1\",\"questions\":[{\"q\":\"Ship it?\"}],"

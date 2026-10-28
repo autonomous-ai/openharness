@@ -6,6 +6,7 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'project_github.dart';
 import 'project_visibility.dart';
 import 'roles_editor.dart';
 
@@ -56,6 +57,11 @@ Future<void> showProjectAction(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // Whether teammates' agents can push to its repository, and what to do about it.
+                      if (action == 'details') ...[
+                        ProjectGitHubAccess(controller: c, projectId: project.id),
+                        const SizedBox(height: 16),
+                      ],
                       if (action == 'rename')
                         TextFormField(
                           autofocus: true,

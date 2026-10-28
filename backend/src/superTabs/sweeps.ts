@@ -106,7 +106,7 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
       await swarmTransaction(db, async tx => {
         await guardedWrite(tx, head.tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version, data: { ...data, invitations: kept },
           head: { groupCounter: head.groupCounter, visibilityEpoch: head.visibilityEpoch, sequenceBase: head.sequenceBase } }, clock.next())
-        const row = await tx.superTab.findUniqueOrThrow({ where: { id: head.tabId } })
+        const row = await tx.superTab.findUniqueOrThrow({ where: { id: head.tabId }, select: { revision: true } })
         const updated = await tx.superTab.updateMany({ where: { id: head.tabId, revision: row.revision },
           data: { revision: row.revision + 1, invitedEmails: kept.map(i => i.email) } })
         if (!updated.count) throw new PartConflict('head', 'index')

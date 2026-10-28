@@ -31,6 +31,8 @@ export interface DecisionDraft extends Question {
 /** The decision `decision.answer` names, read from SuperTabDecision by the store. */
 export interface DecisionTarget {
   id: string; personId: string; conversationId: string; askerAgentId: string; question: string; options: string[]; answeredAt: number | null
+  /** When it was asked, and the task whose needs_human asked it: the leaderboard credits the answer (leaderboard/record.ts). */
+  createdAt: number; assignmentId: string | null
 }
 export interface DecisionAnswer { id: string; choice: number; note: string | null }
 
@@ -128,8 +130,9 @@ export async function fullFor(tx: Tx, tabId: string, ask: Parameters<typeof repe
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
-    select: { id: true, personId: true, conversationId: true, askerAgentId: true, question: true, options: true, answeredAt: true } })
-  return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null } : undefined
+    select: { id: true, personId: true, conversationId: true, askerAgentId: true, question: true, options: true, answeredAt: true, createdAt: true,
+      assignmentId: true } })
+  return row ? { ...row, answeredAt: row.answeredAt?.getTime() ?? null, createdAt: row.createdAt.getTime(), assignmentId: row.assignmentId ?? null } : undefined
 }
 
 /** Conflicts with a concurrent answer of the same decision: only the first one counts. */

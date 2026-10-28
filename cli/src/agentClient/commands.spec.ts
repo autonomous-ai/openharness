@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
@@ -1955,5 +1955,168 @@ describe('harness tell', () => {
     new Ledger(ledgerPath(dir)).append({ at: NOW - 11 * 60_000, by: { machineId: 'm', agentId: 'lead' }, told: { machineId: 'm', agentId: 'kid' }, probe: 'Old.' })
     expect(await showCommand(['kid'], mcp.deps)).toBe(EXIT.ok)
     expect(mcp.out.join('\n')).toContain('Next: harness_tell (name: "kid", text: "<work>")')
+  })
+})
+
+describe('harness watch', () => {
+  const cloud = (id: string, state: string, over: Partial<Frame> = {}) => frame(id, {
+    engine: 'devin-cloud', location: 'cloud', tmuxPane: null, project: null, sessionId: id,
+    activity: { state: state === 'working' || state === 'starting' ? 'working' : 'idle' },
+    cloud: { state, links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] }, ...over,
+  })
+  /** Each round's frame and transcript, one per look; the last stays. */
+  const script = (d: FakeDaemon, rounds: Array<{ frame: Frame; said?: Array<{ from: string; text: string }> }>) => {
+    let at = 0
+    const now = () => rounds[Math.min(at, rounds.length - 1)]
+    d.extra.agents_list = (payload) => {
+      const f = now().frame
+      return { agents: payload.includeStopped || f.status !== 'stopped' ? [f] : [] }
+    }
+    d.extra.cloud_transcript = () => ({ messages: (now().said ?? []).map((m, i) => ({ id: String(i), at: '', ...m })) })
+    return () => { at++ }
+  }
+  const lines = (out: string[]) => out.map((l) => JSON.parse(l) as Record<string, unknown>)
+
+  it('follows a cloud harness: one line a change, its question and its answer, until it stops (exit 4)', async () => {
+    const d = new FakeDaemon()
+    const asked = [{ from: 'person', text: 'add a slugify helper' }]
+    const question = [...asked, { from: 'agent', text: 'Question: kebab or snake case?' }]
+    const answer = [...question, { from: 'person', text: 'kebab' }, { from: 'agent', text: 'Summary: added slugify with tests.' }]
+    const next = script(d, [
+      { frame: cloud('devin', 'starting', { updatedAt: '1' }) },
+      { frame: cloud('devin', 'working', { updatedAt: '2' }), said: asked },
+      { frame: cloud('devin', 'working', { updatedAt: '2' }), said: asked },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '3' }), said: question },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '3' }), said: question },
+      { frame: cloud('devin', 'working', { updatedAt: '4' }), said: [...question, { from: 'person', text: 'kebab' }] },
+      { frame: cloud('devin', 'idle', { updatedAt: '5' }), said: answer },
+      { frame: cloud('devin', 'idle', { updatedAt: '5' }), said: answer },
+      { frame: cloud('devin', 'stopped', { updatedAt: '6', status: 'stopped' }), said: answer },
+    ])
+    const h = harness(d, { sleep: async () => { h.advance(1_000); next() } })
+    expect(await watchCommand(['devin', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['started', 'working', 'needs_person', 'working', 'done', 'stopped'])
+    expect(said[2]).toMatchObject({ name: 'devin', agent: 'devin-cloud', state: 'needs-input', question: 'Question: kebab or snake case?', truncated: false,
+      cloud: { state: 'needs_input' }, links: [{ label: 'Session', url: 'https://app.devin.ai/sessions/1' }] })
+    expect(said[3]).toMatchObject({ event: 'working', ask: 'kebab' })
+    expect(said[4]).toMatchObject({ event: 'done', state: 'idle', summary: 'Summary: added slugify with tests.' })
+    expect(said[0].at).toBe(new Date(NOW).toISOString())
+    // Read no screen, and the transcript only when the frame moved (the stopped line reads its last answer).
+    expect(d.requests.some((r) => r.type === 'agent_close' || r.type === 'session_get')).toBe(false)
+    expect(d.requests.filter((r) => r.type === 'cloud_transcript').length).toBe(5)
+    expect(said[5]).toMatchObject({ event: 'stopped', summary: 'Summary: added slugify with tests.' })
+  })
+
+  it('says a second question as a new line, in the same state', async () => {
+    const d = new FakeDaemon()
+    const first = [{ from: 'person', text: 'go' }, { from: 'agent', text: 'Which repo?' }]
+    const second = [...first, { from: 'person', text: 'lamp' }, { from: 'agent', text: 'Which branch?' }]
+    const next = script(d, [
+      { frame: cloud('devin', 'needs_input', { updatedAt: '1' }), said: first },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '2' }), said: second },
+    ])
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); next() } })
+    expect(await watchCommand(['devin', '--json', '--timeout', '5s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => l.question)).toEqual(['Which repo?', 'Which branch?'])
+  })
+
+  it('follows a harness here by wait\'s looks: working, a question on its screen, then done on two idle looks', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: 'fix the test' }), ev('tool_start'), ev('tool_end'), ev('text_delta', { content: 'Fixed: 12 passed.' })], hasMore: false }])
+    let round = 0
+    const h = harness(d, { sleep: async (ms) => {
+      h.advance(ms)
+      round++
+      // Its screen: a question, then a draft (about to work again), then idle.
+      if (round === 2) { d.frames = [frame('kid')]; d.screens.set('kid', ['needs_input', 'draft', 'idle']) }
+    } })
+    expect(await watchCommand(['kid', '--json', '--timeout', '8s'], h.deps)).toBe(EXIT.timeout)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'needs_person', 'working', 'done'])
+    expect(said[0]).toMatchObject({ state: 'working', ask: 'fix the test' })
+    expect(said[1]).toMatchObject({ state: 'needs-input', question: 'Fixed: 12 passed.' })
+    expect(said[3]).toMatchObject({ state: 'idle', summary: 'Fixed: 12 passed.', tools: 1 })
+  })
+
+  it('says idle, not done, for a harness with nothing asked of it, once it is past its start', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('new', { createdAt: '2026-10-11T11:00:00Z' })]
+    const h = harness(d)
+    expect(await watchCommand(['new', '--json', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => l.event)).toEqual(['idle'])
+  })
+
+  it('prints a line a change for a person, and ends at --timeout while it still works', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: 'build it' })], hasMore: false }])
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--timeout', '10s'], h.deps)).toBe(EXIT.timeout)
+    expect(h.out).toEqual(['12:00:00Z kid: working: asked: build it'])
+  })
+
+  it('says stopped and exits 4 for a harness gone while it was watched', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); d.frames = [] } })
+    expect(await watchCommand(['kid', '--json'], h.deps)).toBe(EXIT.stopped)
+    expect(lines(h.out).map((l) => l.event)).toEqual(['working', 'stopped'])
+  })
+
+  it('looks again after a round that timed out', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    let first = true
+    const real = d.request.bind(d)
+    d.request = async (type, payload) => {
+      if (type === 'agents_list' && first && d.requests.some((r) => r.type === 'agents_list')) { first = false; throw new AgentClientError('TIMEOUT', 'slow') }
+      return real(type, payload)
+    }
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '3s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out).map((l) => l.event)).toEqual(['working'])
+  })
+
+  it('keeps a cloud maker\'s state: a Devin that has only finished is needs_person, with its words and providerStatus (#1449)', async () => {
+    const d = new FakeDaemon()
+    const asked = [{ from: 'person', text: 'add a word counter' }]
+    const finished = [...asked, { from: 'agent', text: 'Summary: added it; all 3 tests pass.' }]
+    const next = script(d, [
+      { frame: cloud('devin', 'working', { updatedAt: '1', cloud: { state: 'working', providerStatus: { status: 'running', detail: 'working' } } }), said: asked },
+      { frame: cloud('devin', 'needs_input', { updatedAt: '2', cloud: { state: 'needs_input', providerStatus: { status: 'running', detail: 'waiting_for_user' } } }), said: finished },
+      { frame: cloud('devin', 'stopped', { updatedAt: '3', status: 'stopped', cloud: { state: 'stopped', providerStatus: { status: 'suspended', detail: 'inactivity' } } }), said: finished },
+    ])
+    const h = harness(d, { sleep: async (ms) => { h.advance(ms); next() } })
+    expect(await watchCommand(['devin', '--json'], h.deps)).toBe(EXIT.stopped)
+    const said = lines(h.out)
+    expect(said.map((l) => l.event)).toEqual(['working', 'needs_person', 'stopped'])
+    expect(said[1]).toMatchObject({ question: 'Summary: added it; all 3 tests pass.', cloud: { providerStatus: { status: 'running', detail: 'waiting_for_user' } } })
+    // Put to sleep after it finished: the stopped line still carries the answer.
+    expect(said[2]).toMatchObject({ state: 'stopped', summary: 'Summary: added it; all 3 tests pass.', cloud: { providerStatus: { status: 'suspended', detail: 'inactivity' } } })
+  })
+
+  it('says what the harness was asked without the line harness new puts before it', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { activity: { state: 'working' } })]
+    d.pages.set('s-kid', [{ events: [ev('user_message', { content: '[from Claude Code outside Harness · studio, the agent that started you. It reads your answer itself.]\n\nbuild it' })], hasMore: false }])
+    const h = harness(d)
+    expect(await watchCommand(['kid', '--json', '--timeout', '1s'], h.deps)).toBe(EXIT.timeout)
+    expect(lines(h.out)[0]).toMatchObject({ event: 'working', ask: 'build it' })
+  })
+
+  it('takes one name, a whole --chars and a duration', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('a'), frame('b')]
+    for (const [argv, said] of [
+      [[], 'Name the harness to watch.'],
+      [['a', 'b'], 'Watch one harness.'],
+      [['a', '--chars', '0'], '--chars takes a whole number.'],
+    ] as const) {
+      const h = harness(d)
+      expect(await watchCommand(argv, h.deps)).toBe(EXIT.usage)
+      expect(h.err[0]).toBe(said)
+    }
   })
 })

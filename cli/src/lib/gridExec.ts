@@ -21,11 +21,11 @@
  */
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
-import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath, gridChildEnv } from './gridBinary.js'
+import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath, gridChildEnv, gridCommand } from './gridBinary.js'
 
 // Which `grid` to run is gridBinary.ts's, which the core keeps for its launches; said again here for
 // every grid call that imports it from this module.
-export { GRID_BINARY, GRID_NO_UPDATE_CHECK_VAR, gridAvailable, gridBinaryPath, gridChildEnv, gridCliPresence, managedGridPath, type GridCliPresence } from './gridBinary.js'
+export { GRID_BINARY, GRID_NO_UPDATE_CHECK_VAR, gridAvailable, gridBinaryPath, gridChildEnv, gridCliPresence, gridCommand, managedGridPath, type GridCliPresence } from './gridBinary.js'
 
 /**
  * The oldest `grid` this daemon can drive.
@@ -100,7 +100,8 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
     return { code: 'GRID_CLI_MISSING', exitCode: 1, stdout: '', stderr: '', message: MISSING_MESSAGE }
   }
   return await new Promise<GridResult>((resolve) => {
-    const child = spawn(binary, [...args], { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
+    const command = gridCommand(binary, args)
+    const child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
     let stdout = ''
     let stderr = ''
     let settled = false

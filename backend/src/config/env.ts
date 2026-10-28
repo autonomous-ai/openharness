@@ -44,6 +44,11 @@ const envSchema = z.object({
   // Base internal port; each worker binds MESH_PORT_BASE + NODE_APP_INSTANCE (distinct per worker).
   MESH_PORT_BASE: z.string().default('8095').transform(Number),
 
+  // On SIGTERM the API answers /api/ready with 503 at once, then keeps serving this long before it closes its
+  // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
+  // Kubernetes sets it, with probes and grace period, as backend/README.md describes.
+  DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
+
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.
   TERMINAL_P2P_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),
@@ -252,6 +257,10 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(''),
   // The app's name in github.com/apps/NAME, for the install link a refusal gives. Optional.
   GITHUB_APP_SLUG: z.string().default(''),
+  // The app's own GitHub sign-in (its Client ID and a client secret), with which a person who can push to a repository
+  // approves it for a Swarm (github/approvals.ts). Unset, no repository can be approved and the app gives no token.
+  GITHUB_APP_CLIENT_ID: z.string().default(''),
+  GITHUB_APP_CLIENT_SECRET: z.string().default(''),
 
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.

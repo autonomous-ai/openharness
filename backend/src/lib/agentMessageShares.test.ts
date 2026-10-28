@@ -283,6 +283,26 @@ describe('agent message shares', () => {
     expect(p.agentMessageMember.upsert).not.toHaveBeenCalled()
   })
 
+  it('answers the invitation a racing identical invite just made, not a duplicate-key error', async () => {
+    p.agentMessageShare.findFirst.mockResolvedValue({ id: S, ownerMachineId: 'm1' })
+    p.agentMessageMember.count.mockResolvedValue(1); p.agentMessageInvite.count.mockResolvedValue(0)
+    p.agentMessageInvite.upsert.mockRejectedValueOnce(p2002()).mockResolvedValueOnce({ id: 'i-raced' })
+    expect(await inv()).toEqual({ id: 'i-raced' })
+    expect(p.agentMessageInvite.upsert).toHaveBeenCalledTimes(2)
+    p.agentMessageInvite.upsert.mockRejectedValue(new Error('down'))
+    await expect(inv()).rejects.toThrow('down')
+  })
+
+  it('answers the shared tab when a racing accept of the same invitation made the member first', async () => {
+    p.agentMessageShare.findFirst.mockResolvedValue({ id: S })
+    p.agentMessageInvite.findFirst.mockResolvedValue(row())
+    p.agentMessageMember.upsert.mockRejectedValueOnce(p2002()).mockResolvedValueOnce({})
+    expect(await accept({ sub: 'bob', email: 'bob@x.io', autonomousEnv: 'prod' }, 'i1', now)).toEqual({ sharedTabId: S })
+    expect(p.agentMessageMember.upsert).toHaveBeenCalledTimes(2)
+    p.agentMessageMember.upsert.mockRejectedValue(new Error('down'))
+    await expect(accept({ sub: 'bob', email: 'bob@x.io', autonomousEnv: 'prod' }, 'i1', now)).rejects.toThrow('down')
+  })
+
   it('accepts an invitation and (re)activates the member', async () => {
     p.agentMessageShare.findFirst.mockResolvedValue({ id: S })
     p.agentMessageInvite.findFirst.mockResolvedValue(row())

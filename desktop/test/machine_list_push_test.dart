@@ -23,7 +23,11 @@ const _computerId = 'aabbccddeeff0011';
 class _Api extends ApiClient {
   _Api() : super(config: AppConfig.dev, session: AuthSession());
   int reads = 0;
+  int sharesTold = 0;
   Completer<void>? hold;
+
+  @override
+  void sharesChanged() => sharesTold++;
 
   /// When set, every read waits on a gate of its own, so a test can finish
   /// them in the order it chooses.
@@ -149,10 +153,65 @@ void main() {
 
     await app.handleEventForTest('local-machine', _push);
     await tester.pump();
+    expect(
+      api.reads,
+      0,
+      reason: 'the same push from the other machines may follow',
+    );
+    await tester.pump(AppNotifier.machinesPushCollapse);
 
     expect(api.reads, 1);
     app.dispose();
   });
+
+  testWidgets(
+    'the same push from every machine connection costs one read, not one each',
+    (tester) async {
+      final api = _Api();
+      final app = _signedIn(api);
+      for (final id in ['m1', 'm2', 'm3']) {
+        app.machineStates[id] = MachineState(
+          Machine(machineId: id, name: id, authMode: MachineAuthMode.remote),
+        );
+      }
+
+      // Diego's app, 2026-10-28: each push arrived four times at once, one per machine socket.
+      for (final id in ['local-machine', 'm1', 'm2', 'm3']) {
+        await app.handleEventForTest(id, _push);
+      }
+      await tester.pump(AppNotifier.machinesPushCollapse);
+      await tester.pump();
+      expect(api.reads, 1);
+      await tester.pump(AppNotifier.machinesPushCollapse);
+      expect(api.reads, 1);
+      app.dispose();
+    },
+  );
+
+  testWidgets(
+    'a push saying a harness share changed has the read read the shares',
+    (tester) async {
+      final api = _Api();
+      final app = _signedIn(api);
+
+      await app.handleEventForTest('local-machine', _push);
+      await tester.pump(AppNotifier.machinesPushCollapse);
+      expect(
+        api.sharesTold,
+        0,
+        reason: 'any other change reads them every few minutes',
+      );
+
+      await app.handleEventForTest('local-machine', const {
+        'type': 'machines_changed',
+        'payload': {'reason': 'harness_shares'},
+      });
+      expect(api.sharesTold, 1);
+      await tester.pump(AppNotifier.machinesPushCollapse);
+      expect(api.reads, 2);
+      app.dispose();
+    },
+  );
 
   testWidgets('a push is ignored once the person has signed out', (
     tester,
@@ -174,10 +233,12 @@ void main() {
       final app = _signedIn(api);
 
       // A bulk rename: the first push starts a read, the rest land while it is open.
-      for (var i = 0; i < 5; i++) {
+      await app.handleEventForTest('local-machine', _push);
+      await tester.pump(AppNotifier.machinesPushCollapse);
+      for (var i = 0; i < 4; i++) {
         await app.handleEventForTest('local-machine', _push);
+        await tester.pump(AppNotifier.machinesPushCollapse);
       }
-      await tester.pump();
       expect(api.reads, 1);
 
       // The open read may predate the later changes, so exactly one more follows it.
@@ -201,7 +262,7 @@ void main() {
       await tester.pump();
       expect(api.reads, 1);
       await app.handleEventForTest('local-machine', _push);
-      await tester.pump();
+      await tester.pump(AppNotifier.machinesPushCollapse);
 
       api.hold!.complete();
       api.hold = null;
@@ -223,8 +284,9 @@ void main() {
 
       // Read #1 is ours; a second push asks for a follow-up once it is done.
       await app.handleEventForTest('local-machine', _push);
-      await tester.pump();
+      await tester.pump(AppNotifier.machinesPushCollapse);
       await app.handleEventForTest('local-machine', _push);
+      await tester.pump(AppNotifier.machinesPushCollapse);
       // The person presses Reload while #1 is still open: read #2 is theirs.
       final manual = app.retryMachines();
       await tester.pump();

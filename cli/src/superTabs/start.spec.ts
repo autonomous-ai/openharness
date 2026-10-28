@@ -129,6 +129,19 @@ describe('Swarm permission mode', () => {
     expect(f.open).not.toHaveBeenCalled()
   })
 
+  it('tells the Lead a contributed start is still being prepared on its machine, so it waits rather than starting another', async () => {
+    const f = fixture()
+    Object.assign(f.start, { poolGeneration: 'pool', dispatched: true, preparing: true })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ ok: true, queued: true,
+      preparing: true, startId: 'start', machineId: f.start.request.machineId,
+      detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' })
+    // One its machine has not said it is preparing (an older machine, or not launched yet) reads as queued, as before.
+    delete (f.start as { preparing?: boolean }).preparing
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ ok: true, queued: true,
+      startId: 'start', machineId: f.start.request.machineId, detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' })
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
   it('asks the backend for full mode even when the caller asks for another mode', async () => {
     const f = fixture()
     await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, permissionMode: 'ask' } }, f.scoped, where, f.open)
@@ -911,7 +924,9 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     /** What happens to the retry's start: the backend refuses it, or its reply is lost after or before the backend recorded it. */
     retry?: 'refused' | 'lost' | 'lostUnrecorded'
     /** Machines off the contributed list: the Lead's own start launches there, and this one refuses for its owner's sharing. */
-    direct?: string[] } = {}) {
+    direct?: string[]
+    /** Why a failing machine's host fails the start; the app token problem unless set. */
+    error?: string } = {}) {
     const starts = new Map<string, Record<string, unknown>>()
     const fails = new Set(options.fails ?? ['mac-one'])
     const commands: Record<string, unknown>[] = []
@@ -921,7 +936,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
         if (!start) return { error: 'NOT_FOUND', detail: 'This agent start is unavailable.' }
         // The host readies a queued start on its next pass: a machine whose app token cannot be had fails it there.
         const request = start.request as Record<string, unknown>
-        if (start.read && fails.has(String(request.machineId))) start.error = TOKEN
+        if (start.read && fails.has(String(request.machineId))) start.error = options.error ?? TOKEN
         start.read = true
         return { ok: true, value: structuredClone(start) }
       }
@@ -1054,6 +1069,15 @@ describe('a Lead\'s start that fails before its agent exists', () => {
       text: 'Builder could not start on Mac One, and no other machine allowed for this task could take it. This task has no worker until that machine is fixed or another one is added.' })
     expect(String(notice!.text)).not.toContain('token')
     expect(result).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
+  })
+
+  // Ken's MacBook Pro, 2026-10-28: the group read "until that machine is fixed" when the machine was only short of memory.
+  it('names a memory shortage and the machine in the notice, and leaves out the rest of the raw reason', async () => {
+    const reason = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.'
+    const b = backend({ candidates: [candidate('c0', 'mac-one')], error: reason })
+    expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', detail: expect.stringContaining(reason) })
+    expect(b.of('message.send')).toMatchObject([{ text: 'Builder could not start on Mac One: not enough free memory (1.8 GiB free, 2 GiB needed), '
+      + 'and no other machine allowed for this task could take it. This task has no worker until memory frees up on that machine or another one is added.' }])
   })
 
   it('reports instead of trying a third machine when the retry fails as well', async () => {

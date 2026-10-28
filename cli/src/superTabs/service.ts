@@ -10,7 +10,7 @@ import { within } from './wire.js'
 import { machineChoices } from '../lib/newCommand.js'
 import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
-import { ContributionPreparations, prepareContribution } from './contribution.js'
+import { ContributionPreparations, ownerRequest, prepareContribution, setMachineAgents } from './contribution.js'
 import { messageIdOf } from './attach.js'
 import { cardId, SwarmCards } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
@@ -43,6 +43,9 @@ const HELP = {
   start: 'start OPERATION_ID JSON: create one agent in a conversation on a machine in this Swarm\'s Machines list; to use another machine, a person adds it to the Swarm first. Repeat exactly after an interruption; it follows the same native creation receipt. It does not assign work. With worktree true, the agent starts from the repository\'s default branch, fetched first, unless you set branchRef (refs/heads/BRANCH, or refs/remotes/origin/BRANCH to fetch it first) to start from another branch, such as the one this work builds on. Set role "reviewer" to start a Reviewer; leave role out for a Builder. The role is kept for the session. On Custom skills, add "roleId" to the start request to start the agent in that role of its kind (a builder or reviewer role from status); without it the agent takes the first role of its kind. A Reviewer runs on claude or codex and is assigned only review groups (conversation.create with reviewOf naming the group it reviews); a review group is assigned only to a Reviewer. Add the Reviewer to the reviewed group with conversation.agent so it is told when that work is ready for review and can pass its independent check. Start one with a routeDecisionId like any agent.',
   release: 'When a Builder finishes, decide reuse, keep or stop; prefer stop unless more work is coming soon. Reuse assigns new work; agent.release records keep or requests stop. Wait for the execution host to confirm a stop. A person can withdraw a stuck stop; the session cannot receive new work in that Swarm. Its native capacity stays reserved until its host confirms stopping. Other Swarms wait up to two minutes for an in-flight close, then may reuse it.',
   resume: 'resume START_ID: finish a pending start without creating another agent.',
+  // A person's own command, for the machines they added; an agent's terminal is refused (command.ts), so no agent raises its
+  // own machine's room (Lead, 2026-10-28).
+  setAgents: 'set-agents MACHINE_ID COUNT: for a machine\'s owner, from their own terminal, not an agent\'s: how many Swarm agents may run on that machine at once. Each agent still needs free memory when it starts. A machine may offer one agent for every 2 GB of its memory, and at least 4; a larger number is refused.',
   route: 'route GROUP JSON: before you start an agent or assign work to another agent, choose who does it. Work you do yourself is not routed. JSON: {"difficulty":"low|medium|high","risk":"low|medium|high","size":"small|medium|large","why":"one sentence","kind":"optional word such as ui or docs","local":"optional true, only when a person asked for a local model","model":"optional: the model a person named, in their words; only it is offered","needs":{"tools":[],"devices":[],"cwd":"/absolute/repo"}}. size is how long the work runs: small about 20 minutes, medium about an hour, large about three hours. Candidates that break the owner\'s hard rules are left out, and so are machines that cannot take a teammate\'s project: it runs only on Team machines (a Mac\'s Harness Team account whose privacy check passed, or a machine used only for agents), and the route says why the others were left out. Soft rules (a preferred engine for the kind, idle agents first) rank the rest. A group whose task requires machines or devices (task "requires":{"machines":["MACHINE"],"devices":["/dev/…"]}, set with conversation.create or work.define) is offered only those machines; while none can take it the route answers NO_CANDIDATE with "waiting":true, so keep it queued and route it again later. A pick on a model served on the Swarm\'s grid starts with gridModel and gridName in place of model and effort. Start or assign the pick with its routeDecisionId; to choose otherwise, pass overrideReason. An agent\'s start or work.assign without a routeDecisionId is refused, so route first; a person can still start and assign by hand.',
   screen: 'screen AGENT [--scrollback N]: read a worker\'s terminal as plain text, with up to 200 lines of scrollback. Only its project\'s Lead may. Use it when a worker seems stuck.',
   type: 'type AGENT [TEXT] [--key K]...: type text, then keys (Enter, Esc, Tab, Up, Down, Left, Right, Ctrl-C, 0-9), into a worker\'s terminal. Answer prompts within its task; ask the owner before approving anything risky.',
@@ -171,14 +174,22 @@ export async function sharedSwarm(sources: SwarmSources): Promise<boolean> {
   const pools = await sources.feed.current(POOLS_FRESH_MS).then(read => read.pools, () => [])
   for (const row of pools) {
     if (!identifier(row.tabId)) continue
-    const people = await sources.reads.read(row.tabId).then(read => read.state.people, () => null)
-    if (Array.isArray(people) && people.length > 1) return true
+    // A Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm) asks for none.
+    const read = await sources.reads.read(row.tabId).catch(() => null)
+    if (read?.teamAccounts && Array.isArray(read.state.people) && read.state.people.length > 1) return true
   }
   return false
 }
 
+/** Whether the Swarm a person just joined or added this Mac to uses Harness Team accounts: false only when its server
+ *  says it does not, so a read that fails still offers, as before. */
+export async function teamAccountsIn(sources: SwarmSources, tabId: string): Promise<boolean> {
+  return sources.reads.read(tabId).then(read => read.teamAccounts, () => true)
+}
+
 export interface SuperTabServiceOptions {
   prepareContribution?: typeof prepareContribution
+  setMachineAgents?: typeof setMachineAgents
   capacity?: typeof readCapabilities
   host?: (core: CoreApi, machineId: string, options: SuperTabHostOptions) => SuperTabHost
   reservations?: (core: CoreApi, machineId: string) => ReservationBook
@@ -310,6 +321,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.reason === 'startup' && !(identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId())))) {
             return { ok: true, state: 'not-shared' }
           }
+          // Joined or added to a Swarm Harness Team accounts are not tried in yet: nothing asked (2026-10-28). An older
+          // Desktop names no Swarm and is offered as before.
+          if ((payload.reason === 'join' || payload.reason === 'contribute') && identifier(payload.tabId)
+            && !await teamAccountsIn(sources(), payload.tabId)) return { ok: true, state: 'not-used' }
           return { ok: true, ...await (await setup()).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources()),
             payload.action === 'teamSetupCheck') }
         }
@@ -318,6 +333,15 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, role: grant ? grant.role : grant, ...(grant ? { mode: grant.mode } : {}) }
         }
         if (payload.action === 'prepareContribution') return preparations.read(payload)
+        // `harness super-tab set-agents`, typed by the person at this computer; never through the relay.
+        if (payload.action === 'setMachineAgents') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          const { maxAgents } = payload
+          if (!identifier(payload.tabId) || !identifier(payload.machineId) || typeof maxAgents !== 'number' || !Number.isInteger(maxAgents) || maxAgents < 1 || maxAgents > 1024) {
+            return { error: 'INVALID_REQUEST', detail: 'Name the Swarm, the machine and a whole number of agents from 1 to 1024.' }
+          }
+          return await (options.setMachineAgents ?? setMachineAgents)(core, { tabId: payload.tabId, machineId: payload.machineId, maxAgents })
+        }
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
@@ -344,8 +368,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
             || !/^\/api\/super-tabs(?:\/[A-Za-z0-9_-]+)*(?:\?[A-Za-z0-9_=&%-]+)?$/.test(path)) {
             return { error: 'INVALID_REQUEST', detail: 'Choose a Super Tab endpoint.' }
           }
-          const value = await backend(core, method as string, path, payload.body)
-          return { ok: true, value }
+          return { ok: true, value: (await ownerRequest(core, method as string, path, payload.body)).value }
         }
         const named = identifier(payload.agentId) ? payload.agentId : null
         const hashed = identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null

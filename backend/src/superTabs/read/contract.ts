@@ -68,6 +68,9 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
+   *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
+  teamAccounts?: false
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

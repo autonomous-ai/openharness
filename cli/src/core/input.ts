@@ -29,6 +29,7 @@ import type { TerminalControl } from './terminals/control.js'
 import { launchBound } from './engines/sessionBinding.js'
 import { inputContextIn } from '../lib/nativeTurnObservations.js'
 import { teamHold } from '../engines/kit/screen.js'
+import type { ShortTurnGuard } from './turns/shortTurnGuard.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -66,6 +67,8 @@ export interface InputDeps {
   /** Whether a typed delivery's maker queues it in the engine's own input while the agent works (the Swarm's chat,
    *  superTabs/inCore/deliveries.ts), where the engine takes that; absent, every typed delivery waits for idle. */
   typesWhileBusy?: (deliveryId: string) => boolean
+  /** An agent whose turns keep ending at once has its automatic writes held a while (turns/shortTurnGuard.ts). */
+  shortTurns?: Pick<ShortTurnGuard, 'holding'>
 }
 
 /**
@@ -165,6 +168,8 @@ export function sessionInputDeps(
       deliveries.settled(event)
     },
     beforeTeamWrite: async (session, deliveryId) => {
+      // Before the pane is read: a held agent's Swarm deliveries are asked again every second.
+      if (deps.shortTurns?.holding(session.sessionId)) return 'team_waiting_control'
       const capture = await captureTerminal(session.agentId)
       const screen = await deps.readScreen(session, capture)
       return deliveryHold(session, screen, capture, deliveryId)

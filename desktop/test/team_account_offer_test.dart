@@ -73,12 +73,12 @@ void main() {
   test('asks this Mac\'s own daemon whether it is wanted, and explains it only then', () async {
     final explained = <String>[];
     final listening = app.teamSetupAsks.listen(explained.add);
-    await app.offerTeamAccount('join');
+    await app.offerTeamAccount('join', tabId: 'tab-1');
     daemon.answer = {'ok': true, 'state': 'declined'};
     await app.offerTeamAccount('contribute');
     await pumpEventQueue();
     expect(daemon.asked, [
-      {'action': 'teamSetupCheck', 'reason': 'join'},
+      {'action': 'teamSetupCheck', 'reason': 'join', 'tabId': 'tab-1'},
       {'action': 'teamSetupCheck', 'reason': 'contribute'},
     ]);
     expect(explained, ['join']);

@@ -334,6 +334,14 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
     expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
   })
 
+  it('reads each Swarm\'s newest change over all its parts, without a groupBy (it once panicked the engine on Mongo)', async () => {
+    const [a, b] = [await scene(), await scene()]
+    await writeGroup(b.tabId, b.web, MIGRATED + 5_000, group => { group.title = 'Web, renamed' })
+    const newest = await db.$transaction(tx => parts.lastChangedAt(tx, [a.tabId, b.tabId, 'tab-with-no-parts']))
+    expect(Object.fromEntries(newest)).toEqual({ [a.tabId]: MIGRATED, [b.tabId]: MIGRATED + 5_000 })
+    expect((await db.$transaction(tx => parts.lastChangedAt(tx, []))).size).toBe(0)
+  })
+
   it.each(['/api/super-tabs', '/api/super-tabs/TAB', '/api/super-tabs/hosts/host', '/api/super-tabs/hosts/host/pools', '/api/super-tabs/hosts/host/assignments'])(
     'answers %s with 426 Update required', async url => {
       const s = await scene()
@@ -347,7 +355,8 @@ describe('host form (design 4.10)', () => {
   /** The owner's machine `host` contributed to the Swarm, a third agent whose only group is dormant, a queued start. */
   let machine = 'host'
   /** Each test has its own machine, so other tests' Swarms never show up in its host reads. */
-  const hostScene = async () => {
+  /** [webRequester]: who asked for the Web work this machine's worker runs; the owner contributes the machine. */
+  const hostScene = async (webRequester = owner.sub) => {
     machine = `m-${randomUUID().slice(0, 8)}`
     await db.machine.create({ data: { machineId: machine, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     return scene((s, ids) => {
@@ -361,6 +370,7 @@ describe('host form (design 4.10)', () => {
     s.run({ type: 'conversation.archive', conversationId: archived, archived: true })
     s.edit(state => {
       const pool = state.machines!.find(m => m.machineId === machine)!
+      state.conversations.find(c => c.id === ids.web)!.requesterId = webRequester
       // One in a running group, one in a dormant group none of its agents is in: the host still has to settle it.
       state.starts = [[ids.web, 'queued'], [archived, 'queued-in-dormant']].map(([conversationId, id]) => ({ id: id!, creationId: 'c',
         actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: pool.membershipGeneration,
@@ -537,12 +547,13 @@ describe('host form (design 4.10)', () => {
   })
 
   it('sleeps through the Lent hours a reading credits to the machine\'s running workers', async () => {
-    const s = await hostScene()
+    // Lent counts only work for someone else (leaderboard/lent.ts).
+    const s = await hostScene(peer.sub)
     await reading(s.tabId, (await fullRead(s.tabId)).generation)
     const { cursor, generation } = await fullRead(s.tabId)
     await reading(s.tabId, generation)
     const lent = await db.$transaction(async tx => (await parts.loadActive(tx, s.tabId)).machines.find(m => m.key === machine)!.data!.contribution?.lent)
-    expect(lent?.[0]?.agentMs).toBeGreaterThan(0)
+    expect(lent?.[0]?.busyMs).toBeGreaterThan(0)
     clock = Date.now()
     expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
   })
@@ -1025,18 +1036,21 @@ describe('what a read costs the database (group 3b)', () => {
     const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
     const ops: string[] = []
     const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      ops.push(`${model}.${operation}`)
+      ops.push(`${model}.${operation}${operation === 'aggregateRaw' && JSON.stringify(args).includes('"$max"') ? ':max' : ''}`)
       return query(args)
     } } } }) as unknown as PrismaClient
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
     clock = Date.now()
+    // The newest change is one Mongo `$group` per part kind, and never a Prisma groupBy.
+    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\.aggregateRaw:max$/.test(op))
     const first = await hosts.changes(owner, machineId, { full: true })
-    expect(ops.filter(op => op.endsWith('.groupBy'))).toHaveLength(7)
+    expect(newestReads()).toHaveLength(7)
+    expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
     ops.length = 0
     clock = Date.now()
     const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
     expect(idle.tabs).toEqual([])
-    expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
+    expect(newestReads()).toEqual([])
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
       command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
     clock = Date.now()

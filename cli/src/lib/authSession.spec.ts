@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import type { AuthSession } from './authSession.js'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 
@@ -18,6 +19,7 @@ const {
   readAuthSession,
   readSignedOut,
   releaseHeldAuthLock,
+  updateAuthSession,
   signInOf,
   writeAuthSession,
 } = await import('./authSession.js')
@@ -323,6 +325,46 @@ describe('AuthSessionManager', () => {
 
     expect(fetched).not.toHaveBeenCalled()
     expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  // Follow-up to the review of #1866: a rewrite that read the session before another process marked it
+  // wrote it back without the mark.
+  it('a rewrite never writes over a mark that landed after it read the session', async () => {
+    writeAuthSession(baseSession())
+
+    const written = await updateAuthSession((latest) => {
+      // Another process marks it while this one works out its change.
+      writeAuthSession({ ...latest, signedOut: { at: 1, reason: 'revoked' } } as typeof latest)
+      return { ...latest, machineId: 'machine-2' }
+    })
+
+    expect(written).toBeNull()
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  it('a rewrite of a marked sign-in writes nothing', async () => {
+    writeAuthSession(baseSession())
+    await markSignedOut('revoked')
+    const change = vi.fn((latest: AuthSession): AuthSession => ({ ...latest, machineId: 'machine-2' }))
+
+    expect(await updateAuthSession(change)).toBeNull()
+
+    expect(change).not.toHaveBeenCalled()
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  // Follow-up to the review of #1866: a revoke whose lock stayed busy stopped the daemon unmarked, and the
+  // core that came back used the revoked sign-in until it was refused again.
+  it('a revoke marks even when the lock cannot be had', async () => {
+    writeAuthSession(baseSession())
+    const busy = async (): Promise<never> => {
+      throw new AuthSessionError('Another Harness process is refreshing SSO credentials. Please retry.', 'UNAVAILABLE')
+    }
+
+    await markSignedOut('revoked', Date.now(), busy)
+
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+    expect(readAuthSession()).toBeNull()
   })
 
   it('a new sign-in replaces one marked signed out', async () => {

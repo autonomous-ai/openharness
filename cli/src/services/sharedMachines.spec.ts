@@ -213,6 +213,27 @@ describe('shared machines', () => {
       expect(port.trust).toHaveBeenLastCalledWith({ pins: [], keys: [{ ...ann.machines[0], label: 'Machine · ann@gmail.com', email: 'ann@gmail.com' }] })
     })
 
+    it('keeps what the backend holds after telling it again, so an address it drops is written once and then left alone', async () => {
+      // The backend never holds the owner's own address. Kept here, it read back as a different policy at every
+      // read, so the daemon wrote it again every two minutes and each write told every member's apps to re-read.
+      writeFileSync(file, JSON.stringify({ emails: ['dee@acme.io', 'ann@gmail.com'], sameDomain: false }))
+      let held: string[] = []
+      const port = fakePort({
+        policy: vi.fn(async () => policy({ emails: held })),
+        publish: vi.fn(async (emails: string[], sameDomain: boolean) => {
+          held = emails.filter((e) => e !== 'dee@acme.io')
+          return policy({ emails: held, sameDomain })
+        }),
+      })
+      start(port)
+      await fire()
+      expect(port.publish).toHaveBeenCalledExactlyOnceWith(['dee@acme.io', 'ann@gmail.com'], false)
+      expect(readPolicy(file).emails).toEqual(['ann@gmail.com'])
+      await fire()
+      await fire()
+      expect(port.publish).toHaveBeenCalledOnce()
+    })
+
     it('changes only what it could read, and nothing when it read nothing', async () => {
       const port = fakePort({ shared: vi.fn(async () => down), policy: vi.fn(async () => down) })
       start(port)

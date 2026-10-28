@@ -37,6 +37,10 @@ export interface McpServersDeps {
   dataDir?: string
   /** Who runs it, by what its shell says (model.ts `outsideCaller`): an agent may list, never change. */
   env?: NodeJS.ProcessEnv
+  /** Whether it runs in a pane a Harness daemon made (cli.ts, as `harness mcp` asks `paneOwner`): an agent there whose
+   *  engine sets none of `outsideCaller`'s variables (Hermes, OpenCode) is refused too. A person's own terminal pane in
+   *  Harness can't be told apart from an agent's, so it is refused alike, and told to run it outside Harness. */
+  inPane?: boolean
   out?: (line: string) => void
   err?: (line: string) => void
 }
@@ -63,9 +67,10 @@ export function mcpServersCommand(argv: readonly string[], deps: McpServersDeps 
   }
   if (verb !== 'add' && verb !== 'remove') { err(MCP_SERVERS_USAGE); return 2 }
   const agent = outsideCaller(deps.env ?? process.env, '')
-  if (agent) {
-    err(`${agent.name} may not change this machine's MCP servers: a server runs a command inside every later agent here. `
-      + 'Tell the person the exact harness mcp-servers command to run themselves.')
+  if (agent || deps.inPane) {
+    err(`${agent ? agent.name : 'An agent in a Harness pane'} may not change this machine's MCP servers: a server runs a command `
+      + 'inside every later agent here. Tell the person the exact harness mcp-servers command to run themselves, in a terminal '
+      + 'outside Harness.')
     return REFUSED
   }
   if (why) { err(`Fix or remove it first: ${why}`); return 1 }

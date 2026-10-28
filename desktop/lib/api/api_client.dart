@@ -50,12 +50,16 @@ class ApiClient {
   final LocalDaemonTransport? localTransport;
   late final Dio _dio = _buildDio();
 
+  /// The time, for when harness shares are read again ([sharesReadInterval], [sharesRetryDelays]).
+  final DateTime Function() _clock;
+
   ApiClient({
     required this.config,
     required this.session,
     this.auth,
     this.localTransport,
-  });
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
 
   Dio _buildDio() {
     final dio = attachHttpLog(
@@ -698,12 +702,52 @@ class ApiClient {
   int _accountRevision = 0;
   int _machineRequestRevision = 0;
 
+  /// How long a read of `/api/harness-shares` stands for, unless a push says they changed
+  /// ([sharesChanged]). Read through this computer's daemon, it took 14 to 16 s, or failed with a 504
+  /// after 20 s, on Diego's app (2026-10-28), where every `machines_changed` (one every 1 to 3 minutes,
+  /// each four times) started another.
+  static const sharesReadInterval = Duration(minutes: 5);
+
+  /// How long a failed shares read waits before the next, the last shares read standing in meanwhile:
+  /// a failure that only marked the list stale was read again at once, by recovery and the next push.
+  static const sharesRetryDelays = [
+    Duration(minutes: 1),
+    Duration(minutes: 2),
+    Duration(minutes: 5),
+  ];
+
+  /// When the last shares read that answered started; null while none has for this account.
+  DateTime? _sharesReadAt;
+  int _sharesFailures = 0;
+  DateTime? _sharesRetryAt;
+
+  /// Pushes saying the shares changed, and how many of them the last answered read covers.
+  int _sharesAsked = 0;
+  int _sharesAnswered = 0;
+
+  /// A push said a harness shared with this account was invited or taken back: the next machine
+  /// read reads the shares too, once any wait after a failure is over.
+  void sharesChanged() => _sharesAsked++;
+
+  bool _sharesDue(DateTime now) {
+    final retryAt = _sharesRetryAt;
+    if (retryAt != null && now.isBefore(retryAt)) return false;
+    final readAt = _sharesReadAt;
+    return readAt == null ||
+        _sharesAsked > _sharesAnswered ||
+        now.difference(readAt) >= sharesReadInterval;
+  }
+
   /// Sharing fallback belongs to the account that loaded it. Late responses
   /// must not refill it after sign-out or while a new sign-in is starting.
   void resetAccountCache() {
     ++_accountRevision;
     _sharedMachines = [];
     lastMachinesStale = false;
+    _sharesReadAt = null;
+    _sharesRetryAt = null;
+    _sharesFailures = 0;
+    _sharesAnswered = _sharesAsked;
   }
 
   void _requireAccount(int revision) {
@@ -730,22 +774,38 @@ class ApiClient {
         Machine.fromJson(Map<String, dynamic>.from(row as Map)),
     ].where((m) => !owned.any((own) => own.machineId == m.machineId)).toList();
     var sharedMachines = _sharedMachines;
-    try {
-      final shared = await _dio.get('/api/harness-shares');
-      _requireAccount(account);
-      if (shared.statusCode == 404) {
-        sharedMachines = [];
-      } else {
-        final body = unwrapApiResponse(shared) as Map<String, dynamic>;
-        sharedMachines = [
-          for (final row in body['machines'] as List? ?? const [])
-            Machine.fromJson(Map<String, dynamic>.from(row as Map)),
-        ];
+    final now = _clock();
+    if (_sharesDue(now)) {
+      final asked = _sharesAsked;
+      try {
+        final shared = await _dio.get('/api/harness-shares');
+        _requireAccount(account);
+        if (shared.statusCode == 404) {
+          sharedMachines = [];
+        } else {
+          final body = unwrapApiResponse(shared) as Map<String, dynamic>;
+          sharedMachines = [
+            for (final row in body['machines'] as List? ?? const [])
+              Machine.fromJson(Map<String, dynamic>.from(row as Map)),
+          ];
+        }
+        _sharesReadAt = now;
+        _sharesAnswered = asked;
+        _sharesFailures = 0;
+        _sharesRetryAt = null;
+      } catch (error) {
+        if (isUnauthorizedError(error)) rethrow;
+        _requireAccount(account);
+        final delay =
+            sharesRetryDelays[_sharesFailures < sharesRetryDelays.length
+                ? _sharesFailures
+                : sharesRetryDelays.length - 1];
+        _sharesFailures++;
+        _sharesRetryAt = _clock().add(delay);
       }
-    } catch (error) {
-      if (isUnauthorizedError(error)) rethrow;
-      stale = true;
     }
+    // With no shares read yet there is nothing to stand in for them: the list is stale until one answers.
+    if (_sharesReadAt == null) stale = true;
     _requireAccount(account);
     if (request == _machineRequestRevision) {
       _sharedMachines = sharedMachines;

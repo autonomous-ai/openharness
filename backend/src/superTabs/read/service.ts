@@ -18,7 +18,7 @@ import type { SwarmParts } from '../parts/index.js'
 import { canReadGroup, readProject } from '../projects.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
-import { readableWeek, recentDormantGroups } from '../leaderboard/read.js'
+import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
@@ -124,7 +124,8 @@ export class SwarmReads {
       readProject(state, actor, projectId)
       const dormant = await recentDormantGroups(tx, tabId, projectId, now - LEDGER_WEEKS * WEEK_MS)
       const groups = [...state.conversations.filter(g => !g.dormant), ...dormant].filter(g => !isLeads(g) && canReadGroup(state, actor, g))
-      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now })
+      const names = await profileNames(tx, state.people.map(p => p.id))
+      return leaderboard({ state, groups, machines: visibleState(state, actor, now).machines ?? [], projectId, week: start, now, names })
     })
   }
 
