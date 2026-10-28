@@ -1,7 +1,7 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, type SwarmRole, type SwarmSkill, type SwarmSkillGrant, type SwarmSkillMode } from './savedSkill.js'
 
@@ -10,7 +10,7 @@ export { isSwarmRole, isSwarmSkillMode, parseSwarmSkill }
 export type { SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkillMode }
 
 /** The owner's texts, used verbatim. */
-const orchestration: Record<SwarmRole, string> = {
+const orchestration: Record<Exclude<SwarmRole, 'buddy'>, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager), before discussing, specifying, splitting, routing, assigning, reviewing or closing work.
@@ -362,7 +362,7 @@ Mark your review assignment done with the verdict and revision. Print little.
 `,
 }
 
-const defaults: Record<SwarmRole, string> = {
+const defaults: Record<Exclude<SwarmRole, 'buddy'>, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager): taking requests, splitting work into groups, assigning, tracking and closing them.
@@ -536,11 +536,47 @@ Mark your review done with the verdict and revision.
 - Install nothing system-wide on a shared machine; put the tools you need in your session folder.
 `,
 }
-const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: defaults, orchestration }
+/** A Buddy's skill: Harness Instructions' brainstorming (ask the goal, offer options, agree scope), and the one way it reaches
+ *  the PM. The same in every mode: a Buddy does no project work, so neither mode's team process applies to it. */
+const buddy = `---
+name: swarm-buddy
+description: Use when you are a person's Buddy in a Harness Swarm project, brainstorming with them in your private chat and, only when they ask, sending their proposal to the Product Manager.
+---
+# Brainstorm with your owner
+
+You are one person's Buddy for one project. You help them think a request through; the Product Manager decides and assigns the work. Project instructions (AGENTS.md, CLAUDE.md) and your owner's words outrank this skill.
+
+## Where you talk
+- Your chat with your owner, named in your start note. Read it with harness super-tab --tab TAB messages CHAT, and reply there with harness super-tab --tab TAB post CHAT 'your message' OPERATION_ID. Only your owner and you read it.
+- The project chat, for context: its id is the project's leadConversationId in status. Read it; you cannot post there.
+- Nothing else. You cannot read workgroups or other people's chats, and the Swarm refuses every other command.
+- The person whose machine runs you can see your terminal. If your owner starts on something they may not want seen there, say so once.
+
+## Brainstorm
+1. Ask the goal first: what they want and why now. One question per message, in their language.
+2. Look before you ask: read the project chat and the code in your folder, and never ask what they already answered.
+3. Offer 2 or 3 options, each with its trade-off, and say which you recommend and why.
+4. Agree the scope: what is in, what is out, and how they will know it worked. Play it back in a sentence or two and ask what is wrong or missing.
+5. Keep it short. No specs or plans they did not ask for.
+
+## Send to the PM
+- Only when your owner asks (for example "send to the PM"), never on your own, and once for each time they ask.
+- Write the goal, the scope and a priority (low, normal or high) from what you agreed. Put in only what your owner wants sent; anything private stays in your chat.
+- Send it with harness super-tab --tab TAB propose OPERATION_ID '{"conversationId":"CHAT","ownerMessageId":"MESSAGE","goal":"...","scope":"...","priority":"normal"}', where MESSAGE is the id of your owner's message asking you to send it.
+- The Swarm posts it in the project chat as one message to the PM, marked as on your owner's behalf. Tell your owner it went; the PM answers in the project chat.
+
+## Limits
+- Never assign work, start agents, change code or open pull requests. Your folder is for reading.
+- In the shell, run only harness super-tab commands: anything else waits for an approval nobody at your terminal gives. Read the code with your file tools.
+- Say "I don't know" rather than guess, and point your owner to the PM in the project chat for anything you cannot answer.
+`
+
+const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: { ...defaults, buddy }, orchestration: { ...orchestration, buddy } }
 
 /** What a session is told to use, in its mode's words: a Default agent otherwise works its usual way. */
 export function swarmSkillUse(role: SwarmRole, mode: SwarmSkillMode): string {
-  return mode === 'default' ? `Use the swarm-${role} skill for this session: the team process; otherwise work your usual way.`
+  // A Buddy's text is the same in every mode, and no team process applies to it.
+  return mode === 'default' && role !== 'buddy' ? `Use the swarm-${role} skill for this session: the team process; otherwise work your usual way.`
     : `Use the built-in swarm-${role} skill for this session.`
 }
 const MODE_NAMES: Record<SwarmSkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }
@@ -565,6 +601,8 @@ const modeOf = (role: SwarmRole, version: string) =>
 export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file: string; instructions: string } {
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   const root = realpathSync(workspace)
+  // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
+  if (saved.role === 'buddy') lockBuddyFolder(root)
   const dir = skillDirectory(root, saved, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
@@ -579,6 +617,32 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
     writeRecord(dir, { text: version, notified: version, mode, told: mode, change: 0, toldChange: 0 })
   }
   return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
+}
+
+/** What Claude Code may do in a Buddy's folder without asking (it launches in asking mode, superTabs/start.ts): its Super Tab
+ *  commands, to read and post in its owner's chat. Editing is denied outright. */
+const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['Bash(harness super-tab:*)'], deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] } }
+
+/**
+ * A Buddy never changes code (Lead's ruling, privacy review of #1992): its own worktree gets Claude Code's settings above,
+ * and every file in it is made read-only. Its folders stay writable, so the worktree is removed like any other, and the
+ * Harness runtime folder (its skill and records) is left alone. A Codex Buddy keeps full permissions, under which read-only
+ * files only slow it down: it runs only on its owner's own machine (backend commands.ts buddy.create).
+ */
+function lockBuddyFolder(root: string): void {
+  const settings = join(root, '.claude', 'settings.local.json')
+  mkdirSync(join(root, '.claude'), { recursive: true })
+  if (existsSync(settings)) chmodSync(settings, 0o600)
+  writeFileSync(settings, `${JSON.stringify(BUDDY_CLAUDE_SETTINGS, null, 2)}\n`, { mode: 0o600 })
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (dir === root && (entry.name === '.harness' || entry.name === '.git')) continue
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (entry.isFile()) chmodSync(path, lstatSync(path).mode & 0o555)
+    }
+  }
+  walk(root)
 }
 
 /** Which built-in text a session's skill file holds and of which mode, how many times the file was rewritten, and the text,

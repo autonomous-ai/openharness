@@ -27,7 +27,7 @@ export const GROUP_FIELDS = {
   always: ['id', 'kind', 'projectId', 'leadId', 'agentIds', 'archived', 'audience', 'dormant', 'assignment.id', 'assignment.agentId', 'assignment.status',
     'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
-  unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'pullRequestUrls', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq',
+  unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'pullRequestUrls', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals',
     'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt'],
 } as const
 const LIGHT_GROUP = {
@@ -71,6 +71,36 @@ async function undecidedWork(agents: Part<Agent>[], groups: Part<GroupData>[], l
 
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T })
+
+/** Delivery authority only: no machine reports, starts, progress, or unrelated work. Keep the Lead conversations for
+ * ledProject, and the named agents' groups for legacy project identity and native-context privacy checks. These projected
+ * groups must never be committed as state; a delivery only touches its authority parts and updates its own row. */
+export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds: string[], agentIds: string[], nativeAgentId?: string): Promise<SwarmParts> {
+  const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
+  if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
+  const { projects, leadsConversationId } = head.data as unknown as HeadData
+  const keys = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? '']
+  const [members, agents] = await Promise.all([
+    tx.swarmMember.findMany({ where: { tabId, deleted: false } }),
+    tx.swarmAgent.findMany({ where: { tabId, deleted: false } }),
+  ])
+  // Modern agents carry their project. Older agents derive it from their first loaded group. Native privacy checks
+  // additionally inspect every group of the terminal's agent, which need not be the delivery's receiver.
+  const related = [...agents.filter(a => agentIds.includes(a.key) && !(a.data as unknown as Agent).projectId).map(a => a.key),
+    ...nativeAgentId ? [nativeAgentId] : []]
+  // One read per index, like loadLight: an $or spanning key and membership indexes would invoke the query planner again.
+  const [named, linked] = await Promise.all([
+    groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: [...groupIds, ...keys] },
+      $or: [{ dormant: false }, { key: { $in: groupIds } }] } }, { $project: LIGHT_GROUP }]),
+    related.length ? groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: false,
+      agentIds: { $in: related } } }, { $project: LIGHT_GROUP }]) : Promise.resolve([]),
+  ])
+  const groups = [...new Map([...named, ...linked].map(row => [row.key, lightGroup(row)])).values()]
+  return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow),
+    members: members.map(row => toPart('member', row)), agents: agents.map(row => toPart('agent', row)),
+    groups, machines: [], starts: [], progress: [],
+    sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
+}
 
 /**
  * The live parts of one Swarm with conversations light. Conversations: every active one (`groups: 'active'`, as

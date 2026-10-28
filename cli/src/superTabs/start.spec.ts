@@ -244,6 +244,30 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
+it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy skill, talking in its owner\'s chat and waiting for no assignment', async engine => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request }, f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('buddy')
+  expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
+  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(payload.prompt).not.toContain('assign')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+it('starts a Claude Buddy in asking mode, never with full permissions, and no Buddy with the GitHub App\'s token', async () => {
+  for (const [engine, mode, bypass] of [['claude', 'ask', false], ['codex', 'full', true]] as const) {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, hostDispatch: true, github: { requester: 'peer' } } as never,
+      f.scoped, where, f.open)
+    const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+    expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, mode, bypass, undefined])
+    expect(payload.prompt).not.toContain('GitHub')
+  }
+})
+
 describe('the skills of the project the agent joins', () => {
   const projects = (skillMode?: string) => ({ conversations: [{ id: 'other', projectId: 'p1' }, { id: 'group', projectId: 'p2' }],
     projects: [{ id: 'p1', skillMode: 'default' }, { id: 'p2', ...(skillMode ? { skillMode } : {}) }] })

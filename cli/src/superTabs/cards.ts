@@ -250,6 +250,21 @@ export class SwarmCards {
     this.openBy.set(session, key)
   }
 
+  /** Whether a Swarm read last lists this harness on that machine as one of its workers (a Builder or Reviewer): a member
+   *  that leads no conversation and that the Swarm started, by its start record (the proof superTabs/host.ts closes workers
+   *  by). A session the person opened by hand and added is theirs, as on this computer (services/devices.ts). A Swarm
+   *  Reviewer on another computer failing every turn took over the round dial (2026-10-28), so the devices ask before they
+   *  show a card's failure. Nothing is read for it: before the first poll, nobody is one. A Buddy (`buddyOf`) is started
+   *  the same way but is its owner's own agent, so its failures stay on their dial (combination review of batch #2043). */
+  worker(machineId: string, harnessId: string): boolean {
+    return [...this.tabs.values()].some(({ state }) => {
+      const member = list(state.agents).find(a => a.machineId === machineId && a.harnessId === harnessId)
+      return !!member && !member.buddyOf && !list(state.conversations).some(c => c.leadId === member.id)
+        && list(state.starts).some(s => s.harnessId === harnessId && object(s.request).machineId === machineId && !s.error
+          && s.creationId === `super-${String(s.id)}`)
+    })
+  }
+
   async tick(): Promise<void> {
     if (this.busy) return
     this.busy = true

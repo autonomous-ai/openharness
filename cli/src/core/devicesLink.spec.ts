@@ -222,7 +222,7 @@ describe('what the devices tell the core', () => {
 })
 
 describe('the devices\' Swarm card requests to the Super Tab service', () => {
-  it('hands the core only the fields of the three card requests (the core allows those and no other action)', async () => {
+  it('hands the core only the fields of the card requests (the core allows those and no other action)', async () => {
     const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
     const core = fakeCore()
     core.superTabRequest = superTabRequest
@@ -232,6 +232,7 @@ describe('the devices\' Swarm card requests to the Super Tab service', () => {
     expect(await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', extra: 1 })).toMatchObject({ echoed: { action: 'cardRecap', tabId: 't1', leadId: 'l1' } })
     expect(await devices.answer('super_tabs', { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null })).toMatchObject({ echoed: { action: 'cardOpen', session: 'c1', tabId: 't1', leadId: null } })
     expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', tabId: 't1' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it' })
+    expect((await devices.answer('super_tabs', { action: 'cardWorker', machineId: 'm2', harnessId: 'h1', text: 'x', tabId: 't1' })).echoed).toEqual({ action: 'cardWorker', machineId: 'm2', harnessId: 'h1' })
     // A core with no way to the service says so.
     const bare = createDevicesLink({ core: fakeCore(), notify: () => true, call: vi.fn(), state: () => STATE })
     expect(await bare.answer('super_tabs', { action: 'cardsWanted', on: true })).toEqual({ error: 'SERVICE_UNAVAILABLE' })

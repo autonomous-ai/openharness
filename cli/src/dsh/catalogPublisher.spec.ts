@@ -53,6 +53,24 @@ describe('Store publication', () => {
     }
   })
 
+  it('says which packages run a setup or check script, so a computer that cannot run them refuses before downloading', () => {
+    const root = fixture()
+    expect(parseStoreCatalog(createStoreCatalog(root, ref)).entries[0]).not.toHaveProperty('runsScripts')
+    writeFileSync(join(root, 'agents', 'game', 'harness.json'), JSON.stringify({ spec: 1, id: 'autonomous/game', name: 'Game', engine: 'claude', toolchain: { setup: 'setup.sh' } }))
+    expect(parseStoreCatalog(createStoreCatalog(root, ref)).entries[0]!.runsScripts).toBe(true)
+    // The real shelf: on 2026-10-28, 65 of 67 packages ran one; `devices` runs none.
+    const real = parseStoreCatalog(createStoreCatalog(fileURLToPath(new URL('../../../store', import.meta.url)), ref)).entries
+    expect(real.filter(entry => entry.runsScripts).length).toBeGreaterThan(50)
+    expect(real.find(entry => entry.id === 'autonomous/devices') ?? {}).not.toHaveProperty('runsScripts')
+  })
+
+  it('refuses to publish a runsScripts that is not `true`, which the CLI would refuse the whole catalog over', () => {
+    const root = fixture()
+    mkdirSync(join(root, 'registry', 'acme'), { recursive: true })
+    writeFileSync(join(root, 'registry', 'acme', 'tool.json'), JSON.stringify({ id: 'acme/tool', name: 'Tool', engine: 'claude', repo: 'https://example.com/tool', runsScripts: 'yes' }))
+    expect(() => createStoreCatalog(root, ref)).toThrow('acme/tool: invalid runsScripts')
+  })
+
   it('rejects corrupt manifests instead of silently publishing a partial catalog', () => {
     const root = fixture()
     writeFileSync(join(root, 'agents', 'game', 'harness.json'), '{bad')

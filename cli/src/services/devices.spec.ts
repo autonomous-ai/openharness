@@ -1166,6 +1166,83 @@ describe('a failed turn of a Swarm worker', () => {
     expect(calls('turnDone')).toEqual([])
   })
 
+  describe('on another of the person\'s computers', () => {
+    // The Swarm service says which agent on which machine is a worker, from the Swarms it read last (superTabs/cards.ts).
+    const askedWorker = (workers: string[], fail = false, now?: () => number) => {
+      const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => {
+        if (fail) throw new Error('service gone')
+        return payload.action === 'cardWorker' ? { ok: true, worker: workers.includes(`${payload.machineId}/${payload.harnessId}`) } : { ok: true }
+      })
+      return { superTabRequest, ...start({ core: { ...fakeCore({ dataDir }), superTabRequest } as CoreApi, now }) }
+    }
+    const failed = (agentId: string, text = 'boom') => seen.fleet!.events!({ machineId: 'mac-mini', kind: 'error', agentId, text, recap: '' })
+    const asks = (request: ReturnType<typeof vi.fn>) => request.mock.calls.filter(([p]) => (p as { action?: string }).action === 'cardWorker')
+
+    it('keeps a Swarm worker\'s failure off the dial, asking once a minute at most', async () => {
+      let clock = 0
+      const { superTabRequest } = askedWorker(['mac-mini/builder'], false, () => clock)
+      failed('builder')
+      failed('builder')
+      await vi.waitFor(() => expect(calls('turnDone')).toEqual([['builder'], ['builder']]))
+      expect(calls('turnError')).toEqual([])
+      expect(asks(superTabRequest)).toEqual([[{ action: 'cardWorker', machineId: 'mac-mini', harnessId: 'builder' }]])
+      // A minute on, the Swarm may have changed: it is asked again.
+      clock = 60_001
+      failed('builder')
+      await vi.waitFor(() => expect(calls('turnDone')).toHaveLength(3))
+      expect(asks(superTabRequest)).toHaveLength(2)
+    })
+
+    it('shows the person\'s own agent\'s failure, and asks nothing for an agent on a tab', async () => {
+      const { superTabRequest, port } = askedWorker(['mac-mini/builder'])
+      port.swarms({ active: 't1', swarms: [{ id: 't1', name: 'api', agentIds: ['builder'], panes: 1 }], tiles: [] })
+      failed('mine', 'mine broke')
+      failed('builder', 'builder broke')
+      // Each agent's cards keep their order; two agents' need not, and the one on a tab is not waited on.
+      await vi.waitFor(() => expect(calls('turnError')).toHaveLength(2))
+      expect(calls('turnError')).toEqual(expect.arrayContaining([['mine', 'mine broke'], ['builder', 'builder broke']]))
+      expect(asks(superTabRequest)).toEqual([[{ action: 'cardWorker', machineId: 'mac-mini', harnessId: 'mine' }]])
+    })
+
+    it('forgets every answer once it holds 256, rather than grow with each agent that ever failed', async () => {
+      const { superTabRequest } = askedWorker([])
+      for (let n = 0; n < 256; n++) failed(`agent-${n}`)
+      await vi.waitFor(() => expect(calls('turnError')).toHaveLength(256))
+      failed('agent-0')
+      failed('agent-256')
+      await vi.waitFor(() => expect(calls('turnError')).toHaveLength(258))
+      failed('agent-0')
+      await vi.waitFor(() => expect(calls('turnError')).toHaveLength(259))
+      // agent-0 was still held; agent-256 filled the store past 256, so agent-0 is asked again.
+      expect(asks(superTabRequest).filter(([p]) => (p as { harnessId: string }).harnessId === 'agent-0')).toHaveLength(2)
+    })
+
+    it('waits 2 s at most for an answer, then shows the failure, so a hung service never leaves a tile working', async () => {
+      vi.useFakeTimers()
+      try {
+        const superTabRequest = vi.fn((payload: Record<string, unknown>) =>
+          payload.action === 'cardWorker' ? new Promise<Record<string, unknown>>(() => {}) : Promise.resolve({ ok: true }))
+        start({ core: { ...fakeCore({ dataDir }), superTabRequest } as CoreApi })
+        failed('builder', 'builder broke')
+        await vi.advanceTimersByTimeAsync(1_999)
+        expect(calls('turnError')).toEqual([])
+        await vi.advanceTimersByTimeAsync(1)
+        expect(calls('turnError')).toEqual([['builder', 'builder broke']])
+        // Its next failure within the minute does not wait again.
+        failed('builder', 'again')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('turnError')).toHaveLength(2)
+        expect(asks(superTabRequest)).toHaveLength(1)
+      } finally { vi.useRealTimers() }
+    })
+
+    it('shows the failure when the Swarm service cannot say', async () => {
+      askedWorker([], true)
+      failed('builder', 'builder broke')
+      await vi.waitFor(() => expect(calls('turnError')).toEqual([['builder', 'builder broke']]))
+    })
+  })
+
   it('leaves a Lead\'s own failure as it was', async () => {
     const { port } = start({ core: swarmAgents([{ agentId: 'lead', swarmSkill: { role: 'lead', key: 'k' } }]) })
     port.card({ type: 'commander_event', agentId: 'lead', payload: { kind: 'error', text: 'lead broke' } })

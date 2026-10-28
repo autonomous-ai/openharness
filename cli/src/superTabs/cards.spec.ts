@@ -785,3 +785,60 @@ describe('SwarmCards chats', () => {
     t.cards.want(false)
   })
 })
+
+// A Swarm Reviewer on another computer failing every turn took over the round dial with the engine's raw error (2026-10-28):
+// the devices ask whether the agent a card names is one of a Swarm's workers, and are answered from the Swarms read last.
+describe('SwarmCards.worker', () => {
+  /** The Swarm's record of starting a harness on a machine, as the backend keeps it. */
+  const started = (id: string, harnessId: string, machineId: string, over: Record<string, unknown> = {}) =>
+    ({ id, creationId: `super-${id}`, harnessId, request: { machineId, name: 'Builder' }, error: null, ...over })
+  // h1 is a session the person opened by hand and added as an Engineer: no start of the Swarm's names it.
+  type Rows = Record<'agents' | 'conversations' | 'starts', Array<Record<string, unknown>>>
+  const roster = (more: Partial<Rows> = {}) => swarm({
+    agents: [agent('a1'), agent('b1', { machineId: 'm2' }), agent('r1', { machineId: 'm2', role: 'reviewer' }), agent('b2', { machineId: 'm1' }),
+      agent('h1', { machineId: 'm2' }), ...more.agents ?? []],
+    conversations: [conv('lead-web', 'a1', { projectId: 'web' }), conv('w-web', null, { projectId: 'web', agentIds: ['b1', 'r1', 'h1'] }),
+      ...more.conversations ?? []],
+    starts: [started('s1', 'h-b1', 'm2'), started('s2', 'h-r1', 'm2'), started('s3', 'h-b2', 'm1'),
+      // Not proof that the Swarm started h1: a start that failed, one on another machine, one under another creation id.
+      started('s4', 'h-h1', 'm2', { error: 'Its machine did not start it within 3 minutes.' }), started('s5', 'h-h1', 'm1'),
+      started('s6', 'h-h1', 'm2', { creationId: 'other' }), ...more.starts ?? []],
+  })
+
+  it('says yes for a Builder or Reviewer on the machine the card came from, and no for its Lead', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-b1')).toBe(true)
+    expect(t.cards.worker('m2', 'h-r1')).toBe(true)
+    expect(t.cards.worker('m1', 'h-a1')).toBe(false)
+  })
+
+  it('says no for a member the person started by hand and added, the rule this computer\'s own workers follow', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-h1')).toBe(false)
+    expect(t.cards.worker('m1', 'h-b2')).toBe(true)
+  })
+
+  // A Buddy is started by the Swarm and leads nothing, yet it is its owner's own agent (combination review of batch #2043).
+  it('says no for a Buddy, whose failures on another of its owner\'s computers stay on the owner\'s dial', async () => {
+    const owner = { personId: 'p1', generation: 'g1' }
+    const state = roster({
+      agents: [agent('y1', { machineId: 'm2', buddyOf: owner })],
+      conversations: [conv('buddy-p1', null, { projectId: 'web', kind: 'buddy', agentIds: ['y1'] })],
+      starts: [started('s7', 'h-y1', 'm2', { request: { machineId: 'm2', name: 'Buddy', buddyOf: owner } })],
+    })
+    const t = setup({ t1: { lastChangedAt: 1, state } })
+    await t.cards.tick()
+    expect(t.cards.worker('m2', 'h-y1')).toBe(false)
+    expect(t.cards.worker('m2', 'h-b1')).toBe(true)
+  })
+
+  it('matches the machine as well as the harness, and knows nothing before a read or of an agent no Swarm lists', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: roster() } })
+    expect(t.cards.worker('m2', 'h-b1')).toBe(false)
+    await t.cards.tick()
+    expect(t.cards.worker('m1', 'h-b1')).toBe(false)
+    expect(t.cards.worker('m2', 'h-nobody')).toBe(false)
+  })
+})
