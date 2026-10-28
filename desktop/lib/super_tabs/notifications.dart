@@ -1,6 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../notify/system_notifications.dart';
@@ -37,6 +38,12 @@ class SuperTabMention {
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
 }
+
+/// Whether the menu bar's Harness menu lists the reader's tags and decisions,
+/// with their count on the Dock: the Mac app's. Elsewhere the Swarm's sidebar
+/// keeps its Notifications row.
+bool get superTabNoticesInMenuBar =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
 /// What tells the person about a new tag outside the window: the operating
 /// system, on Desktop only. The web shows only the badge and the list (spec
@@ -76,6 +83,7 @@ class SuperTabMentions extends ChangeNotifier {
   String? error;
   int? _count;
   int _lastChangedAt = -1;
+  int? _epoch;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
@@ -96,6 +104,23 @@ class SuperTabMentions extends ChangeNotifier {
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
+    final epoch = controller.visibilityEpoch;
+    if (epoch != null && epoch != _epoch) {
+      final moved = _epoch != null;
+      _epoch = epoch;
+      if (moved) {
+        // Who may read what changed: no tag read before shows until read
+        // again, even while the count stays, as the decisions do.
+        if (waiting.isNotEmpty || earlier.isNotEmpty) {
+          waiting = earlier = const [];
+          notifyListeners();
+        }
+        _lastChangedAt = controller.lastChangedAt;
+        _count = snapshot.mentionsWaiting;
+        unawaited(load());
+        return;
+      }
+    }
     // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
     final moved = count != _count;
@@ -139,11 +164,15 @@ class SuperTabMentions extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    final epoch = _epoch;
     try {
       final [nextWaiting, nextEarlier] = await Future.wait([
         _list('waiting'),
         _list('earlier'),
       ]);
+      // Read before who may read what changed: the read asked again since
+      // replaces it.
+      if (epoch != _epoch) return;
       waiting = nextWaiting;
       earlier = nextEarlier;
       error = null;
@@ -155,6 +184,7 @@ class SuperTabMentions extends ChangeNotifier {
         }
       }
     } catch (_) {
+      if (epoch != _epoch) return;
       error = 'Could not load notifications. Try again.';
     }
     notifyListeners();

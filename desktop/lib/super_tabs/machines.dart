@@ -29,6 +29,7 @@ import 'identity.dart';
 import 'local_models.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
+import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'team_account_setup.dart';
@@ -2193,16 +2194,14 @@ class _MachineLine extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 4),
-          // A machine reads as a home directory, "~ Diego's Mac", beside the
-          // sidebar's "# project" channels.
+          // A machine leads with what it is, a MacBook, a Mac Studio, beside
+          // the sidebar's "# project" channels; dimmed with its name.
           SizedBox(
             width: 32,
-            child: Text(
-              '~',
-              textAlign: TextAlign.center,
-              style: DesktopChrome.control(
-                color: DesktopChrome.muted,
-                medium: true,
+            child: Center(
+              child: SuperTabMachineIcon(
+                deviceType: view.resources?.deviceType,
+                color: muted ? DesktopChrome.muted : DesktopChrome.foreground,
               ),
             ),
           ),

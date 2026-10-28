@@ -881,6 +881,18 @@ class SuperTabController extends ChangeNotifier {
         : state.projects.firstOrNull?.id;
   }
 
+  /// A tag or decision the menu bar asked to open ([openNotice]), until the
+  /// Swarm view on screen takes it.
+  ({String kind, String id})? noticeRequest;
+
+  /// Opens the reader's tag (`mention`) at its message, or shows their
+  /// decisions (`decision`) where they are answered, in the view on screen,
+  /// or the one shown next.
+  void openNotice(String kind, String id) {
+    noticeRequest = (kind: kind, id: id);
+    notifyListeners();
+  }
+
   /// Set by the Swarm view on screen: opens a project's PM chat in front of
   /// whatever covers the conversation, Notifications or a terminal.
   Future<bool> Function(String projectId)? pmChatOpener;
