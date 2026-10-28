@@ -1153,11 +1153,12 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    SuperTabMessage? held() => c
-        .messages(id)
-        .where((m) => m.id == mention.messageId)
-        .firstOrNull;
+    SuperTabMessage? held() =>
+        c.messages(id).where((m) => m.id == mention.messageId).firstOrNull;
     var message = held();
+    // The tag is what to see, not the rows read back: the first read goes up
+    // to the latest, never only a few pages below them.
+    if (message == null) c.readingBack(id, false);
     // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
     // is after it, so the first read is up to the latest; the rest go back.
     for (var page = 0; message == null && page < 50; page++) {
