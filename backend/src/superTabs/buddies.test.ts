@@ -344,6 +344,19 @@ describe('a Buddy\'s proposal to the PM', () => {
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.app.conversationId, ownerMessageId: 'ask', ...proposal }, buddy)).toThrow('A Buddy posts only in its own chat')
   })
 
+  it('names only its owner\'s newest message in the chat, or one from the last hour (privacy review of #1992)', () => {
+    const { f } = asked()
+    const send = (newestOwnerMessageId: string, createdAt: number) => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal }, buddy,
+      { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: f.chat, source: false, createdAt, newestOwnerMessageId,
+        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } })
+    expect(() => send('later', 900)).toThrow('your owner\'s newest message')
+    expect(send('ask', 900).messages).toHaveLength(1)
+    const { f: g } = asked()
+    expect(g.run({ type: 'buddy.propose', conversationId: g.chat, ownerMessageId: 'ask', ...proposal }, buddy,
+      { now: 2 * 3_600_000, proposalAsk: { id: 'ask', conversationId: g.chat, source: false, createdAt: 2 * 3_600_000 - 59 * 60_000, newestOwnerMessageId: 'later',
+        author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(1)
+  })
+
   it('is a Buddy\'s alone, and only while Buddies are on', () => {
     const { f, propose } = asked()
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.app.conversationId, ownerMessageId: 'ask', ...proposal }, agentActor(f.pm))).toThrow('Only a Buddy')
@@ -530,5 +543,49 @@ describe('starting a down Buddy again', () => {
     const { f, agentId } = running()
     expect(() => addBuddy(f, peer, f.app.projectId)).toThrow('You already have a Buddy in this project')
     expect(f.state.agents.map(a => a.id)).toContain(agentId)
+  })
+})
+
+describe('a Buddy chat\'s readers are fixed (privacy review of #1992)', () => {
+  it('refuses adding people or agents to it, the Swarm owner and the PM included', () => {
+    const f = setup()
+    f.run({ type: 'tab.buddies', enabled: true })
+    expect(() => f.run({ type: 'conversation.audience', conversationId: f.chat, personIds: ['peer', 'owner'] }, peer)).toThrow('A Buddy chat stays its owner\'s')
+    expect(() => f.run({ type: 'conversation.agent', conversationId: f.chat, agentId: f.pm, present: true, lead: false }, peer)).toThrow('A Buddy chat stays its owner\'s')
+    expect(group(f, f.chat)).toMatchObject({ agentIds: ['buddy'], audience: { people: [{ id: 'peer', generation: 'first' }] } })
+  })
+})
+
+describe('turning Buddies off while one starts (privacy review of #1992)', () => {
+  it('fails its pending start, refuses its join, and refuses a Buddy\'s posts', () => {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    f.run({ type: 'tab.buddies', enabled: false })
+    expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toBe('Buddies were turned off in this Swarm.')
+    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+    expect(() => f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'late', configuration }, peer, host)).toThrow()
+    expect(f.state.agents.some(a => a.harnessId === 'late')).toBe(false)
+    // One that joined before the switch and is still listed cannot post.
+    const g = setup()
+    expect(() => g.run({ type: 'message.send', conversationId: g.chat, text: 'Still here', replyTo: null, recipientIds: [] }, agentActor('buddy'))).toThrow('Buddies are off')
+  })
+
+  it('refuses a dispatched Buddy start joining once Buddies are off, even if its start record has no error', () => {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    delete f.state.buddies
+    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+    expect(() => f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'late', configuration }, peer, host)).toThrow('Buddies are off')
+    expect(() => f.run({ type: 'agent.startDispatch', startId: added.result.startId as string }, peer, host)).toThrow('Buddies are off')
+  })
+})
+
+describe('a Codex Buddy (Lead\'s ruling on the privacy review of #1992)', () => {
+  it('runs only on its owner\'s own machine; a Claude Buddy may run on any machine they may use', () => {
+    const f = fresh()
+    machine(f, 'owner-mac', 'owner')
+    expect(() => addBuddy(f, peer, f.app.projectId, 'owner-mac', 'codex')).toThrow('A Codex Buddy runs only on your own machine')
+    expect(addBuddy(f, peer, f.app.projectId, 'owner-mac', 'claude').result.startId).toBeTruthy()
+    expect(addBuddy(f, peer, f.web.projectId, 'peer-mac', 'codex').result.startId).toBeTruthy()
   })
 })

@@ -26,7 +26,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, proposalText, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -262,7 +262,9 @@ export interface CommandContext {
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
-  proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number }
+  proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
+    /** The owner's newest message in that chat, which may always be named. */
+    newestOwnerMessageId?: string }
   /** The message a Lead quotes as the owner's request for a rule or skill mode change, loaded from this tab by the store. */
   askedIn?: { author: Author; source: boolean; createdAt: number }
   /** The newest messages of this conversation before the one being sent, newest first, loaded by the store for `message.send`. */
@@ -418,7 +420,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-  if (buddy) requireBuddyCommand(buddy, command, state.conversations)
+  if (buddy) requireBuddyCommand(buddy, command, state.conversations, !!state.buddies)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   if ('conversationId' in command && command.type !== 'invite.create') {
     const group = readConversation(state, actor, command.conversationId)
@@ -1070,8 +1072,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.enabled) state.buddies = true
       else {
         delete state.buddies
-        // Off means no Buddy runs: each one's session closes, and its chat stays for its owner to read.
+        // Off means no Buddy runs: each one's session closes, one still starting never joins, and its chat stays for its
+        // owner to read (privacy review of #1992).
         for (const target of state.agents.filter(isBuddy)) removeAgent(target)
+        for (const start of state.starts ?? []) if (start.request.buddyOf && !start.harnessId && !start.error) start.error = 'Buddies were turned off in this Swarm.'
       }
       break
     }
@@ -1199,6 +1203,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'conversation.audience': {
       // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
       const group = open(state, command.conversationId)
+      if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
       if (!group.audience) fail('AUDIENCE_FIXED', 'A shared conversation stays shared. Open a private conversation instead.', 400)
       group.audience = audienceOf(state, groupProject(state, group), command.personIds)
       break
@@ -1338,6 +1343,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         || ask.author.id !== owner.id || ask.author.membershipGeneration !== owner.generation) {
         fail('PROPOSAL_UNASKED', 'Send a proposal only when your owner asks for it: name your owner\'s message in your chat that asked.', 403)
       }
+      // Its newest message there, or one from the last hour: an old ask is not a standing order (privacy review of #1992).
+      if (ask.newestOwnerMessageId !== ask.id && context.now - ask.createdAt > PROPOSAL_ASK_MS) {
+        fail('PROPOSAL_STALE', 'Send a proposal for your owner\'s newest message in your chat, or one from the last hour. Ask them again.', 403)
+      }
       if (chat.proposals?.includes(command.ownerMessageId)) fail('PROPOSAL_SENT', 'A proposal was already sent for that message. Ask your owner before sending another.')
       chat.proposals = [...chat.proposals ?? [], command.ownerMessageId].slice(-MAX_PROPOSAL_ASKS)
       const project = projectOf(state, agentProjectId(state, self)), home = conversation(state, project.leadConversationId)
@@ -1373,6 +1382,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (existing) removeAgent(existing)
       // A Buddy runs where the Swarm's agents run, under that machine's own rules: its Machines list.
       const pool = machineContribution(state, command.machineId) ?? fail('BUDDY_MACHINE', 'Add this machine to the Swarm first: a Buddy runs on one of its machines.', 403)
+      // A Codex Buddy keeps its engine's full permissions, read-only files being all that hold it back: only on its owner's
+      // own machine, until Codex has the Claude Buddy's pre-approved commands (Lead's ruling, privacy review of #1992).
+      if (command.engine === 'codex' && pool.contributorId !== me.id) {
+        fail('BUDDY_CODEX_OWN_MACHINE', 'A Codex Buddy runs only on your own machine. Pick one of yours, or choose Claude for this machine.', 403)
+      }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       const contributor = person(state, grant.contributorId)
       let chat = state.conversations.find(c => c.id === chatId)
@@ -1403,6 +1417,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.startFailed': {
       const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (start.actorKey !== actorKey(actor)) fail('FORBIDDEN', 'Only the initiating lead can complete this start.', 403)
+      if (start.request.buddyOf && !state.buddies && command.type !== 'agent.startFailed') fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
       controls(state, actor, start.request.conversationId)
       if (command.type === 'agent.startDispatch') {
@@ -1599,6 +1614,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'conversation.agent': {
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
+      if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
       const member = agent(state, command.agentId)
       if (isBuddy(member)) fail('BUDDY_CHAT_ONLY', 'A Buddy stays in its own chat: its owner\'s alone.', 403)
       sameProject(state, group, member)

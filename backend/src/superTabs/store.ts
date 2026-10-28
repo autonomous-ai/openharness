@@ -929,8 +929,13 @@ export class SuperTabStore {
       }
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
+        // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
+        const recent = asked ? await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
+          orderBy: { sequence: 'desc' }, take: 50, select: { id: true, author: true, source: true } }) : []
+        const ownerId = (asked?.author as unknown as Author | undefined)?.id
+        const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === ownerId)
         if (asked) context.proposalAsk = { id: asked.id, conversationId: asked.conversationId, author: asked.author as unknown as Author,
-          source: !!asked.source, createdAt: asked.createdAt.getTime() }
+          source: !!asked.source, createdAt: asked.createdAt.getTime(), ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
