@@ -589,6 +589,32 @@ describe('local models on the Swarm\'s grid', () => {
     expect(LOCAL_NONE).toContain('Your models')
   })
 
+  describe('first for simple work (roadmap, Dec: about 30% of work on cheaper models)', () => {
+    const simple = a({ difficulty: 'low', risk: 'low', size: 'small' })
+    // Opus on an account whose 5-hour window resets in 20 minutes costs nothing in effect, so it ranked above a free model.
+    const expiring = probe({ machineName: 'mac', model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([60, 20 * M], [60, 2 * D]) })
+    const haiku = probe({ machineName: 'mac', model: 'haiku', effort: 'auto', quality: 1, cost: 1, quota: windows([90, 4 * H], [80, 5 * D]) })
+    const idle = probe({ kind: 'member', agentId: 'a1', name: 'Idle', model: 'sonnet', quota: windows([90, 4 * H], [80, 5 * D]) })
+    const grid = local({ machineName: 'mac' })
+    const firstOf = (r: ReturnType<typeof choose>) => ok(r).shown[0]!.gridModel ?? ok(r).shown[0]!.model
+    it('ranks a model on the Swarm\'s grid first for low-difficulty, low-risk work', () => {
+      expect(firstOf(choose([expiring, haiku, grid], policy, simple, NOW))).toBe('qwen3')
+      expect(firstOf(choose([idle, grid], policy, simple, NOW, [], [{ rule: { kind: 'preferIdle' }, text: 'Idle first.' }]))).toBe('qwen3')
+    })
+    it('keeps the policy order for anything harder, riskier or a review', () => {
+      expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, difficulty: 'medium' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, kind: 'review' }, NOW))).toBe('opus')
+    })
+    it('still puts the owner\'s preferred engine first, and stops when the owner opts out', () => {
+      const codex = probe({ machineName: 'mac', engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, quota: windows([90, 4 * H], [80, 5 * D]) })
+      const prefer = [{ rule: { kind: 'preferEngine', taskKind: null, engine: 'codex' }, text: 'Codex.' } as SwarmRule]
+      expect(firstOf(choose([codex, grid], policy, simple, NOW, [], prefer))).toBe('default')
+      expect(firstOf(choose([codex, local({ machineName: 'mac', engine: 'codex' })], policy, simple, NOW, [], prefer))).toBe('qwen3')
+      expect(firstOf(choose([expiring, grid], policy, simple, NOW, [], [{ rule: { kind: 'noGridFirst' }, text: 'Subscriptions first.' }]))).toBe('opus')
+    })
+  })
+
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {
     const llama = { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local' as const, holders: [],
       refused: 'llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more).' }

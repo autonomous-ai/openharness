@@ -1610,7 +1610,7 @@ it('marks every row the system writes in the owner\'s name, so a Lead cannot quo
   run({ type: 'machine.contribute', machineId: 'mac', name: 'Mac', cwd: '/swarm', engines: ['codex'], maxAgents: 2 },
     { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, abandonedStartIds: ['s2'] })
   expect(rows.map(r => r.text)).toEqual(expect.arrayContaining(['Builder never started and will not start now. Start it again if still needed.',
-    'Could not start Builder: Launch refused.', 'owner removed worker from the Swarm.']))
+    'Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.', 'owner removed worker from the Swarm.']))
   expect(rows.filter(r => !r.source).map(r => r.text)).toEqual([])
 })
 
@@ -1625,10 +1625,49 @@ it('delivers a failed start\'s notice to the Lead of its group, and to nobody wh
     request: { conversationId, machineId: 'mac', name: 'Builder' }, error: null })
   f.state.starts = [start('s1', 'lead'), start('s2', group)] as never
   expect(f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused.' }, owner).messages)
-    .toMatchObject([{ conversationId: 'lead', text: 'Could not start Builder: Launch refused.', recipients: [lead] }])
+    .toMatchObject([{ conversationId: 'lead', text: 'Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.', recipients: [lead] }])
   // A Lead that left the group's members is not told there, as a removed machine's notice is not (removeMachine).
   Object.assign(f.state.conversations.find(c => c.id === group)!, { leadId: lead, agentIds: [] })
   expect(f.run({ type: 'agent.startFailed', startId: 's2', error: 'Launch refused.' }, owner).messages).toMatchObject([{ conversationId: group, recipients: [] }])
+})
+
+// A start's raw reason can name its machine, a folder on it or a token problem, and every group member reads the group
+// (review of #1847): they read a generic reason, and only the Lead and the machine owner read the raw one.
+describe('a failed start\'s reason', () => {
+  const RAW = 'Studio (host-mac) could not prepare /Users/ken/swarm/project: the Harness GitHub App token ghs_abc123 is not in the form GitHub gives.'
+  const failed = (f: ReturnType<typeof fixture>, error: string | null = null) => {
+    f.state.starts = [{ id: 's1', actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      machineOwnerId: 'peer', request: { conversationId: 'lead', machineId: 'host-mac', name: 'Builder' }, harnessId: null, dispatched: true, error }] as never
+  }
+  it('tells the group a generic reason, never the machine, a folder, a token or the raw error', () => {
+    const f = fixture(); f.invite()
+    failed(f)
+    const [notice] = f.run({ type: 'agent.startFailed', startId: 's1', error: RAW }, owner).messages
+    expect(notice!.text).toBe('Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.')
+    for (const hidden of ['Studio', 'host-mac', '/Users', 'token', 'ghs_', RAW]) expect(notice!.text).not.toContain(hidden)
+    // The start keeps the raw reason for those who may read it.
+    expect(f.state.starts![0]!.error).toBe(RAW)
+  })
+  it('hands the raw reason on the start only to its Lead and the machine owner', () => {
+    const f = fixture(); f.invite()
+    const lead = f.add('lead-agent', 'owner', 'lead', true), worker = f.add('worker', 'owner')
+    failed(f, RAW)
+    f.state.starts![0]!.actorKey = `agent:${lead}`
+    const read = (actor: Actor) => visibleState(f.state, actor).starts![0]!.error
+    expect(read({ kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toBe(RAW)
+    expect(read(peer)).toBe(RAW)
+    // The tab's owner and another agent of the group read only what it means.
+    expect(read(owner)).toBe('Its machine could not prepare or launch it.')
+    expect(read({ kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' })).toBe('Its machine could not prepare or launch it.')
+    // The group's Lead reads it even when a person made the start by hand.
+    f.state.starts![0]!.actorKey = 'person:someone'
+    expect(read({ kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toBe(RAW)
+    // A start its machine never ran reads as that; the server's own reasons name nothing and read as they are.
+    f.state.starts![0]!.error = 'Studio did not start it within 3 minutes'
+    expect(read(owner)).toBe('Its machine did not start it within 3 minutes.')
+    f.state.starts![0]!.error = 'Its machine was removed from the Swarm.'
+    expect(read(owner)).toBe('Its machine was removed from the Swarm.')
+  })
 })
 
 describe('the owner\'s rules, after review', () => {
@@ -1644,6 +1683,13 @@ describe('the owner\'s rules, after review', () => {
     expect(byHand.result.warnings).toEqual(['The owner\'s rule "No test model." rules out Codex test-model.'])
     expect(byHand.messages[0]).toMatchObject({ text: 'owner added worker anyway. The owner\'s rule "No test model." rules out Codex test-model.' })
     expect(f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: f.worker, present: false, lead: false }, f.leadActor).messages).toEqual([])
+  })
+  it('keeps the owner\'s opt-out from grid models first, which only ranks and refuses no start', () => {
+    const f = routed()
+    f.run(set({ kind: 'noGridFirst' }, 'Subscriptions first.'))
+    expect(f.state.rules!.map(r => r.rule)).toEqual([{ kind: 'noGridFirst' }])
+    expect(f.run({ type: 'agent.start', request: request(), ...via } as Command, f.leadActor, { contribution: f.contribution, ...decisionIn() }).result.startId).toEqual(expect.any(String))
+    expect(() => f.run(set({ kind: 'noGridFirst', engine: 'claude' }))).toThrow()
   })
   it('does not launch a start recorded before a rule, unless a person chose it', () => {
     const f = routed()
