@@ -635,6 +635,23 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     expect(again[0]!.messageId).not.toBe(first!.messageId)
   })
 
+  it('keeps holding later update requests while the first never reached the Lead\'s host, however long', async () => {
+    const f = await swarm()
+    await f.leadInbox()
+    f.clock.now += 5 * MINUTE
+    const kinds = async () => {
+      const rows = await f.timed.deliveries(host, f.tab, f.lead)
+      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
+      return rows.map(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind)
+    }
+    expect(await kinds()).toContain('update-request')
+    // Never claimed: the host is offline. New reports keep coming.
+    f.clock.now += MINUTE
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
+    f.clock.now += 3 * 60 * MINUTE
+    expect((await kinds()).filter(kind => kind === 'update-request')).toHaveLength(1)
+  })
+
   it('delivers a message on the very next poll, within a second of the last one', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
