@@ -813,17 +813,18 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 describe('the push for a new delivery', () => {
   it('keeps several messages batched for one recipient in conversation order, including equal timestamps', async () => {
     const f = await swarm()
-    const expectedIds: string[] = []
+    const assignments: string[] = []
     for (const title of ['Parser', 'Renderer', 'Exporter']) {
       const group = String((await f.execute({ type: 'conversation.create', title, brief: 'Build it',
         checks: [{ description: 'Built', independent: false }] })).result.conversationId)
       // Without the Lead in these groups, each loss is delivered in the same project chat.
       await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
       const worker = await f.add(group, 'test-host', randomUUID(), title)
-      const assignment = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
-      expectedIds.push(stableId(stableId('work-lost', assignment), 'lead'))
+      assignments.push(String((await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId))
     }
     f.clock.now += 6 * MINUTE
+    // Each loss notice is named by its task and the time of the loss (this poll).
+    const expectedIds = assignments.map(assignment => stableId(stableId('work-lost', assignment, String(f.clock.now)), 'lead'))
     // One poll expires all three assignments and inserts their messages/deliveries together.
     const first = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(first).toHaveLength(3)
