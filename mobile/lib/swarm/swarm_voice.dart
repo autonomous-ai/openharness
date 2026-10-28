@@ -162,8 +162,19 @@ class SwarmVoiceMic extends StatelessWidget {
             VoiceInputStatus.idle || VoiceInputStatus.unavailable => null,
           };
     final off = controller?.status == VoiceInputStatus.unavailable;
+    void talk() {
+      HapticFeedback.lightImpact();
+      voice.tap();
+    }
+
+    void chooseLanguage() => unawaited(showVoiceLanguagePicker(context));
+    // The actions on the node itself: the button's own are left out with its
+    // icon, and VoiceOver's double-tap-and-hold is the only way to the list.
     return Semantics(
       button: true,
+      enabled: true,
+      onTap: talk,
+      onLongPress: chooseLanguage,
       // One word while the mic is open: VoiceOver reads the label aloud, and
       // a sentence read into an open microphone lands in the take.
       label: switch (face) {
@@ -178,11 +189,8 @@ class SwarmVoiceMic extends StatelessWidget {
       child: GestureDetector(
         key: const ValueKey('swarm-mic'),
         behavior: HitTestBehavior.opaque,
-        onTap: () {
-          HapticFeedback.lightImpact();
-          voice.tap();
-        },
-        onLongPress: () => unawaited(showVoiceLanguagePicker(context)),
+        onTap: talk,
+        onLongPress: chooseLanguage,
         child: SizedBox.square(
           dimension: 44,
           child: Center(

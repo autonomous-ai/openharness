@@ -258,6 +258,41 @@ void main() {
     // Put away without choosing: a choice writes the real preferences file.
   });
 
+  testWidgets('VoiceOver can talk, finish and choose the language', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await pump(tester);
+    stt.replies.add('on my way');
+
+    expect(
+      tester.getSemantics(key('swarm-mic')),
+      matchesSemantics(
+        label: 'Talk',
+        isButton: true,
+        hasEnabledState: true,
+        isEnabled: true,
+        hasTapAction: true,
+        hasLongPressAction: true,
+        onLongPressHint: 'Choose language',
+      ),
+    );
+
+    tester.semantics.tap(find.semantics.byLabel('Talk'));
+    await frames(tester);
+    expect(recorder.recording, isTrue);
+    expect(find.semantics.byLabel('Done'), findsOne);
+
+    tester.semantics.tap(find.semantics.byLabel('Done'));
+    await frames(tester);
+    expect(box(tester), 'on my way');
+
+    tester.semantics.longPress(find.semantics.byLabel('Talk'));
+    await tester.pumpAndSettle();
+    expect(find.text('Voice input language'), findsOneWidget);
+    semantics.dispose();
+  });
+
   testWidgets('leaving the chat mid-take closes the microphone', (
     tester,
   ) async {
