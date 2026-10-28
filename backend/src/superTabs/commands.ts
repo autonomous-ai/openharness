@@ -897,8 +897,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stored = projectOf(state, project.id)
       if (command.time === null) delete stored.digest
       else {
-        // Set after today's time, the first digest comes tomorrow rather than at once.
-        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now)
+        // Set after today's time, the first digest comes tomorrow rather than at once; moved later on a day its digest went
+        // out, it stays sent for today.
+        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now, stored.digest?.lastOn)
         stored.digest = { time: command.time, timeZone: command.timeZone, ...lastOn ? { lastOn } : {} }
       }
       break

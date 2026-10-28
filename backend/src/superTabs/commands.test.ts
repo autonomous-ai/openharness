@@ -2818,6 +2818,20 @@ describe('the morning digest setting (digest.ts)', () => {
     expect(digest()).toBeUndefined()
   })
 
+  // Today's digest message has a stable id (digest.ts digestRequest): sent again at the later time, it is a duplicate, and
+  // every Lead poll failed on it for the rest of the day (prod slow log, 2026-10-28).
+  it('keeps today\'s digest counted as sent when its time moves later the same day', () => {
+    const { f, digest } = setup()
+    // 07:00 on 27 October in Vietnam, after today's 06:30 digest.
+    const at = { now: Date.UTC(2026, 9, 27, 0, 0) }
+    f.run({ type: 'project.digest', projectId: 'lead', time: '06:30', timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
+    f.run({ type: 'project.digest', projectId: 'lead', time: '09:00', timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
+    expect(digest()).toEqual({ time: '09:00', timeZone: 'Asia/Ho_Chi_Minh', lastOn: '2026-10-27' })
+    // Another day's mark does not hold today's back.
+    f.run({ type: 'project.digest', projectId: 'lead', time: '10:00', timeZone: 'Asia/Ho_Chi_Minh' }, owner, { now: Date.UTC(2026, 9, 28, 0, 0) })
+    expect(digest()).toEqual({ time: '10:00', timeZone: 'Asia/Ho_Chi_Minh' })
+  })
+
   it('refuses a worker, an unknown time zone and a time that is not a time of day', () => {
     const { f, worker, as, digest } = setup()
     expect(() => f.run({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'UTC' }, as(worker))).toThrow('A person or the project’s Lead sets its morning digest.')

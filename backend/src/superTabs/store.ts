@@ -20,7 +20,7 @@ import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, pr
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
-import { digestDue, digestRequest, digestSince } from './digest.js'
+import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
@@ -1867,7 +1867,11 @@ export class SuperTabStore {
       // due: it loads nothing for it, or every poll repeats the loads over a growing window (Diego's issue file, 2026-10-27).
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
-      if (led && !loaded.state.paused && digestDue(led, this.now())) {
+      const due = led && !loaded.state.paused ? digestDue(led, this.now()) : null
+      // A day's digest stored while its project was not marked sent (its time moved later that day, on an older server) went
+      // out: it only gets marked, or every poll would read for it again and fail on the duplicate (prod slow log, 2026-10-28).
+      const sentAlready = !!due && !!await tx.superTabMessage.findUnique({ where: { id: digestMessageId(tabId, led!.id, due) }, select: { id: true } })
+      if (led && due && !sentAlready) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
         // A decision waits in its conversation even once that conversation went quiet.
@@ -1876,6 +1880,10 @@ export class SuperTabStore {
         if (groupIds.length) loaded = await this.ensure(tx, loaded, { groupIds })
       }
       const state = structuredClone(loaded.state)
+      if (sentAlready) {
+        const project = projectOf(state, led!.id)
+        project.digest = { ...project.digest!, lastOn: due! }
+      }
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
