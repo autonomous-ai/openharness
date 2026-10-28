@@ -103,7 +103,13 @@ export const tmuxRunsAt = (binary: string) => new Promise<boolean>((resolve) => 
   execFile(binary, ['-V'], { timeout: 5_000 }, (error, stdout) => resolve(!error && /^tmux \S+/.test(String(stdout).trim())))
 })
 
+/** The system's tar, by its path (the team daemon's PATH is not trusted for it): /usr/bin/tar, and on a Linux without a
+ *  merged /usr (Debian 10 and 11) /bin/tar, which is the only one there. */
+export function systemTar(platform: NodeJS.Platform = process.platform, exists: (path: string) => boolean = existsSync): string {
+  return platform === 'linux' && !exists('/usr/bin/tar') ? '/bin/tar' : '/usr/bin/tar'
+}
+
 /** Unpacks with the system's tar, as install.sh does. */
 export const untarGz = (archive: string, into: string) => new Promise<void>((resolve, reject) => {
-  execFile('/usr/bin/tar', ['-xzf', archive, '-C', into], { timeout: 60_000 }, (error) => error ? reject(new Error(`could not unpack ${archive}`)) : resolve())
+  execFile(systemTar(), ['-xzf', archive, '-C', into], { timeout: 60_000 }, (error) => error ? reject(new Error(`could not unpack ${archive}`)) : resolve())
 })
