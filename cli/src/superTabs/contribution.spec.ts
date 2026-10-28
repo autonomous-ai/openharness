@@ -87,8 +87,14 @@ describe('one-field machine preparation', () => {
   it.each([
     { totalGiB: 32, usedGiB: 30, maxAgents: 8, maxAvailableAgents: 16 },
     { totalGiB: 16, usedGiB: 15, maxAgents: 4, maxAvailableAgents: 8 },
-    { totalGiB: 64, usedGiB: 63, maxAgents: 16, maxAvailableAgents: 16 },
-    { totalGiB: 2, usedGiB: 1, maxAgents: 1, maxAvailableAgents: 1 },
+    { totalGiB: 64, usedGiB: 63, maxAgents: 16, maxAvailableAgents: 32 },
+    // The Mac Studio: every 2 GB may run an agent, while the starting suggestion stays at today's 16 (Ken, 2026-10-28).
+    { totalGiB: 192, usedGiB: 100, maxAgents: 16, maxAvailableAgents: 96 },
+    // Every machine may offer 4, whatever its RAM; a small one still starts at what it suggested before.
+    { totalGiB: 8, usedGiB: 7, maxAgents: 2, maxAvailableAgents: 4 },
+    { totalGiB: 2, usedGiB: 1, maxAgents: 1, maxAvailableAgents: 4 },
+    // The server refuses more than 1024 (backend superTabs/commands.ts).
+    { totalGiB: 4096, usedGiB: 1, maxAgents: 16, maxAvailableAgents: 1024 },
   ])('suggests $maxAgents of $maxAvailableAgents slots from $totalGiB GiB total RAM', async ({ totalGiB, usedGiB, maxAgents, maxAvailableAgents }) => {
     const f = fixture()
     f.deps.capacity.mockResolvedValueOnce({ ok: true, resources: {

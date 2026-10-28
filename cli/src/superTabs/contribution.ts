@@ -62,7 +62,10 @@ export async function prepareContribution(core: CoreApi, input: Json, given: Par
     const total = typeof resources.memoryTotalBytes === 'number' ? resources.memoryTotalBytes : 0
     // Free memory is checked again for every start. It must not shrink the machine's
     // configured limit just because other work happens to be running during setup.
-    const maxAvailableAgents = Math.max(1, Math.min(16, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
+    // Every 2 GB of total RAM may run an agent and every machine may offer 4 (Ken, 2026-10-28): the cap of 16 held a
+    // 192 GB Mac Studio to a sixth of that. 1024 is the most the server accepts. The suggestion below keeps its 16, so a
+    // machine that joins by itself still sends what a server from before this accepts.
+    const maxAvailableAgents = Math.min(1024, Math.max(4, Math.floor(total / START_REQUIREMENTS.memoryBytes)))
     const maxAgents = Math.max(1, Math.min(16, Math.floor(total / (2 * START_REQUIREMENTS.memoryBytes))))
     return { ok: true, state: 'ready', cwd, engines: [...new Set(engines)], maxAgents, maxAvailableAgents, ...(swarm ? { scope: 'swarm' } : {}) }
   } finally { connection.close() }
