@@ -1889,21 +1889,41 @@ describe('machine.remove', () => {
     expect(f.state.machines).toEqual([])
   })
 
-  it('drops the machine\'s records after 24 hours without an acknowledgement, and keeps the cleanup for its host', () => {
+  // Diego's Mac, 2026-10-28: a host that keeps reporting but never confirms held its machine 'Cleaning up' for a day.
+  it('drops the machine\'s records after 30 minutes without an acknowledgement, says so in the project\'s chat, and keeps the cleanup for its host', () => {
     const { f, removalId } = cleaning()
-    const day = 24 * 3_600_000
-    // Its host keeps reporting, so only the day-long fallback can expire it.
+    const day = 30 * 60_000
+    // Its host keeps reporting, so only the fallback can expire it.
     f.state.machines![0]!.observation!.receivedAt = 1000 + day - 1
-    f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 })
+    expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: 1000 + day - 1 }).messages).toEqual([])
     expect(f.state.machines!.map(m => m.removal?.id)).toEqual([removalId])
     expect(visibleState(f.state, owner, 1000 + day).machines).toEqual([])
-    f.run({ type: 'tab.rename', name: 'A day later' }, owner, { now: 1000 + day })
+    expect(f.run({ type: 'tab.rename', name: 'Half an hour later' }, owner, { now: 1000 + day }).messages).toEqual([
+      expect.objectContaining({ conversationId: 'lead', source: { kind: 'system' },
+        text: 'Studio left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.' })])
     expect(f.state.machines).toEqual([])
     expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
     const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
     expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day })).toThrow('still cleaning up')
-    f.run(cleaned(removalId), owner, { now: 1000 + day })
+    // Its host's late confirmation closes the cleanup without telling anyone again.
+    expect(f.run(cleaned(removalId), owner, { now: 1000 + day }).messages).toEqual([])
     expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  it('tells each project\'s chat that the machine left once its host confirmed the cleanup', () => {
+    const { f, removalId } = cleaning()
+    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { conversationId: string }
+    expect(f.run(cleaned(removalId)).messages).toEqual(['lead', docs.conversationId].map(conversationId => expect.objectContaining({
+      conversationId, source: { kind: 'system' }, recipients: [], text: 'Studio left the Swarm: its host confirmed its cleanup.' })))
+  })
+
+  it('writes the line only in the chats of projects its machine owner can open', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer')
+    f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })
+    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }, peer).result.removalId as string
+    expect(f.run(cleaned(removalId), peer).messages.map(m => [m.conversationId, m.author.id])).toEqual([['lead', 'peer']])
   })
 
   it.each([['has no reading', null], ['was last read long ago', 1000 - 45_001]] as const)(
@@ -1914,6 +1934,8 @@ describe('machine.remove', () => {
       expect(visibleState(f.state, owner).machines).toHaveLength(1)
       const effects = f.run({ type: 'machine.remove', machineId: 'host' })
       const removalId = effects.result.removalId as string
+      expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'system' },
+        text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
       expect(f.state.machines).toEqual([])
       expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
       expect(visibleState(f.state, owner).machines).toEqual([])
@@ -1950,8 +1972,9 @@ describe('machine.remove', () => {
     expect(visibleState(f.state, owner, later).machines).toEqual([])
     expect(visibleState(f.state, owner, later).machineCleanups).toBeUndefined()
     expect(f.state.machines).toEqual([expect.objectContaining({ machineId: 'host' })])
-    // The next change applies the same rule and keeps the cleanup for its host.
-    f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later })
+    // The next change applies the same rule, says why, and keeps the cleanup for its host.
+    expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([expect.objectContaining({
+      conversationId: 'lead', text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
     expect(f.state.machines).toEqual([])
     expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
     f.run(cleaned(removalId))
@@ -2816,6 +2839,20 @@ describe('the morning digest setting (digest.ts)', () => {
     expect(digest()).toEqual({ time: '06:30', timeZone: 'Asia/Ho_Chi_Minh', lastOn: '2026-10-27' })
     f.run({ type: 'project.digest', projectId: 'lead', time: null, timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
     expect(digest()).toBeUndefined()
+  })
+
+  // Today's digest message has a stable id (digest.ts digestRequest): sent again at the later time, it is a duplicate, and
+  // every Lead poll failed on it for the rest of the day (prod slow log, 2026-10-28).
+  it('keeps today\'s digest counted as sent when its time moves later the same day', () => {
+    const { f, digest } = setup()
+    // 07:00 on 27 October in Vietnam, after today's 06:30 digest.
+    const at = { now: Date.UTC(2026, 9, 27, 0, 0) }
+    f.run({ type: 'project.digest', projectId: 'lead', time: '06:30', timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
+    f.run({ type: 'project.digest', projectId: 'lead', time: '09:00', timeZone: 'Asia/Ho_Chi_Minh' }, owner, at)
+    expect(digest()).toEqual({ time: '09:00', timeZone: 'Asia/Ho_Chi_Minh', lastOn: '2026-10-27' })
+    // Another day's mark does not hold today's back.
+    f.run({ type: 'project.digest', projectId: 'lead', time: '10:00', timeZone: 'Asia/Ho_Chi_Minh' }, owner, { now: Date.UTC(2026, 9, 28, 0, 0) })
+    expect(digest()).toEqual({ time: '10:00', timeZone: 'Asia/Ho_Chi_Minh' })
   })
 
   it('refuses a worker, an unknown time zone and a time that is not a time of day', () => {

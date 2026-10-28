@@ -98,9 +98,10 @@ export class HostReads {
       tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true, data: true } }),
     ])
     const woken = new Set([...ids.filter(id => changed.get(id)?.some(p => plainlyRelevant(p, machineId))), ...groups.map(g => g.tabId)])
-    // This machine's own settings, a team account's pool on this Mac, or the Mac this team account follows.
-    const follows = new Map((await tx.swarmMachine.findMany({ where: { tabId: { in: [...new Set(machines.map(m => m.tabId))] }, key: machineId },
-      select: { tabId: true, data: true } })).map(m => [m.tabId, (m.data as MachineData | null)?.contribution?.hostMachineId]))
+    // This machine's own settings, a team account's pool on this Mac, or the Mac this team account follows. Not read when no
+    // machine changed, as on most polls: Prisma sends an empty list as a filter no index serves, a scan of every Swarm's machines.
+    const follows = new Map(machines.length ? (await tx.swarmMachine.findMany({ where: { tabId: { in: [...new Set(machines.map(m => m.tabId))] }, key: machineId },
+      select: { tabId: true, data: true } })).map(m => [m.tabId, (m.data as MachineData | null)?.contribution?.hostMachineId]) : [])
     for (const m of machines) {
       if (m.key === machineId || (m.data as MachineData | null)?.contribution?.hostMachineId === machineId || follows.get(m.tabId) === m.key) woken.add(m.tabId)
     }
