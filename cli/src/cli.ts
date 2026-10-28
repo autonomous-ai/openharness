@@ -545,20 +545,28 @@ async function loginCommand(
     // `/api/machines/resolve-computer` reached `onError`, which is JSON-unaware — so the ONE mode a
     // client drives answered a stack trace and NO result line at all, on the commonest path there
     // is (a computer that is already signed in).
+    let stuck = false
     try {
       await resolveComputerMachine()
     } catch (err) {
-      // An `AuthSessionError` is passed on rather than coded here: it is not the backend failing, it
-      // is THIS computer's harness session, and only the caller knows which of the two sign-ins the
-      // person should be sent to. `harness login` is unaffected — it never caught this before either.
-      if (json && !(err instanceof AuthSessionError)) {
-        emit({ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: (err as Error).message })
-        process.exitCode = 1
-        return { signedIn: false }
+      // A sign-in SSO has not confirmed for 7 days ("sign in again", backend lib/ssoSession.ts) is kept, but cannot be
+      // renewed: signing in is what that message asks for, so this goes on to a fresh sign-in that replaces it, as
+      // --force would. Without this, `harness login` retried the same refused renewal and never opened a sign-in.
+      if (!(err instanceof AuthSessionError && err.code === 'SIGN_IN_AGAIN')) {
+        // An `AuthSessionError` is passed on rather than coded here: it is not the backend failing, it
+        // is THIS computer's harness session, and only the caller knows which of the two sign-ins the
+        // person should be sent to. `harness login` is unaffected — it never caught this before either.
+        if (json && !(err instanceof AuthSessionError)) {
+          emit({ type: 'result', status: 'error', code: 'BACKEND_ERROR', message: (err as Error).message })
+          process.exitCode = 1
+          return { signedIn: false }
+        }
+        throw err
       }
-      throw err
+      stuck = true
     }
-    return await succeed(true)
+    if (!stuck) return await succeed(true)
+    force = true
   }
   if (opts.method === 'ask') {
     const picked = await askSignInMethod()

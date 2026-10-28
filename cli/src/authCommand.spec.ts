@@ -930,6 +930,37 @@ describe('a Harness session in place of SSO tokens', () => {
     expect(text.stdout).toMatch(/sign in again.*harness login/i)
   })
 
+  it('recovers from "sign in again": harness login opens a fresh sign-in that replaces the stuck one', async () => {
+    const root = tempRoot()
+    // A Harness session SSO has not confirmed for 7 days: every renewal answers "sign in again".
+    seedSession(root, { expiresInMs: 30_000, overrides: { accessToken: HNA, refreshToken: HNR } })
+    const NEW_HNA = `hna_${'f'.repeat(43)}`
+    const NEW_HNR = `hnr_${'g'.repeat(43)}`
+    let redirectUri = ''
+    const backend = await fakeBackend({
+      authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      exchange: () => ({ token: NEW_HNA, refreshToken: NEW_HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }),
+      resolveComputer: () => ({ machine: { machineId: 'm_seeded' } }),
+      routes: {
+        '/api/auth/refresh': () => new Refusal(403, 'SIGN_IN_AGAIN', 'Sign in again'),
+        '/api/auth/revoke': () => ({ revoked: true }),
+      },
+    })
+
+    // What the message says to run: plain `harness login`, no flag.
+    const login = jsonChild(root, backend.base, ['login', '--google', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+    await fetch(`${redirectUri}?code=code_123&state=state_456`)
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+    await login.exit
+
+    // The stuck session is replaced, and ended on the server; the computer is signed in again.
+    expect(sessionOnDisk(root)).toMatchObject({ accessToken: NEW_HNA, refreshToken: NEW_HNR })
+    expect(authCalls(backend.calls).filter((c) => c.url === '/api/auth/revoke')).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+    const status = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+    expect(JSON.parse(status.stdout.trim())).toMatchObject({ loggedIn: true })
+  }, 30_000)
+
   it('reset ends the Harness session on the server too', async () => {
     const root = tempRoot()
     seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
