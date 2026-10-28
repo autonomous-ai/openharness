@@ -80,6 +80,47 @@ enum ProductFlow {
 
 enum ProductOutcome { ok, failed, cancelled, unknown }
 
+/// Why a Desktop sign-in that did not go through ended (`setup_desktop_sign_in_reason_<wire>`), once
+/// per sign-in beside its outcome: the CLI's own result code, or what the app saw instead. Fixed
+/// names only; the backend refuses any other (`PRODUCT_USAGE_SIGN_IN_END_REASONS`).
+enum SignInEndReason {
+  /// The person pressed Cancel, chose the other button, or the app closed meanwhile.
+  cancelled('cancelled'),
+
+  /// Nobody came back from the browser page within the CLI's five minutes: the person left, or
+  /// finished there and the callback never reached the CLI.
+  timeout('timeout'),
+
+  /// The phone's QR ran out unscanned.
+  expired('expired'),
+
+  /// Turned down on the phone.
+  denied('denied'),
+
+  /// The CLI could not be started at all.
+  cliUnavailable('cli_unavailable'),
+
+  /// The CLI is too old for this way in.
+  cliTooOld('cli_too_old'),
+
+  /// The CLI ended without a result line: it crashed or was killed.
+  noResult('no_result'),
+  callbackError('callback_error'),
+  exchangeFailed('exchange_failed'),
+  backendError('backend_error'),
+  authError('auth_error'),
+  daemonBusy('daemon_busy'),
+  daemonDidNotStop('daemon_did_not_stop'),
+  ticketInvalid('ticket_invalid'),
+  unavailable('unavailable'),
+
+  /// A code not named here, or an error with none.
+  other('other');
+
+  const SignInEndReason(this.wire);
+  final String wire;
+}
+
 /// Where Add Phone was opened from, counted each time it opens
 /// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
 enum AddPhoneOpening {
@@ -736,6 +777,17 @@ class ProductMeasurement extends ChangeNotifier {
             );
       }
     }
+  }
+
+  /// Why a sign-in that did not go through ended. A signed-out setup count only, like
+  /// [_countSetupMissing]: the reasons are names an older CLI's report proxy does not know.
+  void signInEnded(SignInEndReason reason) {
+    if (sharing || !_setupAllowed || surface != 'desktop' || _disposed) return;
+    _count(
+      'setup',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'setup_${surface}_sign_in_reason_${reason.wire}',
+    );
   }
 
   /// How many new computers needed a tool installed: a signed-out setup count only, because a

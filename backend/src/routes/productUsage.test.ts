@@ -205,6 +205,21 @@ it('keeps legacy explicit setup opt-in without credentials or account lookup', a
   }
   for (const headers of [{ authorization: 'fixture' }, { cookie: 'PRIVATE_CANARY' }]) expect((await sendSetup(setup, headers)).statusCode).toBe(400)
 })
+it('accepts why a Desktop sign-in ended, from the fixed reasons only', async () => {
+  const counters = { setup_desktop_sign_in_started: 2, setup_desktop_sign_in_failed: 1, setup_desktop_sign_in_reason_no_result: 1,
+    setup_desktop_sign_in_reason_cancelled: 1 }
+  expect((await sendSetup({ ...setup, counters })).statusCode).toBe(200)
+  expect(methods.ingestSetupUsage).toHaveBeenCalledWith({ ...setup, counters })
+  methods.ingestSetupUsage.mockClear()
+  for (const reason of ['PRIVATE_CANARY', 'NO_RESULT']) {
+    const response = await sendSetup({ ...setup, counters: { [`setup_desktop_sign_in_reason_${reason}`]: 1 } })
+    expect(response.statusCode).toBe(400)
+    expect(response.body).not.toContain('PRIVATE_CANARY')
+  }
+  // Only Desktop signs in through the CLI; the phone counts its sign-in by button.
+  expect((await sendSetup({ ...setup, counters: { setup_phone_sign_in_reason_timeout: 1 } })).statusCode).toBe(400)
+  expect(methods.ingestSetupUsage).not.toHaveBeenCalled()
+})
 it('accepts default-on sharing only for Desktop or phone setup, one at a time, without asserting consent', async () => {
   const { consent: _, ...fields } = setup
   const report = { ...fields, sharing: 'default' }
