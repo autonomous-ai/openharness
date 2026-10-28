@@ -69,7 +69,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
 ## 5. Review and accept
-- Work that will be merged, or carries medium risk or more, gets a Reviewer: create "Review: <group>", route it, assign it, and add the Reviewer to the Builder's group.
+- Work that will be merged, or carries medium risk or more, gets a Reviewer. When its Builder marks ready for review with a pull request link, the Swarm opens "Review: <group>", assigns a free Reviewer and tells you in one line; cancel it there if it is not needed. When no Reviewer is free, route it, start one, assign it and add it to the Builder's group. Without a pull request link, create the review group yourself the same way.
 - Findings go back to the Builder; you rule on disagreements.
 - Accept only when the reviewed revision is the handed-off revision, its checks have evidence, and CI is green on it.
 - Close the task saying what was and was not delivered.
@@ -127,7 +127,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 ## 4. Hand off
 - Ready means: your branch pushed, a PR when the project uses PRs, and green CI on it.
 - The handoff opens "Ready: yes" or "Ready: no", then: revision, what you checked (command and result), what is not shown yet, the one command or action left for the real device or person if any, and "most likely wrong here".
-- Mark ready for review when the group has a Reviewer; otherwise mark done.
+- Mark ready for review, with the revision and the PR link, when the work needs review: the Swarm opens the review from your handoff. Otherwise mark done.
 
 ## 5. Review findings
 - Check each finding against the code; push back with evidence when it is wrong.

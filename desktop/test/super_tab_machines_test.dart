@@ -15,6 +15,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -299,7 +300,7 @@ void main() {
       expect(find.text('Offline · 1'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('super-machine-online')));
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(_hw(tester, 'online', 'CPU'), '0%');
       expect(_hw(tester, 'online', 'RAM'), '0 GB');
       expect(_hw(tester, 'online', 'SSD'), '141 GB');
@@ -354,23 +355,21 @@ void main() {
         tester
             .widget<EngineMark>(
               find.descendant(
-                of: find.byType(AlertDialog),
+                of: find.byType(SuperTabDetailDialog),
                 matching: find.byType(EngineMark),
               ),
             )
             .engine,
         'codex',
       );
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await openMachineDetails(tester, offline);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(
         find.descendant(
-          of: find.byWidget(
-            tester.widget<AlertDialog>(find.byType(AlertDialog)).title!,
-          ),
+          of: find.byType(DesktopDialogHeader),
           matching: find.text('M2'),
         ),
         findsOneWidget,
@@ -834,7 +833,7 @@ void main() {
       await tester.tap(dev);
       await tester.pumpAndSettle();
       expect(opened, ['dev']);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       (server.state['machines'] as List)[0]['observation']['receivedAt'] =
           at - 600000;
       await c.refresh();
@@ -1226,7 +1225,7 @@ void main() {
       expect(row, findsOneWidget);
       await openMachineDetails(tester, row);
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Attach running agent'));
+      await tester.tap(find.text('Attach running agent'));
       await tester.pumpAndSettle();
       expect(attached, [c.selected!.id]);
       await tester.pumpWidget(const SizedBox());
@@ -1345,7 +1344,7 @@ void main() {
           find.byKey(const ValueKey('super-machine-local-models-run')),
           findsNothing,
         );
-        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
         await tester.pumpWidget(const SizedBox());
         await c.flush();
@@ -1547,12 +1546,11 @@ void main() {
       await tester.pumpAndSettle();
       final remove = find.byKey(const ValueKey('super-machine-remove'));
       expect(remove, findsOneWidget);
-      expect(
-        find.text(
-          'Mira is the Product Manager of project Pilot. Delete the project first.',
-        ),
-        findsOneWidget,
-      );
+      // Why, on the unavailable control itself, not as a sentence under the title (Ken, 2026-10-28).
+      const why =
+          'Mira is the Product Manager of project Pilot. Delete the project first.';
+      expect(find.text(why), findsNothing);
+      expect(find.byTooltip(why), findsOneWidget);
       expect(server.posts, isEmpty);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -1674,7 +1672,9 @@ void main() {
         await c.refresh();
         await tester.pumpAndSettle();
         expect(
-          find.textContaining('Product Manager of project Pilot'),
+          find.byTooltip(
+            'Mira is the Product Manager of project Pilot. Delete the project first.',
+          ),
           findsOneWidget,
         );
         final remove = tester.widget<AppIconButton>(
@@ -1708,7 +1708,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-machine-remove')), findsNothing);
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await owner.flush();
@@ -1729,7 +1729,7 @@ void main() {
         find.byKey(const ValueKey('super-machine-remove')),
         findsOneWidget,
       );
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -1964,7 +1964,7 @@ void main() {
               );
               await tester.pumpAndSettle();
             }
-            final dialog = find.byType(AlertDialog);
+            final dialog = find.byType(SuperTabDetailDialog);
             final details = find.byType(SuperTabMachineDetails);
             expect(dialog, findsOneWidget);
             expect(details, findsOneWidget);
@@ -1985,18 +1985,14 @@ void main() {
             expect(
               find.descendant(
                 of: details,
-                matching: find.textContaining(
-                  '5-hour: 70% remaining\nResets in ',
-                ),
+                matching: find.textContaining('70% left · resets in '),
               ),
               findsOneWidget,
             );
             expect(
               find.descendant(
                 of: details,
-                matching: find.textContaining(
-                  'Weekly: 90% remaining\nResets in ',
-                ),
+                matching: find.textContaining('90% left · resets in '),
               ),
               findsOneWidget,
             );
@@ -2022,7 +2018,7 @@ void main() {
                 'machine-details-more-$captureName',
               );
             }
-            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.tap(find.byTooltip('Close'));
             await tester.pumpAndSettle();
             expect(tester.takeException(), isNull);
             await tester.pumpWidget(const SizedBox());
@@ -2070,6 +2066,53 @@ void main() {
     expect(superTabRepositoryUrl('github.com'), isNull);
   });
   testWidgets(
+    'Add machine shows a long hostname whole, over two lines if it must',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      const host = 'autonomous-code-vm-01.c.autonomous-code.internal';
+      f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
+          .copyWith(name: host);
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async => _reading(freeGiB: 8),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add machine'));
+      await tester.pumpAndSettle();
+      final label = find.descendant(
+        of: _picker,
+        matching: find.textContaining(host),
+      );
+      expect(label, findsOneWidget);
+      final paragraph = tester.renderObject<RenderParagraph>(label);
+      expect(
+        paragraph.didExceedMaxLines,
+        isFalse,
+        reason: 'the whole hostname is readable',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
     'Add machine has one field and contributes the prepared project and installed engines',
     (tester) async {
       final f = SuperTabLaunchFixture();
@@ -2101,12 +2144,15 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Add machine'));
       await tester.pumpAndSettle();
+      // One short paragraph instead of three (Ken, 2026-10-28).
       expect(
         find.text(
-          'Agents the Swarm starts on this machine run without asking for permission.',
+          "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
+          'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
         ),
         findsOneWidget,
       );
+      expect(find.textContaining('Harness clones each project'), findsNothing);
       expect(_picker, findsOneWidget);
       expect(
         find.text('This Mac (${f.app.stateOf('m')!.machine.displayName})'),
@@ -2114,19 +2160,9 @@ void main() {
       );
       expect(find.byType(Checkbox), findsNothing);
       expect(find.text('Choose project folder'), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find.text(
-            'Harness clones each project into ~/harnesses/swarms and lets '
-            "the Swarm's agents work in it.",
-          ),
-        ),
-        findsOneWidget,
-      );
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command'], {
         'type': 'machine.contribute',
         'machineId': 'm',
@@ -2441,7 +2477,7 @@ void main() {
       expect(_option('m2'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(_option('m2'), findsNothing);
       expect(tester.widget<TextButton>(_picker).focusNode!.hasFocus, isTrue);
       expect(tester.takeException(), isNull);
@@ -2473,7 +2509,7 @@ void main() {
         ),
         isEmpty,
       );
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -2703,7 +2739,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command'], {
         'type': 'machine.contribute',
         'machineId': 'm',
@@ -2884,7 +2920,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command'], {
         'type': 'machine.contribute',
         'machineId': 'm',
@@ -2928,7 +2964,7 @@ void main() {
       f.connection.server.loseReply = true;
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
 
       // The owner changes their mind before trying again.
@@ -2940,7 +2976,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       // The stored attempt is settled first, and then the six on screen — the
       // four it was built with is not what the machine ends up with.
       expect(f.connection.server.posts.last['command']!['maxAgents'], 6);
@@ -2977,7 +3013,7 @@ void main() {
       // suggestion is the number the field would have shown.
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
       expect(tester.takeException(), isNull);
 
@@ -3010,7 +3046,7 @@ void main() {
       f.connection.server.loseReply = true;
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
 
       // Now the earlier attempt cannot be checked either, and the reason it
       // gives is the one worth reading.
@@ -3020,7 +3056,7 @@ void main() {
       };
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(
         find.text('This machine is no longer linked to this Swarm.'),
         findsOneWidget,

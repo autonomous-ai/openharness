@@ -388,7 +388,8 @@ describe('who unblocks waiting work', () => {
 describe('other ways a person unblocks work: decisions, approvals and tags', () => {
   const HOUR = 3_600_000
   const decision = (conversationId: string, extra: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'decision-1', personId: 'owner', conversationId,
-    askerAgentId: 'gone', question: 'Ship how?', options: ['Behind a flag', 'To everyone'], answeredAt: null, createdAt: 2 * HOUR, assignmentId: null, ...extra })
+    projectId: 'lead', askerAgentId: 'gone', question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, answeredAt: null,
+    createdAt: 2 * HOUR, assignmentId: null, ...extra })
   /** The project's Lead asks in its own conversation at [askedAt], returning what a reply to it carries. */
   const leadAsk = (f: ReturnType<typeof fixture>, askedAt = HOUR) => {
     const lead = f.add('lead', 'lead', true)
@@ -415,6 +416,16 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
     f.say(id, owner, 'Picked the flag.')
     expect(f.group(id).ledger?.unblocks).toEqual([expect.objectContaining({ kind: 'decision', waitedMs: HOUR })])
     expect(f.group(id).ledger?.waiting?.answeredAt).toBe(2 * HOUR)
+  })
+
+  it('closes the wait of a decision left to the PM, but credits the person nothing: they did not choose', () => {
+    const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
+    f.at(HOUR)
+    f.status(id, assignmentId, worker, 'needs_human', 'Flag?')
+    f.at(2 * HOUR)
+    f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, owner, { decision: decision(id, { createdAt: HOUR, assignmentId }) })
+    expect(f.group(id).ledger?.waiting?.answeredAt).toBe(2 * HOUR)
+    expect(f.group(id).ledger?.unblocks ?? []).toEqual([])
   })
 
   it('counts a needs-human ask once when its person posts an answer before answering its decision', () => {

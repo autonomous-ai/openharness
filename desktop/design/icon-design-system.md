@@ -56,6 +56,10 @@ and disablement. Platform text scaling may grow the containing control; terminal
 font size never changes the surrounding app icons. Identity artwork and
 illustrations have their own layout dimensions.
 
+On the phone, icons beside text draw at 20 points and standalone icons at 24,
+each with a 44-point touch target; see Phone in the
+[desktop design system](desktop-design-system.md#phone).
+
 The pane close target has a 4-point trailing inset. Tabs retain their 8-point
 inset. Glyphs stay centered inside the target; do not move the drawing itself
 to compensate for excess container padding.
@@ -99,6 +103,9 @@ These are content or identities, not a second action-icon library:
   same `activityColor`, including the monochrome preference. Do not substitute
   SF Symbols or add status pills to a different Harness surface. A notification
   mark describes its unread receipt; a tab/pane mark describes current activity.
+- Ranks are numerals, never medals, cups, trophies or emoji. A trend is
+  `AppIcons.arrowUp` or `arrowDown` with its number; see
+  [Numbers and rankings](desktop-design-system.md#numbers-and-rankings).
 - QR codes, companion artwork, explanatory diagrams, wallpaper, terminal
   output and user-selected status/Powerline artwork are content. Keep their
   function and authorship; do not round QR modules or replace terminal glyphs.

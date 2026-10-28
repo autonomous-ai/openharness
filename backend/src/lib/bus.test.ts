@@ -30,6 +30,8 @@ vi.mock('ioredis', () => {
     exec = vi.fn(async () => this.results)
   }
   class FakeRedis {
+    // The bus guards its command connection at ioredis' single send point (lib/redisGuard.ts).
+    sendCommand = vi.fn()
     publish = vi.fn(async () => 1)
     subscribe = vi.fn(async () => 1)
     unsubscribe = vi.fn(async () => 1)
@@ -104,6 +106,103 @@ describe('publishUp', () => {
   it('returns 0 and does not throw when Redis rejects', async () => {
     pub.publish.mockRejectedValueOnce(new Error('ECONNREFUSED'))
     await expect(bus.publishDown('m1', { connId: 'c', frame: { type: 'message' } })).resolves.toBe(0)
+  })
+})
+
+const NOT_WRITABLE = "Stream isn't writeable and enableOfflineQueue options is false"
+type Listener = (...args: unknown[]) => void
+/** What the subscriber connection hands the bus when Redis delivers `payload` on `channel`. */
+function deliverFromRedis(instance: number, event: 'message' | 'messageBuffer', channel: string | Buffer, payload: string | Buffer) {
+  const conn = state.instances[instance] as { on: MockFn }
+  for (const [name, listener] of conn.on.mock.calls as Array<[string, Listener]>) if (name === event) listener(channel, payload)
+}
+
+describe('single-pod mode: Redis cannot take a publish', () => {
+  beforeEach(() => { pub.publish.mockReset(); pub.publish.mockResolvedValue(1) })
+
+  it('still delivers to this pod\'s own subscribers, once', async () => {
+    const got: unknown[] = []
+    await bus.subscribeShareChanged('share-1', () => got.push('changed'))
+    pub.publish.mockRejectedValueOnce(new Error(NOT_WRITABLE))
+
+    await expect(bus.publishShareChanged('share-1')).resolves.toBe(1)
+    await vi.waitFor(() => expect(got).toEqual(['changed']))
+  })
+
+  it('delivers a frame for a machine whose socket is on this pod', async () => {
+    const got: unknown[] = []
+    await bus.subscribeDown('m-local', (msg) => got.push(msg))
+    pub.publish.mockRejectedValueOnce(new Error(NOT_WRITABLE))
+
+    await bus.publishDown('m-local', { connId: 'c1', frame: { type: 'message', payload: { text: 'hi' } } })
+
+    await vi.waitFor(() => expect(got).toEqual([{ connId: 'c1', frame: { type: 'message', payload: { text: 'hi' } } }]))
+  })
+
+  it('delivers terminal bytes locally too', async () => {
+    const got: Buffer[] = []
+    await bus.subscribeTerminalUp('m-term', (payload) => got.push(payload))
+    pub.publish.mockRejectedValueOnce(new Error(NOT_WRITABLE))
+
+    await bus.publishTerminalUp('m-term', new Uint8Array([1, 2, 3]))
+
+    await vi.waitFor(() => expect(got.map((b) => [...b])).toEqual([[1, 2, 3]]))
+  })
+
+  it('does not deliver a publish that timed out, which Redis may still deliver itself', async () => {
+    const got: unknown[] = []
+    await bus.subscribeShareChanged('share-2', () => got.push('changed'))
+    pub.publish.mockRejectedValueOnce(new Error('Command timed out'))
+
+    await expect(bus.publishShareChanged('share-2')).resolves.toBe(0)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(got).toEqual([])
+  })
+
+  it('says 0 when nobody on this pod listens, as Redis would', async () => {
+    pub.publish.mockRejectedValueOnce(new Error(NOT_WRITABLE))
+    await expect(bus.publishShareChanged('nobody')).resolves.toBe(0)
+  })
+
+  it('warns once on entering it and says once when it is over', async () => {
+    const { logger } = await import('../utils/logger.js')
+    const warn = vi.mocked(logger.warn), info = vi.mocked(logger.info)
+    await bus.publishShareChanged('settle') // out of single-pod mode, whatever an earlier test left
+    warn.mockClear(); info.mockClear()
+    pub.publish.mockRejectedValue(new Error(NOT_WRITABLE))
+    await bus.publishShareChanged('a'); await bus.publishShareChanged('b')
+    pub.publish.mockResolvedValue(1)
+    await bus.publishShareChanged('c'); await bus.publishShareChanged('d')
+
+    expect(warn.mock.calls.filter(([m]) => String(m).includes('single-pod mode'))).toHaveLength(1)
+    expect(info.mock.calls.filter(([m]) => String(m).includes('single-pod mode'))).toHaveLength(1)
+  })
+})
+
+describe('subscribing while Redis is away', () => {
+  it('does not hold the caller until Redis comes back, and the subscription still works when it does', async () => {
+    const mainSub = state.instances[1] as { subscribe: MockFn }
+    let subscribed!: () => void
+    mainSub.subscribe.mockImplementationOnce(() => new Promise<void>((resolve) => { subscribed = resolve }))
+    const got: unknown[] = []
+
+    const started = Date.now()
+    await bus.subscribeShareChanged('share-away', () => got.push('changed'))
+    expect(Date.now() - started).toBeLessThan(2_000)
+
+    subscribed()
+    deliverFromRedis(1, 'message', 'harness-share:share-away', '{}')
+    expect(got).toEqual(['changed'])
+  })
+
+  it('does not hold a terminal subscriber either', async () => {
+    const terminalSub = state.instances[2] as { subscribe: MockFn }
+    terminalSub.subscribe.mockImplementationOnce(() => new Promise<void>(() => {}))
+    const started = Date.now()
+
+    await bus.subscribeTerminalDown('m-away', () => undefined)
+
+    expect(Date.now() - started).toBeLessThan(2_000)
   })
 })
 

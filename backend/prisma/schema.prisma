@@ -1123,6 +1123,8 @@ model SuperTabDecision {
   answeredAt     DateTime?
   choice         Int?
   note           String?
+  /// The person asked left it to the PM, who took the recommended option: never shown as their own choice.
+  delegated      Boolean?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
@@ -1209,6 +1211,8 @@ model SuperTabDelivery {
   @@index([machineId, status])
   // A page of messages reads its deliveries by message (pageReads.ts).
   @@index([tabId, messageId])
+  // The delivery pass reads only the open ones (superTabs/deliverySettle.ts).
+  @@index([status, id])
   /// A Swarm's open deliveries, whoever they are for (the Lead's poll, store.ts fullDeliveries).
   @@index([tabId, status])
   /// An ended task's open deliveries, cancelled with it (store.ts releaseRuns and stopped): by [tabId, status] alone the

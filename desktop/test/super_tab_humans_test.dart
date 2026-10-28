@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -482,8 +483,8 @@ void main() {
       // A server from before names: the email's first part, as before.
       expect(within('scholes', 'scholes'), findsOneWidget);
       expect(find.text('dee'), findsNothing);
-      // The email stays on hover.
-      expect(find.byTooltip('dee@example.com'), findsOneWidget);
+      // On hover the whole name, which a long one needs when it is cut, then the email.
+      expect(find.byTooltip('Dee\ndee@example.com'), findsOneWidget);
 
       await close(tester, controller);
     },
@@ -587,11 +588,16 @@ void main() {
       final controller = await show(tester, humansSwarm());
       await tester.tap(person('peer'));
       await tester.pumpAndSettle();
-      final dialog = find.byType(AlertDialog);
+      final dialog = find.byType(SuperTabDetailDialog);
       Finder inDialog(String text) =>
           find.descendant(of: dialog, matching: find.text(text));
       expect(inDialog('Dee'), findsOneWidget);
-      expect(inDialog('21 pts · up 6 from last week'), findsOneWidget);
+      // Who they are on one line under the name (Ken, 2026-10-28).
+      expect(inDialog('dee@example.com · Can collaborate'), findsOneWidget);
+      // This week's points in words, and last week's beside them rather than a difference.
+      expect(inDialog('21 points this week · 15 last week'), findsOneWidget);
+      expect(find.textContaining('pts'), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Close'), findsNothing);
       expect(inDialog('Shipped'), findsOneWidget);
       expect(inDialog('Unblocked'), findsOneWidget);
       expect(inDialog('Lent'), findsOneWidget);
@@ -610,12 +616,12 @@ void main() {
       await tester.tap(inDialog('Swarm digest pauses with the Swarm'));
       await tester.pumpAndSettle();
       expect(launches, hasLength(1));
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
 
       await tester.tap(person('owner'));
       await tester.pumpAndSettle();
-      expect(inDialog('13 pts · down 7 from last week'), findsOneWidget);
+      expect(inDialog('13 points this week · 20 last week'), findsOneWidget);
       expect(inDialog('No pull requests merged yet'), findsOneWidget);
       expect(inDialog('No questions answered yet'), findsOneWidget);
       // The machine as it calls itself, without .local.
@@ -633,7 +639,7 @@ void main() {
       final controller = await show(tester, humansSwarm());
       await tester.tap(person('scholes'));
       await tester.pumpAndSettle();
-      final dialog = find.byType(AlertDialog);
+      final dialog = find.byType(SuperTabDetailDialog);
       Finder inDialog(String text) =>
           find.descendant(of: dialog, matching: find.text(text));
       expect(inDialog('scholes'), findsOneWidget);
@@ -698,15 +704,23 @@ void main() {
     await tester.tap(person('peer'));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    // A count, the newest five, and the rest one click away; not a wall of links cut off at the bottom.
+    expect(find.text('20'), findsOneWidget);
+    expect(find.text('Pull request 4'), findsOneWidget);
+    expect(find.text('Pull request 5'), findsNothing);
+    await tester.tap(find.text('Show all 20'));
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(
       find.text('No machines lent yet'),
       100,
       scrollable: find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(SuperTabDetailDialog),
         matching: find.byType(Scrollable),
       ),
     );
+    expect(find.text('Pull request 19'), findsOneWidget);
     expect(find.text('No machines lent yet'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await close(tester, controller);
   });
 
