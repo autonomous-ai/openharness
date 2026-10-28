@@ -11,6 +11,8 @@ export const TERMINAL_KEYS = ['Enter', 'Esc', 'Tab', 'Up', 'Down', 'Left', 'Righ
 /** The host has this long to pick a request up, then this long to answer it; after either, the request fails with a plain reason. */
 export const TERMINAL_PICKUP_MS = 10_000
 export const TERMINAL_ANSWER_MS = 30_000
+/** A sender's wait reads its request again this often even unwoken, in case the notice of its answer was lost. */
+export const TERMINAL_RECHECK_MS = 5_000
 /** An unread answer, which can hold a screen's secrets, is gone after this long: refused on read, and removed by a TTL index. */
 export const TERMINAL_EXPIRY_MS = 120_000
 /** Run by the singleton worker at startup, like the product-usage expiry indexes. */

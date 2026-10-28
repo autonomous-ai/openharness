@@ -125,7 +125,7 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [{ pub }, { announceSwarmDeliveries }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js')])
+  const [bus, { announceSwarmDeliveries }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -133,8 +133,13 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       teamAccountsIdle: !github,
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
-      polls: redisPollMemory(pub),
-      deliveriesWaiting: announceSwarmDeliveries })
+      polls: redisPollMemory(bus.pub),
+      deliveriesWaiting: announceSwarmDeliveries,
+      // The host's answer often lands on another instance than the sender's wait.
+      terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
+      watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
+      // Its observer sockets may be on any instance.
+      accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) } })
 }
 
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
