@@ -557,7 +557,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   }
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
-  // An uploaded avatar's stored key stays on the server; readers get a signed link with each parts read (avatarLinks.ts).
+  // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
   visible.people = visible.people.map(withAvatarView) as Person[]
   visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.

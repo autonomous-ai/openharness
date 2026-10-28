@@ -12,12 +12,32 @@ import '../until.dart';
 import 'format.dart';
 import 'model.dart';
 
-/// Where the name and the quiet line start: after the avatar (24) and its gap (8).
-const _nameInset = 32.0;
+/// The gap between a row's columns, and half of it: the spacing scale's 8
+/// and 4.
+const _gap = grid.AppDesktop.controlGap;
+const _halfGap = _gap / 2;
 
-/// Figures of one width, so the numbers of one column line up row under row.
-TextStyle _figures(TextStyle style) =>
-    style.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
+/// The avatar the Agents rows below draw, so without a rank column a person's
+/// name starts where an agent's does.
+const _avatarSize = 24.0;
+
+/// Numbers and rankings (desktop design system): the rank a bold numeral in
+/// secondary ink, the points the one emphasized number, every figure in a
+/// column of one width so the column holds row under row.
+TextStyle _rankStyle() => grid.AppType.label(
+  fontWeight: FontWeight.w700,
+  color: grid.AppPalette.textSecondary,
+  fontFeatures: grid.AppFont.tabularFigures,
+);
+TextStyle _pointsStyle() => grid.AppType.label(
+  fontWeight: grid.AppFont.semibold,
+  color: grid.AppPalette.textPrimary,
+  fontFeatures: grid.AppFont.tabularFigures,
+);
+
+TextStyle _trendStyle(Color color) =>
+    DesktopChrome.metadata(color: color)
+        .copyWith(fontFeatures: grid.AppFont.tabularFigures);
 
 /// A person as the leaderboard names them: the board's display name, else the
 /// email's first part, as before the board had names.
@@ -33,232 +53,281 @@ String? leaderboardTrend(SuperTabPersonScore score) {
   return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
 }
 
-/// The cup's colour and name, by place.
-(Color, String) _cup(SuperTabMedal medal) => switch (medal) {
-  SuperTabMedal.gold => (grid.AppPalette.brandBolt, 'Gold cup: 1st'),
-  SuperTabMedal.silver => (
-    grid.AppTheme.pick(const Color(0xFF6E7681), const Color(0xFFC0C6CF)),
-    'Silver cup: 2nd',
-  ),
-  SuperTabMedal.bronze => (
-    grid.AppTheme.pick(const Color(0xFF8C5A2B), const Color(0xFFD08A4E)),
-    'Bronze cup: 3rd',
-  ),
-};
+/// "16 shipped", "1 unblocked", "43 hours lent": each number that would not
+/// read zero, in words; empty when all would.
+List<String> leaderboardNumbers(SuperTabPersonScore score) {
+  final hours = leaderboardHours(score.lentMs);
+  return [
+    if (score.shipped > 0) '${score.shipped} shipped',
+    if (score.unblocked > 0) '${score.unblocked} unblocked',
+    if (hours != '0') '${plural(int.parse(hours), 'hour')} lent',
+  ];
+}
 
-/// One person in the Humans section: avatar, name, status, their cup and
-/// their change against last week, and this week's points in fixed columns,
-/// with Shipped, Unblocked and Lent as icons on a quiet line beneath. Without
-/// a [score] (no board yet, or a server without one) only the name and status.
+/// The board's fixed numeric columns, each as wide as its widest value at
+/// the current text size, so rank, trend and points line up on every row.
+class LeaderboardColumns {
+  const LeaderboardColumns({
+    required this.rank,
+    required this.points,
+    this.trend,
+  });
+
+  factory LeaderboardColumns.of(
+    BuildContext context,
+    List<SuperTabPersonScore> scores,
+  ) {
+    final scaler = MediaQuery.textScalerOf(context);
+    double width(String text, TextStyle style) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width;
+    }
+
+    // Digits are of one width, so the longest number is the widest.
+    String widest(Iterable<int> values) => values
+        .map((value) => '$value')
+        .fold('0', (a, b) => b.length > a.length ? b : a);
+    final changes = [
+      for (final score in scores)
+        if (score.prevWeekPoints case final before? when before != score.points)
+          (score.points - before).abs(),
+    ];
+    return LeaderboardColumns(
+      rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
+      points: width(
+        widest(scores.map((score) => score.points)),
+        _pointsStyle(),
+      ),
+      trend: changes.isEmpty
+          ? null
+          : AppIcons.metadataSize +
+                width(widest(changes), _trendStyle(DesktopChrome.muted)),
+    );
+  }
+
+  final double rank, points;
+
+  /// Null when no one on the board moved against last week.
+  final double? trend;
+}
+
+/// One person in the Humans section: their rank as a bold numeral in its own
+/// column, avatar, name and status, and a quiet line of their non-zero
+/// numbers beneath; at the right the change against last week, then their
+/// points, the one emphasized number. The viewer's own row carries
+/// the selected fill. Without a [score] (no board yet, or a server without
+/// one) only the name and status.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
     super.key,
     required this.person,
     required this.score,
     required this.onTap,
+    this.columns,
+    this.own = false,
   });
   final SuperTabPerson person;
   final SuperTabPersonScore? score;
   final VoidCallback onTap;
 
+  /// The numeric columns, the same on every row; null without a board.
+  final LeaderboardColumns? columns;
+
+  /// Whether this is the viewer's own row.
+  final bool own;
+
   @override
   Widget build(BuildContext context) {
-    final scale = MediaQuery.textScalerOf(context);
     final score = this.score;
-    final quiet = _figures(DesktopChrome.metadata());
-    Widget cell(double width, String text, String label) => SizedBox(
-      width: scale.scale(width),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Tooltip(
-          message: label,
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: quiet,
-          ),
-        ),
+    final columns = this.columns;
+    final numbers = score == null
+        ? const <String>[]
+        : leaderboardNumbers(score);
+    final trend = score == null ? null : leaderboardTrend(score);
+    final radius = BorderRadius.circular(DesktopChrome.rowRadius);
+    Widget column(String kind, double width, Widget? child) => Padding(
+      padding: const EdgeInsets.only(left: _gap),
+      child: SizedBox(
+        key: ValueKey('leaderboard-$kind-${person.id}'),
+        width: width,
+        child: Align(alignment: Alignment.centerRight, child: child),
       ),
     );
-    final medal = score?.medal;
-    final trend = score == null ? null : leaderboardTrend(score);
-    return InkWell(
-      key: ValueKey('super-person-${person.id}'),
-      onTap: onTap,
-      child: ConstrainedBox(
-        // A phone's row is a finger's height; a mouse keeps 36.
-        constraints: BoxConstraints(
-          minHeight: fingerHeight(36, enabled: workspaceIsCompact(context)),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: _gap),
+      child: Material(
+        color: own ? grid.AppSurface.selectedFill : Colors.transparent,
+        borderRadius: radius,
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: ValueKey('super-person-${person.id}'),
+          onTap: onTap,
+          // Hover and focus keep their treatment over the viewer's own fill.
+          hoverColor: grid.AppSurface.hoverFill,
+          focusColor: grid.AppSurface.hoverFill,
+          borderRadius: radius,
+          child: ConstrainedBox(
+            // A phone's row is a finger's height; a mouse keeps a field's.
+            constraints: BoxConstraints(
+              minHeight: fingerHeight(
+                grid.AppControl.heightField,
+                enabled: workspaceIsCompact(context),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: _gap,
+                vertical: _halfGap,
+              ),
+              child: Row(
                 children: [
-                  SuperTabAvatar.person(person, size: 24),
-                  const SizedBox(width: _nameInset - 24),
+                  if (columns != null) ...[
+                    SizedBox(
+                      key: ValueKey('leaderboard-rank-${person.id}'),
+                      width: columns.rank,
+                      child: score == null
+                          ? null
+                          : Text(
+                              '${score.rank}',
+                              maxLines: 1,
+                              textAlign: TextAlign.right,
+                              style: _rankStyle(),
+                            ),
+                    ),
+                    const SizedBox(width: _gap),
+                  ],
+                  SuperTabAvatar.person(person, size: _avatarSize),
+                  const SizedBox(width: _gap),
                   Expanded(
-                    child: Tooltip(
-                      message: person.email,
-                      child: SuperTabUntil(
-                        until: person.status?.until,
-                        builder: (context) => Text.rich(
-                          TextSpan(
-                            text: leaderboardName(person, score),
-                            children: [
-                              if (person.statusAt(clock.now())
-                                  case final status?)
-                                TextSpan(
-                                  text: '  ${status.text}',
-                                  style: DesktopChrome.metadata(),
-                                ),
-                            ],
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _name(),
+                        if (numbers.isNotEmpty)
+                          _Numbers(
+                            key: ValueKey('leaderboard-meta-${person.id}'),
+                            parts: numbers,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.control(),
-                        ),
-                      ),
+                      ],
                     ),
                   ),
-                  if (medal != null) ...[
-                    const SizedBox(width: 6),
-                    _Cup(personId: person.id, medal: medal),
-                  ],
-                  if (trend != null && score != null) ...[
-                    const SizedBox(width: 6),
-                    _Trend(personId: person.id, score: score, trend: trend),
-                  ],
-                  if (score != null)
-                    SizedBox(
-                      width: scale.scale(64),
-                      child: Text(
-                        '${score.points} pts',
-                        maxLines: 1,
-                        textAlign: TextAlign.right,
-                        style: _figures(DesktopChrome.control(medium: true)),
+                  if (columns?.trend case final width?)
+                    column(
+                      'trend-column',
+                      width,
+                      trend == null || score == null
+                          ? null
+                          : _Trend(
+                              personId: person.id,
+                              score: score,
+                              trend: trend,
+                            ),
+                    ),
+                  if (columns != null && score != null)
+                    column(
+                      'points',
+                      columns.points,
+                      Semantics(
+                        label: '${score.points} points',
+                        excludeSemantics: true,
+                        child: Text(
+                          '${score.points}',
+                          maxLines: 1,
+                          style: _pointsStyle(),
+                        ),
                       ),
                     ),
                 ],
               ),
-              if (score != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: _nameInset, top: 2),
-                  child: Row(
-                    children: [
-                      cell(
-                        56,
-                        '🚀 ${score.shipped}',
-                        '${score.shipped} shipped',
-                      ),
-                      cell(
-                        56,
-                        '🔓 ${score.unblocked}',
-                        '${score.unblocked} unblocked',
-                      ),
-                      cell(
-                        72,
-                        '💻 ${leaderboardHours(score.lentMs)} h',
-                        '${leaderboardHours(score.lentMs)} agent-hours lent',
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+
+  /// The name, then the status quietly; the email on hover.
+  Widget _name() => Tooltip(
+    message: person.email,
+    child: SuperTabUntil(
+      until: person.status?.until,
+      builder: (context) => Text.rich(
+        TextSpan(
+          text: leaderboardName(person, score),
+          children: [
+            if (person.statusAt(clock.now()) case final status?)
+              TextSpan(
+                text: '  ${status.text}',
+                style: DesktopChrome.metadata(),
+              ),
+          ],
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: DesktopChrome.control(),
+      ),
+    ),
+  );
 }
 
-/// A top-three cup in its place's colour; #1's sparkles once as the board
-/// opens, never with Reduce Motion.
-class _Cup extends StatelessWidget {
-  const _Cup({required this.personId, required this.medal});
-  final String personId;
-  final SuperTabMedal medal;
+/// A person's numbers joined by a spaced middle dot. Where the line does not
+/// fit, whole items fall off its end, never part of a word; the whole line,
+/// lent in agent-hours, is on hover.
+class _Numbers extends StatelessWidget {
+  const _Numbers({super.key, required this.parts});
+  final List<String> parts;
 
   @override
   Widget build(BuildContext context) {
-    final (color, name) = _cup(medal);
-    final cup = Icon(AppIcons.trophy, size: 14, color: color);
+    final style = DesktopChrome.metadata();
+    final scaler = MediaQuery.textScalerOf(context);
     return Tooltip(
-      key: ValueKey('leaderboard-cup-$personId'),
-      message: '$name this week',
-      excludeFromSemantics: true,
-      child: Semantics(
-        label: '$name this week',
-        child:
-            medal == SuperTabMedal.gold &&
-                !MediaQuery.disableAnimationsOf(context)
-            ? _Sparkle(color: color, child: cup)
-            : cup,
+      message: parts
+          .map((part) => part.replaceFirst(' hour', ' agent-hour'))
+          .join(' · '),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          bool fits(String text) {
+            final painter = TextPainter(
+              text: TextSpan(text: text, style: style),
+              textDirection: TextDirection.ltr,
+              textScaler: scaler,
+              maxLines: 1,
+            )..layout(maxWidth: constraints.maxWidth);
+            final fits = !painter.didExceedMaxLines;
+            painter.dispose();
+            return fits;
+          }
+
+          var shown = parts.length;
+          while (shown > 1 && !fits(parts.take(shown).join(' · '))) {
+            shown--;
+          }
+          final text = parts.take(shown).join(' · ');
+          // A first item too wide even alone (enlarged text in a narrow
+          // pane) wraps between its words rather than losing one.
+          final wraps = !fits(text);
+          return Text(
+            text,
+            maxLines: wraps ? 2 : 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          );
+        },
       ),
     );
   }
 }
 
-/// A light sparkle over [child] that plays once and then is gone.
-class _Sparkle extends StatefulWidget {
-  const _Sparkle({required this.color, required this.child});
-  final Color color;
-  final Widget child;
-
-  @override
-  State<_Sparkle> createState() => _SparkleState();
-}
-
-class _SparkleState extends State<_Sparkle>
-    with SingleTickerProviderStateMixin {
-  late final _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1400),
-  )..forward();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    child: widget.child,
-    builder: (context, child) {
-      if (_controller.isCompleted) return child!;
-      // Up and back down: a glint, not a blink.
-      final t = Curves.easeInOut.transform(_controller.value);
-      final glint = 1 - (2 * t - 1).abs();
-      return Stack(
-        clipBehavior: Clip.none,
-        children: [
-          child!,
-          Positioned(
-            right: -7,
-            top: -7,
-            child: Opacity(
-              key: const ValueKey('leaderboard-sparkle'),
-              opacity: glint,
-              child: Transform.scale(
-                scale: .6 + .4 * glint,
-                child: Icon(AppIcons.sparkles, size: 11, color: widget.color),
-              ),
-            ),
-          ),
-        ],
-      );
-    },
-  );
-}
-
-/// An arrow and the change against last week: up in green, down quietly.
+/// An arrow and the change against last week, by shape and colour both: up in
+/// the online green, down in the theme's error ink.
 class _Trend extends StatelessWidget {
   const _Trend({
     required this.personId,
@@ -272,7 +341,9 @@ class _Trend extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final up = score.points > score.prevWeekPoints!;
-    final color = up ? grid.AppPalette.online : DesktopChrome.muted;
+    final color = up
+        ? grid.AppPalette.online
+        : Theme.of(context).colorScheme.error;
     return Tooltip(
       key: ValueKey('leaderboard-trend-$personId'),
       message: capitalized(trend),
@@ -285,12 +356,13 @@ class _Trend extends StatelessWidget {
           children: [
             Icon(
               up ? AppIcons.arrowUp : AppIcons.arrowDown,
-              size: 12,
+              size: AppIcons.metadataSize,
               color: color,
             ),
             Text(
               '${(score.points - score.prevWeekPoints!).abs()}',
-              style: _figures(DesktopChrome.metadata(color: color)),
+              style: DesktopChrome.metadata(color: color)
+                  .copyWith(fontFeatures: grid.AppFont.tabularFigures),
             ),
           ],
         ),
@@ -345,28 +417,30 @@ class LeaderboardPersonWeek extends StatelessWidget {
             : '${plural(score.streakDays, 'day')} shipping',
       ),
     ];
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // Labels take their natural width, so a longer word never clips.
+    return Table(
+      columnWidths: const {0: IntrinsicColumnWidth(), 1: FlexColumnWidth()},
       children: [
         for (final (label, value) in rows)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 88,
-                  child: Text(
-                    label,
-                    style: DesktopChrome.metadata(
-                      color: DesktopChrome.foreground,
-                    ),
+          TableRow(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(
+                  right: _gap * 2,
+                  bottom: _halfGap,
+                ),
+                child: Text(
+                  label,
+                  style: DesktopChrome.metadata(
+                    color: DesktopChrome.foreground,
                   ),
                 ),
-                Expanded(child: Text(value, style: DesktopChrome.metadata())),
-              ],
-            ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: _halfGap),
+                child: Text(value, style: DesktopChrome.metadata()),
+              ),
+            ],
           ),
       ],
     );
@@ -385,7 +459,7 @@ class _LeaderboardPersonDetails extends StatelessWidget {
     final trend = leaderboardTrend(score);
     final quiet = DesktopChrome.metadata();
     Widget section(String title, String empty, List<Widget> items) => Padding(
-      padding: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.only(top: _gap + _halfGap),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -396,20 +470,24 @@ class _LeaderboardPersonDetails extends StatelessWidget {
               medium: true,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: _halfGap),
           if (items.isEmpty) Text(empty, style: quiet) else ...items,
         ],
       ),
     );
+    // Items stand the spacing scale's smallest step apart.
     Widget item(Widget title, String trailing) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
+      padding: const EdgeInsets.symmetric(vertical: _halfGap / 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(child: title),
           if (trailing.isNotEmpty) ...[
-            const SizedBox(width: 12),
-            Text(trailing, style: _figures(quiet)),
+            const SizedBox(width: _gap + _halfGap),
+            Text(
+              trailing,
+              style: quiet.copyWith(fontFeatures: grid.AppFont.tabularFigures),
+            ),
           ],
         ],
       ),
@@ -419,8 +497,9 @@ class _LeaderboardPersonDetails extends StatelessWidget {
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * .5,
       ),
+      // The small form's width, less the dialog's own content inset.
       child: SizedBox(
-        width: 380,
+        width: grid.AppDesktop.formWidth - 2 * grid.AppDesktop.panelPadding,
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -432,7 +511,7 @@ class _LeaderboardPersonDetails extends StatelessWidget {
                     : '${score.points} pts · $trend',
                 style: quiet,
               ),
-              section('🚀 Shipped', 'No pull requests merged yet', [
+              section('Shipped', 'No pull requests merged yet', [
                 for (final shipped in details.shipped)
                   item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
                     // Only a web page opens: a link from the server is data,
@@ -455,14 +534,14 @@ class _LeaderboardPersonDetails extends StatelessWidget {
                     _ => Text(shipped.title, style: text),
                   }, ''),
               ]),
-              section('🔓 Unblocked', 'No questions answered yet', [
+              section('Unblocked', 'No questions answered yet', [
                 for (final unblocked in details.unblocked)
                   item(
                     Text(unblocked.title, style: text),
                     'waited ${leaderboardDuration(unblocked.waitedMinutes * 60000)}',
                   ),
               ]),
-              section('💻 Lent', 'No machines lent yet', [
+              section('Lent', 'No machines lent yet', [
                 for (final lent in details.lent)
                   item(
                     Text(superTabMachineName(lent.machineName), style: text),
