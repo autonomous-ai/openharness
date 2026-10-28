@@ -84,3 +84,36 @@ describe('what a Buddy reads', () => {
     expect(canWatchAgent(f.state, { kind: 'person', userId: 'host', email: 'host@example.com' }, buddy)).toBe(true)
   })
 })
+
+describe('the Swarm\'s Buddies setting', () => {
+  it('is off in a new Swarm, and only its owner turns it on', () => {
+    const f = setup()
+    expect(f.state.buddies).toBeUndefined()
+    expect(() => f.run({ type: 'tab.buddies', enabled: true }, peer)).toThrow('Only the Swarm owner')
+    expect(() => f.run({ type: 'tab.buddies', enabled: true }, agentActor(f.pm))).toThrow('Only the Swarm owner')
+    f.run({ type: 'tab.buddies', enabled: true })
+    expect(f.state.buddies).toBe(true)
+    expect(visibleState(f.state, peer).buddies).toBe(true)
+  })
+
+  it('may be turned on by a Lead passing on the owner\'s own chat message from the last day', () => {
+    const f = setup(), askedIn = { conversationId: f.app.conversationId, messageId: 'owner-message' }
+    const asked = (author: { kind: 'person' | 'agent'; id: string }, createdAt = 1000) =>
+      ({ askedIn: { author: { ...author, name: author.id, membershipGeneration: 'g' }, source: false, createdAt } })
+    expect(() => f.run({ type: 'tab.buddies', enabled: true, askedIn }, agentActor(f.pm), asked({ kind: 'person', id: 'peer' }))).toThrow('Only the Swarm owner')
+    f.run({ type: 'tab.buddies', enabled: true, askedIn }, agentActor(f.pm), asked({ kind: 'person', id: 'owner' }))
+    expect(f.state.buddies).toBe(true)
+  })
+
+  it('removes every Buddy when turned off, closing its session, and keeps their chats for their owners', () => {
+    const f = setup()
+    f.run({ type: 'tab.buddies', enabled: true })
+    const off = f.run({ type: 'tab.buddies', enabled: false })
+    expect(f.state.buddies).toBeUndefined()
+    expect(f.state.agents.map(a => a.id)).not.toContain('buddy')
+    expect(off.cancelledAgents).toEqual(['buddy'])
+    expect(f.state.closingSessions).toEqual([{ agentId: 'buddy', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'host' }])
+    expect(group(f, f.chat)).toMatchObject({ agentIds: [], archived: false })
+    expect(canReadGroup(f.state, peer, group(f, f.chat))).toBe(true)
+  })
+})

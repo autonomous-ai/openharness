@@ -262,6 +262,8 @@ export interface SuperTabState {
   paused: boolean
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
+  /** Buddies (buddies.ts): on once the owner turns them on; absent is off. Turning them off removes every Buddy. */
+  buddies?: true
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]

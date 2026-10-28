@@ -25,6 +25,7 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { isBuddy } from './buddies.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -90,6 +91,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
+  z.object({ type: z.literal('tab.buddies'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
@@ -409,7 +411,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+    || command.type === 'tab.buddies') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -592,6 +595,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       fail('OWNER_MESSAGE_REQUIRED', 'Only the project owner sets its rules; quote a chat message the project owner wrote in its chat in the last day asking for this change.', 403)
     }
     return project
+  }
+  /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
+   *  as rules are. */
+  const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
+    if (actor.kind === 'person' && actor.userId === state.ownerId) return
+    const asked = actor.kind === 'agent' && ledProject(state, actor.agentId) && askedIn && context.askedIn
+    if (!asked || asked.author.kind !== 'person' || asked.author.id !== state.ownerId || asked.source || context.now - asked.createdAt > RULE_MESSAGE_MS) {
+      fail('OWNER_REQUIRED', `Only the Swarm owner, or a Lead passing on a chat message the owner wrote in the last day, ${what}.`, 403)
+    }
   }
   const openDecision = (): RouteDecision => {
     const decision = context.routeDecision ?? fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
@@ -1023,15 +1035,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.paused = command.paused
       break
     case 'tab.tidy': {
-      // The Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day, as rules are.
-      if (!(actor.kind === 'person' && actor.userId === state.ownerId)) {
-        const asked = actor.kind === 'agent' && ledProject(state, actor.agentId) && command.askedIn && context.askedIn
-        if (!asked || asked.author.kind !== 'person' || asked.author.id !== state.ownerId || asked.source || context.now - asked.createdAt > RULE_MESSAGE_MS) {
-          fail('OWNER_REQUIRED', 'Only the Swarm owner, or a Lead passing on a chat message the owner wrote in the last day, turns tidying on or off.', 403)
-        }
-      }
+      swarmOwnerAsked(command.askedIn, 'turns tidying on or off')
       if (command.enabled) delete state.tidy
       else state.tidy = false
+      break
+    }
+    case 'tab.buddies': {
+      swarmOwnerAsked(command.askedIn, 'turns Buddies on or off')
+      if (command.enabled) state.buddies = true
+      else {
+        delete state.buddies
+        // Off means no Buddy runs: each one's session closes, and its chat stays for its owner to read.
+        for (const target of state.agents.filter(isBuddy)) removeAgent(target)
+      }
       break
     }
     case 'tab.routingPolicy':
