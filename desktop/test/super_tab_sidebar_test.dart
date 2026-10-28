@@ -552,6 +552,13 @@ void main() {
     await tester.tap(find.text('lamp-os'));
     await tester.pumpAndSettle();
     expect(app.swarms.where((s) => s.superTabId == 'other'), hasLength(1));
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Workspace settings…'));
+    await tester.pumpAndSettle();
+    expect(find.text('Workspace settings'), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
     await disposeSidebar(tester, controller);
   });
 

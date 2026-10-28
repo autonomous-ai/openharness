@@ -19,6 +19,7 @@ import 'pm_chat_rows.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
 import 'workspace_menu.dart';
+import 'workspace_settings.dart';
 import 'workspaces.dart';
 import 'project_github.dart';
 
@@ -680,7 +681,11 @@ class ProjectSidebar extends StatelessWidget {
               workspaces: workspaces,
               tabId: controller.tabId,
               onOpenSwarm: app!.openSuperTab,
-              onSettings: onWorkspaceSettings,
+              onSettings:
+                  onWorkspaceSettings ??
+                  (workspace) => unawaited(
+                    showSwarmWorkspaceSettings(context, workspaces, workspace),
+                  ),
               onNewWorkspace: onNewWorkspace,
               onNewSwarm: onNewSwarmIn,
             ),
