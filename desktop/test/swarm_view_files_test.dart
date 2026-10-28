@@ -9,11 +9,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/harness_file_store.dart';
+import 'package:harness/logging/app_log.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/super_tabs/saved_view.dart';
 
 import 'super_tab_saved_view_test.dart' show savedViewForTest;
+
+class _RecordingLog implements AppLog {
+  final warnings = <String>[];
+
+  @override
+  void record(
+    AppLogLevel level,
+    String category,
+    String message, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
+    if (level == AppLogLevel.warn && category == 'swarm') {
+      warnings.add('$message ${error ?? ''}');
+    }
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -164,6 +182,104 @@ void main() {
       expect(viewFiles(), isEmpty);
       expect(await kept.readInTurn('owner', 'tab'), isNull);
     });
+  });
+
+  group('nothing of an account stays behind', () {
+    /// A view of [account] no index lists (a stop between the view's write
+    /// and its index's), and a temporary left beside its file by a stop
+    /// mid-write.
+    Future<void> leftovers(AppNotifier app, String account) async {
+      final store = app.superTabs.viewStorage;
+      final before = viewFiles().map((f) => f.path).toSet();
+      await store.write(
+        '${SuperTabSavedViews.viewPrefix}$account.lost',
+        jsonEncode(savedViewForTest()),
+      );
+      final lost = viewFiles().singleWhere((f) => !before.contains(f.path));
+      await File('${lost.path}.999.1.tmp').writeAsString('Pilot');
+    }
+
+    List<String> left() => viewsDirectory().existsSync()
+        ? viewsDirectory()
+              .listSync()
+              .map((e) => e.uri.pathSegments.where((s) => s.isNotEmpty).last)
+              .where((n) => n.startsWith('view.'))
+              .toList()
+        : const [];
+
+    test(
+      'signing out removes its files, listed or not, temporaries too',
+      () async {
+        final shown = app();
+        final kept = views(shown);
+        await kept.claim('owner');
+        await kept.write('owner', 'tab', savedViewForTest());
+        await leftovers(shown, 'owner');
+        expect(left(), hasLength(3));
+        await kept.claim(null);
+        expect(left(), isEmpty);
+      },
+    );
+
+    test("another account signing in removes all of the last one's", () async {
+      final shown = app();
+      final kept = views(shown);
+      await kept.claim('owner');
+      await kept.write('owner', 'tab', savedViewForTest());
+      await leftovers(shown, 'owner');
+      await kept.claim('other');
+      expect(left(), isEmpty);
+      expect(await kept.write('other', 'tab', savedViewForTest()), isTrue);
+      expect(left(), hasLength(1));
+    });
+
+    test("Clear now removes the account's unlisted files too", () async {
+      final shown = app();
+      final kept = views(shown);
+      await kept.claim('owner');
+      await kept.write('owner', 'tab', savedViewForTest());
+      await leftovers(shown, 'owner');
+      await kept.clear('owner');
+      expect(left(), isEmpty);
+    });
+
+    test('a new start removes temporaries a stop left behind', () async {
+      final kept = views(app());
+      await kept.claim('owner');
+      await kept.write('owner', 'tab', savedViewForTest());
+      await File('${viewFiles().single.path}.999.1.tmp').writeAsString('Pilot');
+      expect(left(), hasLength(2));
+
+      final again = views(app());
+      expect(await again.readInTurn('owner', 'tab'), isNotNull);
+      expect(left(), hasLength(1));
+    });
+
+    test(
+      'a file that will not go is logged, without its path or content',
+      () async {
+        final log = _RecordingLog();
+        final previous = appLog;
+        appLog = log;
+        addTearDown(() => appLog = previous);
+        final kept = views(app());
+        await kept.claim('owner');
+        await kept.write('owner', 'tab', savedViewForTest());
+        // A folder where the view's file was: no file delete removes it.
+        final file = viewFiles().single;
+        await file.delete();
+        await File('${file.path}/inside').create(recursive: true);
+
+        await kept.claim(null);
+        expect(log.warnings, isNotEmpty);
+        for (final warning in log.warnings) {
+          expect(warning, isNot(contains(scratch.path)));
+          expect(warning, isNot(contains('view.')));
+          expect(warning, isNot(contains('Pilot')));
+        }
+      },
+      skip: Platform.isWindows,
+    );
   });
 
   group('the views an older build kept in state.json', () {

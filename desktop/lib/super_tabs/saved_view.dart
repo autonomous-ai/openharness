@@ -4,6 +4,12 @@ import 'dart:convert';
 import '../core/local_key_value_store.dart';
 import 'parts.dart';
 
+/// A store that keeps each view apart, and so can drop every view of an
+/// account it holds, its index's or not ([SuperTabSavedViews.forgetAccount]).
+abstract interface class SavedViewSweep {
+  Future<void> sweepAccount(String account);
+}
+
 /// The last view of a Swarm tab as read: the state the tab draws and the open
 /// conversation's last page, kept on this device so the next open draws it at
 /// once and reads after ([SuperTabReading.drawsSaved]; the web, where that
@@ -167,6 +173,9 @@ class SuperTabSavedViews {
       await storage.delete(_key(account, tab));
     }
     await storage.delete(_index(account));
+    if (storage case final SavedViewSweep sweep) {
+      await sweep.sweepAccount(account);
+    }
   }
 
   /// Clear now: every view this device keeps, for [account] and for any

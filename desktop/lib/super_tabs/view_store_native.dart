@@ -25,7 +25,7 @@ LocalKeyValueStore swarmViewStore({LocalKeyValueStore? beside}) =>
 ///
 /// Desktop builds from 1.3.27 on wrote all of it into the settings document;
 /// the first operation moves it out, once ([_moveOut]).
-class SwarmViewFiles implements LocalKeyValueStore {
+class SwarmViewFiles implements LocalKeyValueStore, SavedViewSweep {
   SwarmViewFiles(this.settings)
     : directory = Directory(
         '${settings.directory.path}${Platform.pathSeparator}swarm-views',
@@ -46,11 +46,63 @@ class SwarmViewFiles implements LocalKeyValueStore {
       key.startsWith(SuperTabSavedViews.indexKey('')) ||
       key == SuperTabSavedViews.ownerKey;
 
-  /// One file per account and Swarm, named so no id can leave the folder.
-  SnapshotStore _file(String key) {
+  /// One file per account and Swarm, named so no id can leave the folder,
+  /// and every file of an account, its temporaries too, starts with
+  /// [_accountPrefix].
+  FileSnapshotStore _file(String key) {
     final id = key.substring(SuperTabSavedViews.viewPrefix.length);
-    final name = base64Url.encode(utf8.encode(id)).replaceAll('=', '');
-    return FileSnapshotStore('view.$name', directory: directory, private: true);
+    final dot = id.indexOf('.');
+    final account = dot < 0 ? id : id.substring(0, dot);
+    final tab = dot < 0 ? '' : id.substring(dot + 1);
+    return FileSnapshotStore(
+      '${_accountPrefix(account)}${_name(tab)}',
+      directory: directory,
+      private: true,
+    );
+  }
+
+  static String _name(String id) =>
+      base64Url.encode(utf8.encode(id)).replaceAll('=', '');
+
+  static String _accountPrefix(String account) => 'view.${_name(account)}.';
+
+  /// Every file of [account], an index lists it or not: one a stop left
+  /// between a view's write and its index's, and a temporary a stop left
+  /// mid-write.
+  @override
+  Future<void> sweepAccount(String account) async {
+    await _ready();
+    final prefix = _accountPrefix(account);
+    for (final entry in await _entries()) {
+      if (_basename(entry).startsWith(prefix)) await _remove(entry);
+    }
+  }
+
+  Future<List<FileSystemEntity>> _entries() async {
+    try {
+      return await directory.list().toList();
+    } on FileSystemException {
+      return const [];
+    }
+  }
+
+  static String _basename(FileSystemEntity entry) =>
+      entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+
+  /// Deletes [entry]; one that will not go is logged, by the folder alone:
+  /// a file's name carries the account.
+  Future<void> _remove(FileSystemEntity entry) async {
+    try {
+      await File(entry.path).delete();
+    } on PathNotFoundException {
+      // Already gone.
+    } on FileSystemException catch (error) {
+      appLog.warn(
+        'swarm',
+        'a saved view in swarm-views was not deleted: '
+            '${error.osError?.message ?? error.runtimeType}',
+      );
+    }
   }
 
   Future<void>? _moved;
@@ -71,13 +123,20 @@ class SwarmViewFiles implements LocalKeyValueStore {
   @override
   Future<void> delete(String key) async {
     await _ready();
-    return _isView(key) ? _file(key).clear() : _small.delete(key);
+    return _isView(key) ? _remove(_file(key).file) : _small.delete(key);
   }
 
   /// Moves the views kept in a document into their files: first those in this
   /// folder's own, then those in the settings document. A failure leaves the
   /// rest where it was for the next launch.
   Future<void> _moveOut() async {
+    // A temporary a stop left mid-write holds a view no index will name.
+    for (final entry in await _entries()) {
+      final name = _basename(entry);
+      if (name.startsWith('view.') && name.endsWith('.tmp')) {
+        await _remove(entry);
+      }
+    }
     try {
       await _moveFrom(_small);
       await _moveFrom(settings);
