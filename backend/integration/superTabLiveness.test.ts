@@ -712,6 +712,44 @@ describe('the push for a new delivery', () => {
   })
 })
 
+// Diego's review of 10-28, item 1: every write of the full poll is the Lead's, so a worker's poll only reads. Through the
+// read cache, with no transaction: 20 workers were 40 whole-Swarm loads, clones and empty commits a minute. Each test holds
+// the Swarm in the cache first, as every reader of a busy Swarm finds it; a miss reads it once for all of them.
+describe('a worker\'s delivery poll', () => {
+  const counting = () => {
+    const opened = { count: 0 }
+    const client = new Proxy(db, { get(target, key, receiver) {
+      if (key !== '$transaction') return Reflect.get(target, key, receiver)
+      return (body: unknown, options: unknown) => {
+        opened.count++
+        return (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)(body, options)
+      }
+    } }) as PrismaClient
+    return { opened, client }
+  }
+
+  it('opens no transaction and returns the worker\'s open deliveries', async () => {
+    const { opened, client } = counting()
+    const f = await swarm({ client })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    await f.timed.readLoad(host, f.tab)
+    opened.count = 0
+    const rows = await f.timed.deliveries(host, f.tab, f.worker)
+    expect(opened.count).toBe(0)
+    expect(rows.map(r => r.messageId)).toContain(sent.result.messageId)
+    expect(rows.every(r => r.agentId === f.worker)).toBe(true)
+  })
+
+  it('still runs the Lead\'s poll in one transaction', async () => {
+    const { opened, client } = counting()
+    const f = await swarm({ client })
+    await f.timed.readLoad(host, f.tab)
+    opened.count = 0
+    await f.timed.deliveries(host, f.tab, f.lead)
+    expect(opened.count).toBe(1)
+  })
+})
+
 describe('the morning digest', () => {
   // #1772 review: every open decision counts, however many there are, and private ones never crowd out shared ones.
   it('counts every decision waiting, past 200, and is not crowded out by newer private ones', async () => {
