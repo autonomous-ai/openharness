@@ -202,7 +202,7 @@ class _ChangeWifiPageState extends State<ChangeWifiPage> {
             _Step.moving,
             error:
                 '$_name has not come back. If it lost its Wi-Fi, it opens its own "Harness-…" '
-                'Wi-Fi in a few minutes: then use Settings ▸ Set up a device near it.',
+                'Wi-Fi in a few minutes: then use Settings ▸ Set up Intern 3 near it.',
           );
         }
       } finally {

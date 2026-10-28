@@ -1,5 +1,6 @@
 import 'dotenv/config'
-import { closeBus } from './lib/bus.js'
+import { closeBus, redisSwarmStamps } from './lib/bus.js'
+import { configureSwarmStamps } from './superTabs/cache.js'
 import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
 import {
@@ -20,6 +21,7 @@ import { ensureMentionExpiry } from './superTabs/mentions.js'
 import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
+import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
@@ -71,7 +73,10 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
-  const swarms = new SuperTabStore(prisma)
+  // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
+  configureSwarmStamps(redisSwarmStamps(), { reads: false })
+  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once.
+  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).

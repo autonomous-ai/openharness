@@ -2786,6 +2786,30 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // Stability roadmap 2.4: the server says over this socket when work waits for an agent here (backend lib/adapterWs.ts).
+  it('hands the backend\'s super_tab_deliveries to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
+    // Naming no agent, or naming one wrongly, it only says the server pushes.
+    ws.message({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 7 } } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: 'super_tab_deliveries', tabId: 'tab-1', agentId: 'agent-1' }, { type: 'super_tab_deliveries' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
+    socket.handleLocalFrame('local:swarm', { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(2)
+    expect(frames.filter((f) => f.type === 'super_tab_deliveries')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   it('hands the backend\'s zoo_changed to the window as its own frame, and only the backend\'s', async () => {
     const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []

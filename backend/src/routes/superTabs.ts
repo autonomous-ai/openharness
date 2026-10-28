@@ -9,6 +9,7 @@ import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
+import { redisPollMemory } from '../superTabs/pollMemory.js'
 import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
@@ -122,6 +123,25 @@ function busyOnDuplicate(error: unknown): never {
  *  before or right after any action, so it meets this at once. */
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
+/** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
+async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
+  const [bus, { announceSwarmDeliveries }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js')])
+  return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
+    // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
+    { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      // A team account has no git login of its own: without the app it takes no teammates' work.
+      teamAccountsIdle: !github,
+      // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
+      // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
+      polls: redisPollMemory(bus.pub),
+      deliveriesWaiting: announceSwarmDeliveries,
+      // The host's answer often lands on another instance than the sender's wait.
+      terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
+      watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
+      // Its observer sockets may be on any instance.
+      accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) } })
+}
+
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
   approvals?: Approvals; signIn?: GitHubSignIn | null } = {}) {
   const github = options.github !== undefined ? options.github : await githubTokensFromEnv(env)
@@ -141,11 +161,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     throw new SuperTabError('GITHUB_REPOSITORY_NOT_APPROVED', `Nobody who can push to ${repository.fullName} has approved it for this project yet, `
       + 'so teammates\' agents get no access to it. Someone who can push to it approves it in Harness: Project details, GitHub access.', 403)
   }
-  // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
-  const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
-    { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
-      // A team account has no git login of its own: without the app it takes no teammates' work.
-      teamAccountsIdle: !github })
+  const store = options.store ?? await productionStore(github)
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
@@ -335,7 +351,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       }
       await requireApproval(req.user!, grant, repository)
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
-      return { ...issued, ...attribution(grant) }
+      // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
+      // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
+      const commitAs = isTeamSession(req.user) ? await github.app.commitIdentity(issued.token) : null
+      return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
     }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },

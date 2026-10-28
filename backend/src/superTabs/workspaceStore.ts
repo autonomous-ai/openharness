@@ -29,6 +29,9 @@ const checked = new WeakMap<object, Map<string, boolean>>()
  *  per person per transaction, which reads one snapshot. */
 export async function hasWorkspaceAccess(tx: Transaction, state: Pick<SuperTabState, 'workspaceId'>, userId: string): Promise<boolean> {
   if (!state.workspaceId) return !workspacesRequired()
+  // Remembered only within a transaction. A read outside one (the read cache's, cache.ts) runs on the process's own client,
+  // which lives as long as the process: an answer kept on it would outlive the person's removal.
+  if (typeof (tx as { $transaction?: unknown }).$transaction === 'function') return !!await activeMember(tx, state.workspaceId, userId)
   const answers = checked.get(tx) ?? new Map<string, boolean>()
   checked.set(tx, answers)
   const key = memberId(state.workspaceId, userId)

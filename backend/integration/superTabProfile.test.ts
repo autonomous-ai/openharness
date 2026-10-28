@@ -9,7 +9,7 @@ import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { CdnAvatarStore, MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -228,6 +228,60 @@ describe('setting avatars', () => {
     const { Readable } = await import('node:stream')
     await expect(plain.uploadAvatar(owner, tab, { body: Readable.from([Buffer.from(image(64))]) })).rejects.toMatchObject({ code: 'AVATARS_UNAVAILABLE', status: 503 })
     await plain.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'preset', key: 'fox' } } })
+  })
+})
+
+// Prod has no avatar bucket (Ken, 2026-10-28): pictures go in the attachments bucket under avatars/ and are linked on its
+// CDN, as chat files are.
+describe('avatars in the attachments bucket', () => {
+  const bucket = new MemoryAttachmentStore()
+  let shared: SuperTabStore
+  let reads: FastifyInstance
+  beforeAll(async () => {
+    shared = new SuperTabStore(db, Date.now, { store: bucket, prefix: 'super-tabs', publicBase: 'https://cdn.example.test',
+      avatars: new CdnAvatarStore(bucket, 'https://cdn.example.test'), avatarPrefix: 'avatars' })
+    reads = Fastify()
+    reads.setErrorHandler(errorHandler)
+    reads.addHook('onRequest', async request => { request.user = [owner, peer].find(u => `Bearer ${u.sub}` === request.headers.authorization) })
+    await reads.register(superTabRoutes, { store: shared, github: null })
+    await reads.ready()
+  })
+  afterAll(async () => { await reads?.close() })
+  const picture = async (tab: string, bytes: Uint8Array) => {
+    const { Readable } = await import('node:stream')
+    const { avatar } = await shared.uploadAvatar(owner, tab, { body: Readable.from([Buffer.from(bytes)]) })
+    await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id: avatar.id } } })
+    return (await db.superTabAttachment.findUniqueOrThrow({ where: { id: avatar.id } })).objectKey
+  }
+  const linkFor = async (tab: string) => {
+    const response = await reads.inject({ method: 'GET', url: `/api/super-tabs/${tab}/parts`, headers: { authorization: `Bearer ${peer.sub}` } })
+    return response.json().data.derived?.avatars?.[`person:${owner.sub}`] as string | undefined
+  }
+
+  it('uploads, reads and replaces a picture, linked on the CDN', async () => {
+    const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
+    const invitation = await shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' } })
+    await shared.execute(peer, tab, { operationId: randomUUID(), command: { type: 'invite.accept', inviteId: invitation.result.inviteId as string } })
+    const first = await picture(tab, image(64))
+    expect(first).toMatch(new RegExp(`^avatars/${tab}/[0-9a-f]{32}/avatar$`))
+    expect(bucket.objects.get(first)).toMatchObject({ contentType: 'image/png' })
+    expect(await linkFor(tab)).toBe(`https://cdn.example.test/${first}`)
+    expect(bucket.objects.get(first)!.bytes).toEqual(Buffer.from(image(64)))
+    const second = await picture(tab, image(96))
+    expect(second).not.toBe(first)
+    expect(await linkFor(tab)).toBe(`https://cdn.example.test/${second}`)
+    expect(bucket.objects.get(second)!.bytes).toEqual(Buffer.from(image(96)))
+  })
+
+  it('keeps chat files out of the avatar folder and out of avatar links', async () => {
+    const tab = (await shared.create(owner, randomUUID(), 'Shared bucket')).id
+    const { Readable } = await import('node:stream')
+    const chat = await shared.upload(owner, tab, 'lead', { name: 'contract.pdf', mime: 'application/pdf', body: Readable.from([Buffer.from('private')]) })
+    const chatKey = (await db.superTabAttachment.findUniqueOrThrow({ where: { id: chat.attachment.id } })).objectKey
+    expect(chatKey).toMatch(/^super-tabs\//)
+    await expect(shared.execute(owner, tab, { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id: chat.attachment.id } } }))
+      .rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+    expect([...bucket.objects.keys()].filter(objectKey => objectKey.startsWith('avatars/'))).not.toContain(chatKey)
   })
 })
 

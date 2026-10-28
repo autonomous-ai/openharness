@@ -5,10 +5,12 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, readConversation } from './projects.js'
+import { canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
+import { mayDrive } from './terminal.js'
 import { noteProjectReports } from './projectUpdates.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
+import type { DeliveriesWaiting } from './store.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -39,6 +41,8 @@ interface Deps {
   teamHost(tx: Transaction, user: AuthUser): Promise<string | null>
   /** Refuses a person no longer in the Swarm's Workspace (workspaceStore.ts requireWorkspaceAccess). */
   workspaceAccess(tx: Transaction, state: SuperTabState, userId: string): Promise<void>
+  /** Tells the agent's machine, once `tx` commits, that a delivery waits for it (store.ts announce). */
+  announce(tx: Transaction, waiting: DeliveriesWaiting): void
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -67,6 +71,11 @@ export class SuperTabNativeStore {
     const operator = author(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, true)
     const target = agent(state, record.agentId)
     const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
+    // A terminal drives its session and its answers land in the conversation: only those who may drive it may use it.
+    try { mayDrive(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, target) } catch (error) {
+      if (error instanceof SuperTabError) fail('NATIVE_CONTEXT_REVOKED', 'Only this agent\'s machine\'s owner can use its terminal now.', 403)
+      throw error
+    }
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
       || target.harnessId !== binding.harnessId || target.machineId !== binding.machineId || target.machineOwnerId !== binding.machineOwnerId
       || target.contributorId !== binding.contributorId || target.membershipGeneration !== binding.contributionGeneration
@@ -107,6 +116,7 @@ export class SuperTabNativeStore {
         await this.validate(tx, state, prior)
         return { contextId }
       }
+      mayDrive(state, { kind: 'person', userId: user.sub, email: user.email }, target)
       const binding: Binding = { tabId, conversationId: group.id, agentId: target.id, harnessId: target.harnessId,
         machineId: target.machineId, machineOwnerId: target.machineOwnerId, operator,
         contributorId: target.contributorId, contributionGeneration: target.membershipGeneration,
@@ -235,6 +245,7 @@ export class SuperTabNativeStore {
           ...(team
             ? { authorKind: 'agent', authorId: target.id, authorGeneration: target.membershipGeneration }
             : { authorKind: 'person', authorId: binding.operator.id, authorGeneration: binding.operator.membershipGeneration }) } })
+        this.deps.announce(tx, { machineId: lead.machineId, tabId, agentId: recipient })
       }
       await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
       const result = { eventId, sequence }
@@ -244,12 +255,15 @@ export class SuperTabNativeStore {
   }
 }
 
-/** Removal followed by rejoining must not revive an old terminal binding. */
+/** Removal followed by rejoining must not revive an old terminal binding. Only what this change ended is revoked: what
+ *  ended earlier was revoked by the change that ended it, and no context opens without access (open; validate checks it
+ *  again at every use). Most commands change no access and read nothing here: rebuilding every viewer and every member
+ *  outside every private conversation on each command kept prod Mongo busy (2026-10-28). */
 export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState) {
   const conditions: Prisma.SuperTabNativeContextWhereInput[] = []
   for (const member of before.people) {
     const current = after.people.find(p => p.id === member.id)
-    if (!current || current.generation !== member.generation || current.role === 'viewer') conditions.push({ userId: member.id })
+    if (!current || current.generation !== member.generation || (current.role === 'viewer' && member.role !== 'viewer')) conditions.push({ userId: member.id })
   }
   // A removed agent's contexts, and those of an agent given a replacement terminal: they name the old terminal, and its
   // waiting turns are cancelled with them, so a claim racing the change conflicts on their rows (rule b).
@@ -257,15 +271,16 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const current = after.agents.find(a => a.id === target.id)
     if (!current || current.harnessId !== target.harnessId) conditions.push({ agentId: target.id })
   }
+  // Those who may no longer watch an agent, such as everyone but its machine's owner once it reads private chats.
+  for (const { agentId, personIds } of watchersLost(before, after)) conditions.push({ agentId, userId: { in: personIds } })
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
-    if (!current || current.archived) conditions.push({ conversationId: group.id })
+    if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
     // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
     else if (!isLeads(current)) {
       for (const member of after.people) {
-        if (!canReadGroup(after, { kind: 'person', userId: member.id, email: member.email }, current)) {
-          conditions.push({ conversationId: group.id, userId: member.id })
-        }
+        const reader = { kind: 'person' as const, userId: member.id, email: member.email }
+        if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })
       }
       const removed = group.agentIds.filter(id => !current.agentIds.includes(id))
       if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })

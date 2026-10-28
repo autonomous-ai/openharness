@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -44,9 +44,9 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db }: { legacy?: boolean; client?: PrismaClient } = {}) {
+async function swarm({ legacy = false, client = db, hooks }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks } = {}) {
   let now = 10_000_000
-  const timed = new SuperTabStore(client, () => now)
+  const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
   if (legacy) await dropProjects(tab)
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -617,6 +617,34 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     expect(rows.map(d => d.messageId)).toEqual([sent.result.messageId])
   })
 
+  // Behind a load balancer each poll may land on another pod: a memory of the last full poll per pod made every pod run its
+  // own full polls, so the one-row answer held only as often as a host met the same pod twice (stability roadmap 2.4).
+  it('answers from one indexed read on another server once any server ran the full poll, when they share the memory', async () => {
+    const counted = counting()
+    const shared = new Map<string, number>()
+    const polls = { get: async (key: string) => shared.get(key), set: async (key: string, at: number) => { shared.set(key, at) } }
+    const f = await swarm({ client: counted.client, hooks: { polls } })
+    const other = new SuperTabStore(counted.client, () => f.clock.now, null, { polls })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect(await other.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+  })
+
+  it('runs the full checked poll each time while the shared memory cannot be read or written, and still answers', async () => {
+    const counted = counting()
+    const down = async () => { throw new Error('Redis unreachable') }
+    const f = await swarm({ client: counted.client, hooks: { polls: { get: down, set: down } } })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toContain('SwarmGroup.findMany')
+    // A stranger still meets the authority checks, never a remembered answer.
+    await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+  })
+
   it('never answers a caller who is not the agent\'s host from another caller\'s quiet poll, before or after it fails', async () => {
     const f = await swarm()
     await f.timed.deliveries(host, f.tab, f.lead)
@@ -624,6 +652,60 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     }
+  })
+})
+
+// Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
+// announced to the machine its agent runs on, once its write commits, so the host reads it at once.
+describe('the push for a new delivery', () => {
+  const announcing = () => {
+    const waiting: Array<{ machineId: string; tabId: string; agentId: string }> = []
+    return { waiting, hooks: { deliveriesWaiting: (w: { machineId: string; tabId: string; agentId: string }) => { waiting.push(w) } } }
+  }
+
+  it('names the machine, Swarm and agent of a message\'s recipient once it is written', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    expect(waiting).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
+  })
+
+  // The host reads as soon as it hears: a push heard before the commit would find nothing and wait 30 s for the next read.
+  it('is heard only once its write has committed', async () => {
+    let open = 0
+    const client = new Proxy(db, { get(target, key, receiver) {
+      if (key !== '$transaction') return Reflect.get(target, key, receiver)
+      return async (body: unknown, options: unknown) => {
+        open++
+        try { return await (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)(body, options) } finally { open-- }
+      }
+    } }) as PrismaClient
+    const heard: number[] = []
+    const f = await swarm({ client, hooks: { deliveriesWaiting: () => { heard.push(open) } } })
+    heard.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    expect(heard).toEqual([0])
+  })
+
+  it('names the Lead\'s machine for a turn typed into a worker\'s terminal', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
+    waiting.length = 0
+    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'prompt', previousEventId: null, text: 'Typed by hand',
+      truncated: false, interrupted: false })
+    expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+  })
+
+  it('announces the update request the Lead\'s own poll writes for it', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    await f.leadInbox()
+    waiting.length = 0
+    f.clock.now += 5 * MINUTE
+    await f.timed.deliveries(host, f.tab, f.lead)
+    expect(waiting).toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
   })
 })
 

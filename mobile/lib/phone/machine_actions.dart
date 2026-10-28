@@ -8,6 +8,7 @@ import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
     show showMachineRenameDialog;
 
 import 'change_wifi_page.dart';
+import 'computer_github_page.dart';
 import 'computer_password_page.dart';
 import 'computer_ssh_page.dart';
 import 'computer_version_page.dart';
@@ -45,7 +46,7 @@ Future<void> signOutComputer(
     title: 'Sign out $name?',
     message:
         'It signs out of this account and forgets its Wi-Fi, then opens its own Wi-Fi "$hotspot" '
-        'to be set up again — with Set up a device, on this account or another. Its harnesses, '
+        'to be set up again — with Set up Intern 3, on this account or another. Its harnesses, '
         'projects and files stay on it.',
     confirmLabel: 'Sign out',
   );
@@ -57,7 +58,7 @@ Future<void> signOutComputer(
     SnackBar(
       content: Text(
         reply['started'] == true
-            ? '$name is signing out. Set it up again from Set up a device, near it.'
+            ? '$name is signing out. Set it up again from Set up Intern 3, near it.'
             : 'Could not reach $name. Try again.',
       ),
     ),
@@ -73,7 +74,8 @@ Future<void> signOutComputer(
 /// offered only where it answers.
 ///
 /// Read at the tap, not when the row was drawn, so a computer that got linked in between gets the
-/// sheet for what it is now.
+/// sheet for what it is now — and read again while it is open: its Harness OS status is asked as it
+/// opens, and its Version, GitHub, SSH… rows come with the answer.
 void openMachineActions(
   BuildContext context,
   AppNotifier notifier,
@@ -81,6 +83,27 @@ void openMachineActions(
 ) {
   final machine = notifier.stateOf(machineId);
   if (machine == null) return;
+  // Asked as the sheet opens; the rows below follow the answer.
+  if (phoneMachineStatusOf(machine) == PhoneMachineStatus.ready) {
+    unawaited(notifier.refreshOsStatus(machineId));
+  }
+  final rows = _machineRows(context, notifier, machineId);
+  showPhoneSheet(
+    context,
+    title: machine.machine.displayName,
+    rebuildOn: notifier,
+    rows: () => _machineRows(context, notifier, machineId) ?? rows!,
+  );
+}
+
+/// The sheet's rows for the computer as it is now; null once it is gone from the account.
+PhoneSheetRows? _machineRows(
+  BuildContext context,
+  AppNotifier notifier,
+  String machineId,
+) {
+  final machine = notifier.stateOf(machineId);
+  if (machine == null) return null;
   final status = phoneMachineStatusOf(machine);
   final retrying = notifier.machineRetrying(machineId);
   final removing = notifier.machineRemoving(machineId);
@@ -213,6 +236,20 @@ void openMachineActions(
                 ),
               ),
             ),
+          if (notifier.osFeature(machineId, 'github'))
+            PhoneSheetAction(
+              icon: LucideIcons.gitPullRequest300,
+              label: 'GitHub',
+              chevron: true,
+              onTap: () => Navigator.of(context).push(
+                phoneRoute(
+                  (_) => ComputerGithubPage(
+                    notifier: notifier,
+                    machineId: machineId,
+                  ),
+                ),
+              ),
+            ),
           if (notifier.osFeature(machineId, 'ssh'))
             PhoneSheetAction(
               icon: LucideIcons.terminal300,
@@ -250,14 +287,7 @@ void openMachineActions(
         remove,
       ];
   }
-  // Asked as the sheet opens; the rows above come from the last answer, and a new one rebuilds them
-  // the next time.
-  if (status == PhoneMachineStatus.ready) {
-    unawaited(notifier.refreshOsStatus(machineId));
-  }
-  showPhoneSheet(
-    context,
-    title: machine.machine.displayName,
+  return (
     actions: actions,
     // Their own card, below a gap: the rows that end something stand apart from the ones that
     // only look or ask.

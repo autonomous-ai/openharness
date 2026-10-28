@@ -12,6 +12,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import * as parts from '../src/superTabs/parts/index.js'
+import { noteChange, swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
@@ -98,7 +99,7 @@ const get = async (url: string, as: AuthUser = owner) => {
 const keys = (list: Array<{ key: string }>) => list.map(p => p.key)
 /** A later write of one group by a command, as group 2's store does it, stamped `at`. */
 async function writeGroup(tabId: string, key: string, at: number, change: (group: Conversation) => void, op: 'update' | 'remove' = 'update') {
-  await db.$transaction(async tx => {
+  await swarmTransaction(db, async tx => {
     const current = (await parts.loadActive(tx, tabId, { groupIds: [key] })).groups.find(g => g.key === key)!
     const data = structuredClone(current.data!) as Conversation
     change(data)
@@ -276,7 +277,7 @@ describe('changes since a cursor (design 4.2, 4.4)', () => {
     const s = await scene()
     const cursor = await firstLoad(s.tabId, peer, NOW)
     expect((await changes(s.tabId, cursor, peer, NOW - 30_000 + 7 * DAY)).body.data).toEqual({ reload: true })
-    await db.swarmHead.updateMany({ where: { tabId: s.tabId }, data: { visibilityEpoch: 2 } })
+    await swarmTransaction(db, async tx => { noteChange(tx, s.tabId, 'main'); await tx.swarmHead.updateMany({ where: { tabId: s.tabId }, data: { visibilityEpoch: 2 } }) })
     expect((await changes(s.tabId, cursor, peer, NOW + 1_000)).body.data).toEqual({ reload: true })
     expect((await changes(s.tabId, 'not-a-cursor', peer, NOW + 1_000)).body.data).toEqual({ reload: true })
   })

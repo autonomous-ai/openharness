@@ -374,8 +374,10 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci --no-audit --no-fund
-      - name: Shared desk layout compatibility
-        run: npm test -- src/routes/desk.test.ts
+      # The whole backend unit suite (src/**/*.test.ts, including the shared desk layout test): it once ran only the desk
+      # test, and main broke 48 team-session tests unseen (#1926).
+      - name: Backend unit suite
+        run: npm test
 
   website-checks:
     concurrency:

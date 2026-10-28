@@ -732,9 +732,14 @@ describe('the managed runtimes on Windows', () => {
     expect(runtimeLayout('linux')).toEqual({ archiveSuffix: '.tar.gz', nodeBinary: join('bin', 'node'), eol: '\n' })
   })
 
-  it('installs no grid on Windows: nothing is fetched and nothing is laid down, even with a pointer left behind', async () => {
+  it('lays no managed grid down on Windows: only the manifest is read, for the version grid\'s installer lays down (gridWindowsPin.ts)', async () => {
     installedGrid('0.3.47', 'win32-x64', true)
-    const fetchSpy = vi.fn()
+    const before = readdirSync(runtimeDir).sort()
+    // An archive entry, as a mistaken publish could leave: still never downloaded. Its version is below Windows'
+    // floor, so no installer runs either.
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ grid: { 'win32-x64': {
+      version: '0.3.48', url: 'https://example.test/grid.tar.gz', sha256: 'x', archiveRoot: 'grid-0.3.48-win32-x64',
+    } } })))
     vi.stubGlobal('fetch', fetchSpy)
     const { ensureManagedGrid } = await load()
     const platform = process.platform
@@ -744,6 +749,7 @@ describe('the managed runtimes on Windows', () => {
     } finally {
       Object.defineProperty(process, 'platform', { value: platform })
     }
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(fetchSpy.mock.calls.map((call) => String((call as unknown[])[0]))).toEqual(['https://example.test/runtime/grid/metadata.json'])
+    expect(readdirSync(runtimeDir).sort()).toEqual(before)
   })
 })

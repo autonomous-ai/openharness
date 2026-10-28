@@ -51,6 +51,16 @@ SuperTabAvatarUpload uploadAvatarWith(ApiClient Function() api) =>
           body['success'] == true) {
         return Map<String, dynamic>.from(body['data'] as Map);
       }
+      // The daemon's own 404, a bare code: a CLI too old to pass pictures on
+      // (Desktop 1.3.30 read it as "Could not upload the file", and retrying
+      // never helps). The backend's refusals carry `{code, message}`.
+      if (response.statusCode == 404 && body is Map && body['error'] is! Map) {
+        throw const SuperTabFailure(
+          'UPDATE_HARNESS',
+          'Update Harness on this computer to upload pictures.',
+          statusCode: 404,
+        );
+      }
       throw superTabUploadRefusal(response);
     };
 

@@ -11,6 +11,7 @@
  */
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { clock, guardedWrite, PartConflict } from '../parts/index.js'
+import { swarmTransaction } from '../cache.js'
 import { addMember, personalWorkspaceId } from '../workspaceStore.js'
 import type { Person } from '../model.js'
 
@@ -94,7 +95,7 @@ export async function migrateWorkspaces(db: PrismaClient, opts: { apply: boolean
     report.swarms += swarms.length
     if (!opts.apply) continue
     try {
-      await db.$transaction(async tx => {
+      await swarmTransaction(db, async tx => {
         if (!await tx.swarmWorkspace.findUnique({ where: { id: workspaceId } })) {
           await tx.swarmWorkspace.create({ data: { id: workspaceId, autonomousEnv: first.autonomousEnv, name: first.name || 'Workspace', ownerId: first.ownerId, deletedAt: null, purgeAt: null } })
         }
@@ -109,7 +110,7 @@ export async function migrateWorkspaces(db: PrismaClient, opts: { apply: boolean
     }
     for (const swarm of swarms) {
       try {
-        await db.$transaction(tx => stampSwarm(tx, swarm.id, swarm.headVersion, swarm.head, swarm.headFields, workspaceId), TRANSACTION)
+        await swarmTransaction(db, tx => stampSwarm(tx, swarm.id, swarm.headVersion, swarm.head, swarm.headFields, workspaceId), TRANSACTION)
       } catch (error) {
         report.failed.push({ tabId: swarm.id, error: error instanceof Error ? error.message : String(error) })
       }
@@ -141,7 +142,7 @@ export async function rollbackWorkspaces(db: PrismaClient, opts: { apply: boolea
   if (!opts.apply) return report
   for (const row of rows) {
     try {
-      await db.$transaction(async tx => {
+      await swarmTransaction(db, async tx => {
         const head = await tx.swarmHead.findUniqueOrThrow({ where: { id: `${row.id}:head` } })
         await stampSwarm(tx, row.id, head.version, head.data as Prisma.JsonObject,
           { groupCounter: head.groupCounter, visibilityEpoch: head.visibilityEpoch, sequenceBase: head.sequenceBase }, null)

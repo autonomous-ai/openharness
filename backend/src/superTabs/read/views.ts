@@ -4,7 +4,7 @@
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
 import { isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
-import { machineSlots, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine } from '../machines.js'
+import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
@@ -67,8 +67,8 @@ export function agentView(agent: Agent): AgentView {
   return withAvatarView(rest) as AgentView
 }
 
-export function readerView(parts: SwarmParts, actor: Actor, now: number, extras: ReadExtras): ReaderView {
-  const state = store.reassemble(parts)
+/** `state` is the parts already reassembled, when the caller has it (a read reassembles once). */
+export function readerView(parts: SwarmParts, actor: Actor, now: number, extras: ReadExtras, state = store.reassemble(parts, { share: true })): ReaderView {
   const visible = visibleState(state, actor, now)
   const groups = visible.conversations.filter(group => canReadGroup(state, actor, group))
   const readable = new Set(groups.map(g => g.id))
@@ -99,8 +99,7 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
-    const refusal = teamWorkRefusal(stored, now, extras.teamMachines.includes(pool.machineId), teamAccountRequired(state),
-      !!extras.otherWorkspaceMachines?.includes(pool.machineId))
+    const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
       teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }] as const
   }

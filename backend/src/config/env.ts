@@ -22,6 +22,11 @@ const envSchema = z.object({
   // manager socket may land on different backend instances; Redis pub/sub bridges them
   // (channels up:{machineId} / down:{machineId}) plus an agent→manager presence key. See lib/bus.ts.
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
+  // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
+  SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // Its size per process, counted as the JSON size of what it holds.
+  SWARM_CACHE_MB: z.string().default('64').transform(Number),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
@@ -240,7 +245,9 @@ const envSchema = z.object({
   SUPER_TAB_ATTACHMENTS_PREFIX: z.string().default('super-tabs'),
   // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
   SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
-  // A private bucket (no public read) for Swarm avatars, served only through signed links. Unset: avatar uploads are off.
+  // A private bucket (no public read) for Swarm avatars, served only through signed links that expire. Unset: avatars go in
+  // the attachments bucket under avatars/ and are linked on its public CDN like chat files, links that never expire
+  // (docs/swarms.md). No attachments bucket either: avatar uploads are off.
   SUPER_TAB_AVATARS_BUCKET: z.string().default(''),
 
   // The Harness GitHub App (github/app.ts, docs/swarm-github-app.md): a Swarm agent doing a task pushes and opens pull

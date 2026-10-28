@@ -1200,6 +1200,8 @@ model SuperTabDelivery {
 
   @@index([tabId, agentId, status, createdAt])
   @@index([machineId, status])
+  // A page of messages reads its deliveries by message (pageReads.ts).
+  @@index([tabId, messageId])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.
@@ -1506,9 +1508,13 @@ model SwarmMachine {
   cleanupOwnerIds String[]
   /// The last change to its settings or ledger, never its own reading (host reads wake on this, not on changedAt).
   hostChangedAt   DateTime?
+  /// The last write of its own reading alone (a report every 15 s): readers of changes see it, while `changedAt`, and so the
+  /// Swarm's newest change, stays at the last change of anything else (Stability Roadmap 2.2).
+  readAt          DateTime?
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  @@index([tabId, readAt])
   @@index([machineId, deleted])
 }
 
