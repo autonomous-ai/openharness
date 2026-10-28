@@ -169,6 +169,64 @@ void main() {
     expect(c.selectedId, 'lead');
   });
 
+  for (final move in ['a new conversation', 'its terminals', 'one terminal']) {
+    test('late loadGroup does not override $move chosen meanwhile', () async {
+      server.state['agents'] = [
+        {
+          'id': 'b',
+          'name': 'b',
+          'machineId': 'm',
+          'harnessId': 'native-b',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      group('lead')['agentIds'] = ['b'];
+      final hold = Completer<void>();
+      // Holds a create between selecting its conversation and reading the
+      // change, where a late open could still land over it.
+      final saving = Completer<void>();
+      late final SuperTabController c;
+      c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        request: (method, path, {body}) async {
+          if (path.endsWith('/groups/finished')) await hold.future;
+          return server.request(method, path, body: body);
+        },
+        save: (state) async {
+          if (c.selectedId != 'lead') await saving.future;
+          return server.save(state);
+        },
+        pollInterval: Duration.zero,
+      );
+      await c.refresh();
+      final slow = c.select('finished');
+      Future<Object?> made = Future.value();
+      switch (move) {
+        case 'a new conversation':
+          made = c.command({
+            'type': 'conversation.create',
+            'title': 'New feature',
+            'brief': '',
+            'checks': <dynamic>[],
+          });
+          await pumpEventQueue();
+          expect(c.selectedId, startsWith('group-'));
+        case 'its terminals':
+          c.selectGroupTerminals('lead');
+        default:
+          c.selectTerminal('lead', 'b');
+      }
+      final chosen = c.selectedId;
+      hold.complete();
+      expect(await slow, isFalse);
+      expect(c.selectedId, chosen);
+      saving.complete();
+      await made;
+    });
+  }
+
   test(
     'read marks and drafts of a closed group survive opening again',
     () async {

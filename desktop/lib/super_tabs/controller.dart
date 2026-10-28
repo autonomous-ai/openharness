@@ -126,9 +126,17 @@ class SuperTabController extends ChangeNotifier {
   SuperTabSnapshot? snapshot;
   String selectedId = 'lead';
 
-  /// Counts [select] and [selectDevices] calls, so a slow select cannot land
+  /// Counts the reader's moves ([_moveView]), so a slow [select] cannot land
   /// over a newer choice.
   int _selectRequest = 0;
+
+  /// Every move of what the reader looks at goes through here: a [select]
+  /// still reading its conversation then knows it was overtaken.
+  void _moveView({String? to, bool devices = false}) {
+    _selectRequest++;
+    devicesSelected = devices;
+    if (to != null) selectedId = to;
+  }
 
   /// The newest change of the Swarm this tab has read, in epoch milliseconds: what tells the app and the tag list
   /// that it changed (spec ruling 8).
@@ -272,8 +280,7 @@ class SuperTabController extends ChangeNotifier {
   /// its draft and terminal choice stay available when the person returns.
   void selectDevices() {
     if (_disposed || accessRevoked || devicesSelected) return;
-    _selectRequest++;
-    devicesSelected = true;
+    _moveView(devices: true);
     _saveSoon();
     _changed();
   }
@@ -378,7 +385,7 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     _terminals[conversationId] = '*';
-    devicesSelected = false;
+    _moveView();
     _saveSoon();
     _changed();
   }
@@ -393,7 +400,7 @@ class SuperTabController extends ChangeNotifier {
     if (_terminals[conversationId] == agentId && !devicesSelected) {
       return;
     }
-    devicesSelected = false;
+    _moveView();
     if (agentId == null) {
       _terminals.remove(conversationId);
     } else {
@@ -918,7 +925,6 @@ class SuperTabController extends ChangeNotifier {
       if (ask != _selectRequest) return false;
     }
     if (id == selectedId && !devicesSelected) return true;
-    devicesSelected = false;
     _acted();
     final group = snapshot!.conversation(id)!;
     // A workgroup is shown under its project, so its project opens. A Chat with
@@ -928,7 +934,7 @@ class SuperTabController extends ChangeNotifier {
       unawaited(loadDormant(group.projectId));
       if (group.closed) closedOpenProjects.add(group.projectId);
     }
-    selectedId = id;
+    _moveView(to: id);
     _viewVersion++;
     operationNotice = null;
     _saveSoon();
@@ -1592,7 +1598,7 @@ class SuperTabController extends ChangeNotifier {
           result['conversationId'] is String) {
         // A successful create selects its confirmed destination even when the
         // following read is offline. Never leave the old group's composer active.
-        selectedId = result['conversationId'] as String;
+        _moveView(to: result['conversationId'] as String);
       }
       _pending = null;
       try {
