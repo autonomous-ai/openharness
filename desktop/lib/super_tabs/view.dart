@@ -370,14 +370,28 @@ class _SuperTabViewState extends State<SuperTabView>
         scroll.position.extentAfter >= 40) {
       return;
     }
-    _following[id] = true;
+    _follow(id, true);
     if (_newAfter.containsKey(id)) setState(() => _newAfter.remove(id));
     c.markRead(id, through: sequence);
   }
 
+  /// Whether [id]'s list follows its end; the controller keeps a reader's
+  /// rows while they read back.
+  void _follow(String id, bool following) {
+    _following[id] = following;
+    c.readingBack(id, !following);
+  }
+
   void _jumpToLatest() {
-    _followEnd(c.selectedId);
+    final id = c.selectedId;
     _focus.requestFocus();
+    if (!c.hasNewer(id)) return _followEnd(id);
+    // More are waiting than were read: the latest page first, then its end.
+    unawaited(
+      c.showLatest(id).then((_) {
+        if (mounted && c.selectedId == id) _followEnd(id);
+      }),
+    );
   }
 
   @override
@@ -1170,7 +1184,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // Stop following the end: the tagged message is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
-      _following[id] = false;
+      _follow(id, false);
     });
     _revealTarget(id, 0);
     _focus.requestFocus();
@@ -1287,7 +1301,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // Stop following the end: the original is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
-      _following[id] = false;
+      _follow(id, false);
     });
     _revealTarget(
       id,
@@ -2168,6 +2182,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final newCount = newAfter == null
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
+    // More came than were read: the count is a floor.
+    final moreNew = c.hasNewer(c.selectedId);
     final reply = _replies[c.selectedId];
     final outgoing = c.outgoing(c.selectedId);
     // A failed message says so in its own row, with what can be done.
@@ -2242,7 +2258,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         if (_jumpingToEnd) return false;
                         final id = c.selectedId;
                         final atEnd = event.metrics.extentAfter < 40;
-                        _following[id] = atEnd;
+                        _follow(id, atEnd);
                         // Once the scroll ends, so keeping the place never
                         // cuts a drag short.
                         if (event is ScrollEndNotification) {
@@ -2406,7 +2422,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                     size: 16,
                                   ),
                                   label: Text(
-                                    '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
+                                    moreNew
+                                        ? '$newCount+ new messages'
+                                        : '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
                                   ),
                                 ),
                             ],

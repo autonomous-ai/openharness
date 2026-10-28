@@ -680,6 +680,36 @@ class SuperTabController extends ChangeNotifier {
 
   bool hasOlder(String id) => _before[id] != null;
 
+  /// Conversations whose reader is scrolled up ([readingBack]).
+  final _readingBack = <String>{};
+
+  /// Conversations with messages after the newest held that no read has
+  /// brought yet ([hasNewer]).
+  final _newer = <String>{};
+
+  /// Conversations whose next read takes the latest page whole
+  /// ([showLatest]).
+  final _latestWanted = <String>{};
+
+  /// The reader of [id] scrolled up, or back to its end. While they read
+  /// back, a read that finds more than a page new keeps the rows they are
+  /// reading and adds the next page below; [showLatest] reads the rest.
+  void readingBack(String id, bool reading) =>
+      reading ? _readingBack.add(id) : _readingBack.remove(id);
+
+  /// Whether more messages came after the newest held than reads brought.
+  bool hasNewer(String id) => _newer.contains(id);
+
+  /// Brings [id]'s newest messages: when more are waiting than reads
+  /// brought, the latest page replaces what is held.
+  Future<void> showLatest(String id) async {
+    _readingBack.remove(id);
+    await _reading[(id, false)];
+    if (_disposed || !_newer.contains(id)) return;
+    _latestWanted.add(id);
+    await _readMessages(id);
+  }
+
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
   int _loadedMessageSequence(String id) =>
@@ -1693,7 +1723,7 @@ class SuperTabController extends ChangeNotifier {
     }
     // A saved page may be stale in its receipts as well as short of new
     // messages: the first read after it takes the latest page whole.
-    if (_showingSaved) return '';
+    if (_showingSaved || _latestWanted.contains(id)) return '';
     final tail = _messages[id]?.lastOrNull?.sequence;
     return tail != null ? '?after=$tail' : '';
   }
@@ -1782,6 +1812,7 @@ class SuperTabController extends ChangeNotifier {
           ? known.last.sequence
           : null;
       final query = _query(id, older: older);
+      final latest = !older && _latestWanted.remove(id);
       final from = _before[id];
       final first = early != null && early.query == query ? early.page : null;
       var answer = first != null
@@ -1797,9 +1828,12 @@ class SuperTabController extends ChangeNotifier {
       final reactionSeq = older ? null : answer['reactionSeq'];
       // More than a page arrived after the newest held (back from another
       // conversation, or from sleep): the page after it would show messages
-      // from hours ago as the newest. The latest page replaces what is held.
+      // from hours ago as the newest. The latest page replaces what is held,
+      // unless the reader is scrolled up: their rows stay, the page joins
+      // below them, and the rest waits for [showLatest].
       final skipped = query.startsWith('?after=') && answer['next'] != null;
-      if (!_disposed && skipped) {
+      final keepPlace = skipped && _readingBack.contains(id);
+      if (!_disposed && skipped && !keepPlace) {
         answer = await request('GET', _messagesPath(id));
       } else if (!_disposed &&
           !older &&
@@ -1843,7 +1877,8 @@ class SuperTabController extends ChangeNotifier {
       }
       // The first read over a saved page replaces it: merged, the saved
       // page would leave a gap when more than a page arrived since.
-      final replacing = (_showingSaved || skipped) && !older;
+      final replacing =
+          (_showingSaved || latest || (skipped && !keepPlace)) && !older;
       if (replacing) _rows.remove(id);
       _keepRows(id, answer['messages'] as List);
       final combined = {
@@ -1905,6 +1940,7 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
+      if (!older) keepPlace ? _newer.add(id) : _newer.remove(id);
       _dropShownSends(id);
       if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
       if (older || replacing || !_before.containsKey(id)) {
