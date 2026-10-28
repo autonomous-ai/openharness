@@ -698,13 +698,15 @@ export class ContributedMachines {
     if (addedAgain(state)) return
     const starts = list(state.starts)
     const swarm = new Set(recorded.map(w => w.harnessId))
+    /** Each Swarm start's receipt on this machine, by the agent it names: what lets the core close one its host no longer retains. */
+    const receipts = new Map<string, string>()
     const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true }))
     for (const start of starts) {
       const request = object(start.request)
       if (request.machineId !== this.machineId || !identifier(start.id) || !identifier(start.harnessId) || !identifier(start.creationId)) continue
       const creation = await this.core.agents.creationStatus?.(start.creationId)
       const proven = creation?.state === 'created' && creation.agentId === start.harnessId
-      if (proven) swarm.add(start.harnessId)
+      if (proven) { swarm.add(start.harnessId); receipts.set(start.harnessId, start.creationId) }
       const agent = this.core.agents.all().find(a => a.agentId === start.harnessId)
       if (request.worktree === true && typeof request.cwd === 'string' && agent?.cwd && !candidates.some(c => c.path === agent.cwd)) {
         candidates.push({ source: request.cwd, path: agent.cwd, startId: start.id, proven: proven && agent.startedBy === 'agent' })
@@ -713,25 +715,42 @@ export class ContributedMachines {
     const worktrees: string[] = []
     for (const c of candidates) {
       if (c.proven && await swarmWorktree(c.path, c.source, c.startId)) worktrees.push(c.path)
-      else if (existsSync(c.path)) this.log(`Kept ${c.path}: it is not provably a worktree a Swarm start made.`)
+      else if (existsSync(c.path)) this.log(`Kept ${basename(c.path)}: it is not provably a worktree a Swarm start made.`)
     }
     if (addedAgain(await read())) return
     const targets = [...worktrees, ...swarmCloneRoots(this.core.dataDir, tabId)]
     const inside = (cwd: string | null) => !!cwd && targets.some(t => within(t, cwd))
+    // The Swarm's own close (core/api.ts closeMember), which the core answers in its process and in the Swarm's own
+    // (services/processCoreApi.ts). Diego 10-29: closeStarted is the agent cleanup's alone, so under harnessd the Swarm's
+    // process had none, closed nothing and kept every folder. The core closes only a member its host retains or one this
+    // start's receipt names; any other agent-started session here stays open, and its folder with it.
+    // Why each close failed, by the folder it ran in: review of #2070, a removal that never confirmed said nothing of why.
+    const refused = new Map<string, string>()
     for (const agent of this.core.agents.live()) {
       if (agent.startedBy === 'agent' && (swarm.has(agent.agentId) || inside(agent.cwd))) {
-        await this.core.agents.closeStarted?.(agent.agentId, 'now').catch(() => null)
+        const answer = await (this.core.agents.closeMember?.(agent.agentId, receipts.get(agent.agentId)) ?? Promise.resolve({ error: 'UNSUPPORTED' }))
+          // A fixed code, not the error's own text, which can carry a full path (re-check of #2070).
+          .catch(() => ({ error: 'CLOSE_FAILED' }))
+        if (typeof answer.error === 'string' && agent.cwd) refused.set(agent.cwd, answer.error)
       }
     }
     const open = this.core.agents.live().map(a => a.cwd).filter((cwd): cwd is string => !!cwd)
+    const kept = new Set<string>()
     for (const target of targets) {
-      if (open.some(cwd => within(target, cwd))) { this.log(`Kept ${target}: a session still runs in it.`); continue }
+      if (open.some(cwd => within(target, cwd))) {
+        const reasons = [...new Set([...refused].filter(([cwd]) => within(target, cwd)).map(([, error]) => error))]
+        this.log(`Kept ${basename(target)}: a session still runs in it${reasons.length ? `; its close was refused: ${reasons.join(', ')}` : ''}.`)
+        kept.add(basename(target)); continue
+      }
       if (addedAgain(await read())) return
       const source = candidates.find(c => c.path === target)?.source
       // git forgets the worktree in its repository too; a folder it refuses (a submodule, a lock) is deleted as a folder.
       if (source) await git(source, ['worktree', 'remove', '--force', target]).catch(() => null)
       await rm(target, { recursive: true, force: true })
     }
+    // Diego 10-29: a folder kept for a live session was confirmed cleaned anyway and its records dropped, so nothing ever
+    // tried it again. Unconfirmed, the cleanup row stays and the next try comes on clean()'s backoff.
+    if (kept.size) throw new Error(`Did not finish cleaning up Swarm ${tabId} yet: a session still runs in ${[...kept].join(', ')}. It tries again later.`)
     if (addedAgain(await read())) return
     writeWorktrees(file, readWorktrees(file).filter(w => w.tabId !== tabId))
     await this.deps.backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `machine-cleaned-${removalId}`,
