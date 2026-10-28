@@ -54,10 +54,57 @@ describe('a Swarm this host is cleaning up', () => {
     const cleaning = f.machine.clean('tab', 'removal').catch(() => null)
     await f.machine.tick()
     expect(f.start).not.toHaveBeenCalled()
+    expect(f.log.mock.calls.flat().join('\n')).toContain('finish cleaning up this Swarm')
     release()
     await cleaning
     f.advance()
     await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Review of #2004: a start passed the cleaning check, waited in its folder preparation, and launched after a cleanup began.
+// A start holds its Swarm from that check through its launch, and a cleanup waits for the starts in flight, for a while.
+describe('a start and a cleanup of one Swarm', () => {
+  const homes: string[] = []
+  afterEach(() => { vi.unstubAllEnvs(); for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
+  function held(cleanupWaitMs?: number) {
+    const home = mkdtempSync(join(tmpdir(), 'swarm-cleaning-')); homes.push(home)
+    vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
+    const f = fixture()
+    let release!: () => void
+    f.prepare.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
+    const answer = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, {}) : answer(core, method, path, body))
+    const machine = cleanupWaitMs === undefined ? f.machine : new ContributedMachines(f.core, 'host', { ...f.deps, cleanupWaitMs } as never)
+    const swarmRead = () => f.backend.mock.invocationCallOrder.find((_order, i) => f.backend.mock.calls[i]![1] === 'GET'
+      && String(f.backend.mock.calls[i]![2]).startsWith('/api/super-tabs/tab/'))
+    return { f, machine, release: () => release(), swarmRead }
+  }
+
+  it('lets a start that passed the check launch before the cleanup touches anything', async () => {
+    const { f, machine, release, swarmRead } = held()
+    const pass = machine.tick()
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalled())
+    const cleaning = machine.clean('tab', 'removal').catch(() => null)
+    // Room for a cleanup that does not wait to read the Swarm and delete: what is checked is that nothing happens.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    release()
+    await pass
+    await cleaning
+    expect(f.start).toHaveBeenCalledTimes(1)
+    expect(swarmRead()).toBeGreaterThan(f.start.mock.invocationCallOrder[0]!)
+  })
+
+  it('gives up waiting for a start that never finishes, with a clear error, and touches nothing', async () => {
+    const { f, machine, release, swarmRead } = held(20)
+    const pass = machine.tick()
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalled())
+    await expect(machine.clean('tab', 'removal')).rejects.toThrow('an agent start there is still running')
+    expect(swarmRead()).toBeUndefined()
+    release()
+    await pass
     expect(f.start).toHaveBeenCalledTimes(1)
   })
 })
