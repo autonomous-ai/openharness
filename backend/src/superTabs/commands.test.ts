@@ -2124,6 +2124,18 @@ describe('machine.remove', () => {
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
+  // Ken's remote-deepseek and WIN-DELL, 2026-10-28: removed, then their machine accounts deleted, so no host would ever
+  // confirm their cleanups, which stayed for good. A machine whose account is gone takes its cleanups with it.
+  it('drops the cleanups of machines whose account is deleted, on any change, and says nothing', () => {
+    const f = fixture()
+    f.state.machineCleanups = [{ machineId: 'gone', removalId: 'a', machineOwnerId: 'owner' }, { machineId: 'host', removalId: 'b', machineOwnerId: 'owner' },
+      { machineId: 'gone', removalId: 'c', machineOwnerId: 'owner' }]
+    expect(f.run({ type: 'tab.rename', name: 'Tidy' }, owner, { deletedMachineIds: ['gone'] }).messages).toEqual([])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId: 'b', machineOwnerId: 'owner' }])
+    f.run({ type: 'tab.rename', name: 'Tidier' }, owner, { deletedMachineIds: ['host'] })
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
   it('tells each project\'s chat that the machine left once its host confirmed the cleanup', () => {
     const { f, removalId } = cleaning()
     const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { conversationId: string }

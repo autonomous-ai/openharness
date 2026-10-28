@@ -351,6 +351,15 @@ export class SuperTabStore {
     }
   }
 
+  /** The machines of the Swarm's pending cleanups whose account is deleted or missing: no host of theirs can read the
+   *  Swarm again to confirm (read/host.ts asks for a live account), so applyCommand drops their cleanups. */
+  private async deletedMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
+    const ids = [...new Set((state.machineCleanups ?? []).map(c => c.machineId))]
+    const live = new Set((await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive },
+      select: { machineId: true } })).map(m => m.machineId))
+    return ids.filter(id => !live.has(id))
+  }
+
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`,
    *  lib/teamSession.ts): one of the two signs routing reads that a machine is a Team machine (machines.ts teamWorkCheck). */
   /** Shared with the read API (superTabs/read, design section 7.2). */
@@ -907,6 +916,8 @@ export class SuperTabStore {
           // The native receipt remains intact; the operation records the person's resolution.
         } })
       }
+      // Read only while the Swarm has a cleanup pending, which is rare: one indexed read of those machines' accounts.
+      if (original.machineCleanups?.length) context.deletedMachineIds = await this.deletedMachines(tx, original)
       if (command.type === 'machine.contribute' || command.type === 'agent.add' || command.type === 'tab.project') {
         context.contribution = await this.contribution(tx, original, actor, command)
       }
