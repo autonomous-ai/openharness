@@ -236,7 +236,7 @@ void main() {
       await walk.shot('chat');
 
       // ④ Posting: @ picks an agent, the text names it, Send.
-      await tester.tap(walk.key('swarm-mention'));
+      await tester.enterText(find.byType(TextField), '@');
       await walk.waitFor(find.text('Nova'));
       await walk.shot('mention');
       await tester.tap(find.text('Nova').last);
