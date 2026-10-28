@@ -115,8 +115,10 @@ beforeEach(async () => {
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticate as never)
   // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment). Its config is
-  // what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`).
-  const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null } },
+  // what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`), and a team session's commits
+  // carry the app's bot identity (github/app.ts `commitIdentity`).
+  const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null },
+    commitIdentity: vi.fn(async () => ({ name: 'harness-app[bot]', email: '424242+harness-app[bot]@users.noreply.github.com' })) },
     issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
     prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
