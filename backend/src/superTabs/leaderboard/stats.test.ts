@@ -190,3 +190,22 @@ describe('the week asked for', () => {
     expect(person(view, 'dee').shipped.count).toBe(1)
   })
 })
+
+describe('Models: the share of work on the Swarm\'s grid, and how often it passes its first review', () => {
+  const run = (at: number, grid: boolean, firstReview?: boolean) =>
+    ({ assignmentId: `r${++n}`, engine: 'claude', model: grid ? 'moonshotai/kimi-k3' : 'opus', ...(grid ? { grid: true as const } : {}), at,
+      ...(firstReview === undefined ? {} : { firstReview }) })
+  it('counts the week\'s attempts, those on the grid, and first-review passes by kind', () => {
+    const view = board(swarm(), [
+      group({ status: 'done', ledger: { runs: [run(WEEK + HOUR, true, false), run(WEEK + 2 * HOUR, false, true)] } }),
+      group({ status: 'done', ledger: { runs: [run(WEEK + HOUR, true, true), run(LAST + HOUR, true, true)] } }),
+      group({ status: 'working', ledger: { runs: [run(WEEK + HOUR, false)] } }),
+      // A review group's attempts are reviews, not work.
+      group({ status: 'done', reviewOf: 'g0', ledger: { runs: [run(WEEK + HOUR, false, true)] } }),
+    ])
+    expect(view.models).toEqual({
+      thisWeek: { attempts: 4, grid: 2, reviewed: { grid: 2, subscription: 1 }, passedFirst: { grid: 1, subscription: 1 } },
+      lastWeek: { attempts: 1, grid: 1, reviewed: { grid: 1, subscription: 0 }, passedFirst: { grid: 1, subscription: 0 } },
+    })
+  })
+})

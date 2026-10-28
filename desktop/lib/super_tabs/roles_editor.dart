@@ -49,6 +49,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Route each group; reuse an idle agent before starting one; start only on the Swarm's machines.
 - With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan's order and start the plan's pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.
 - Local models: the route may pick one for low-difficulty, well-specified work; set "local":true only when a person asks for one, set "model" to a model a person names, and start it with the route's gridModel and gridName.
+- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route's next machine, or tells the group and its requester. A task that requires a machine or device never moves: when its route says it waits, keep it queued and route it again once that machine can take it.
 - The brief is all a Builder gets; never rely on chat history.
 - Before assigning, look at other projects' active work; if your task touches the same code, say so in the Leads conversation and agree an order first.
 

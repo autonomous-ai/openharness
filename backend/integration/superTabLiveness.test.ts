@@ -481,7 +481,7 @@ describe('an agent whose task was lost', () => {
 })
 
 describe('a start that never runs', () => {
-  it('fails 3 minutes after dispatch, naming its machine, and tells the Lead in its group', async () => {
+  it('fails 3 minutes after dispatch, naming its machine to its Lead only, and tells the Lead in its group', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
@@ -501,7 +501,9 @@ describe('a start that never runs', () => {
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).toBeNull()
     f.clock.now = dispatched + 3 * MINUTE + 1
     const told = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'start-timeout')!
-    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: Worker Mac did not start it within 3 minutes.' })
+    // Every group member reads the notice, so it names no machine (review of #1847); the start's Lead reads which one.
+    expect(told).toMatchObject({ conversationId: 'lead', text: 'Could not start Builder: its machine did not start it within 3 minutes.' })
+    expect((await f.timed.start(host, f.tab, startId, f.lead)).error).toBe('Worker Mac did not start it within 3 minutes')
     await expect(onMachine({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config }))
       .rejects.toMatchObject({ code: 'START_FAILED' })
   })
@@ -627,6 +629,29 @@ describe('the morning digest', () => {
     await f.leadInbox()
     const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
     expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 1 for owner@example\.com$/)
+  })
+
+  // Diego's issue file (2026-10-27): a paused Swarm sends no digest (digest.ts digestRequest), so it stays due, and every full
+  // Lead poll read the dormant groups and waiting decisions for it again, over a window that kept growing.
+  it('reads nothing for the digest while the Swarm is paused, and sends it once it resumes', async () => {
+    const queries: Array<{ model?: string; args: { where?: Record<string, unknown> } }> = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, args, query }) {
+      queries.push({ model, args: args as { where?: Record<string, unknown> } })
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const f = await swarm({ client })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    await f.execute({ type: 'tab.pause', paused: true })
+    f.clock.now = 3 * 60 * 60_000
+    queries.length = 0
+    await f.leadInbox()
+    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt) || q.model === 'SuperTabDecision')
+    expect(forDigest).toEqual([])
+    await f.execute({ type: 'tab.pause', paused: false })
+    f.clock.now += 30_000
+    await f.leadInbox()
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
   })
 
   it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
