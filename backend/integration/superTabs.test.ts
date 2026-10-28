@@ -30,6 +30,7 @@ import { beforeFirstWrite } from './interleave.test-support.js'
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
 let db: PrismaClient
+let recordQuery = (_query: string) => {}
 let store: SuperTabStore
 let app: FastifyInstance
 const owner: AuthUser = { sub: '100000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
@@ -100,7 +101,9 @@ beforeAll(async () => {
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
-  db = new PrismaClient({ datasources: { db: { url: uri } } })
+  const client = new PrismaClient({ datasources: { db: { url: uri } }, log: [{ emit: 'event', level: 'query' }] })
+  client.$on('query', event => recordQuery(event.query))
+  db = client
   store = new SuperTabStore(db)
   for (const user of [owner, peer, host]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`,
     email: user.email, autonomousEnv: user.autonomousEnv } })
@@ -1525,6 +1528,32 @@ describe('Super Tabs on a real Mongo replica set', () => {
       }
     } finally { await db.swarmWorkspaceMember.update({ where: { id: `${row.workspaceId}:${owner.sub}` }, data: { removedAt: null } }) }
   })
+  it('writes a message to several recipients in two insert commands, preserving each delivery', async () => {
+    const { tab, lead } = await fixture()
+    const recipients = [lead]
+    for (const name of ['Parser', 'Renderer', 'Exporter']) recipients.push(String((await run(tab, {
+      type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name, configuration: config, lead: false,
+    })).result.agentId))
+    const queries: string[] = []
+    recordQuery = query => { if (/SuperTab(Message|Delivery).*insert/i.test(query)) queries.push(query) }
+    let sent: Awaited<ReturnType<typeof run>>
+    try {
+      sent = await run(tab, { ...message('Batch to all four.'), recipientIds: recipients } as Command)
+    } finally { recordQuery = () => {} }
+    const messageId = String(sent.result.messageId)
+    const stored = await db.superTabMessage.findUniqueOrThrow({ where: { id: messageId } })
+    expect(stored).toMatchObject({ tabId: tab, conversationId: 'lead', text: 'Batch to all four.', recipientIds: recipients,
+      author: { kind: 'person', id: owner.sub }, replyTo: null, mentions: [] })
+    const deliveries = await db.superTabDelivery.findMany({ where: { tabId: tab, messageId } })
+    expect(deliveries).toHaveLength(4)
+    for (const recipient of recipients) expect(deliveries.find(row => row.agentId === recipient)).toMatchObject({
+      id: stableId(messageId, recipient), tabId: tab, conversationId: 'lead', messageId, machineId: 'test-host',
+      machineOwnerId: host.sub, membershipGeneration: tab, authorKind: 'person', authorId: owner.sub,
+      authorGeneration: tab, assignmentId: null, status: 'queued',
+    })
+    expect(queries).toHaveLength(2)
+  })
+
   it('closes the replying agent\'s own deliveries of a message as answered, and nobody else\'s', async () => {
     const { tab, lead } = await fixture()
     const helper = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(),
