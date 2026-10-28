@@ -200,6 +200,10 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** A delivery now waits for an agent (Stability roadmap 2.4): its machine's daemon socket is told so, and its host reads
+   *  the agent's deliveries at once instead of each second (routes/superTabs.ts). Called after the write commits; it must
+   *  not throw. */
+  deliveryWaiting?: (machineId: string, tabId: string, agentId: string) => void
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
@@ -221,6 +225,7 @@ export class SuperTabStore {
       agentGrant: (tx, state, target) => this.agentGrant(tx, state, target),
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
       teamHost: (tx, user) => this.teamHost(tx, user),
+      waiting: (tx, machineId, tabId, agentId) => this.announce(tx, machineId, tabId, agentId),
     })
   }
 
@@ -1374,6 +1379,13 @@ export class SuperTabStore {
     return rows.map(r => r.assignmentId).filter(id => !id.startsWith('release-') && !active.has(id))
   }
 
+  /** Tells the agent's machine that a delivery waits for it, once this write commits: told earlier, its host could read
+   *  before the row is there and wait 30 s for the next read. */
+  private announce(tx: Transaction, machineId: string, tabId: string, agentId: string): void {
+    const waiting = this.hooks.deliveryWaiting
+    if (waiting) afterCommit(tx, () => waiting(machineId, tabId, agentId))
+  }
+
   /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
     for (const message of messages) {
@@ -1390,6 +1402,7 @@ export class SuperTabStore {
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
           authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
+        this.announce(tx, target.machineId, tabId, recipient)
       }
     }
   }

@@ -37,6 +37,8 @@ interface Deps {
   contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }): Promise<Grant>
   /** The one machine a team session (lib/teamSession.ts) hosts for; null for any other sign-in. */
   teamHost(tx: Transaction, user: AuthUser): Promise<string | null>
+  /** Tells the agent's machine, once this write commits, that a delivery waits for it (store.ts announce). */
+  waiting(tx: Transaction, machineId: string, tabId: string, agentId: string): void
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -231,6 +233,7 @@ export class SuperTabNativeStore {
           ...(team
             ? { authorKind: 'agent', authorId: target.id, authorGeneration: target.membershipGeneration }
             : { authorKind: 'person', authorId: binding.operator.id, authorGeneration: binding.operator.membershipGeneration }) } })
+        this.deps.waiting(tx, lead.machineId, tabId, recipient)
       }
       await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
       const result = { eventId, sequence }

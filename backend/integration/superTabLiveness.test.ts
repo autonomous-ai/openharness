@@ -3,11 +3,11 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore } from '../src/superTabs/store.js'
+import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -21,6 +21,7 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '200000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const host: AuthUser = { sub: '200000000000000000000003', email: 'host@example.com', autonomousEnv: 'prod', role: 'user' }
+const stranger: AuthUser = { sub: '200000000000000000000009', email: 'stranger@example.com', autonomousEnv: 'prod', role: 'user' }
 const config = { engine: 'codex', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 const MINUTE = 60_000
 
@@ -44,9 +45,9 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db }: { legacy?: boolean; client?: PrismaClient } = {}) {
+async function swarm({ legacy = false, client = db, hooks = {} }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks } = {}) {
   let now = 10_000_000
-  const timed = new SuperTabStore(client, () => now)
+  const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
   if (legacy) await dropProjects(tab)
   const execute = (command: Command, user = owner, asAgentId?: string) => timed.execute(user, tab, { operationId: randomUUID(), command }, asAgentId)
@@ -562,6 +563,44 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     }
+  })
+})
+
+// Stability roadmap 2.4: the host no longer reads each second; the server tells the agent's machine when work waits for it.
+describe('the word that a delivery waits', () => {
+  it('names the machine, Swarm and agent of each new delivery, once its write has committed', async () => {
+    const told: Array<[string, string, string]> = []
+    const committed: number[] = []
+    const f = await swarm({ hooks: { deliveryWaiting: (machineId, tabId, agentId) => {
+      told.push([machineId, tabId, agentId])
+      // Told only once the row can be read: a host reading at once must find it.
+      void db.superTabDelivery.count({ where: { tabId, agentId, status: 'queued' } }).then(count => committed.push(count))
+    } } })
+    told.length = 0
+    await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
+    expect(told).toEqual([['lead-host', f.tab, f.lead]])
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Start', replyTo: null, recipientIds: [f.worker] })
+    expect(told.slice(1)).toEqual([['test-host', f.tab, f.worker]])
+    await vi.waitFor(() => expect(committed.length).toBe(2))
+    expect(committed.every(count => count >= 1)).toBe(true)
+  })
+
+  it('names the Lead for a terminal turn it is told of', async () => {
+    const told: Array<[string, string, string]> = []
+    const f = await swarm({ hooks: { deliveryWaiting: (...args) => { told.push(args) } } })
+    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
+    told.length = 0
+    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'prompt', previousEventId: null, text: 'Typed by hand',
+      truncated: false, interrupted: false })
+    expect(told).toEqual([['lead-host', f.tab, f.lead]])
+  })
+
+  it('tells nothing for a command that was refused', async () => {
+    const told = vi.fn()
+    const f = await swarm({ hooks: { deliveryWaiting: told } })
+    told.mockClear()
+    await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi', replyTo: null, recipientIds: [] }, stranger)).rejects.toBeDefined()
+    expect(told).not.toHaveBeenCalled()
   })
 })
 
