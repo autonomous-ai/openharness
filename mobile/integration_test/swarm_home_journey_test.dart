@@ -106,15 +106,20 @@ void main() {
     await walk.waitFor(walk.key('swarm-drawer-chat-$leadChat'));
     await walk.shot('drawer-chats');
 
-    // ⑥ A project's name opens it: Chat with PM its one main button.
+    // ⑥ A project's name opens it on its project chat, Chat with PM at the
+    // top right.
     await tester.tap(walk.key('swarm-drawer-project-$tab-$project'));
     await walk.waitFor(walk.key('swarm-pm-chat'));
     expect(find.byType(SwarmProjectPage), findsOneWidget);
     await walk.shot('project');
 
-    // ⑥½ The team card: each agent in a sheet over the project.
+    // ⑥½ The line under the header: the project's work, then each agent,
+    // in a sheet over the chat.
     await tester.tap(walk.key('swarm-team-line'));
     await walk.waitFor(walk.key('swarm-team-close'));
+    await walk.wait();
+    await walk.shot('work');
+    await tester.tap(walk.key('swarm-sheet-team'));
     await walk.wait();
     await walk.shot('team');
     await tester.tap(walk.key('swarm-team-close'));

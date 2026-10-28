@@ -11,7 +11,6 @@ import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -119,6 +118,20 @@ void main() {
     fake.routes['/api/super-tabs/$tab/commands'] = (_) => {
       'result': <String, dynamic>{},
     };
+    fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+        (_) => {
+          'messages': [
+            {
+              'id': 'msg-lead-1',
+              'conversationId': leadChat,
+              'text': 'Morning: Fix login waits on you.',
+              'sequence': 1,
+              'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+              'createdAt': '2026-10-27T00:30:00.000Z',
+            },
+          ],
+          'next': null,
+        };
     fake.routes[messages] = (_) => {
       'messages': [
         {
@@ -416,81 +429,102 @@ void main() {
   });
 
   group('a project', () {
-    testWidgets(
-      'Chat with PM and the Lead first, then work by latest, older folded',
-      (tester) async {
-        await pump(
-          tester,
-          backend(),
-          const SwarmProjectPage(swarmId: tab, projectId: project),
-        );
-        // The project page reads what the inbox has read.
-        await tester.pumpAndSettle();
+    const page = SwarmProjectPage(swarmId: tab, projectId: project);
 
-        double y(String k) => tester.getTopLeft(key(k)).dy;
-        expect(y('swarm-pm-chat'), lessThan(y('swarm-lead-chat')));
-        expect(
-          find.descendant(
-            of: key('swarm-lead-chat'),
-            matching: find.text('Project chat'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.textContaining('Lead'),
-          findsNothing,
-          reason: 'the Naming System: Product Manager on screen, never Lead',
-        );
-        expect(y('swarm-lead-chat'), lessThan(y('swarm-conversation-g1')));
-        expect(
-          y('swarm-conversation-g1'),
-          lessThan(y('swarm-conversation-g-busy')),
-          reason: 'what waits on the person first, then the latest activity',
-        );
-        expect(key('swarm-conversation-g-old'), findsNothing);
-        expect(
-          key('swarm-conversation-g-private'),
-          findsNothing,
-          reason: 'a private chat is for its people only',
-        );
-        expect(
-          key('swarm-conversation-g-pm'),
-          findsNothing,
-          reason: 'Chat with PM is pinned, not listed again',
-        );
+    /// The scrollable of the project's sheet, not the chat's under it.
+    Finder sheetList() => find
+        .descendant(
+          of: find.byType(SwarmProjectSheet),
+          matching: find.byType(Scrollable),
+        )
+        .first;
 
-        await tester.tap(key('swarm-older'));
-        await tester.pumpAndSettle();
-        expect(key('swarm-conversation-g-old'), findsOneWidget);
-        expect(key('swarm-conversation-g-spike'), findsNothing);
-
-        // Rows are 56 points tall: below the fold of the test's screen, and
-        // built only as they come into view.
-        await tester.scrollUntilVisible(
-          key('swarm-older-earlier'),
-          200,
-          scrollable: find.byType(Scrollable).first,
-        );
-        await tester.pumpAndSettle();
-        await tester.tap(key('swarm-older-earlier'));
-        await tester.pumpAndSettle();
-        expect(key('swarm-conversation-g-spike'), findsOneWidget);
-        expect(key('swarm-older-earlier'), findsNothing);
-      },
-    );
-
-    testWidgets('the team card opens each agent in a word', (tester) async {
-      await pump(
-        tester,
-        backend(),
-        const SwarmProjectPage(swarmId: tab, projectId: project),
-      );
-      await tester.pumpAndSettle();
-
+    Future<void> openSheet(WidgetTester tester) async {
       await tester.tap(key('swarm-team-line'));
       await tester.pumpAndSettle();
+    }
 
-      expect(find.byType(SwarmTeamSheet), findsOneWidget);
+    testWidgets('opens on its project chat, the line under its header', (
+      tester,
+    ) async {
+      await pump(tester, backend(), page);
+      await tester.pumpAndSettle();
+
+      const said = 'Morning: Fix login waits on you.';
+      expect(find.text(said), findsOneWidget, reason: 'its project chat');
+      expect(
+        tester.getBottomLeft(key('swarm-team-line')).dy,
+        lessThanOrEqualTo(tester.getTopLeft(find.text(said)).dy),
+      );
+      expect(
+        find.textContaining('Lead'),
+        findsNothing,
+        reason: 'the Naming System: Product Manager on screen, never Lead',
+      );
+    });
+
+    testWidgets('its sheet has what waits on the person, then work by '
+        'latest, older folded', (tester) async {
+      await pump(tester, backend(), page);
+      await tester.pumpAndSettle();
+      await openSheet(tester);
+
+      double y(String k) => tester.getTopLeft(key(k)).dy;
+      expect(
+        y('swarm-conversation-g1'),
+        lessThan(y('swarm-conversation-g-busy')),
+        reason: 'what waits on the person first, then the latest activity',
+      );
+      expect(key('swarm-conversation-g-old'), findsNothing);
+      expect(
+        key('swarm-conversation-g-private'),
+        findsNothing,
+        reason: 'a private chat is for its people only',
+      );
+      expect(
+        key('swarm-conversation-g-pm'),
+        findsNothing,
+        reason: 'Chat with PM is in the header, not listed again',
+      );
+      expect(
+        key('swarm-conversation-$leadChat'),
+        findsNothing,
+        reason: 'the project chat is the screen',
+      );
+      expect(
+        find.textContaining('Lead'),
+        findsNothing,
+        reason: 'the Naming System: Product Manager on screen, never Lead',
+      );
+
+      await tester.tap(key('swarm-older'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-conversation-g-old'), findsOneWidget);
+      expect(key('swarm-conversation-g-spike'), findsNothing);
+
+      // Rows are 56 points tall: below the fold of the sheet, and built only
+      // as they come into view.
+      await tester.scrollUntilVisible(
+        key('swarm-older-earlier'),
+        200,
+        scrollable: sheetList(),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-older-earlier'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-conversation-g-spike'), findsOneWidget);
+      expect(key('swarm-older-earlier'), findsNothing);
+    });
+
+    testWidgets("its sheet's Team has each agent in a word", (tester) async {
+      await pump(tester, backend(), page);
+      await tester.pumpAndSettle();
+      await openSheet(tester);
+
+      await tester.tap(key('swarm-sheet-team'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmProjectSheet), findsOneWidget);
       expect(key('swarm-agent-agent-builder'), findsOneWidget);
       expect(
         find.descendant(
@@ -499,6 +533,70 @@ void main() {
         ),
         findsOneWidget,
       );
+    });
+
+    testWidgets("a pull on its sheet's work reads its Swarm once", (
+      tester,
+    ) async {
+      final fake = backend();
+      await pump(tester, fake, page);
+      await openSheet(tester);
+      final before = changeReads(fake);
+
+      await tester.fling(
+        key('swarm-conversation-g1'),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(changeReads(fake), before + 1);
+      expect(find.byType(SwarmProjectSheet), findsOneWidget, reason: 'open');
+    });
+
+    testWidgets('of hundreds of older chats, only those in view are built', (
+      tester,
+    ) async {
+      final fake = backend();
+      fake.routes[dormant] = (_) => {
+        'groups': [
+          for (var i = 0; i < 300; i++)
+            part(
+              'old-$i',
+              100 + i,
+              groupData(
+                'old-$i',
+                title: 'Old work $i',
+                lastMessageSequence: 1000 - i,
+                dormant: true,
+              ),
+            ),
+        ],
+        'next': null,
+      };
+      await pump(tester, fake, page);
+      await openSheet(tester);
+      final older = find.byWidgetPredicate(
+        (widget) => switch (widget.key) {
+          ValueKey(:final String value) => value.startsWith(
+            'swarm-conversation-old-',
+          ),
+          _ => false,
+        },
+      );
+
+      await tester.tap(key('swarm-older'));
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-conversation-old-0'), findsOneWidget);
+      expect(older.evaluate().length, lessThan(40));
+      await tester.scrollUntilVisible(
+        key('swarm-conversation-old-299'),
+        600,
+        scrollable: sheetList(),
+      );
+      expect(key('swarm-conversation-old-299'), findsOneWidget);
+      expect(older.evaluate().length, lessThan(40));
     });
   });
 
@@ -519,18 +617,16 @@ void main() {
       await frames(tester);
     }
 
-    testWidgets('draws its title, team, Chat with PM and work as rows on '
-        'their way while its Swarm is read, then the page', (tester) async {
+    testWidgets('draws its title and the line under it on their way while '
+        'its Swarm is read, then its chat', (tester) async {
       final fake = backend();
       final read = hold(fake, '/api/super-tabs/$tab/parts');
       await pump(tester, fake, page, settle: false);
 
       expect(key('swarm-project-title-loading'), findsOneWidget);
       expect(key('swarm-project-loading'), findsOneWidget);
-      for (var i = 0; i < 3; i++) {
-        expect(key('swarm-project-loading-work-$i'), findsOneWidget);
-      }
       expect(find.text(gone), findsNothing);
+      expect(find.byType(SwarmConversationPage), findsNothing);
 
       read.complete();
       await tester.pumpAndSettle();
@@ -539,8 +635,8 @@ void main() {
       expect(key('swarm-project-title-loading'), findsNothing);
       expect(tester.widget<Text>(key('swarm-title')).data, 'Mobile');
       expect(key('swarm-pm-chat'), findsOneWidget);
+      expect(find.byType(SwarmConversationPage), findsOneWidget);
     });
-
     testWidgets('says it is no longer in the Swarm only once a read since it '
         'opened has finished without it', (tester) async {
       final fake = backend();
@@ -582,63 +678,9 @@ void main() {
       expect(key('swarm-pm-chat'), findsOneWidget);
     });
 
-    testWidgets('a pull reads its Swarm once', (tester) async {
-      final fake = backend();
-      await pump(tester, fake, page);
-      final before = changeReads(fake);
-
-      await tester.fling(key('swarm-pm-chat'), const Offset(0, 400), 1000);
-      await tester.pumpAndSettle();
-
-      expect(changeReads(fake), before + 1);
-    });
-
-    testWidgets('of hundreds of older chats, only those in view are built', (
+    testWidgets('its sheet has rows on their way while the Swarm is read', (
       tester,
     ) async {
-      final fake = backend();
-      fake.routes[dormant] = (_) => {
-        'groups': [
-          for (var i = 0; i < 300; i++)
-            part(
-              'old-$i',
-              100 + i,
-              groupData(
-                'old-$i',
-                title: 'Old work $i',
-                lastMessageSequence: 1000 - i,
-                dormant: true,
-              ),
-            ),
-        ],
-        'next': null,
-      };
-      await pump(tester, fake, page);
-      final older = find.byWidgetPredicate(
-        (widget) => switch (widget.key) {
-          ValueKey(:final String value) => value.startsWith(
-            'swarm-conversation-old-',
-          ),
-          _ => false,
-        },
-      );
-
-      await tester.tap(key('swarm-older'));
-      await tester.pumpAndSettle();
-
-      expect(key('swarm-conversation-old-0'), findsOneWidget);
-      expect(older.evaluate().length, lessThan(40));
-      await tester.scrollUntilVisible(
-        key('swarm-conversation-old-299'),
-        600,
-        scrollable: find.byType(Scrollable).first,
-      );
-      expect(key('swarm-conversation-old-299'), findsOneWidget);
-      expect(older.evaluate().length, lessThan(40));
-    });
-
-    testWidgets('its team sheet has rows on their way while the Swarm is '
-        'read', (tester) async {
       final fake = backend();
       final read = hold(fake, '/api/super-tabs/$tab/parts');
       await pump(
@@ -647,14 +689,17 @@ void main() {
         Builder(
           builder: (context) => TextButton(
             onPressed: () =>
-                showSwarmTeam(context, swarmId: tab, projectId: project),
-            child: const Text('Team'),
+                showSwarmProjectSheet(context, swarmId: tab, projectId: project),
+            child: const Text('Open'),
           ),
         ),
         settle: false,
       );
 
-      await tester.tap(find.text('Team'));
+      await tester.tap(find.text('Open'));
+      await frames(tester);
+      expect(key('swarm-work-loading'), findsOneWidget);
+      await tester.tap(key('swarm-sheet-team'));
       await frames(tester);
       expect(key('swarm-team-loading'), findsOneWidget);
 
@@ -665,7 +710,8 @@ void main() {
       expect(key('swarm-agent-agent-builder'), findsOneWidget);
     });
 
-    testWidgets('a poll that changes its Swarm builds it once', (tester) async {
+    testWidgets('a poll that changes its Swarm builds its line once, and not '
+        'its chat', (tester) async {
       final fake = backend();
       await pump(tester, fake, page);
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
@@ -680,9 +726,10 @@ void main() {
           ),
         ],
       );
-      var builds = 0;
+      var lines = 0, chats = 0;
       debugOnRebuildDirtyWidget = (element, _) {
-        if (element.widget is SwarmTopBar) builds++;
+        if (element.widget is SwarmProjectStatus) lines++;
+        if (element.widget is SwarmConversationPage) chats++;
       };
       addTearDown(() => debugOnRebuildDirtyWidget = null);
 
@@ -695,14 +742,18 @@ void main() {
       asked.complete();
       await tester.pumpAndSettle();
 
-      expect(find.text('Sync again'), findsOneWidget);
       expect(
-        builds,
+        lines,
         1,
         reason:
             'what waits on the person in its chats is read again, '
-            'which this page does not show',
+            'which moved nothing the line shows',
       );
+      expect(chats, 0, reason: 'the chat follows its own messages');
+      debugOnRebuildDirtyWidget = null;
+      await tester.tap(key('swarm-team-line'));
+      await tester.pumpAndSettle();
+      expect(find.text('Sync again'), findsOneWidget);
     });
 
     testWidgets('a change in another Swarm does not build it', (tester) async {
@@ -737,11 +788,14 @@ void main() {
         ],
       );
       await pump(tester, fake, page);
-      // With two Swarms, the page names its own under the project.
-      expect(find.text('Phone Swarm'), findsOneWidget);
+      // With two Swarms, the page names its own after who is in the chat.
+      expect(find.text('River and everyone · Phone Swarm'), findsOneWidget);
       var builds = 0;
       debugOnRebuildDirtyWidget = (element, _) {
-        if (element.widget is SwarmTopBar) builds++;
+        if (element.widget is SwarmProjectStatus ||
+            element.widget is SwarmConversationPage) {
+          builds++;
+        }
       };
       addTearDown(() => debugOnRebuildDirtyWidget = null);
 

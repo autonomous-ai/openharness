@@ -215,13 +215,17 @@ void main() {
       await walk.waitFor(walk.keyStarting('swarm-project-'));
       await walk.shot('swarm');
 
-      // ② A project: Chat with PM, the Product Manager, work by latest, the
-      // team line.
+      // ② A project: its project chat, Chat with PM at the top right, the
+      // line under the header; the line opens its work by latest.
       await tester.tap(find.text('Mobile app').last);
       await walk.waitFor(walk.key('swarm-team-line'));
       await walk.shot('project');
+      await tester.tap(walk.key('swarm-team-line'));
+      await walk.waitFor(walk.key('swarm-team-close'));
+      await walk.wait();
+      await walk.shot('project-work');
 
-      // ③ The chat the decision was asked in.
+      // ③ The chat the decision was asked in, over the sheet.
       await tester.tap(find.textContaining('Sign in with passkeys').last);
       await walk.waitFor(
         find.textContaining('One thing I cannot decide alone'),
@@ -254,8 +258,10 @@ void main() {
       await walk.wait(1500);
       await walk.shot('decision-answered');
 
-      // ⑥ Back on the Swarm page, what still needs the person.
+      // ⑥ Back on the Swarm page, what still needs the person: the chat,
+      // the sheet, then the project.
       tester.state<NavigatorState>(find.byType(Navigator))
+        ..pop()
         ..pop()
         ..pop();
       await walk.wait(1500);

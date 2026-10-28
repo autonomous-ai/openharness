@@ -115,30 +115,28 @@ void main() {
       await tester.tap(key('swarm-mark'));
       await waitFor(keyStarting('swarm-project-'), seconds: 60);
 
-      // ② The first project, then its Product Manager chat: read only.
+      // ② The first project: it opens on its project chat, read only.
       await tester.tap(keyStarting('swarm-project-').first);
       await waitFor(key('swarm-pm-chat'));
-      await shot('project');
-      await tester.tap(key('swarm-lead-chat'));
       await waitFor(key('swarm-messages'));
       await wait(3000);
-      await shot('product-manager-chat');
+      await shot('project');
 
       if (chat.isEmpty) return;
 
       // ③ The named test chat, from its decision on Swarm Home: one line
       // posted, and the decision answered with its first option.
-      // Back twice, as the pages' own chevrons do: the shell's navigator.
-      tester.state<NavigatorState>(
-          find
-              .descendant(
-                of: find.byType(PhoneShell),
-                matching: find.byType(Navigator),
-              )
-              .first,
-        )
-        ..pop()
-        ..pop();
+      // Back, as the page's own chevron does: the shell's navigator.
+      tester
+          .state<NavigatorState>(
+            find
+                .descendant(
+                  of: find.byType(PhoneShell),
+                  matching: find.byType(Navigator),
+                )
+                .first,
+          )
+          .pop();
       await wait(1500);
       final card = find.byWidgetPredicate(
         (w) =>
