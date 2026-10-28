@@ -2,11 +2,16 @@
  * What the leaderboard counts, recorded as it happens on the group it happened in (docs/swarms.md, Leaderboard): when a
  * request was asked and first shipped, which item waits on a person, and who answered it. Only facts and times, never text.
  */
-import type { Actor, Agent, Assignment, Check, Conversation, SuperTabState, WorkStatus } from '../model.js'
-import { groupProject } from '../projects.js'
+import { isLeads, type Actor, type Agent, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
+import { groupProject, ledProject } from '../projects.js'
 import { WEEK_MS } from './week.js'
 
-export interface Unblock { personId: string; at: number; waitedMs: number }
+/** How a person unblocked work: answered a decision, approved the Lead's plan, answered work waiting on them, or replied to
+ *  a tag (Dee, 2026-10-28). */
+export type UnblockKind = 'decision' | 'approval' | 'needs_human' | 'tag_reply'
+/** `item`: what was answered (the decision, the Lead's ask, the waiting question or the tag message), credited once. Absent
+ *  from answers recorded before kinds, which were all answers to waiting work. */
+export interface Unblock { personId: string; at: number; waitedMs: number; kind?: UnblockKind; item?: string }
 /** One attempt at a group's work: what it ran on and whether its first review passed (roadmap, Dec: about 30% of work on
  *  cheaper models without lower quality). `grid`: a model served on the Swarm's grid, named by its start, since the engine
  *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
@@ -34,6 +39,8 @@ export interface GroupLedger {
 export const LEDGER_WEEKS = 5
 /** A group is one request; more attempts than this are a stuck task, and the oldest say nothing new. */
 export const MAX_RUNS = 20
+/** Credits one conversation keeps, newest: a busy Lead conversation collects approvals and tag replies for weeks. */
+export const MAX_UNBLOCKS = 200
 
 /** A shared group is asked when it is opened. A private conversation is chat only and never counts. */
 export function recordAsked(group: Conversation, requesterId: string | undefined, now: number): void {
@@ -70,16 +77,59 @@ export function waitedOn(state: SuperTabState, group: Conversation): string {
   return requester ?? groupProject(state, group).ownerId
 }
 
+/** What a person's post can answer besides waiting work: the message it replies to, and the tags waiting on the poster in
+ *  this conversation (mentions.ts), both read by the store. */
+export interface PostContext { replyTo: string | null; text: string; reply?: { id: string; author: Author; createdAt: number }
+  openTags?: Array<{ messageId: string; createdAt: number }> }
+
+/** A person's post earns one credit at most, for the first it answers of: the work waiting on them, the Lead's ask it approves,
+ *  the oldest tag waiting on them here (Lead's rulings, 2026-10-28). Private chats never count. */
+export function recordPost(state: SuperTabState, group: Conversation, actor: Actor, post: PostContext, now: number): void {
+  if (actor.kind !== 'person' || group.audience || isLeads(group)) return
+  if (recordAnswer(state, group, actor.userId, post.replyTo, now)) return
+  const reply = post.reply
+  if (reply && reply.author.kind === 'agent' && approves(post.text) && ledProject(state, reply.author.id)?.id === groupProject(state, group).id) {
+    if (credit(group, { personId: actor.userId, at: now, waitedMs: now - reply.createdAt, kind: 'approval', item: reply.id })) return
+  }
+  const oldest = [...post.openTags ?? []].sort((a, b) => a.createdAt - b.createdAt)[0]
+  if (oldest) credit(group, { personId: actor.userId, at: now, waitedMs: now - oldest.createdAt, kind: 'tag_reply', item: oldest.messageId })
+}
+
+/** A reply that starts with GO, approve(d) or duyệt, in any case, with or without accents; a bare "ok" is too ambiguous
+ *  (Lead, 2026-10-28). */
+export function approves(text: string): boolean {
+  const plain = text.normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/giu, 'd').trim().toLowerCase()
+  return /^(go|approved?|duyet)(?![\p{L}\p{N}])/u.test(plain)
+}
+
+/** The person asked answered a decision: credited from when it was asked. A decision a worker asked through needs_human
+ *  answers that wait too, so a post after it is not a second answer. */
+export function recordDecision(group: Conversation, decision: { id: string; personId: string; createdAt: number; assignmentId: string | null }, now: number): void {
+  if (group.audience || isLeads(group)) return
+  const waiting = group.ledger?.waiting
+  if (decision.assignmentId && waitsNow(group) && waiting?.assignmentId === decision.assignmentId && group.assignment?.id === decision.assignmentId) {
+    waiting.answeredAt = now
+  }
+  credit(group, { personId: decision.personId, at: now, waitedMs: now - decision.createdAt, kind: 'decision', item: decision.id })
+}
+
 /** A person's post answers the waiting item when they are the one it waits on, or when it replies to the question itself;
  *  a passer-by's chat earns nothing (Lead, 2026-10-27). One answer per wait. */
-export function recordAnswer(state: SuperTabState, group: Conversation, actor: Actor, replyTo: string | null, now: number): void {
+function recordAnswer(state: SuperTabState, group: Conversation, personId: string, replyTo: string | null, now: number): boolean {
   const waiting = group.ledger?.waiting
-  if (actor.kind !== 'person' || !waitsNow(group) || waiting?.assignmentId !== group.assignment!.id) return
-  if (actor.userId !== waitedOn(state, group) && replyTo !== waiting.messageId) return
-  const ledger = group.ledger!
+  if (!waitsNow(group) || waiting?.assignmentId !== group.assignment!.id) return false
+  if (personId !== waitedOn(state, group) && replyTo !== waiting.messageId) return false
   waiting.answeredAt = now
-  const kept = (ledger.unblocks ?? []).filter(u => now - u.at < LEDGER_WEEKS * WEEK_MS)
-  ledger.unblocks = [...kept, { personId: actor.userId, at: now, waitedMs: Math.max(0, now - waiting.since) }]
+  return credit(group, { personId, at: now, waitedMs: now - waiting.since, kind: 'needs_human', item: waiting.messageId })
+}
+
+/** Adds a credit unless its item already has one; keeps the last LEDGER_WEEKS, at most MAX_UNBLOCKS. */
+function credit(group: Conversation, unblock: Unblock & { item: string }): boolean {
+  const ledger = group.ledger ??= {}
+  if (ledger.unblocks?.some(u => u.item === unblock.item)) return false
+  const kept = (ledger.unblocks ?? []).filter(u => unblock.at - u.at < LEDGER_WEEKS * WEEK_MS)
+  ledger.unblocks = [...kept, { ...unblock, waitedMs: Math.max(0, unblock.waitedMs) }].slice(-MAX_UNBLOCKS)
+  return true
 }
 
 /** Whether the group's work waits on a person now: needs a human and not yet answered. An item from before answers were

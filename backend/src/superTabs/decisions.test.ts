@@ -77,7 +77,8 @@ describe('asking a person for decisions', () => {
 
 describe('answering a decision', () => {
   const open = (s: ReturnType<typeof swarm>, overrides: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'decision-1', personId: 'peer',
-    conversationId: s.group, askerAgentId: s.worker, question: 'Ship how?', options: ['Behind a flag', 'To everyone'], answeredAt: null, ...overrides })
+    conversationId: s.group, askerAgentId: s.worker, question: 'Ship how?', options: ['Behind a flag', 'To everyone'], answeredAt: null,
+    createdAt: 0, assignmentId: null, ...overrides })
 
   it('records the asked person\'s choice and tells the asking agent and the Lead with a notice only they read, carrying none of it', () => {
     const s = swarm()
