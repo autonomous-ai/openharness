@@ -135,8 +135,9 @@ class SwarmMessageFrame extends StatelessWidget {
 }
 
 /// One message: avatar, who wrote it, their role and when — none of it for a
-/// follow-up — then what it answers, its text and its files. A tap opens
-/// its actions; lit for a moment when a quote leads to it.
+/// follow-up — then what it answers, its text, its files and its
+/// [reactions]. A tap opens its actions, a long-press [onLongPress]; lit for
+/// a moment when a quote leads to it.
 class SwarmMessageRow extends StatelessWidget {
   const SwarmMessageRow({
     super.key,
@@ -151,6 +152,8 @@ class SwarmMessageRow extends StatelessWidget {
     required this.actions,
     required this.onTap,
     required this.onReply,
+    this.reactions,
+    this.onLongPress,
   });
 
   final SuperTabMessage message;
@@ -168,6 +171,12 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Null where the person cannot post.
   final VoidCallback? onReply;
+
+  /// Drawn under its text and files: its reaction counts.
+  final Widget? reactions;
+
+  /// Null where the person cannot post: picks a reaction.
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -231,6 +240,7 @@ class SwarmMessageRow extends StatelessWidget {
               link: swarmAttachmentLink(file.url),
             ),
           ),
+        ?reactions,
         if (actions)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -257,7 +267,14 @@ class SwarmMessageRow extends StatelessWidget {
           ),
       ],
     );
-    if (!followed) return Padding(key: key, padding: padding, child: frame);
+    final held = onLongPress == null
+        ? frame
+        : GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onLongPress: onLongPress,
+            child: frame,
+          );
+    if (!followed) return Padding(key: key, padding: padding, child: held);
     return AnimatedContainer(
       key: key,
       duration: const Duration(milliseconds: 600),
@@ -269,7 +286,7 @@ class SwarmMessageRow extends StatelessWidget {
             : Colors.transparent,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: frame,
+      child: held,
     );
   }
 }
