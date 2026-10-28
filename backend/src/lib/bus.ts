@@ -667,7 +667,8 @@ export function subscribeDeviceStatus(userId: string, cb: (msg: DeviceStatusMsg)
 // create/delete/rename happens on normal REST workers, while device/web sockets may live on another
 // worker, so Redis fans out "re-query the DB now".
 export interface DeviceMachineListChangedMsg {
-  reason: 'created' | 'deleted' | 'renamed' | 'updated' | 'environment_changed'
+  /** `harness_shares`: a harness shared with the account was invited or taken back (routes/harnessShares.ts). */
+  reason: 'created' | 'deleted' | 'renamed' | 'updated' | 'harness_shares' | 'environment_changed'
   autonomousEnv?: 'prod' | 'stag'
 }
 
