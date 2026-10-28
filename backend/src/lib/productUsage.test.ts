@@ -218,6 +218,13 @@ describe('aggregate ingestion', () => {
     expect(vi.mocked(delay).mock.calls[0][0]).toBeGreaterThanOrEqual(25)
     expect(vi.mocked(delay).mock.calls[0][0]).toBeLessThan(75)
   })
+  it('retries a Mongo lock wait like a conflict, with the same receipt', async () => {
+    db.$runCommandRaw.mockRejectedValueOnce(new Error('Error code 24 (LockTimeout): Unable to acquire IX lock, labels: {"TransientTransactionError"}'))
+    expect(await ingestProductUsage('a', report, now)).toEqual({ accepted: true })
+    expect(db.$transaction).toHaveBeenCalledTimes(2)
+    expect(db.productUsageReceipt.create.mock.calls[0]).toEqual(db.productUsageReceipt.create.mock.calls[1])
+    expect(delay).toHaveBeenCalledOnce()
+  })
   it('rechecks a sharing-off choice before retrying the transaction', async () => {
     db.$runCommandRaw.mockRejectedValueOnce({ code: 'P2034' })
     db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: true, revision: 0 })
