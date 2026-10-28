@@ -27,11 +27,14 @@ class LeaderboardWaitingLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final target = _target;
-    return Container(
+    // The team total's quiet hierarchy and inset.
+    return Padding(
       key: const ValueKey('leaderboard-waiting'),
-      padding: const EdgeInsets.fromLTRB(16, 10, 12, 12),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: DesktopChrome.rim)),
+      padding: const EdgeInsets.fromLTRB(
+        DesktopChrome.groupGap,
+        DesktopChrome.controlGap,
+        DesktopChrome.controlGap,
+        DesktopChrome.controlGap,
       ),
       child: waiting.total == 0
           ? Text(
@@ -43,8 +46,8 @@ class LeaderboardWaitingLine extends StatelessWidget {
               children: [
                 // The whole width, so the count never wraps beside Answer.
                 Text(
-                  '⏳ Agents waiting on a person now: ${waiting.total}',
-                  style: DesktopChrome.control(),
+                  'Agents waiting on a person now: ${waiting.total}',
+                  style: DesktopChrome.metadata(),
                 ),
                 Row(
                   children: [
