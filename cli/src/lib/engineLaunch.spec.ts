@@ -28,6 +28,7 @@ import {
   permissionFlagToVerify,
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
+  engineUpdateCommand,
   unsupportedLaunchModelFlag,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
@@ -1214,6 +1215,14 @@ describe('the permission gates', () => {
     expect(refusal?.error).toBe('CODEX_CLI_TOO_OLD')
     expect(refusal?.detail).toContain('opencode')
     expect(refusal?.detail).toContain('--auto')
+  })
+
+  // The install lines are POSIX shell: on Windows only an npm line runs as written (in PowerShell too).
+  it('names an update command only where it runs as written', () => {
+    expect(engineUpdateCommand('opencode', 'darwin')).toBe('curl -fsSL https://opencode.ai/install | bash')
+    expect(engineUpdateCommand('opencode', 'win32')).toBeNull()
+    expect(engineUpdateCommand('codex', 'win32')).toBe('npm install -g @openai/codex')
+    expect(engineUpdateCommand('terminal', 'darwin')).toBeNull()
   })
 
   // codex_cli_too_old, 2–4 a day: "Update opencode" did not say how.

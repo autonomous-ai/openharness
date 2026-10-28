@@ -1540,6 +1540,13 @@ export async function unsupportedLaunchModelFlag(engine: AgentEngine, launchMode
   return null
 }
 
+/** The line that updates [engine]: its install line, which fetches the latest. Those are POSIX shell lines, so on
+ *  Windows only an npm one, which PowerShell runs as written, is named. */
+export function engineUpdateCommand(engine: AgentEngine, platform: NodeJS.Platform = process.platform): string | null {
+  const command = engineInstallRecipe(engine)?.command
+  return command && (platform !== 'win32' || command.startsWith('npm ')) ? command : null
+}
+
 /**
  * For a launch somebody is waiting on — create, fork. Refusing is kinder than opening a pane that
  * the engine will fill with its own help text and leave: the person is here, and Ask works today.
@@ -1563,11 +1570,11 @@ export async function refusePermissionFlagIfUnsupported(
   }
   const flag = native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
   if (!flag) return null
-  const update = engineInstallRecipe(engine)?.command
+  const update = engineUpdateCommand(engine)
   return {
     error: 'CODEX_CLI_TOO_OLD',
     detail: `The ${engine} CLI on this machine does not support ${flag}, which Harness uses for this permission mode. `
-      // How to update, not only that it is needed (codex_cli_too_old, 2–4 a day). The install line fetches the latest.
+      // How to update, not only that it is needed (codex_cli_too_old, 2–4 a day).
       + `Update ${engine}${update ? ` by running ${update}, then try again` : ' and try again'}`
       + `${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
   }

@@ -300,7 +300,7 @@ describe('runtime validation and file ownership', () => {
     expect(() => prepareHarnessLaunch(pkg, ws, 'codex', 'key')).toThrow('Harness skill is missing')
   })
 
-  // A Windows junction reads back with a trailing separator: a relaunch refused its own link as "already occupied".
+  // An exact string compare refused a link to the same folder written another way as "already occupied".
   it('relaunches over its own skill link however the link writes the same folder', () => {
     const launch = prepareHarnessLaunch(pkg, ws, 'codex', 'key')
     const skill = join(launch.env.HARNESS_SKILLS_DIR!, 'draw')

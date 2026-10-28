@@ -187,7 +187,7 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     if (!existsSync(join(skill.dir, 'SKILL.md'))) throw new Error(`Harness skill is missing: ${skill.dir}; repair the harness installation.`)
     const link = join(skillsDir, skill.name)
     if (existsSync(link) || isLink(link)) {
-      // Compared resolved: a junction reads back with a trailing separator.
+      // Compared resolved, so a link that writes the same folder another way (a trailing separator) is still its own.
       if (!isLink(link) || resolve(readlinkSync(link)) !== resolve(skill.dir)) throw new Error(`Harness skill path is already occupied: ${link}`)
     // A junction on Windows: a directory symlink needs Developer Mode or an administrator (EPERM), a junction
     // neither. Other platforms ignore the type.
