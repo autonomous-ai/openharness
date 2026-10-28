@@ -11,6 +11,7 @@ import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
+import 'identity.dart';
 import 'model.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
@@ -19,6 +20,7 @@ import 'swarm_inbox.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
+import 'swarm_reactions.dart';
 import 'swarm_session.dart';
 import 'team_glance.dart';
 
@@ -606,6 +608,31 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   static SwarmLook _agentLook(SuperTabAgent? agent) =>
       (picture: agent?.avatar, status: null);
 
+  /// Who gave a reaction, by name and never by email: "You", an agent's
+  /// name, another person's email name.
+  String _reactorName(SwarmConversation c, String kind, String id) {
+    if (kind == 'person' && id == c.reader.accountId) return 'You';
+    final snapshot = c.reader.snapshot;
+    if (kind == 'agent') return snapshot?.agentName(id) ?? 'Agent';
+    final email = snapshot?.people.where((p) => p.id == id).firstOrNull?.email;
+    return email == null ? 'Someone' : superTabPersonName(email);
+  }
+
+  /// The reaction picker over message [id]: the pick reacts to the message
+  /// as it is by then.
+  Future<void> _pickReaction(SwarmConversation c, String id) async {
+    SuperTabMessage? shown() => c.messages.where((m) => m.id == id).firstOrNull;
+    final message = shown();
+    if (message == null) return;
+    final emoji = await showSwarmReactionPicker(
+      context,
+      reactions: c.reactionsOf(message),
+      readerId: c.reader.accountId,
+    );
+    if (emoji == null || !mounted) return;
+    if (shown() case final now?) await c.react(now, emoji);
+  }
+
   /// The messages, newest at the foot, with the decisions asked among them.
   /// The entries are made again only when what they are made from changed,
   /// and each row is the one built before while it draws the same ([_row]):
@@ -687,6 +714,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           final quoted = reply == null ? null : _quoted(c, reply);
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
+          final reactions = c.reactionsOf(m);
           return _row(
             key,
             (
@@ -702,6 +730,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               quoted,
               view.canPost,
               view.mentions,
+              reactions,
             ),
             () => SwarmMessageRow(
               key: followed ? _targetKey : null,
@@ -734,6 +763,18 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                         personId: m.authorId,
                       ),
                     ),
+              reactions: SwarmReactionBar(
+                messageId: m.id,
+                reactions: reactions,
+                readerId: c.reader.accountId,
+                nameOf: (kind, id) => _reactorName(c, kind, id),
+                onReact: view.canPost
+                    ? (emoji) => unawaited(c.react(m, emoji))
+                    : null,
+              ),
+              onLongPress: view.canPost
+                  ? () => unawaited(_pickReaction(c, m.id))
+                  : null,
             ),
           );
         case _AskEntry(:final need, :final grouped):

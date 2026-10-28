@@ -143,6 +143,7 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
@@ -169,6 +170,10 @@ class SuperTabConversation {
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
   final int lastMessageSequence;
+
+  /// Moves whenever a reaction here is added or taken back (backend
+  /// reactions.ts): the messages shown are read again for their counts.
+  final int reactionSeq;
   final Map<String, dynamic>? assignment;
 }
 

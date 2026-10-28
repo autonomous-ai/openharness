@@ -28,6 +28,7 @@ class SwarmConversation extends ChangeNotifier {
     if (SwarmChatCache.take(reader, id) case final kept?) {
       messages = kept.messages;
       _before = kept.before;
+      _reactionSeq = kept.reactionSeq;
       _read = _kept = true;
     }
     reader.addListener(_swarmChanged);
@@ -70,7 +71,16 @@ class SwarmConversation extends ChangeNotifier {
 
   /// A read told no one ([readBackTo]): told once it is done.
   bool _untold = false;
-  Future<void>? _reading, _readingOlder, _locating;
+  Future<void>? _reading, _readingOlder, _locating, _rereading;
+
+  /// The reaction counter ([SuperTabConversation.reactionSeq]) the page
+  /// shown was read with: null until a read of that page said it.
+  int? _reactionSeq;
+
+  /// The person's reactions on their way, by message and emoji, each adding
+  /// (true) or taking back: counted in [reactionsOf] until the backend has
+  /// them.
+  final _reacting = <(String, SuperTabReactionEmoji), bool>{};
 
   /// Moves when what was read is dropped: a read asked for before then
   /// answers nothing.
@@ -216,7 +226,13 @@ class SwarmConversation extends ChangeNotifier {
     _listed = true;
     if (_lost) _lost = _refused = false;
     final tail = messages.lastOrNull?.sequence ?? 0;
-    if (!_read || group.lastMessageSequence > tail) unawaited(load());
+    if (!_read || group.lastMessageSequence > tail) {
+      unawaited(load());
+    } else if (_reactionSeq case final seq? when group.reactionSeq > seq) {
+      // A reaction changed on a message already shown, here or on another
+      // device.
+      unawaited(_reread());
+    }
   }
 
   /// Asks the reader for this conversation by id: a closed one comes back,
@@ -240,6 +256,8 @@ class SwarmConversation extends ChangeNotifier {
     _epoch++;
     _reading = null;
     _readingOlder = null;
+    _rereading = null;
+    _reactionSeq = null;
   }
 
   /// The person cannot read this conversation: nothing of it stays, here or
@@ -261,6 +279,7 @@ class SwarmConversation extends ChangeNotifier {
     _pending = null;
     _sent = null;
     _replyingTo = null;
+    _reacting.clear();
     error = null;
     if (held) _tell();
   }
@@ -309,6 +328,18 @@ class SwarmConversation extends ChangeNotifier {
     return has();
   }
 
+  /// Reads the page shown again for its reaction counts; joins a read of it
+  /// under way.
+  Future<void> _reread() {
+    if (_disposed) return Future.value();
+    if (_rereading case final reading?) return reading;
+    late final Future<void> reading;
+    reading = _load(older: false, again: true).whenComplete(() {
+      if (identical(_rereading, reading)) _rereading = null;
+    });
+    return _rereading = reading;
+  }
+
   Future<void> _older({required bool tell}) {
     if (!hasOlder) return Future.value();
     if (_readingOlder case final reading?) return reading;
@@ -320,14 +351,17 @@ class SwarmConversation extends ChangeNotifier {
   }
 
   /// One page: the one before the oldest shown, else what came after the
-  /// newest — or, with [latest] or none shown, the latest page. Tells the
-  /// chat what changed unless [tell] is false, which leaves it [_untold].
+  /// newest — or, with [latest] or none shown, the latest page; with [again],
+  /// the page that ends at the newest shown. Tells the chat what changed
+  /// unless [tell] is false, which leaves it [_untold].
   Future<void> _load({
     required bool older,
     bool latest = false,
+    bool again = false,
     bool tell = true,
   }) async {
     final epoch = _epoch;
+    var reacted = false;
     try {
       final tail = latest ? null : messages.lastOrNull?.sequence;
       final before = _before;
@@ -336,6 +370,8 @@ class SwarmConversation extends ChangeNotifier {
                 '&beforeId=${Uri.encodeQueryComponent(before.id)}'
           : tail == null
           ? ''
+          : again
+          ? '?before=${tail + 1}'
           : '?after=$tail';
       final answer = superTabMap(await reader.request('GET', '$_path$query'));
       if (_disposed || epoch != _epoch) return;
@@ -346,7 +382,7 @@ class SwarmConversation extends ChangeNotifier {
       if (incoming.any((m) => m.conversationId != id)) {
         throw const FormatException('A different conversation was returned.');
       }
-      if (!older && _kept) {
+      if (!older && !again && _kept) {
         _kept = false;
         // More than a page came after what was kept: the latest page, as a
         // first open reads it, where reading on would leave a gap.
@@ -377,10 +413,23 @@ class SwarmConversation extends ChangeNotifier {
             before?.sequence != _before?.sequence || before?.id != _before?.id;
         _before = before;
       }
+      // The counter the page shown was read with; a read of what came after
+      // it that says a reaction changed since reads that page again.
+      if ((answer['reactionSeq'] as num?)?.toInt() case final seq?
+          when !older) {
+        if (again || tail == null) {
+          _reactionSeq = seq;
+        } else {
+          reacted = seq > (_reactionSeq ?? -1);
+        }
+      }
       _read = true;
       _refused = false;
       error = null;
-      if (!changed) return;
+      if (!changed) {
+        if (reacted) await _reread();
+        return;
+      }
     } on SuperTabFailure catch (failure) {
       if (_disposed || epoch != _epoch) return;
       if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) _lose();
@@ -394,6 +443,7 @@ class SwarmConversation extends ChangeNotifier {
     } else {
       _untold = true;
     }
+    if (reacted) await _reread();
   }
 
   /// Posts the draft, to the agents mentioned in it and as a reply to
@@ -452,6 +502,84 @@ class SwarmConversation extends ChangeNotifier {
     return true;
   }
 
+  /// [message]'s counts as the person sees them: their own reaction on its
+  /// way already counted, or already taken back.
+  List<SuperTabReactionCount> reactionsOf(SuperTabMessage message) {
+    var counts = message.reactions;
+    for (final MapEntry(key: (messageId, emoji), value: on)
+        in _reacting.entries) {
+      if (messageId == message.id) counts = _toggled(counts, emoji, on);
+    }
+    return counts;
+  }
+
+  /// [counts] with the person's [emoji] added ([on]) or taken back.
+  List<SuperTabReactionCount> _toggled(
+    List<SuperTabReactionCount> counts,
+    SuperTabReactionEmoji emoji,
+    bool on,
+  ) {
+    final me = (kind: 'person', id: reader.accountId);
+    final was = counts.where((r) => r.emoji == emoji).firstOrNull?.by;
+    final by = [...?was?.where((who) => who != me), if (on) me];
+    return List.unmodifiable(
+      [
+        for (final r in counts)
+          if (r.emoji != emoji) r,
+        if (by.isNotEmpty) SuperTabReactionCount(emoji, by),
+      ]..sort((a, b) => a.emoji.index.compareTo(b.emoji.index)),
+    );
+  }
+
+  /// Adds the person's [emoji] to [message], or takes it back when it is
+  /// already theirs (the desktop's `react`): counted at once, sent, then the
+  /// page shown is read again so the counts are the backend's. A refusal
+  /// takes it back and says why in [error]. True once the backend took it.
+  Future<bool> react(
+    SuperTabMessage message,
+    SuperTabReactionEmoji emoji,
+  ) async {
+    final key = (message.id, emoji);
+    if (_disposed || !canPost || _reacting.containsKey(key)) return false;
+    final on = !reactionsOf(message)
+        .any((r) => r.emoji == emoji && r.includes('person', reader.accountId));
+    _reacting[key] = on;
+    error = null;
+    notifyListeners();
+    String? refused;
+    try {
+      await reader.request(
+        'POST',
+        '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'message.react',
+            'conversationId': id,
+            'messageId': message.id,
+            'emoji': emoji.key,
+            'on': on,
+          },
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      refused = failure.message;
+    } catch (_) {
+      refused = 'Your reaction did not go through. Try again.';
+    }
+    if (refused == null && !_disposed) {
+      // A read of the page begun before the backend had it would not show
+      // it: the read that counts it starts after.
+      if (_rereading case final reading?) await reading;
+      await _reread();
+    }
+    if (_disposed) return refused == null;
+    _reacting.remove(key);
+    if (refused != null) error = refused;
+    notifyListeners();
+    return refused == null;
+  }
+
   /// A post moved between the composer and the messages: both are told.
   void _tell() {
     notifyListeners();
@@ -465,7 +593,21 @@ class SwarmConversation extends ChangeNotifier {
       a.replyTo == b.replyTo &&
       a.authorName == b.authorName &&
       a.createdAt == b.createdAt &&
-      a.attachments.length == b.attachments.length;
+      a.attachments.length == b.attachments.length &&
+      _sameReactions(a.reactions, b.reactions);
+
+  static bool _sameReactions(
+    List<SuperTabReactionCount> a,
+    List<SuperTabReactionCount> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].emoji != b[i].emoji || !listEquals(a[i].by, b[i].by)) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   /// A refused post's text back in the draft, before anything typed since.
   void _restore() {
@@ -503,7 +645,13 @@ class SwarmConversation extends ChangeNotifier {
     _disposed = true;
     // Shown at once when opened again, while the person can still read it.
     if (_read && !_refused) {
-      SwarmChatCache.keep(reader, id, messages: messages, before: _before);
+      SwarmChatCache.keep(
+        reader,
+        id,
+        messages: messages,
+        before: _before,
+        reactionSeq: _reactionSeq,
+      );
     }
     reader.removeListener(_swarmChanged);
     reader.reads.removeListener(_swarmChanged);
