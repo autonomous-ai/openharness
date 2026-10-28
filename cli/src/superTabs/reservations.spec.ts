@@ -23,12 +23,80 @@ function setup() {
     gone: vi.fn(async key => gone.has(key)),
   } })
   const resources: MachineResources = { cpuPercent: 20, memoryTotalBytes: 150, memoryUsedBytes: 50 }
+  // The live agents' start times (registeredAt) and their measured memory, by harness id.
+  const live = new Map<string, number>(), measured = new Map<string, number>()
+  const clock = { now: Date.UTC(2026, 9, 28, 4) }
+  vi.mocked(core.agents.byAgent).mockImplementation(key => live.has(key) ? { agentId: key, registeredAt: live.get(key)! } as never : undefined)
   const deps = { resources: vi.fn(async () => resources),
     disk: vi.fn(async (cwd: string) => ({ freeBytes: 100, volume: cwd === '/second-volume' ? 'second' : 'first', path: cwd })),
-    sqlite: () => builtinSqlite() as never }
+    sqlite: () => builtinSqlite() as never, now: () => clock.now, agentMemory: vi.fn(async () => new Map(measured)) }
   const open = () => { const book = new CapacityReservations(core, 'machine-1', deps); books.push(book); return book }
-  return { directory, file: join(directory, 'super-tabs/capacity.sqlite'), core, native, stopped, gone, resources, deps, open }
+  /** The start reserved as `n` launched as harness `agent-n` at this moment. */
+  const launch = (n: number) => { native.set(id(n), { creationId: id(n), state: 'created', agentId: `agent-${n}` }); live.set(`agent-${n}`, clock.now) }
+  return { directory, file: join(directory, 'super-tabs/capacity.sqlite'), core, native, stopped, gone, resources, deps, open, live, measured, clock, launch }
 }
+const GiB = 1024 ** 3, MINUTE = 60_000
+const free = (f: ReturnType<typeof setup>, bytes: number) => { f.resources.memoryTotalBytes = 32 * GiB; f.resources.memoryUsedBytes = 32 * GiB - Math.round(bytes) }
+const agentInput = (n: number) => input(n, 2 * GiB, 0)
+
+// Ken's MacBook Pro, 2026-10-28: 7.85 GiB free of 32 and three settled builders using about 0.4 GiB together, yet a start was
+// refused with 1.85 GiB "left". Free memory (vm_stat) already counts what a running agent uses, so its 2 GiB was taken twice.
+it("counts a start's memory only during its start window, so settled agents do not block more starts", async () => {
+  const f = setup(), book = f.open()
+  free(f, 30 * GiB)
+  for (const n of [1, 2, 3]) { expect(await book.reserve(agentInput(n))).toMatchObject({ ok: true }); f.launch(n); f.measured.set(`agent-${n}`, 0.13 * GiB) }
+  f.clock.now += 5 * MINUTE
+  free(f, 7.85 * GiB)
+  for (const n of [4, 5, 6]) { expect(await book.reserve(agentInput(n))).toMatchObject({ ok: true }); f.launch(n) }
+  expect(await book.reserve(agentInput(7))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE',
+    detail: 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents in their first 5 minutes.' })
+  // The first of the three new agents settles: its own use is in free memory now, and its window no longer holds.
+  f.clock.now += 5 * MINUTE - 1
+  expect(await book.reserve(agentInput(7))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  f.clock.now += 1
+  expect(await book.reserve(agentInput(7))).toMatchObject({ ok: true })
+})
+
+it('ends a start window early once the agent measures its whole reservation', async () => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
+  f.launch(1)
+  f.measured.set('agent-1', 2 * GiB - 1)
+  expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  f.measured.set('agent-1', 2 * GiB)
+  expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
+})
+
+it('keeps holding a start that has not launched, and times a launched agent the core no longer lists from its reservation', async () => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
+  f.clock.now += 60 * MINUTE
+  expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  // Launched, but not in the core's live list (a reconnect in between): its window ran from the reservation and is over.
+  f.native.set(id(1), { creationId: id(1), state: 'created', agentId: 'agent-1' })
+  expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
+})
+
+it('holds every launched start in its window when its memory cannot be measured', async () => {
+  const f = setup(), book = f.open()
+  free(f, 3 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ ok: true })
+  f.launch(1)
+  f.deps.agentMemory.mockRejectedValue(new Error('ps failed'))
+  expect(await book.reserve(agentInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE' })
+  f.clock.now += 5 * MINUTE
+  expect(await book.reserve(agentInput(2))).toMatchObject({ ok: true })
+})
+
+it('still refuses a truly full machine with no other start pending, and says how much memory is free', async () => {
+  const f = setup(), book = f.open()
+  free(f, 1.5 * GiB)
+  expect(await book.reserve(agentInput(1))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: 'Not enough free memory: 1.5 GiB free, 2 GiB needed.' })
+  free(f, 20 * GiB); f.resources.memoryPressure = 'critical'
+  expect(await book.reserve(agentInput(1))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('critical memory pressure') })
+})
 
 it('serializes simultaneous starts across books and accounts for their declared budgets', async () => {
   const f = setup(), a = f.open(), b = f.open()
