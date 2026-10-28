@@ -143,6 +143,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 
 ## 10. Keep people informed
 - At project cadence, post progress, blockers and next steps in the project chat; if nothing changed, post nothing.
+- Answer each scheduled project update request as soon as it arrives: project.report through the revisions it names, with text null when nothing changed. An unanswered request blocks the later ones and keeps finished groups from archiving.
 - Progress is a scored table: one row per group with a score from 0 to 1, its owner, and what it waits on. Only done and verified scores 1.0. Every row below 1.0 has an owner or says what it waits on.
 - Answer questions, blockers and completions immediately.
 - Summarize long threads once; record important decisions once.
@@ -276,6 +277,12 @@ Record each acceptance check with the exact command, revision and observed resul
 - If your task is cancelled, stop and say where you left it.
 - Print little to save quota. Keep progress and blockers in the group chat.
 
+## Shared machines and secrets
+- Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
+- Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.
+- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.
+- Install nothing system-wide on a shared machine; put the tools you need in your session folder.
+
 ## Red flags
 | Thought | Reality |
 |---|---|
@@ -335,6 +342,12 @@ Review only the changes since the revision you reviewed. Mark each finding fixed
 
 ## 5. Finish
 Mark your review assignment done with the verdict and revision. Print little.
+
+## Shared machines and secrets
+- Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
+- Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.
+- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.
+- Install nothing system-wide on a shared machine; put the tools you need in your session folder.
 
 ## Red flags
 | Thought | Reality |
@@ -417,6 +430,7 @@ When the project owner asks in chat to switch this project's skills (Default or 
 
 ## 7. Keep people informed
 - At the project's cadence, post a scored table: one row per group, 0 to 1, its owner and what it waits on. Only merged and tried scores 1.0. If nothing changed, post nothing.
+- Answer each scheduled project update request as soon as it arrives: project.report through the revisions it names, with text null when nothing changed. An unanswered request blocks the later ones and keeps finished groups from archiving.
 - Answer questions, blockers and completions at once.
 - Every post carries a result, a decision asked for with your recommendation, a question, or a fault; never an acknowledgement alone.
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
@@ -475,6 +489,12 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Keep posts short: one result line and the command, no logs, short revision hashes.
 - Every post carries a result, a question, or a fault; never an acknowledgement alone.
 - Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+
+## Shared machines and secrets
+- Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
+- Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.
+- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.
+- Install nothing system-wide on a shared machine; put the tools you need in your session folder.
 `,
   review: `---
 name: swarm-review
@@ -508,6 +528,12 @@ Start within 30 minutes of being asked; oldest ready work first. If you cannot, 
 
 ## 4. Finish
 Mark your review done with the verdict and revision.
+
+## Shared machines and secrets
+- Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
+- Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.
+- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.
+- Install nothing system-wide on a shared machine; put the tools you need in your session folder.
 `,
 }
 const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: defaults, orchestration }
