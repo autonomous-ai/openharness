@@ -131,6 +131,18 @@ class SuperTabController extends ChangeNotifier {
   SuperTabSnapshot? snapshot;
   String selectedId = 'lead';
 
+  /// Counts the reader's moves ([_moveView]), so a slow [select] cannot land
+  /// over a newer choice.
+  int _selectRequest = 0;
+
+  /// Every move of what the reader looks at goes through here: a [select]
+  /// still reading its conversation then knows it was overtaken.
+  void _moveView({String? to, bool devices = false}) {
+    _selectRequest++;
+    devicesSelected = devices;
+    if (to != null) selectedId = to;
+  }
+
   /// The newest change of the Swarm this tab has read, in epoch milliseconds: what tells the app and the tag list
   /// that it changed (spec ruling 8).
   int lastChangedAt = -1;
@@ -255,7 +267,10 @@ class SuperTabController extends ChangeNotifier {
   /// read, as the backend's page cursor names it (section 4.6). Null at the
   /// start of the conversation.
   final _before = <String, SuperTabPage?>{};
-  final _reading = <String, Future<void>>{};
+
+  /// Each conversation's reads under way, newest and older apart: an older
+  /// page asked for during a poll's read is a read of its own.
+  final _reading = <(String, bool), Future<void>>{};
   final expandedProjects = <String>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
@@ -273,7 +288,7 @@ class SuperTabController extends ChangeNotifier {
   /// its draft and terminal choice stay available when the person returns.
   void selectDevices() {
     if (_disposed || accessRevoked || devicesSelected) return;
-    devicesSelected = true;
+    _moveView(devices: true);
     _saveSoon();
     _changed();
   }
@@ -378,7 +393,7 @@ class SuperTabController extends ChangeNotifier {
       return;
     }
     _terminals[conversationId] = '*';
-    devicesSelected = false;
+    _moveView();
     _saveSoon();
     _changed();
   }
@@ -393,7 +408,7 @@ class SuperTabController extends ChangeNotifier {
     if (_terminals[conversationId] == agentId && !devicesSelected) {
       return;
     }
-    devicesSelected = false;
+    _moveView();
     if (agentId == null) {
       _terminals.remove(conversationId);
     } else {
@@ -866,6 +881,18 @@ class SuperTabController extends ChangeNotifier {
         : state.projects.firstOrNull?.id;
   }
 
+  /// A tag or decision the menu bar asked to open ([openNotice]), until the
+  /// Swarm view on screen takes it.
+  ({String kind, String id})? noticeRequest;
+
+  /// Opens the reader's tag (`mention`) at its message, or shows their
+  /// decisions (`decision`) where they are answered, in the view on screen,
+  /// or the one shown next.
+  void openNotice(String kind, String id) {
+    noticeRequest = (kind: kind, id: id);
+    notifyListeners();
+  }
+
   /// Set by the Swarm view on screen: opens a project's PM chat in front of
   /// whatever covers the conversation, Notifications or a terminal.
   Future<bool> Function(String projectId)? pmChatOpener;
@@ -910,14 +937,17 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Opens conversation [id], reading it first when it is not held
-  /// ([loadGroup]); false when it cannot be read.
+  /// ([loadGroup]); false when it cannot be read, or another was opened while
+  /// it was.
   Future<bool> select(String id) async {
+    final ask = ++_selectRequest;
     // A held group is selected at once, before this returns.
-    if (snapshot?.conversation(id) == null && !await loadGroup(id)) {
-      return false;
+    if (snapshot?.conversation(id) == null) {
+      if (!await loadGroup(id)) return false;
+      // The reader moved on while this was read: it must not pull them back.
+      if (ask != _selectRequest) return false;
     }
     if (id == selectedId && !devicesSelected) return true;
-    devicesSelected = false;
     _acted();
     final group = snapshot!.conversation(id)!;
     // A workgroup is shown under its project, so its project opens. A Chat with
@@ -927,7 +957,7 @@ class SuperTabController extends ChangeNotifier {
       unawaited(loadDormant(group.projectId));
       if (group.closed) closedOpenProjects.add(group.projectId);
     }
-    selectedId = id;
+    _moveView(to: id);
     _viewVersion++;
     operationNotice = null;
     _saveSoon();
@@ -1370,7 +1400,9 @@ class SuperTabController extends ChangeNotifier {
   /// On first open only for the conversation the saved state named; after
   /// that, for a conversation the state has and no read of it under way.
   String? _earlyQuery(String id) {
-    if (!_policy.messagesWithState || _reading.containsKey(id)) return null;
+    if (!_policy.messagesWithState || _reading.containsKey((id, false))) {
+      return null;
+    }
     final known = snapshot == null
         ? _savedSelection
         : snapshot!.conversation(id) != null;
@@ -1410,7 +1442,8 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Joins a read of [id] already under way, so a caller can wait for it.
+  /// Joins a read of [id] in the same direction already under way, so a
+  /// caller can wait for it.
   Future<void> loadMessages(String id, {bool older = false}) {
     if (older) _acted();
     return _readMessages(id, older: older);
@@ -1423,11 +1456,11 @@ class SuperTabController extends ChangeNotifier {
     bool older = false,
     bool light = false,
     _EarlyRead? early,
-  }) => _reading[id] ??=
+  }) => _reading[(id, older)] ??=
       _loadMessages(id, older: older, light: light, early: early).whenComplete(
         () {
           // A block: whenComplete would wait on the removed future, itself.
-          _reading.remove(id);
+          _reading.remove((id, older));
         },
       );
 
@@ -1447,6 +1480,7 @@ class SuperTabController extends ChangeNotifier {
           ? known.last.sequence
           : null;
       final query = _query(id, older: older);
+      final from = _before[id];
       final first = early != null && early.query == query ? early.page : null;
       var answer = first != null
           ? await first.catchError(
@@ -1484,6 +1518,14 @@ class SuperTabController extends ChangeNotifier {
       }
       if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
         return;
+      }
+      // A read replacing the saved page moved where earlier continues while
+      // this page was on its way: under the new page it would leave a gap.
+      // Read on from where earlier continues now.
+      if (older &&
+          (_before[id]?.sequence != from?.sequence ||
+              _before[id]?.id != from?.id)) {
+        return await _loadMessages(id, older: true);
       }
       final incoming = (answer['messages'] as List)
           .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
@@ -1543,6 +1585,13 @@ class SuperTabController extends ChangeNotifier {
           combined[row.id] = row;
         }
         _keepRows(id, receipt['messages'] as List);
+      }
+      // An older page read meanwhile (during the receipt read above) stays:
+      // what is held now, under what this read brought.
+      if (!replacing) {
+        for (final m in _messages[id] ?? <SuperTabMessage>[]) {
+          combined.putIfAbsent(m.id, () => m);
+        }
       }
       final next = combined.values.toList()..sort(superTabMessageOrder);
       // An adapting read that found nothing new changes nothing on screen.
@@ -1633,7 +1682,7 @@ class SuperTabController extends ChangeNotifier {
           result['conversationId'] is String) {
         // A successful create selects its confirmed destination even when the
         // following read is offline. Never leave the old group's composer active.
-        selectedId = result['conversationId'] as String;
+        _moveView(to: result['conversationId'] as String);
       }
       _pending = null;
       try {

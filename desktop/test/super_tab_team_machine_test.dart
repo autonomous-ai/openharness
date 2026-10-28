@@ -108,6 +108,13 @@ void main() {
       expect(find.text('MacBook Pro · Team'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('super-machine-mac')));
       await tester.pumpAndSettle();
+      final count = find.byKey(const ValueKey('super-machine-agents-mac'));
+      expect(
+        find.descendant(of: count, matching: find.text('2 agents')),
+        findsOneWidget,
+      );
+      await tester.tap(count);
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('super-machine-agent-mac-a1')),
         findsOneWidget,
@@ -146,6 +153,13 @@ void main() {
       expect(_state('mac', 'live'), findsOneWidget);
       expect(c.snapshot!.teamPoolOf('mac')!['machineId'], 'mac-team-new');
       await tester.tap(find.byKey(const ValueKey('super-machine-mac')));
+      await tester.pumpAndSettle();
+      final count = find.byKey(const ValueKey('super-machine-agents-mac'));
+      expect(
+        find.descendant(of: count, matching: find.text('2 agents')),
+        findsOneWidget,
+      );
+      await tester.tap(count);
       await tester.pumpAndSettle();
       for (final agent in ['a1', 'a2']) {
         expect(

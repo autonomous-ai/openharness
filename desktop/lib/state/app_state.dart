@@ -1758,6 +1758,7 @@ class AppNotifier extends ChangeNotifier {
     avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
+    onNotices: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
       // Discovery can finish while an already signed-in machine is re-seating
@@ -7484,6 +7485,8 @@ class AppNotifier extends ChangeNotifier {
     sessionTails.clear();
     shareStatus.clear();
     gridPictures.clear();
+    // Pickers keep listening to this menu; only the old account's rows go.
+    _modelsMenu?.reset();
     _stopWakeFollowers();
     expandedMachines.clear();
     selectedMachineId = null;

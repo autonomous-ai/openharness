@@ -18,6 +18,7 @@ import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
 import 'box_render_preview_test.dart' show loadPreviewFonts;
+import 'super_tab_decisions_test.dart' show swarm;
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_screen_test.dart' show mount;
 import 'swarm_state_test.dart' show MemoryStore;
@@ -171,6 +172,64 @@ void main() {
   });
 
   group('notification list', () {
+    /// The reader leaves the private chat their tag is in, and the Lead tags
+    /// them elsewhere: one still waits. Who may read what moved.
+    void leaveChatTaggedElsewhere(ConversationServer server) {
+      final pmChat = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'pm-chat');
+      pmChat['audience'] = {'people': <Object>[]};
+      server.mentions.removeWhere((m) => m['conversationId'] == 'pm-chat');
+      server.state['mentionsWaiting'] =
+          (server.state['mentionsWaiting'] as int) - 1;
+      server.tag('message-2', text: 'Here instead');
+      server.parts.epoch++;
+    }
+
+    test('drops the tags of a conversation the reader leaves at once, '
+        'while the new list is slow to come', () async {
+      final server = swarm()
+        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.waiting.map((m) => m.text), ['Private']);
+
+      leaveChatTaggedElsewhere(server);
+      final slow = server.holdMentions = Completer<void>();
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(controller.snapshot!.mentionsWaiting, 1);
+      expect(mentions.waiting, isEmpty);
+      expect(mentions.earlier, isEmpty);
+
+      server.holdMentions = null;
+      slow.complete();
+      await pumpEventQueue();
+      expect(mentions.waiting.map((m) => m.text), ['Here instead']);
+    });
+
+    test('a tag the reader can no longer read stays gone when the new list '
+        'fails', () async {
+      final server = swarm()
+        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final mentions = SuperTabMentions.of(controller);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.waiting, hasLength(1));
+
+      leaveChatTaggedElsewhere(server);
+      server.failMentions = true;
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(mentions.waiting, isEmpty);
+      expect(mentions.error, isNotNull);
+    });
+
     test('reads waiting and earlier tags, newest first', () async {
       final server = ConversationServer()
         ..tag('m1', text: 'First')

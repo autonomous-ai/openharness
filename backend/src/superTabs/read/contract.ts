@@ -24,7 +24,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 /** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
  *  invitations filtered (invitations only for the Swarm owner). */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels'>
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility'>
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
@@ -131,7 +131,8 @@ export interface CommandReply {
 
 /** GET /api/super-tabs/list[?after=] */
 export interface SwarmList {
-  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null }>
+  /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
+  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null }>
   next: string | null
 }
 

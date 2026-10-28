@@ -131,7 +131,7 @@ export class SwarmApiShares {
   /** Brings back the shares an earlier process noted: their endpoints died with it, so each listens again at the address
    *  it had and joins again, reading the saved API afresh. A note from before addresses were kept is taken off its grid
    *  and shared at a new one. One whose API is no longer saved, or that grid refuses, stays off: a person shares again
-   *  from the Swarm's Manage models. */
+   *  from the Swarm's Your models. */
   restore(): Promise<void> {
     return this.serial(() => this.restoreNow())
   }

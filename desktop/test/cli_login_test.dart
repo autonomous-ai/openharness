@@ -7,6 +7,8 @@ import 'package:harness/auth/cli_login.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/harness_cli_runner.dart';
 
+import 'swarm_state_test.dart' show createApp;
+
 class _Runner extends HarnessCliRunner {
   _Runner({this.method = const []});
 
@@ -91,6 +93,54 @@ class _TimeoutProcess extends _Process {
 }
 
 void main() {
+  // 10-27: a test signed the app out with no fake sign-in client, which ran the
+  // real `harness logout` and signed the whole Mac out, again on every run.
+  group('under flutter test, with no runner given', () {
+    /// What [body] threw, and the errors it reported to its zone, where the
+    /// test framework fails the test on them.
+    Future<(Object?, List<Object>)> guarded(Future<void> Function() body) {
+      final reported = <Object>[];
+      final done = Completer<Object?>();
+      runZonedGuarded(() async {
+        try {
+          await body();
+          done.complete(null);
+        } catch (error) {
+          done.complete(error);
+        }
+      }, (error, _) => reported.add(error));
+      return done.future.then((thrown) => (thrown, reported));
+    }
+
+    test('it never runs the real CLI: it reads as no CLI here', () async {
+      await expectLater(
+        CliLogin().checkStatus(),
+        throwsA(isA<CliNotAvailableException>()),
+      );
+    });
+
+    test('signing out fails the test loudly, and runs nothing', () async {
+      final (thrown, reported) = await guarded(() => CliLogin().logout());
+
+      expect(thrown, isA<CliSignOutUnderTestError>());
+      expect(reported, [isA<CliSignOutUnderTestError>()]);
+    });
+
+    test('an app signed out with no fake sign-in client fails the test '
+        'loudly', () async {
+      final app = createApp();
+      addTearDown(app.dispose);
+
+      final (_, reported) = await guarded(app.logout);
+
+      expect(reported, [isA<CliSignOutUnderTestError>()]);
+      expect(
+        reported.single.toString(),
+        contains('would sign this computer out'),
+      );
+    });
+  });
+
   test('logout reports a nonzero CLI exit as a failure', () async {
     final process = _Process()..finish(1);
     final runner = _LogoutRunner(process);
@@ -112,8 +162,10 @@ void main() {
       process.errors.add(utf8.encode('fixture diagnostic'));
       process.finish();
       await pending;
+      // A person asked, with the app's Sign out button: the CLI refuses a sign-out nothing says a
+      // person asked for (10-27).
       expect(runner.arguments, [
-        ['logout'],
+        ['logout', '--from-sign-out-button'],
       ]);
     },
   );

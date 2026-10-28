@@ -71,11 +71,12 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
-  stopSweeps = startSwarmSweeps(prisma)
+  const swarms = new SuperTabStore(prisma)
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
-  stopArchive = startSwarmArchive(prisma, new SuperTabStore(prisma), () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
+  stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

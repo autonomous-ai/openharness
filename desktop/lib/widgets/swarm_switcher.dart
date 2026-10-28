@@ -1047,7 +1047,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               ? oneLine.clamp(48, double.infinity)
               : _twoLineRowHeight;
         }
-        // A Swarm's Manage models: two lines a row (its name, then what it is), under headings that read as headings.
+        // A Swarm's Your models: two lines a row (its name, then what it is), under headings that read as headings.
         final swarmRows = desktop && search.isSwarmModels;
         if (swarmRows) {
           _rowHeight = math.max(
@@ -2752,7 +2752,7 @@ class SwarmSearchCount extends StatelessWidget {
   }
 }
 
-/// A section heading of a Swarm's Manage models: its title, how many it holds, a rule, and a note at the right.
+/// A section heading of a Swarm's Your models: its title, how many it holds, a rule, and a note at the right.
 class _SwarmModelHeading extends StatelessWidget {
   const _SwarmModelHeading({
     super.key,
@@ -2838,7 +2838,7 @@ class _SwarmModelHeading extends StatelessWidget {
   }
 }
 
-/// A row of a Swarm's Manage models: its mark, its name over what it is, and what it is to the Swarm.
+/// A row of a Swarm's Your models: its mark, its name over what it is, and what it is to the Swarm.
 class _SwarmModelRow extends StatelessWidget {
   const _SwarmModelRow({
     required this.search,

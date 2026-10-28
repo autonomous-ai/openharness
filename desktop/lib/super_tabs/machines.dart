@@ -29,6 +29,7 @@ import 'identity.dart';
 import 'local_models.dart';
 import '../models/swarm_models_target.dart' show swarmSharedWithYouShown;
 import 'machine_details.dart';
+import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'team_account_setup.dart';
@@ -1626,7 +1627,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           ),
         ),
         if (expanded) ...[
-          for (final agent in view.agents) _agent(view, agent),
+          if (view.agents.isNotEmpty) _agentCount(view),
           _MachineReadings(view: view),
           if (view.agents.isEmpty)
             Padding(
@@ -1682,9 +1683,128 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     return native ?? HarnessActivity.unknown;
   }
 
-  Widget _agent(_MachineView view, SuperTabAgent agent) {
+  /// One line for all of [view]'s agents, however many: a busy machine is not a
+  /// screen of rows. The list opens over the sidebar, grouped by what each is doing.
+  Widget _agentCount(_MachineView view) {
+    final count = view.agents.length;
+    final label = count == 1 ? '1 agent' : '$count agents';
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth.clamp(240.0, 320.0);
+        return MenuAnchor(
+          consumeOutsideTap: true,
+          alignmentOffset: const Offset(0, grid.AppControl.menuGap),
+          style: grid.AppMenu.style(minWidth: width, maxWidth: width),
+          menuChildren: [
+            KeyedSubtree(
+              key: ValueKey('super-machine-agent-list-${view.id}'),
+              child: SizedBox(
+                width: width,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: _agentGroups(view),
+                ),
+              ),
+            ),
+          ],
+          builder: (context, menu, _) => Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              key: ValueKey('super-machine-agents-${view.id}'),
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              hoverColor: grid.AppSurface.hoverFill,
+              focusColor: grid.AppSurface.hoverFill,
+              onTap: () => menu.isOpen ? menu.close() : menu.open(),
+              child: Semantics(
+                button: true,
+                expanded: menu.isOpen,
+                label: label,
+                hint: 'Shows this machine’s agents',
+                excludeSemantics: true,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 32),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(36, 6, 10, 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.control(),
+                          ),
+                        ),
+                        Icon(
+                          AppIcons.chevronRight,
+                          size: grid.AppControl.iconSize,
+                          color: DesktopChrome.muted,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// [view]'s agents under Working, Waiting and Idle, each by name; a group with none is left out.
+  List<Widget> _agentGroups(_MachineView view) {
+    final groups = <String, List<(SuperTabAgent, HarnessActivity)>>{
+      'Working': [],
+      'Waiting': [],
+      'Idle': [],
+    };
+    for (final agent in view.agents) {
+      final activity = _activity(view, agent);
+      groups[switch (activity) {
+            HarnessActivity.working || HarnessActivity.starting => 'Working',
+            HarnessActivity.needsInput || HarnessActivity.failed => 'Waiting',
+            _ => 'Idle',
+          }]!
+          .add((agent, activity));
+    }
+    final snapshot = c.snapshot!;
+    return [
+      for (final MapEntry(key: title, value: members) in groups.entries)
+        if (members.isNotEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: Text(
+              title,
+              style: DesktopChrome.text(
+                size: 11,
+                medium: true,
+                height: 1.3,
+                color: DesktopChrome.muted,
+              ).copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+          for (final (agent, activity)
+              in members..sort(
+                (a, b) => snapshot
+                    .agentName(a.$1.id)
+                    .toLowerCase()
+                    .compareTo(snapshot.agentName(b.$1.id).toLowerCase()),
+              ))
+            _agent(view, agent, activity),
+        ],
+    ];
+  }
+
+  Widget _agent(
+    _MachineView view,
+    SuperTabAgent agent,
+    HarnessActivity activity,
+  ) {
     final name = c.snapshot!.agentName(agent.id);
-    final activity = _activity(view, agent);
     final lead = c.snapshot!.isLead(agent.id);
     final customRole = c.snapshot!.activeRoleForAgent(agent);
     final role =
@@ -1712,87 +1832,75 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          key: ValueKey('super-machine-agent-${view.id}-${agent.id}'),
-          borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-          hoverColor: grid.AppSurface.hoverFill,
-          focusColor: grid.AppSurface.hoverFill,
-          onTap: widget.onOpenAgent == null
-              ? null
-              : () {
-                  final current = c.snapshot?.agent(agent.id);
-                  if (current != null) widget.onOpenAgent!(current);
-                },
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 36),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
-                children: [
-                  const SizedBox(width: 4),
-                  SizedBox(
-                    width: 32,
-                    child: Center(
-                      child: SuperTabAvatar.agent(agent, name: name, size: 22),
-                    ),
-                  ),
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final label = Text(
-                          name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.control(),
-                        );
-                        final roleBadge = Semantics(
-                          label: role,
-                          excludeSemantics: true,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 5,
-                              vertical: 1,
+        child: Builder(
+          builder: (context) => InkWell(
+            key: ValueKey('super-machine-agent-${view.id}-${agent.id}'),
+            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+            hoverColor: grid.AppSurface.hoverFill,
+            focusColor: grid.AppSurface.hoverFill,
+            onTap: widget.onOpenAgent == null
+                ? null
+                : () {
+                    MenuController.maybeOf(context)?.close();
+                    final current = c.snapshot?.agent(agent.id);
+                    if (current != null) widget.onOpenAgent!(current);
+                  },
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 36),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: DesktopChrome.control(),
                             ),
-                            decoration: BoxDecoration(
-                              color: grid.AppSurface.hoverFill,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(badge, style: DesktopChrome.metadata()),
                           ),
-                        );
-                        if (constraints.maxWidth <
-                            MediaQuery.textScalerOf(context).scale(100)) {
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [label, roleBadge],
-                          );
-                        }
-                        return Row(
-                          children: [
-                            Flexible(child: label),
-                            const SizedBox(width: 6),
-                            roleBadge,
-                          ],
-                        );
-                      },
+                          const SizedBox(width: 6),
+                          Semantics(
+                            label: role,
+                            excludeSemantics: true,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: grid.AppSurface.hoverFill,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                badge,
+                                style: DesktopChrome.metadata(),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  SizedBox(
-                    width: 32,
-                    child: Center(
-                      child: ActivityMark(
-                        activity: activity,
-                        color: activityColor(
-                          activity,
-                          theme,
-                          color: appearancePrefsStore.value.prompt.color,
+                    SizedBox(
+                      width: 32,
+                      child: Center(
+                        child: ActivityMark(
+                          activity: activity,
+                          color: activityColor(
+                            activity,
+                            theme,
+                            color: appearancePrefsStore.value.prompt.color,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 32),
-                ],
+                    const SizedBox(width: 4),
+                  ],
+                ),
               ),
             ),
           ),
@@ -2086,16 +2194,14 @@ class _MachineLine extends StatelessWidget {
       child: Row(
         children: [
           const SizedBox(width: 4),
-          // A machine reads as a home directory, "~ Diego's Mac", beside the
-          // sidebar's "# project" channels.
+          // A machine leads with what it is, a MacBook, a Mac Studio, beside
+          // the sidebar's "# project" channels; dimmed with its name.
           SizedBox(
             width: 32,
-            child: Text(
-              '~',
-              textAlign: TextAlign.center,
-              style: DesktopChrome.control(
-                color: DesktopChrome.muted,
-                medium: true,
+            child: Center(
+              child: SuperTabMachineIcon(
+                deviceType: view.resources?.deviceType,
+                color: muted ? DesktopChrome.muted : DesktopChrome.foreground,
               ),
             ),
           ),
