@@ -33,6 +33,7 @@ void main() {
       final storage = _Store()..values['unrelated'] = 'kept';
       final font = TerminalFontStore(storage: storage);
       addTearDown(font.dispose);
+      expect(font.value.symbolFontFamily, terminalIconFontFamily);
       await font.setFamily(TerminalFontChoice.courierNew);
       await font.setSize(18);
       final restored = TerminalFontStore(storage: storage);

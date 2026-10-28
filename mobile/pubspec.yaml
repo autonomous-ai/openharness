@@ -116,7 +116,15 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    # Icons only (Nerd Fonts v3.5.1, MIT). Claude Code prints these from the
+    # private-use area; the phone's text faces do not carry them. One em wide,
+    # so the terminal scales them down to the cell measured from the text face.
+    - family: Symbols Nerd Font Mono
+      fonts:
+        - asset: assets/fonts/symbols-nerd-font-mono/SymbolsNerdFontMono-Regular.ttf
   assets:
+    - assets/fonts/symbols-nerd-font-mono/LICENSE
     - assets/engine-icons/
     # Each connected service's icon for Settings ▸ Connectors, PNG only (cli/scripts/connector-assets.mjs).
     - assets/connector-icons/

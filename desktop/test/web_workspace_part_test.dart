@@ -128,7 +128,7 @@ void main() {
   test('the terminal font files are in the bundle the browser reads', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     expect(terminalFontAssets, hasLength(2));
-    for (final asset in terminalFontAssets) {
+    for (final asset in [...terminalFontAssets, terminalIconFontAsset]) {
       final bytes = await rootBundle.load(asset);
       // A TrueType file opens with its version, 0x00010000.
       expect(bytes.getUint32(0), 0x00010000, reason: asset);

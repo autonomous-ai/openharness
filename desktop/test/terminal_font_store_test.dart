@@ -34,6 +34,7 @@ void main() {
 
     expect(store.family, TerminalFontChoice.defaultForPlatform);
     expect(store.size, terminalFontSize);
+    expect(store.value.symbolFontFamily, terminalIconFontFamily);
   });
 
   test('remembers a family and size by name, not by ordinal', () async {
@@ -162,6 +163,7 @@ void main() {
     expect(storage.values['terminal_font_family'], 'font:JetBrains Mono');
     expect(store.family, isNull);
     expect(store.value.fontFamily, 'JetBrains Mono');
+    expect(store.value.symbolFontFamily, terminalIconFontFamily);
     // A glyph the face lacks still comes from a monospaced one: the platform's default first.
     expect(store.value.fontFamilyFallback, [
       terminalFontFamily,

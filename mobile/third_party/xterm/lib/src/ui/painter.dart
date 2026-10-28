@@ -18,6 +18,25 @@ String terminalGlyphText(int charCode) => charCode == 0x23FA
     ? String.fromCharCode(0x25CF)
     : String.fromCharCode(charCode);
 
+/// A private-use code point: where Nerd Font icons live. Unicode assigns them
+/// no width; the grid counts each as one cell.
+bool isPrivateUseIcon(int codePoint) =>
+    (codePoint >= 0xE000 && codePoint <= 0xF8FF) ||
+    (codePoint >= 0xF0000 && codePoint <= 0xFFFFD) ||
+    (codePoint >= 0x100000 && codePoint <= 0x10FFFD);
+
+/// Font size at which an icon whose advance is [symbolAdvance] (measured at
+/// [fontSize]) occupies [cellWidth]. Symbols Nerd Font Mono draws each icon
+/// one em wide, which is wider than the text face's cell.
+double symbolFontSizeForCell({
+  required double fontSize,
+  required double cellWidth,
+  required double symbolAdvance,
+}) {
+  if (symbolAdvance <= 0 || cellWidth <= 0) return fontSize;
+  return fontSize * cellWidth / symbolAdvance;
+}
+
 /// Encapsulates the logic for painting various terminal elements.
 class TerminalPainter {
   TerminalPainter({
@@ -53,6 +72,7 @@ class TerminalPainter {
     if (value == _textStyle) return;
     _textStyle = value;
     _cellSize = _measureCharSize();
+    _fittedSymbolFontSize = null;
     _paragraphCache.clear();
     clearLinePictures();
   }
@@ -63,6 +83,7 @@ class TerminalPainter {
     if (value == _textScaler) return;
     _textScaler = value;
     _cellSize = _measureCharSize();
+    _fittedSymbolFontSize = null;
     _paragraphCache.clear();
     clearLinePictures();
   }
@@ -106,6 +127,7 @@ class TerminalPainter {
   /// clear cached state related to font rendering.
   void clearFontCache() {
     _cellSize = _measureCharSize();
+    _fittedSymbolFontSize = null;
     _paragraphCache.clear();
     clearLinePictures();
   }
@@ -344,7 +366,7 @@ class TerminalPainter {
     if (paragraph == null) {
       final cellFlags = cellData.flags;
 
-      final style = _textStyle.toTextStyle(
+      var style = _textStyle.toTextStyle(
         color: _foregroundColorOf(
           cellData.foreground,
           cellData.background,
@@ -354,6 +376,17 @@ class TerminalPainter {
         italic: cellFlags & CellFlags.italic != 0,
         underline: cellFlags & CellFlags.underline != 0,
       );
+      if (_symbolFace(charCode)) {
+        style = style.copyWith(
+          fontFamily: _textStyle.symbolFontFamily,
+          fontSize: _symbolFontSize,
+          // A missing icon stays on the text face rather than a blank.
+          fontFamilyFallback: [
+            _textStyle.fontFamily,
+            ..._textStyle.fontFamilyFallback,
+          ],
+        );
+      }
 
       // Flutter does not draw an underline below a space which is not between
       // other regular characters. As only single characters are drawn, this
@@ -374,7 +407,70 @@ class TerminalPainter {
       );
     }
 
+    if (_symbolFace(charCode)) {
+      final span = cellData.content >> CellContent.widthShift == 2 ? 2 : 1;
+      final cell = Rect.fromLTWH(
+        offset.dx,
+        offset.dy,
+        _cellSize.width * span,
+        _cellSize.height,
+      );
+      final dx = (cell.width - paragraph.maxIntrinsicWidth) / 2;
+      final dy = (cell.height - paragraph.height) / 2;
+      canvas.save();
+      canvas.clipRect(cell);
+      canvas.drawParagraph(paragraph, offset.translate(dx, dy));
+      canvas.restore();
+      return;
+    }
     canvas.drawParagraph(paragraph, offset);
+  }
+
+  /// The icon face, at a size that fits one cell. Null until the bundled face
+  /// has actually resolved: a probe taken before it loads measures the text
+  /// face's missing-glyph box, and caching that would leave the icons oversized.
+  double? _fittedSymbolFontSize;
+
+  bool _symbolFace(int charCode) =>
+      _textStyle.symbolFontFamily != null && isPrivateUseIcon(charCode);
+
+  double get _symbolFontSize {
+    final cached = _fittedSymbolFontSize;
+    if (cached != null) return cached;
+    final fitted = _measureSymbolFontSize();
+    if (_symbolProbeAdvance >= _textScaler.scale(_textStyle.fontSize) * 0.9) {
+      _fittedSymbolFontSize = fitted;
+      // Paragraphs laid out before the face resolved stay under a key that
+      // does not include the font. Drop them, or the oversized glyph is reused.
+      _paragraphCache.clear();
+      clearLinePictures();
+    }
+    return fitted;
+  }
+
+  double _symbolProbeAdvance = 0;
+
+  double _measureSymbolFontSize() {
+    final family = _textStyle.symbolFontFamily;
+    if (family == null) return _textStyle.fontSize;
+    final probe = TextStyle(fontFamily: family, fontSize: _textStyle.fontSize);
+    _symbolProbeAdvance = _measureAdvance(probe, '\u{f07b}');
+    return symbolFontSizeForCell(
+      fontSize: _textStyle.fontSize,
+      cellWidth: _cellSize.width,
+      symbolAdvance: _symbolProbeAdvance,
+    );
+  }
+
+  double _measureAdvance(TextStyle style, String text) {
+    final builder = ParagraphBuilder(style.getParagraphStyle())
+      ..pushStyle(style.getTextStyle(textScaler: _textScaler))
+      ..addText(text);
+    final paragraph = builder.build()
+      ..layout(const ParagraphConstraints(width: double.infinity));
+    final advance = paragraph.maxIntrinsicWidth / text.length;
+    paragraph.dispose();
+    return advance;
   }
 
   /// Paints the background of a cell represented by [cellData] to [canvas] at

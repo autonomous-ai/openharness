@@ -241,6 +241,7 @@ class TerminalFontStore extends ValueNotifier<TerminalStyle> {
       fontSize: size,
       fontFamily: selection.fontFamily,
       fontFamilyFallback: selection.fontFamilyFallback,
+      symbolFontFamily: terminalIconFontFamily,
     ),
   );
 

@@ -91,6 +91,11 @@ Future<void> startHarness({
     yield LicenseEntryWithLineBreaks([
       'Roboto Mono',
     ], await rootBundle.loadString('assets/fonts/roboto-mono/OFL.txt'));
+    yield LicenseEntryWithLineBreaks([
+      'Symbols Nerd Font Mono',
+    ], await rootBundle.loadString(
+      'assets/fonts/symbols-nerd-font-mono/LICENSE',
+    ));
   });
   harnessTransportPlugins = transportPlugins;
   // Before anything else can fail. The file sinks come first so CrashLog's own

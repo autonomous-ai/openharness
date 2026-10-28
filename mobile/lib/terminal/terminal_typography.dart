@@ -91,3 +91,11 @@ double get terminalFontSize => switch (defaultTargetPlatform) {
   TargetPlatform.iOS || TargetPlatform.android => 14.0,
   _ => 13.0,
 };
+
+/// Bundled icon face for private-use glyphs (Nerd Font / codicons).
+///
+/// Claude Code prints those icons as one column. None of the text faces above
+/// contain them, and Flutter will not go looking through fonts that were not
+/// named. This face contains only the icons, each one em wide, so the painter
+/// scales it to the cell measured from the text face.
+const terminalIconFontFamily = 'Symbols Nerd Font Mono';
