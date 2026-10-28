@@ -32,6 +32,9 @@ void main() {
         initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
       );
       await controller.refresh();
+      // Unread, so the project's dot shows beside its chevron.
+      server.append('New work', conversationId: 'g11');
+      await controller.refresh();
       final picture = GlobalKey();
       await tester.pumpWidget(
         MaterialApp(
