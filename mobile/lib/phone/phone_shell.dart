@@ -113,6 +113,9 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
+    // Install tap callbacks and read the launch payload even when no new notice
+    // arrives. Checking permission does not ask for it.
+    unawaited(noticesEnabled(notices));
     // A tap that launched the app is read before this shell exists, so its value is already set and
     // no listener will ever fire for it: take it once the navigator is up.
     if (notices.opened.value != null ||
@@ -250,7 +253,62 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     final agent = opened.value;
     if (agent == null) return;
     opened.value = null;
-    _openAgentAtHome(agent.machineId, agent.agentId);
+    if (_swarm.session case final session?) {
+      unawaited(_openSwarmAgent(session, agent.machineId, agent.agentId));
+    } else {
+      _openAgentAtHome(agent.machineId, agent.agentId);
+    }
+  }
+
+  int _noticeRequest = 0;
+
+  Future<void> _openSwarmAgent(
+    SwarmSession session,
+    String machineId,
+    String harnessId,
+  ) async {
+    final request = ++_noticeRequest;
+    // Join the cold-start read; a background tap must use the current assignment.
+    await session.inbox.refresh();
+    if (!mounted || _swarm.session != session || request != _noticeRequest) {
+      return;
+    }
+    for (final swarm in session.inbox.swarms) {
+      final snapshot = session.inbox.reader(swarm.id)?.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents) {
+        if (agent.machineId != machineId || agent.harnessId != harnessId) {
+          continue;
+        }
+        final groups = snapshot.conversations.where(
+          (g) =>
+              !g.closed && !snapshot.isProjectLead(g.id) && g.audience == null,
+        );
+        final assigned = groups.where(
+          (g) =>
+              g.assignment?['agentId'] == agent.id &&
+              !const ['done', 'cancelled'].contains(g.assignment?['status']),
+        );
+        final member = groups.where((g) => g.agentIds.contains(agent.id));
+        final conversationId =
+            assigned.firstOrNull?.id ??
+            member.firstOrNull?.id ??
+            snapshot.projectById(agent.projectId)?.leadConversationId;
+        if (conversationId != null) {
+          _showNoticedChat((
+            swarmId: swarm.id,
+            conversationId: conversationId,
+            messageId: null,
+            decisionId: null,
+          ));
+          return;
+        }
+      }
+    }
+    _showSwarm();
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('This agent’s chat is unavailable.')),
+    );
   }
 
   /// A tapped "new device" notice: that device's page. One this phone has just been told of opens as
@@ -269,9 +327,17 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void _openNoticedSwarm() {
     final opened = _swarmNotices.openedSwarm;
     final target = opened.value;
-    final navigator = _navigator.currentState;
-    if (target == null || navigator == null) return;
+    if (target == null || _navigator.currentState == null) return;
     opened.value = null;
+    // Swarm off cancels its notices. A stale tap must not open a disabled UI.
+    if (_swarm.session == null) return;
+    _showNoticedChat(target);
+  }
+
+  void _showNoticedChat(SwarmNoticeTarget target) {
+    ++_noticeRequest;
+    final navigator = _navigator.currentState;
+    if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
     unawaited(
@@ -280,6 +346,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
           (_) => SwarmConversationPage(
             swarmId: target.swarmId,
             conversationId: target.conversationId,
+            messageId: target.messageId,
+            decisionId: target.decisionId,
           ),
           listensForItself: true,
         ),

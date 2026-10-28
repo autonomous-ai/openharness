@@ -69,9 +69,12 @@ class SwarmConversationPage extends StatefulWidget {
     this.subtitle,
     this.action,
     this.below,
+    this.messageId,
+    this.decisionId,
   });
 
   final String swarmId, conversationId;
+  final String? messageId, decisionId;
 
   /// The header's lines in place of the chat's name and its project: a
   /// project's chat is its project's screen, under the project's name and
@@ -108,6 +111,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   /// the one lit for a moment on arrival, the search through earlier pages,
   /// and what to say when it cannot be found.
   String? _target, _lit;
+  String? _decisionTarget;
+  bool _noticeHandled = false;
   final _targetKey = GlobalKey();
   Timer? _litTimer;
   bool _finding = false;
@@ -181,7 +186,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     session.inbox.addListener(_see);
     _see();
     _watch();
-    unawaited(_conversation!.load());
+    unawaited(
+      c.load().then((_) {
+        if (!mounted || _conversation != c || _noticeHandled) return;
+        if (widget.messageId case final messageId?) {
+          _noticeHandled = true;
+          unawaited(_jumpTo(c, messageId));
+        }
+      }),
+    );
     if (rebuild && mounted) setState(() {});
   }
 
@@ -204,6 +217,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
     _view.value = _ChatView.of(session, c, _view.value);
+    final decisionId = widget.decisionId;
+    if (!_noticeHandled &&
+        decisionId != null &&
+        _view.value!.decisions.any((need) => need.decision.id == decisionId)) {
+      _noticeHandled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _conversation != c) return;
+        setState(() => _decisionTarget = decisionId);
+        _reveal(c, decisionId, 0);
+      });
+    }
   }
 
   void _close() {
@@ -374,6 +398,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   Future<void> _jumpTo(SwarmConversation c, String messageId) async {
     if (_finding) return;
     setState(() {
+      _decisionTarget = null;
       _finding = true;
       _note = null;
     });
@@ -406,7 +431,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   /// to the middle (the desktop's `_revealTarget`).
   void _reveal(SwarmConversation c, String messageId, int attempt) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _target != messageId) return;
+      if (!mounted || (_target != messageId && _decisionTarget != messageId)) {
+        return;
+      }
       if (_targetKey.currentContext case final row?) {
         unawaited(
           Scrollable.ensureVisible(
@@ -419,7 +446,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       }
       final shown = _shown;
       final index = shown.indexWhere(
-        (entry) => entry is _MessageEntry && entry.message.id == messageId,
+        (entry) => _decisionTarget == messageId
+            ? entry is _AskEntry && entry.need.decision.id == messageId
+            : entry is _MessageEntry && entry.message.id == messageId,
       );
       if (!_scroll.hasClients || index < 0 || attempt > 20) return;
       final position = _scroll.position;
@@ -870,14 +899,24 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           final role = asker == null ? null : view.roles[asker.id];
           return _row(
             key,
-            (need, grouped, asker?.id, role, swarmLookKey(_agentLook(asker))),
-            () => _Ask(
-              session: session,
-              need: need,
-              grouped: grouped,
-              askerId: asker?.id,
-              role: role,
-              picture: asker?.avatar,
+            (
+              need,
+              grouped,
+              asker?.id,
+              role,
+              swarmLookKey(_agentLook(asker)),
+              _decisionTarget == need.decision.id,
+            ),
+            () => KeyedSubtree(
+              key: _decisionTarget == need.decision.id ? _targetKey : null,
+              child: _Ask(
+                session: session,
+                need: need,
+                grouped: grouped,
+                askerId: asker?.id,
+                role: role,
+                picture: asker?.avatar,
+              ),
             ),
           );
       }
@@ -1665,6 +1704,7 @@ class _Pending extends StatelessWidget {
   /// The files going with it, already uploaded: shown as chips that open
   /// nothing until the post is read back with their links.
   final List<SwarmOutgoingFile> files;
+
   /// The person's own face.
   final SwarmLook look;
   final SwarmMentions mentions;

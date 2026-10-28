@@ -71,7 +71,7 @@ void main() {
   });
 
   group('a Swarm notice', () {
-    const target = (swarmId: 'tab-1', conversationId: 'g9');
+    const target = (swarmId: 'tab-1', conversationId: 'g9', messageId: null, decisionId: null);
     const swarm = (
       key: 'decision:d1',
       title: 'River asks you',
