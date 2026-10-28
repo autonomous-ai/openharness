@@ -253,6 +253,57 @@ describe('work that loses its owner', () => {
       messageId: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') } })).toBe(1)
   })
 
+  // One duplicate stopped every later report and poll for 45 minutes that day. A notice of the time checks found already
+  // stored as that same notice is kept, and its missing deliveries are written, so its recipients still receive it.
+  describe('a lost notice already stored', () => {
+    const lostIds = (f: Awaited<ReturnType<typeof swarm>>) =>
+      ({ lead: stableId('work-lost', f.assignmentId, String(f.clock.now)), agent: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') })
+    const store = (f: Awaited<ReturnType<typeof swarm>>, id: string, text: string, conversationId = f.group) => db.superTabMessage.create({ data: { id,
+      tabId: f.tab, conversationId, sequence: 1, author: { kind: 'agent', id: f.lead }, source: { kind: 'work-lost', agentId: f.worker, assignmentId: f.assignmentId },
+      text, replyTo: null, recipientIds: [], mentions: [] } })
+
+    it('is kept on its machine\'s report, and the Lead and the worker still receive it', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f)
+      await store(f, ids.lead, 'Stored for the Lead')
+      await store(f, ids.agent, 'Stored for the worker')
+      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+      expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+      expect((await f.leadInbox()).map(m => m.text)).toContain('Stored for the Lead')
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker, messageId: ids.agent } })).toBe(1)
+    })
+
+    it('is kept on its Lead\'s poll, and the Lead receives it', async () => {
+      const f = await swarm()
+      await f.observe('test-host', [f.harness.worker])
+      f.clock.now += 3 * MINUTE
+      await store(f, lostIds(f).lead, 'Stored for the Lead')
+      expect((await f.leadInbox()).map(m => m.text)).toContain('Stored for the Lead')
+      expect(await f.assignment()).toMatchObject({ status: 'lost' })
+    })
+
+    it('gets no second delivery when its delivery is stored too', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f)
+      await store(f, ids.lead, 'Stored for the Lead')
+      await db.superTabDelivery.create({ data: { id: stableId(ids.lead, f.lead), tabId: f.tab, conversationId: f.group, messageId: ids.lead, agentId: f.lead,
+        machineId: 'lead-host', machineOwnerId: host.sub, assignmentId: null, membershipGeneration: 'g', authorKind: 'agent', authorId: f.lead, authorGeneration: 'g' } })
+      await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+      expect(await f.assignment()).toMatchObject({ status: 'lost' })
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: ids.lead } })).toBe(1)
+    })
+
+    it('still refuses a stored message that is not this notice', async () => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      await store(f, lostIds(f).lead, 'Another message', 'lead')
+      await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
+      expect(await f.assignment()).toMatchObject({ status: 'working' })
+    })
+  })
+
   // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
   // rows do (cli superTabs/limitResume.ts reads them before typing).
   it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
