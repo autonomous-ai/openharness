@@ -1639,6 +1639,20 @@ model HarnessSession {
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.
   expiresAt   DateTime
   revokedAt   DateTime?
+  /// A session an SSO sign-in backs (lib/ssoSession.ts): the CLI or Desktop signed in through SSO and traded it for this
+  /// session. The person's SSO refresh token, and the last access token it gave, encrypted (lib/machineCredential.ts);
+  /// cleared when the session ends. Absent on a session a QR or a handoff made.
+  ssoRefresh         String?
+  ssoAccess          String?
+  ssoAccessExpiresAt DateTime?
+  /// The account plane and auth-service client the SSO tokens were issued on: a renewal must name the same.
+  ssoEnv             String?
+  ssoClientId        String?
+  /// The last time SSO accepted the sign-in: re-checked hourly, and the outage grace runs from it.
+  ssoCheckedAt       DateTime?
+  /// Set before a renewal asks SSO, cleared once its answer is saved. Left set, a renewal was lost on the way — its
+  /// rotated refresh token may never have been saved — so a refusal of the stored one is no proof of a sign-out.
+  ssoRenewingAt      DateTime?
 
   @@index([userId])
   @@map("harness_sessions")

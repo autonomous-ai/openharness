@@ -24,7 +24,8 @@ import {
 } from '../lib/sso.js'
 import { parseAutonomousEnvironment, type AutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { isHarnessRefreshToken } from '../lib/harnessTokenFormat.js'
-import { redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff } from '../lib/harnessSession.js'
+import { createSsoSession, redeemHandoff, refreshHarnessSession, revokeHarnessSession, startHandoff, type HarnessTokens } from '../lib/harnessSession.js'
+import { parseSsoSessionRequest, type SsoGrant, type SsoSessionRequest } from '../lib/ssoSession.js'
 import { normalizeSignInAttribution, type SignInAttribution } from '../lib/signInAttribution.js'
 import { createHash } from 'node:crypto'
 import { ed25519 } from '@noble/curves/ed25519.js'
@@ -80,6 +81,43 @@ async function teamHostMachine(user: AuthUser, named: string | undefined): Promi
   return ordinary(machine) ? named : false
 }
 
+/**
+ * The Harness session a sign-in or renewal asked for (lib/ssoSession.ts), made from its SSO tokens. Null when it cannot
+ * be made — no SSO refresh token to keep, the account gone, the store or credential key failing: the caller then answers
+ * with the SSO tokens as before, so the person stays signed in either way, and a rotated SSO refresh token is never lost.
+ */
+async function harnessSessionFor(
+  userId: string,
+  asked: SsoSessionRequest,
+  grant: Partial<SsoGrant>,
+  autonomousEnv: AutonomousEnvironment,
+  clientId: ReturnType<typeof normalizeSsoClientId>,
+): Promise<HarnessTokens | null> {
+  if (!grant.accessToken || !grant.refreshToken) {
+    logger.warn('harness session not made; signed in with SSO tokens', { userId, reason: 'NO_SSO_REFRESH_TOKEN' })
+    return null
+  }
+  try {
+    const tokens = await createSsoSession(userId, asked, grant as SsoGrant, autonomousEnv, clientId)
+    if (!tokens) logger.warn('harness session not made; signed in with SSO tokens', { userId, reason: 'NO_ACCOUNT' })
+    return tokens
+  } catch (e) {
+    // The error's kind only: a store's message can quote what it was asked to write.
+    logger.warn('harness session not made; signed in with SSO tokens', { userId, reason: e instanceof Error ? e.name : 'unknown' })
+    return null
+  }
+}
+
+/** A Harness session's tokens, as a sign-in or renewal hands them back in place of the SSO ones. */
+const harnessSessionBody = (tokens: HarnessTokens) => ({
+  token: tokens.token,
+  refreshToken: tokens.refreshToken,
+  expiresIn: tokens.expiresIn,
+  kind: tokens.kind,
+  autonomousEnv: tokens.autonomousEnv,
+  harnessSession: true,
+})
+
 /** Reporting only: a sign-in whose attribution cannot be stored still signs in. */
 async function recordAttribution(userId: string, attribution: SignInAttribution): Promise<void> {
   try {
@@ -120,11 +158,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   //    then validates the access token through the profile service, mirrors the user and returns that
   //    SAME access token in the body. No backend-owned session JWT is minted.
   //    `attribution` is the `utm_*` + `rid` auth-service carried back onto the callback URL (lib/signInAttribution.ts).
-  app.post<{ Body: { code?: string; state?: string; tx?: string; attribution?: unknown } }>(
+  //    `harnessSession: { kind, label }` asks for a Harness session in place of the SSO tokens (lib/ssoSession.ts).
+  app.post<{ Body: { code?: string; state?: string; tx?: string; attribution?: unknown; harnessSession?: unknown } }>(
     '/api/auth/exchange',
     async (req, reply) => {
       const { code, state, tx: txRaw } = req.body ?? {}
       const attribution = normalizeSignInAttribution(req.body?.attribution)
+      const asked = parseSsoSessionRequest(req.body?.harnessSession)
+      if (asked === null) return sendError(reply, 'Ask for a computer or a viewer session', 'INVALID_HARNESS_SESSION', 400)
       let tx: SsoTx | null = null
       try {
         tx = txRaw ? await consumeTx(txRaw) : null
@@ -153,6 +194,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           ...(attribution ? { attribution } : {}),
         })
         if (attribution) await recordAttribution(user.sub, attribution)
+        const session = asked && await harnessSessionFor(user.sub, asked,
+          { accessToken: token, refreshToken: tokens.refresh_token, expiresIn: tokens.expires_in }, tx.autonomousEnv, tx.clientId)
+        if (session) return sendSuccess(reply, { ...harnessSessionBody(session), next: tx.next })
         return sendSuccess(reply, {
           token,
           next: tx.next,
@@ -184,7 +228,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
   )
 
-  app.post<{ Body: { refreshToken?: string; autonomousEnv?: AutonomousEnvironment; clientId?: string } }>(
+  //    An SSO renewal that asks for `harnessSession` is moved over to one (lib/ssoSession.ts): today's signed-in CLIs and
+  //    Desktops switch silently on their next renewal. A Harness refresh token ignores it.
+  app.post<{ Body: { refreshToken?: string; autonomousEnv?: AutonomousEnvironment; clientId?: string; harnessSession?: unknown } }>(
     '/api/auth/refresh',
     async (req, reply) => {
       const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : ''
@@ -197,10 +243,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           if (!tokens) return sendError(reply, 'Refresh token is invalid or expired', 'REFRESH_TOKEN_INVALID', 401)
           return sendSuccess(reply, tokens)
         } catch (e) {
+          // SSO not confirming the sign-in within its grace (lib/ssoSession.ts) says so: unavailable, retrying.
+          if (e instanceof SsoAuthError && e.code === 'AUTH_SERVICE_UNAVAILABLE') return sendError(reply, e.message, e.code, 503)
           logger.error('harness session refresh failed', e)
           return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
         }
       }
+
+      const asked = parseSsoSessionRequest(req.body?.harnessSession)
+      if (asked === null) return sendError(reply, 'Ask for a computer or a viewer session', 'INVALID_HARNESS_SESSION', 400)
 
       let autonomousEnv: AutonomousEnvironment
       try { autonomousEnv = parseAutonomousEnvironment(req.body?.autonomousEnv) } catch {
@@ -209,7 +260,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         // The client the session was issued to: a refresh under any other is refused upstream.
-        const tokens = await refreshAccessToken(refreshToken, autonomousEnv, normalizeSsoClientId(req.body?.clientId))
+        const clientId = normalizeSsoClientId(req.body?.clientId)
+        const tokens = await refreshAccessToken(refreshToken, autonomousEnv, clientId)
         const token = tokens.access_token
         if (!token) throw new SsoTokenError('SSO refresh returned no access token', 'TOKEN_SERVICE_UNAVAILABLE')
         const user = await authenticateAccessToken(token, autonomousEnv)
@@ -219,6 +271,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           rotatedRefreshToken: !!tokens.refresh_token,
           expiresIn: tokens.expires_in,
         })
+        // Whatever this answers, SSO may already have rotated the refresh token: the new one is handed back either way.
+        const session = asked && await harnessSessionFor(user.sub, asked,
+          { accessToken: token, refreshToken: tokens.refresh_token || refreshToken, expiresIn: tokens.expires_in }, autonomousEnv, clientId)
+        if (session) {
+          logger.info('sso sign-in moved to a harness session', { userId: user.sub, kind: session.kind })
+          return sendSuccess(reply, harnessSessionBody(session))
+        }
         return sendSuccess(reply, {
           token,
           ...(tokens.refresh_token ? { refreshToken: tokens.refresh_token } : {}),
