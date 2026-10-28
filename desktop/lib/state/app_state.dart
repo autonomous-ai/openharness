@@ -1826,6 +1826,15 @@ class AppNotifier extends ChangeNotifier {
         }
       }
       if (shown) _persistLayout();
+      // The dial is told the project open in a Swarm tab only once the Swarm
+      // has loaded: a tab shown (or restored) before that went out with no
+      // project, and nothing told the dial again, so it stayed on an empty
+      // tab (Diego, 2026-10-28). Said again when that project changes, not on
+      // every read.
+      if (_dialProjects.containsKey(controller.tabId) &&
+          _dialProjects[controller.tabId] != _dialProject(controller)) {
+        _announceOpenPanesToDial();
+      }
       notifyListeners();
     },
     transport: (method, path, {body}) async {
@@ -5612,6 +5621,20 @@ class AppNotifier extends ChangeNotifier {
   bool _announceFromDevice = false;
   int _devicePick = 0;
 
+  /// The project each Swarm tab's row last told the dial, by backend tab id;
+  /// null while its Swarm had not loaded. See `onSnapshot`.
+  final _dialProjects = <String, String?>{};
+
+  String? _dialProject(SuperTabController controller) =>
+      controller.snapshot?.projectFor(controller.selectedId)?.id;
+
+  /// The project open in this Swarm tab for its dial row, kept as told.
+  String? _rememberDialProject(String tabId) =>
+      _dialProjects[tabId] = switch (superTabs.peek(tabId)) {
+        final controller? => _dialProject(controller),
+        null => null,
+      };
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -5678,10 +5701,7 @@ class AppNotifier extends ChangeNotifier {
           // while the tab has not loaded: a project is not guessed.
           if (swarm.superTabId case final tabId?) ...{
             'superTabId': tabId,
-            if (superTabs.peek(tabId) case final controller?)
-              if (controller.snapshot?.projectFor(controller.selectedId)
-                  case final project?)
-                'projectId': project.id,
+            'projectId': ?_rememberDialProject(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)
