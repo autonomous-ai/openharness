@@ -830,6 +830,8 @@ describe('a Harness session in place of SSO tokens', () => {
   const HNA = `hna_${'a'.repeat(43)}`
   const HNR = `hnr_${'b'.repeat(43)}`
   const sessionOnDisk = (root: string): Record<string, unknown> => JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))
+  // The sign-in's own calls: `auth status` may also ask other routes (the models list) on its own.
+  const authCalls = (calls: Array<{ url: string; body: unknown }>) => calls.filter((c) => c.url.startsWith('/api/auth/'))
   // The backend's answer to a renewal: a Harness session when asked for one, the SSO tokens as before otherwise.
   const renewal = (body: any) => body.harnessSession
     ? { token: HNA, refreshToken: HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }
@@ -845,7 +847,7 @@ describe('a Harness session in place of SSO tokens', () => {
 
     expect(result.status, result.stderr).toBe(0)
     expect(JSON.parse(result.stdout.trim())).toMatchObject({ loggedIn: true, machineId: 'm_seeded' })
-    expect(backend.calls).toEqual([{ url: '/api/auth/refresh', body: {
+    expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/refresh', body: {
       refreshToken: 'refresh_seeded', autonomousEnv: 'prod', clientId: 'harness-desktop',
       harnessSession: { kind: 'computer', label: expect.any(String) },
     } }])
@@ -864,7 +866,7 @@ describe('a Harness session in place of SSO tokens', () => {
       seedSession(root, { expiresInMs: 30_000, overrides })
       const backend = await fakeBackend({ routes: { '/api/auth/refresh': renewal } })
       await runAsync(root, ['auth', 'status', '--json'], backend.base)
-      expect(backend.calls.map((c) => c.body)).toEqual([expect.not.objectContaining({ harnessSession: expect.anything() })])
+      expect(authCalls(backend.calls).map((c) => c.body)).toEqual([expect.not.objectContaining({ harnessSession: expect.anything() })])
     }
   }, 30_000)
 
@@ -894,7 +896,7 @@ describe('a Harness session in place of SSO tokens', () => {
     const result = await runAsync(root, ['logout', '--from-sign-out-button'], backend.base)
 
     expect(result.status, result.stderr).toBe(0)
-    expect(backend.calls).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+    expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
     expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
     expect(result.stdout + result.stderr).not.toContain(HNR)
   })
@@ -919,6 +921,6 @@ describe('a Harness session in place of SSO tokens', () => {
     const result = await runAsync(root, ['logout', '--from-sign-out-button'], backend.base)
 
     expect(result.status, result.stderr).toBe(0)
-    expect(backend.calls).toEqual([])
+    expect(authCalls(backend.calls)).toEqual([])
   })
 })
