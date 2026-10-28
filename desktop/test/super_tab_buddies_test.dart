@@ -432,85 +432,40 @@ void main() {
       );
 
       testWidgets(
-        'says whose machine it runs on as soon as someone else\'s is picked',
+        'lists only the reader\'s own machines: not teammates\', not a Team account (Ken, 10-28)',
         (tester) async {
           final server = buddySwarm();
+          (server.state['machines'] as List).addAll([
+            {
+              'machineId': 'ken-mini',
+              'name': 'Kens-Mini.local',
+              'contributorId': 'peer',
+              'scope': 'swarm',
+            },
+            {
+              'machineId': 'ken-team',
+              'name': 'Kens-MacBook.local',
+              'contributorId': 'peer',
+              'scope': 'swarm',
+              'hostMachineId': 'ken-mac',
+            },
+          ]);
           final c = await show(tester, server);
           await open(tester);
+          // Studio, the owner's, is in the sidebar's Machines; the menu adds
+          // no row for it.
+          final studio = find.text('Studio').evaluate().length;
+          final macbook = find.text('Kens-MacBook').evaluate().length;
           await tester.tap(machine);
           await tester.pumpAndSettle();
-          await tester.tap(find.text('Studio').last);
-          await tester.pumpAndSettle();
 
-          expect(notice, findsOneWidget);
-          expect(
-            find.descendant(
-              of: notice,
-              matching: find.text(
-                'Runs on Studio, which belongs to owner. They can see its terminal.',
-              ),
-            ),
-            findsOneWidget,
-          );
-
-          await tester.tap(submit);
+          expect(find.text('Studio').evaluate(), hasLength(studio));
+          // One row for the MacBook: its Team account is not offered apart.
+          expect(find.text('Kens-MacBook').evaluate(), hasLength(macbook + 1));
+          expect(find.text('Kens-Mini'), findsWidgets);
+          await tester.tap(find.text('Kens-Mini').last);
           await tester.pumpAndSettle();
-          expect(commands(server, 'buddy.create').single, {
-            'type': 'buddy.create',
-            'projectId': 'lead',
-            'machineId': 'studio',
-            'engine': 'claude',
-          });
-          await close(tester, c);
-        },
-      );
-
-      testWidgets(
-        'Codex is only for the reader\'s own machines: on someone else\'s it is off and says why',
-        (tester) async {
-          final server = buddySwarm();
-          final c = await show(tester, server);
-          await open(tester);
-          const hint = 'Codex Buddies run only on your own machines';
-          expect(find.text(hint), findsNothing);
-          // Codex on the reader's own machine, then someone else's machine.
-          await tester.tap(find.text('Codex'));
-          await tester.pumpAndSettle();
-          await tester.tap(machine);
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Studio').last);
-          await tester.pumpAndSettle();
-
-          expect(find.text(hint), findsOneWidget);
-          await tester.tap(find.text('Codex'));
-          await tester.pumpAndSettle();
-          await tester.tap(submit);
-          await tester.pumpAndSettle();
-          // The choice fell back to Claude, which runs there.
-          expect(commands(server, 'buddy.create').single['engine'], 'claude');
-          await close(tester, c);
-        },
-      );
-
-      testWidgets(
-        'back on the reader\'s own machine, Codex can be picked again',
-        (tester) async {
-          final server = buddySwarm();
-          final c = await show(tester, server);
-          await open(tester);
-          await tester.tap(machine);
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Studio').last);
-          await tester.pumpAndSettle();
-          await tester.tap(machine);
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Kens-MacBook').last);
-          await tester.pumpAndSettle();
-
-          expect(
-            find.text('Codex Buddies run only on your own machines'),
-            findsNothing,
-          );
+          expect(notice, findsNothing);
           await tester.tap(find.text('Codex'));
           await tester.pumpAndSettle();
           await tester.tap(submit);
@@ -518,12 +473,32 @@ void main() {
           expect(commands(server, 'buddy.create').single, {
             'type': 'buddy.create',
             'projectId': 'lead',
-            'machineId': 'ken-mac',
+            'machineId': 'ken-mini',
             'engine': 'codex',
           });
           await close(tester, c);
         },
       );
+
+      testWidgets('with no machine of their own, it says so and cannot add', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        (server.state['machines'] as List).removeWhere(
+          (m) => (m as Map)['contributorId'] == 'peer',
+        );
+        final c = await show(tester, server);
+        await open(tester);
+
+        expect(
+          find.text(
+            'A Buddy runs on one of your own machines. Add one of yours to this Swarm first.',
+          ),
+          findsOneWidget,
+        );
+        expect(tester.widget<FilledButton>(submit).onPressed, isNull);
+        await close(tester, c);
+      });
 
       testWidgets('a refusal shows in the dialog, which keeps the choices', (
         tester,
@@ -531,13 +506,11 @@ void main() {
         final server = buddySwarm();
         server.refuse = {
           'code': 'MACHINE_UNAVAILABLE',
-          'message': 'That machine is not shared with you.',
+          'message': 'That machine is offline.',
         };
         final c = await show(tester, server);
         await open(tester);
-        await tester.tap(machine);
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('Studio').last);
+        await tester.tap(find.text('Codex'));
         await tester.pumpAndSettle();
         await tester.tap(submit);
         await tester.pumpAndSettle();
@@ -545,15 +518,18 @@ void main() {
         expect(
           find.descendant(
             of: find.byType(AlertDialog),
-            matching: find.text('That machine is not shared with you.'),
+            matching: find.text('That machine is offline.'),
           ),
           findsOneWidget,
         );
         expect(find.text('Add a Buddy'), findsWidgets);
         expect(
-          find.descendant(of: machine, matching: find.text('Studio')),
+          find.descendant(of: machine, matching: find.text('Kens-MacBook')),
           findsOneWidget,
         );
+        await tester.tap(submit);
+        await tester.pumpAndSettle();
+        expect(commands(server, 'buddy.create').last['engine'], 'codex');
         await close(tester, c);
       });
 
@@ -824,7 +800,7 @@ void main() {
         );
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
-        expect(find.text('Starting Claude on Studio…'), findsOneWidget);
+        expect(find.text('Starting Claude on Kens-MacBook…'), findsOneWidget);
         expect(find.widgetWithText(TextButton, 'Start again'), findsNothing);
         await close(tester, c);
       });
@@ -855,7 +831,7 @@ void main() {
           expect(commands(server, 'buddy.create').single, {
             'type': 'buddy.create',
             'projectId': 'lead',
-            'machineId': 'studio',
+            'machineId': 'ken-mac',
             'engine': 'claude',
           });
           await close(tester, c);

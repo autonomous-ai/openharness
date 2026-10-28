@@ -7,7 +7,7 @@ import 'super_tab_fixture.dart';
 ConversationServer buddySwarm({bool enabled = true}) {
   final server = pmChatSwarm();
   if (enabled) server.state['buddies'] = true;
-  server.state['machines'] = [
+  server.state['machines'] = <dynamic>[
     {
       'machineId': 'ken-mac',
       'name': 'Kens-MacBook.local',
@@ -87,8 +87,8 @@ void startBuddy(
   ConversationServer server, {
   String person = 'peer',
   String projectId = 'lead',
-  String machineId = 'studio',
-  // Only Claude Buddies run on someone else's machine (backend review).
+  // A Buddy runs only on its person's own machines (Ken, 10-28).
+  String machineId = 'ken-mac',
   String engine = 'claude',
   String? error,
 }) {
@@ -102,7 +102,7 @@ void startBuddy(
   server.state['starts'] = [
     {
       'id': 'start-1',
-      'machineOwnerId': 'owner',
+      'machineOwnerId': person,
       'request': {
         'conversationId': 'buddy-$person-$projectId',
         'machineId': machineId,

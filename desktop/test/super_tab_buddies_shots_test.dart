@@ -28,14 +28,7 @@ void main() {
       'projectId': 'web',
     });
     giveBuddy(server);
-    giveBuddy(
-      server,
-      projectId: 'web',
-      id: 'moss',
-      name: 'Moss',
-      machineId: 'studio',
-      machineOwnerId: 'owner',
-    );
+    giveBuddy(server, projectId: 'web', id: 'moss', name: 'Moss');
     ((server.state['agents'] as List).last as Map)['downSince'] =
         '2026-10-28T09:00:00Z';
     server.append(
@@ -135,10 +128,6 @@ void main() {
       await c.refresh();
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Add a Buddy'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('super-buddy-machine')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Studio').last);
       await tester.pumpAndSettle();
       // The dialog is a route of its own, above the captured screen.
       await captureWindow(tester, shots, 'buddy-add-${brightness.name}');

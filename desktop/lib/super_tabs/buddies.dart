@@ -27,28 +27,22 @@ List<SuperTabProject> buddyProjects(SuperTabController c) => [
 ];
 
 /// A machine a Buddy may be added on, as the add dialog lists it.
-typedef BuddyMachine = ({String id, String name, String ownerId});
+typedef BuddyMachine = ({String id, String name});
 
-/// The Swarm's machines, the reader's own first. A Harness Team account is
-/// listed as its Mac, which it runs agents for. Who may use which is the
-/// server's to decide: a refusal says so in the dialog.
-List<BuddyMachine> buddyMachines(SuperTabController c) {
-  final rows = [
-    for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
-      if (m['hostMachineId'] == null && m['machineId'] is String)
-        (
-          id: m['machineId'] as String,
-          name: superTabMachineName(m['name'] as String? ?? ''),
-          ownerId: m['contributorId'] as String? ?? '',
-        ),
-  ];
-  return [
-    for (final m in rows)
-      if (m.ownerId == c.accountId) m,
-    for (final m in rows)
-      if (m.ownerId != c.accountId) m,
-  ];
-}
+/// The reader's own machines in the Swarm: a Buddy runs only there, like a
+/// Lead, whatever its engine (Ken, 10-28). Not a machine the reader may use
+/// but someone else owns, and not a Harness Team account. The backend
+/// refuses any other.
+List<BuddyMachine> buddyMachines(SuperTabController c) => [
+  for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
+    if (m['hostMachineId'] == null &&
+        m['contributorId'] == c.accountId &&
+        m['machineId'] is String)
+      (
+        id: m['machineId'] as String,
+        name: superTabMachineName(m['name'] as String? ?? ''),
+      ),
+];
 
 /// A person by the name the Swarm shows: their address before the @.
 String buddyPersonName(SuperTabController c, String personId) {
@@ -70,9 +64,7 @@ String buddyMachineName(SuperTabController c, String machineId) {
       : 'another machine';
 }
 
-/// Add a Buddy: project, machine and engine. The machine starts on the
-/// reader's own, and someone else's machine says at once who can see its
-/// terminal.
+/// Add a Buddy: project, one of the reader's own machines, and engine.
 Future<void> showAddBuddy(
   BuildContext context,
   SuperTabController c, {
@@ -97,21 +89,12 @@ class _AddBuddyDialog extends StatefulWidget {
 class _AddBuddyDialogState extends State<_AddBuddyDialog> {
   SuperTabController get c => widget.controller;
 
-  /// The fields' labels share one column; the machine notice starts after it.
+  /// The fields' labels share one column.
   static const _labelWidth = 72.0;
   String? _project, _machine;
   String _engine = 'claude';
   bool _busy = false;
   String? _error;
-
-  /// Whether the chosen machine is the reader's own. A Codex Buddy runs only
-  /// there; a Claude Buddy runs restricted on any machine they may use
-  /// (backend Buddy review, 10-28). The backend refuses otherwise.
-  bool get _ownMachine =>
-      buddyMachines(c).where((m) => m.id == _machine).firstOrNull?.ownerId ==
-      c.accountId;
-
-  bool _engineAllowed(String engine) => engine != 'codex' || _ownMachine;
 
   @override
   void initState() {
@@ -152,7 +135,6 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
     grid.AppTheme.watch(context);
     final projects = buddyProjects(c);
     final machines = buddyMachines(c);
-    final chosen = machines.where((m) => m.id == _machine).firstOrNull;
     final projectName =
         projects.where((p) => p.id == _project).firstOrNull?.name ?? '';
     Widget label(String text) => SizedBox(
@@ -172,9 +154,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'A private agent to think things through with. It reads '
-                '#$projectName and your chat with it. It posts to the PM '
-                'only when you ask.',
+                'A private agent to think things through with. It runs on '
+                'your own machine, reads #$projectName and your chat with '
+                'it, and posts to the PM only when you ask.',
                 style: DesktopChrome.text(),
               ),
               const SizedBox(height: 16),
@@ -203,50 +185,28 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                 children: [
                   label('Machine'),
                   Expanded(
-                    child: AppSelectField<String>(
-                      key: const ValueKey('super-buddy-machine'),
-                      value: _machine ?? '',
-                      semanticLabel: 'Machine',
-                      textStyle: DesktopChrome.control(),
-                      options: [
-                        for (final m in machines)
-                          SelectOption(
-                            value: m.id,
-                            label: m.name,
-                            note: m.ownerId == c.accountId
-                                ? 'yours'
-                                : buddyPersonName(c, m.ownerId),
+                    child: machines.isEmpty
+                        ? Text(
+                            'A Buddy runs on one of your own machines. Add '
+                            'one of yours to this Swarm first.',
+                            style: DesktopChrome.metadata(),
+                          )
+                        : AppSelectField<String>(
+                            key: const ValueKey('super-buddy-machine'),
+                            value: _machine ?? '',
+                            semanticLabel: 'Machine',
+                            textStyle: DesktopChrome.control(),
+                            options: [
+                              for (final m in machines)
+                                SelectOption(value: m.id, label: m.name),
+                            ],
+                            onChanged: (value) {
+                              if (!_busy) setState(() => _machine = value);
+                            },
                           ),
-                      ],
-                      onChanged: (value) {
-                        if (_busy) return;
-                        setState(() {
-                          _machine = value;
-                          // Codex runs only on the reader's own machines.
-                          if (!_ownMachine) _engine = 'claude';
-                        });
-                      },
-                    ),
                   ),
                 ],
               ),
-              if (chosen != null && chosen.ownerId != c.accountId) ...[
-                const SizedBox(height: 8),
-                Row(
-                  key: const ValueKey('super-buddy-machine-notice'),
-                  children: [
-                    const SizedBox(width: _labelWidth),
-                    Expanded(
-                      child: Text(
-                        'Runs on ${chosen.name}, which belongs to '
-                        '${buddyPersonName(c, chosen.ownerId)}. '
-                        'They can see its terminal.',
-                        style: DesktopChrome.metadata(),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -255,7 +215,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                     child: RadioGroup<String>(
                       groupValue: _engine,
                       onChanged: (value) {
-                        if (!_busy && value != null && _engineAllowed(value)) {
+                        if (!_busy && value != null) {
                           setState(() => _engine = value);
                         }
                       },
@@ -266,7 +226,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                             Flexible(
                               child: RadioListTile<String>(
                                 value: key,
-                                enabled: !_busy && _engineAllowed(key),
+                                enabled: !_busy,
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(value),
@@ -278,21 +238,6 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
-              if (!_ownMachine) ...[
-                const SizedBox(height: 4),
-                Row(
-                  key: const ValueKey('super-buddy-codex-hint'),
-                  children: [
-                    const SizedBox(width: _labelWidth),
-                    Expanded(
-                      child: Text(
-                        'Codex Buddies run only on your own machines',
-                        style: DesktopChrome.metadata(),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
                 Text(error, style: DesktopChrome.control()),
