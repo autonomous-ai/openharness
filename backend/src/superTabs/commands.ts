@@ -23,6 +23,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerg
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -1083,6 +1084,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('REVIEW_TARGET', 'A review group reviews one build group of the same project.', 400)
         }
         requireCustomRole(project, 'reviewer')
+        // One open review at a time: a Lead on the skill text from before #610 would otherwise open one beside the Swarm's.
+        const pending = openReviewOf(state, reviewed)
+        if (pending) fail('REVIEW_OPEN', `#${pending.number} ${pending.title} already reviews this work and has no verdict yet. Cancel it first, or wait for its verdict.`)
       }
       const requesterId = command.requesterId ? requester(state, project, command.requesterId) : actor.kind === 'person' ? actor.userId : undefined
       const number = nextConversationNumber(state)
@@ -1160,6 +1164,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
+      if (command.archived && verdictPending(state, group)) {
+        fail('REVIEW_PENDING', 'This review has no verdict yet. Cancel it, or finish the work it reviews, before archiving it.')
+      }
       group.archived = command.archived
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
@@ -1793,6 +1800,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        // The Engineer's own Ready for review with a pull request of the project opens its review (autoReview.ts).
+        const pullRequest = command.status === 'review' && actor.kind === 'agent' && actor.agentId === assignment.agentId && !group.reviewOf
+          && !group.audience && !openReviewOf(state, group) ? projectPullRequest(state, group, command.result) : null
+        const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
+          // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
+          mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) })
+        if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])

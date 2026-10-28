@@ -176,6 +176,37 @@ describe('a worker left idle', () => {
   })
 })
 
+describe('a review the Swarm opens by itself', () => {
+  it('opens on a Ready for review with a project pull request, reaches its free Reviewer, and the Lead can cancel and archive it', async () => {
+    const f = await swarm()
+    // The project's repository, as its Lead's start in the repository records it (agent.add with a project).
+    const head = await db.swarmHead.findUniqueOrThrow({ where: { id: `${f.tab}:head` } })
+    const data = head.data as { projects: Array<Record<string, unknown>> }
+    data.projects[0]!.repository = { machineId: 'lead-host', cwd: '/repo', repositoryUrl: 'https://github.com/example/parser' }
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: data as object } })
+    const reviewed = String((await f.execute({ type: 'conversation.create', title: 'Parser v2', brief: 'More parsing',
+      checks: [{ description: 'Verified', independent: true }] })).result.conversationId)
+    const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
+    const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
+    const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
+    await f.started(reviewer, { role: 'reviewer' })
+    await f.delivered()
+    await f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review',
+      result: 'Ready: yes, revision abc..def. https://github.com/example/parser/pull/9' }, host, builder)
+    const state = (await f.timed.read(owner, f.tab)).state
+    const review = state.conversations.find(c => c.reviewOf === reviewed)!
+    expect(review).toMatchObject({ title: 'Review: Parser v2', assignment: { agentId: reviewer, status: 'working' } })
+    expect(state.conversations.find(c => c.id === reviewed)!.agentIds).toContain(reviewer)
+    const queued = await db.superTabDelivery.findMany({ where: { tabId: f.tab, agentId: reviewer, status: 'queued' } })
+    expect(queued.map(d => d.conversationId)).toContain(review.id)
+    const leadLine = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: review.id, text: { startsWith: 'Review opened by itself' } } })
+    expect(leadLine.text).toBe('Review opened by itself for #2: Reviewer reviews it. Cancel it here if it is not needed.')
+    await f.execute({ type: 'work.cancel', conversationId: review.id, assignmentId: review.assignment!.id, reason: 'Not needed' })
+    await f.execute({ type: 'conversation.archive', conversationId: review.id, archived: true })
+    expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === review.id)?.archived ?? true).toBe(true)
+  })
+})
+
 describe('a finished group', () => {
   const PR = 'https://github.com/acme/app/pull/7'
   /** GitHub as the sweep reads it: each pull request's state, null when it cannot say. */
