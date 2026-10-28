@@ -12,6 +12,7 @@ import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { processCoreApi } from '../services/processCoreApi.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
@@ -1514,7 +1515,7 @@ describe('removed machine cleanup', () => {
       live: vi.fn(() => live), all: vi.fn(all),
       creationStatus: vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const,
         agentId: creationId === 'super-unproven' ? 'someone-else' : `h-${creationId.slice('super-'.length)}` })),
-      closeStarted: vi.fn(async (agentId: string) => { live = live.filter(s => s.agentId !== agentId); return { closed: true } as never }),
+      closeMember: vi.fn(async (agentId: string) => { live = live.filter(s => s.agentId !== agentId); return { closed: true } as never }),
     } })
     const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> =>
       method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
@@ -1583,7 +1584,7 @@ describe('removed machine cleanup', () => {
     // The person's repository forgets only the Swarm worktree it held.
     const listed = git(m.own, 'worktree', 'list', '--porcelain')
     expect(listed).toContain('/mine\n'); expect(listed).not.toContain('/earlier\n')
-    expect(m.core.agents.closeStarted).toHaveBeenCalledWith('h-recorded', 'now')
+    expect(m.core.agents.closeMember).toHaveBeenCalledWith('h-recorded', undefined)
     expect(m.acks()).toEqual([[m.core, 'POST', '/api/super-tabs/tab/commands',
       { operationId: 'machine-cleaned-removal', command: { type: 'machine.cleaned', machineId: 'host', removalId: 'removal' } }]])
     expect(JSON.parse(readFileSync(swarmWorktreesFile(m.data, 'host'), 'utf8')).worktrees.map((w: { tabId: string }) => w.tabId)).toEqual(['other-tab'])
@@ -1603,7 +1604,7 @@ describe('removed machine cleanup', () => {
     const host = m.open()
     await host.clean('tab', 'removal')
     for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
-    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.core.agents.closeMember).not.toHaveBeenCalled()
     expect(m.acks()).toEqual([])
     expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
     // Settled: the next poll's row, if any, does not run it again.
@@ -1628,7 +1629,7 @@ describe('removed machine cleanup', () => {
     addedOnRead(m, 2)
     await m.open().clean('tab', 'removal')
     for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
-    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.core.agents.closeMember).not.toHaveBeenCalled()
     expect(records(m)).toEqual(['tab', 'other-tab'])
     expect(m.acks()).toEqual([])
   })
@@ -1654,7 +1655,7 @@ describe('removed machine cleanup', () => {
       if (method !== 'GET' || !path.startsWith('/api/super-tabs/tab/')) return { parts: [] }
       return swarmReply(path, { starts: m.starts, ...(added ? { machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot }] } : {}) })
     })
-    vi.mocked(m.core.agents.closeStarted!).mockImplementation(async () => {
+    vi.mocked(m.core.agents.closeMember!).mockImplementation(async () => {
       // The close was slow; the owner re-added the machine while it was awaited and its new start reused this clone.
       added = true
       m.setLive([])
@@ -1716,16 +1717,63 @@ describe('removed machine cleanup', () => {
     expect(m.acks()).toHaveLength(1)
   })
 
-  it('keeps a folder whose session will not close, cleans the rest and acknowledges', async () => {
+  // Diego 10-29: a folder kept for a session still running in it was confirmed cleaned anyway, and its records dropped, so
+  // nothing ever tried it again. A kept folder now leaves the cleanup unconfirmed, retried on the usual backoff.
+  it('keeps a folder whose session will not close, cleans the rest and confirms nothing until it is gone', async () => {
     const m = machine()
     const person = session('person', join(m.newRoot), undefined)
     m.setLive([person])
-    await m.open().clean('tab', 'removal')
-    expect(m.core.agents.closeStarted).not.toHaveBeenCalledWith('person', 'now')
+    const host = m.open()
+    await expect(host.clean('tab', 'removal')).rejects.toThrow('a session still runs in tab.')
+    expect(m.core.agents.closeMember).not.toHaveBeenCalledWith('person', undefined)
     expect(existsSync(m.newRoot)).toBe(true)
     expect(existsSync(join(m.data, 'swarm-projects', 'tab'))).toBe(false)
-    expect(m.log.mock.calls.flat().join('\n')).toContain(m.newRoot)
+    expect(m.log.mock.calls.flat().join('\n')).toContain('Kept tab: a session still runs in it.')
+    expect(m.log.mock.calls.flat().join('\n')).not.toContain(m.home)
+    expect(m.acks()).toEqual([])
+    expect(records(m)).toEqual(['tab', 'other-tab'])
+    // The person closed it: the next try after the backoff deletes the folder and confirms.
+    m.setLive([])
+    m.step(60_000)
+    await host.clean('tab', 'removal')
+    expect(existsSync(m.newRoot)).toBe(false)
     expect(m.acks()).toHaveLength(1)
+    expect(records(m)).toEqual(['other-tab'])
+  })
+
+  // Diego 10-29: under harnessd the Swarm runs in its own process, whose core API (services/processCoreApi.ts) has no
+  // closeStarted, so the agents were never closed and their folders were kept. It closes through the Swarm's own close.
+  it('closes the Swarm agents in its folders and deletes them when the Swarm runs in its own process', async () => {
+    const m = machine()
+    const cloned = join(m.data, 'swarm-projects', 'tab', 'project')
+    const starts = [...m.starts, { id: 'cloned', creationId: 'super-cloned-0123456789', harnessId: 'h-cloned', request: { machineId: 'host', worktree: false, cwd: cloned } }]
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
+    let live = [session('h-recorded', m.recorded, 'agent'), session('h-cloned', cloned, 'agent')]
+    const asked: [string, Record<string, unknown>][] = []
+    const ask = vi.fn(async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      asked.push([query, payload])
+      if (query === 'creation_status') return { observation: { creationId: payload.creationId, state: 'created', agentId: 'h-cloned' } }
+      if (query !== 'close_member') return { error: 'UNKNOWN_QUERY' }
+      live = live.filter(s => s.agentId !== payload.agentId)
+      return { closed: true }
+    })
+    const core = processCoreApi(m.data, 'superTabs', { live: () => live, ask })
+    await new ContributedMachines(core, 'host', { backend: m.backend, log: m.log, now: () => 0 } as never).clean('tab', 'removal')
+    expect(asked.filter(([query]) => query === 'close_member').map(([, payload]) => payload).sort((a, b) => String(a.agentId).localeCompare(String(b.agentId))))
+      .toEqual([{ agentId: 'h-cloned', creationId: 'super-cloned-0123456789' }, { agentId: 'h-recorded' }])
+    for (const gone of [join(m.data, 'swarm-projects', 'tab'), m.recorded]) expect(existsSync(gone), gone).toBe(false)
+    expect(m.acks()).toHaveLength(1)
+    expect(records(m)).toEqual(['other-tab'])
+  })
+
+  it('confirms nothing and keeps the records while a Swarm agent in the clone does not close', async () => {
+    const m = machine()
+    vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' } as never)
+    await expect(m.open().clean('tab', 'removal')).rejects.toThrow('a session still runs in recorded.')
+    expect(m.core.agents.closeMember).toHaveBeenCalledWith('h-recorded', undefined)
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(m.acks()).toEqual([])
+    expect(records(m)).toEqual(['tab', 'other-tab'])
   })
 
   it('finishes a cleanup after a restart that interrupted its acknowledgement', async () => {
