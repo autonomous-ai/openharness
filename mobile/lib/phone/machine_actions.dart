@@ -9,6 +9,7 @@ import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
 
 import 'change_wifi_page.dart';
 import 'computer_github_page.dart';
+import 'computer_test_tools_page.dart';
 import 'computer_password_page.dart';
 import 'computer_ssh_page.dart';
 import 'computer_version_page.dart';
@@ -244,6 +245,20 @@ PhoneSheetRows? _machineRows(
               onTap: () => Navigator.of(context).push(
                 phoneRoute(
                   (_) => ComputerGithubPage(
+                    notifier: notifier,
+                    machineId: machineId,
+                  ),
+                ),
+              ),
+            ),
+          if (notifier.osFeature(machineId, 'test_tools'))
+            PhoneSheetAction(
+              icon: LucideIcons.flaskConical300,
+              label: 'Test tools',
+              chevron: true,
+              onTap: () => Navigator.of(context).push(
+                phoneRoute(
+                  (_) => ComputerTestToolsPage(
                     notifier: notifier,
                     machineId: machineId,
                   ),
