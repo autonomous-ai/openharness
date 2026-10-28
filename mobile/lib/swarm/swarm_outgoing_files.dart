@@ -28,7 +28,8 @@ class SwarmOutgoingFiles extends ChangeNotifier {
   int get room => swarmAttachmentMaxFiles - _files.length;
 
   /// Adds the files that fit, replacing one of the same name. Returns what
-  /// to tell the person about any left out, or null when all were taken.
+  /// to tell the person about any left out — past the count, over the size,
+  /// or both — or null when all were taken.
   /// [oversized] names files already known to be over the limit, which were
   /// never read into memory to be refused here; [surplus] counts those the
   /// picker already left out for want of room.
@@ -53,12 +54,14 @@ class SwarmOutgoingFiles extends ChangeNotifier {
       _files.add(file);
     }
     notifyListeners();
-    if (over > 0) return 'Attach at most $swarmAttachmentMaxFiles files.';
-    if (tooLarge.isEmpty) return null;
     const limit = '${swarmAttachmentMaxBytes ~/ (1024 * 1024)} MB';
-    return tooLarge.length == 1
-        ? '${tooLarge.single} is over $limit.'
-        : '${tooLarge.length} files are over $limit.';
+    // Both limits can leave files out at once; each says so.
+    final notes = [
+      if (over > 0) 'Attach at most $swarmAttachmentMaxFiles files.',
+      if (tooLarge.length == 1) '${tooLarge.single} is over $limit.',
+      if (tooLarge.length > 1) '${tooLarge.length} files are over $limit.',
+    ];
+    return notes.isEmpty ? null : notes.join(' ');
   }
 
   /// Adds photos beside what is there: the camera and the library name every

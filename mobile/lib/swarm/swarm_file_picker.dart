@@ -80,7 +80,8 @@ Future<List<String>> Function() swarmPickerCopyFolders = () async => [
 ];
 
 /// Opens [source] and adds what the person picks to [files], by Desktop's limits: ten files a
-/// message, 10 MB each. Photos are named `photo.jpg`, `photo-2.jpg`… since a picker names them by
+/// message, 10 MB each — reading no more files than there is room for, and naming any left out,
+/// over the size or empty. Photos are named `photo.jpg`, `photo-2.jpg`… since a picker names them by
 /// no name a person would know; other files keep their own.
 ///
 /// Each picker hands over its own copy of the file in the app's private temporary folder; it is
@@ -132,15 +133,25 @@ Future<SwarmPickOutcome> addSwarmPicked(
   final photos = source != SwarmPickSource.files;
   final taken = {for (final file in files.files) file.name};
   final read = <SwarmOutgoingFile>[];
-  final oversized = <String>[];
+  final oversized = <String>[], empty = <String>[];
+  var surplus = 0;
   String? unreadable;
   for (final file in picked) {
+    // Past the room left, a file is counted, never read: forty 9 MB files
+    // picked at once would otherwise all be held in memory to be refused.
+    if (read.length >= room) {
+      surplus++;
+      delete(file);
+      continue;
+    }
     final own = file.name.isEmpty ? 'file' : file.name;
     final name = photos ? swarmFreeName(_photoName(own), taken) : own;
     try {
       final bytes = await _read(file);
       if (bytes == null) {
         oversized.add(name);
+      } else if (bytes.isEmpty) {
+        empty.add(name);
       } else {
         read.add(SwarmOutgoingFile(name, bytes));
       }
@@ -150,10 +161,13 @@ Future<SwarmPickOutcome> addSwarmPicked(
       delete(file);
     }
   }
-  final note = files.add(read, oversized: oversized);
-  return SwarmPicked(
-    note ?? (unreadable == null ? null : 'Could not read $unreadable.'),
-  );
+  final notes = [
+    ?files.add(read, oversized: oversized, surplus: surplus),
+    if (empty.length == 1) '${empty.single} is empty.',
+    if (empty.length > 1) '${empty.length} files are empty.',
+    if (unreadable != null) 'Could not read $unreadable.',
+  ];
+  return SwarmPicked(notes.isEmpty ? null : notes.join(' '));
 }
 
 bool _always() => true;

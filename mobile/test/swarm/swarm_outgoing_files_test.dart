@@ -138,4 +138,17 @@ void main() {
       expect(swarmMimeForName('Makefile'), 'application/octet-stream');
     });
   });
+
+  test('files over both the count and the size say both', () {
+    final files = SwarmOutgoingFiles();
+    addTearDown(files.dispose);
+
+    final said = files.add([
+      for (var i = 0; i < 11; i++) file('f$i.txt', 1),
+      file('big.jpg', 10 * 1024 * 1024 + 1),
+    ]);
+
+    expect(said, 'Attach at most 10 files. big.jpg is over 10 MB.');
+    expect(files.files, hasLength(10));
+  });
 }

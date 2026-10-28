@@ -318,4 +318,56 @@ void main() {
       expect(File(picked.path).existsSync(), isTrue);
     });
   });
+
+  group('reading', () {
+    test('stops when there is no room: the 11th file is never read', () async {
+      final picked = [
+        for (var i = 0; i < 11; i++) _Counted(copy('f$i.txt', 2).path),
+      ];
+      pickSwarmFiles = () async => picked;
+
+      final outcome = await addSwarmPicked(files, SwarmPickSource.files);
+
+      expect((outcome as SwarmPicked).note, 'Attach at most 10 files.');
+      expect(files.files, hasLength(10));
+      expect([for (final f in picked) f.reads], [...List.filled(10, 1), 0]);
+      expect(File(picked.last.path).existsSync(), isFalse);
+    });
+
+    test('with room for two, only two are read', () async {
+      files.add([
+        for (var i = 0; i < 8; i++) SwarmOutgoingFile('k$i.txt', Uint8List(1)),
+      ]);
+      final picked = [
+        for (var i = 0; i < 4; i++) _Counted(copy('f$i.txt', 2).path),
+      ];
+      pickSwarmFiles = () async => picked;
+
+      await addSwarmPicked(files, SwarmPickSource.files);
+
+      expect([for (final f in picked) f.reads], [1, 1, 0, 0]);
+    });
+
+    test('an empty file is named, not dropped silently', () async {
+      pickSwarmFiles = () async => [copy('empty.txt', 0), copy('ok.txt', 2)];
+
+      final outcome = await addSwarmPicked(files, SwarmPickSource.files);
+
+      expect((outcome as SwarmPicked).note, 'empty.txt is empty.');
+      expect(names(), ['ok.txt']);
+    });
+  });
+}
+
+/// A picker's file that counts how often its bytes are read.
+class _Counted extends XFile {
+  _Counted(super.path);
+
+  int reads = 0;
+
+  @override
+  Future<Uint8List> readAsBytes() {
+    reads++;
+    return super.readAsBytes();
+  }
 }
