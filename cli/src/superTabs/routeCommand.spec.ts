@@ -306,12 +306,15 @@ describe('routeTask', () => {
     expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
     expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
   })
-  it('starts nothing on an account machine that says it runs Windows, or whose last two starts started nothing', async () => {
+  it('offers new agents on an account machine that runs Windows, as on any other, and starts nothing where the last two starts started nothing', async () => {
+    // Swarm agents were kept off Windows while grid's CLI did not run there (2026-10-26). It does since grid 0.3.61 and CLI
+    // 0.4.95: a Claude Code agent on a grid model started and answered on DESKTOP-0TFH0OJ.
     const windows = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os: 'Windows' }, tools: { git: true }, devices: {} } }))
     const s = scoped()
-    expect(await routeTask(input, s, where, windows)).toMatchObject({ ok: true, pick: { kind: 'member' } })
-    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
-      reason: expect.stringContaining('Swarm agents do not run on Windows yet.') })]))
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where, windows)
+    const decision = recorded(s).command.decision
+    expect(decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent'))).toBe(true)
+    expect(JSON.stringify(decision.excluded)).not.toContain('Windows')
     const failed = { id: 's', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'The engine did not start.' }
     const t = tab(); Object.assign(t.state, { starts: [failed, { ...failed, id: 's2' }] })
     const stuck = scoped({ tab: t })
@@ -859,12 +862,13 @@ describe('routing contributed capacity', () => {
     }
     const checkout = (extra: Record<string, unknown> = {}) => ({ folder: 'p2', repository: 'github.com/example/two', git: true, push: true, ...extra })
 
-    it('never starts a Swarm agent on Windows, and keeps a member already there', async () => {
+    it('routes on Windows exactly as on any other machine, with or without members there', async () => {
       const windows = healthy(); Object.assign(windows.observation.resources, { os: 'Windows' })
-      const { answer } = await runPool(windows)
-      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
-      expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Windows yet')
-      expect((await runPool(windows, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      for (const members of [false, true]) {
+        const onWindows = (await runPool(windows, members)).answer
+        expect(onWindows.ok).toBe(true)
+        expect(onWindows.pick).toEqual((await runPool(healthy(), members)).answer.pick)
+      }
     })
 
     it('leaves out an engine the machine says is signed out or not installed, and keeps one whose sign-in is unknown', async () => {
