@@ -394,7 +394,6 @@ void main() {
     group('Add a Buddy', () {
       final machine = find.byKey(const ValueKey('super-buddy-machine'));
       final submit = find.widgetWithText(FilledButton, 'Add Buddy');
-      final notice = find.byKey(const ValueKey('super-buddy-machine-notice'));
 
       Future<void> open(WidgetTester tester) async {
         await tester.tap(addBuddy);
@@ -412,7 +411,6 @@ void main() {
             find.descendant(of: machine, matching: find.text('Kens-MacBook')),
             findsOneWidget,
           );
-          expect(notice, findsNothing);
 
           await tester.tap(submit);
           await tester.pumpAndSettle();
@@ -465,7 +463,6 @@ void main() {
           expect(find.text('Kens-Mini'), findsWidgets);
           await tester.tap(find.text('Kens-Mini').last);
           await tester.pumpAndSettle();
-          expect(notice, findsNothing);
           await tester.tap(find.text('Codex'));
           await tester.pumpAndSettle();
           await tester.tap(submit);
@@ -499,6 +496,31 @@ void main() {
         expect(tester.widget<FilledButton>(submit).onPressed, isNull);
         await close(tester, c);
       });
+
+      testWidgets(
+        'if the chosen machine leaves the Swarm while the dialog is open, Add Buddy turns off',
+        (tester) async {
+          final server = buddySwarm();
+          final c = await show(tester, server);
+          await open(tester);
+          expect(tester.widget<FilledButton>(submit).onPressed, isNotNull);
+
+          (server.state['machines'] as List).removeWhere(
+            (m) => (m as Map)['machineId'] == 'ken-mac',
+          );
+          await c.refresh();
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text(
+              'A Buddy runs on one of your own machines. Add one of yours to this Swarm first.',
+            ),
+            findsOneWidget,
+          );
+          expect(tester.widget<FilledButton>(submit).onPressed, isNull);
+          await close(tester, c);
+        },
+      );
 
       testWidgets('a refusal shows in the dialog, which keeps the choices', (
         tester,
