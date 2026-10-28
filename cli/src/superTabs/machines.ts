@@ -464,9 +464,12 @@ export class ContributedMachines {
           if (this.stopped) return
           if (!identifier(start.id) || ((row.paused || pool.paused) && !start.dispatched)) continue
           const path = `/api/super-tabs/hosts/${this.machineId}/starts/${row.tabId}/${start.id}`
-          const scoped: ScopedRequest = async input => ({ ok: true, value: await this.deps.backend(this.core,
-            input.action === 'startStatus' ? 'GET' : 'POST', path,
-            input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) })
+          // The start endpoint reads this start and takes its commands, nothing else. Any other read went out as an empty
+          // command, which the backend refused with a 400 at every start (prod logs 2026-10-28).
+          const scoped: ScopedRequest = async input => input.action !== 'startStatus' && input.action !== 'command'
+            ? { error: 'HOST_UNSUPPORTED', detail: 'A contributed machine reads only its own starts.' }
+            : { ok: true, value: await this.deps.backend(this.core, input.action === 'startStatus' ? 'GET' : 'POST', path,
+              input.action === 'startStatus' ? undefined : { operationId: input.operationId, command: input.command }) }
           try {
             // The Harness Team account is not private (its owner's home folder opened again, say): a new start is refused
             // here as well as by routing, and never moved to the owner's account instead.
@@ -603,18 +606,24 @@ export class ContributedMachines {
     // Starts from before the record: a worktree counts only when this machine's receipt for that start created the
     // very agent the registry lists as agent-started in it. A start receipt read is required; a tab gone or no longer
     // readable by this owner leaves only the record.
-    let starts: Record<string, unknown>[] = []
-    let state: Record<string, unknown> = {}
-    try { state = (await this.sources.reads.read(tabId)).state; starts = list(state.starts) }
-    catch (error) { if (!(error instanceof SuperTabHostError) || ![403, 404].includes(error.status)) throw error }
     // A cleanup that waited past the backend's fallback gives way to its owner adding this machine again (backend machines.ts
     // cleanupOverdue, 2026-10-28). The Swarm listing this machine other than under this very removal means a newer add owns
-    // the folders now: delete nothing, and confirm nothing, since the backend dropped this cleanup with that add.
-    const listed = list(state.machines).find(m => m.machineId === this.machineId)
-    if (listed && object(listed.removal).id !== removalId) {
-      this.log(`Kept the Swarm folders of ${tabId}: this machine was added to that Swarm again.`)
-      return
+    // the folders now: delete nothing, and confirm nothing, since the backend dropped this cleanup with that add. Read at
+    // the start, again before anything is closed or deleted, and again before the worktree records change (review of
+    // #1986), so an add that lands while this runs keeps what it made.
+    const read = async () => {
+      try { return (await this.sources.reads.read(tabId)).state }
+      catch (error) { if (!(error instanceof SuperTabHostError) || ![403, 404].includes(error.status)) throw error; return {} }
     }
+    const addedAgain = (state: Record<string, unknown>) => {
+      const listed = list(state.machines).find(m => m.machineId === this.machineId)
+      if (!listed || object(listed.removal).id === removalId) return false
+      this.log(`Kept the Swarm folders of ${tabId}: this machine was added to that Swarm again.`)
+      return true
+    }
+    const state = await read()
+    if (addedAgain(state)) return
+    const starts = list(state.starts)
     const swarm = new Set(recorded.map(w => w.harnessId))
     const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true }))
     for (const start of starts) {
@@ -633,6 +642,7 @@ export class ContributedMachines {
       if (c.proven && await swarmWorktree(c.path, c.source, c.startId)) worktrees.push(c.path)
       else if (existsSync(c.path)) this.log(`Kept ${c.path}: it is not provably a worktree a Swarm start made.`)
     }
+    if (addedAgain(await read())) return
     const targets = [...worktrees, ...swarmCloneRoots(this.core.dataDir, tabId)]
     const inside = (cwd: string | null) => !!cwd && targets.some(t => within(t, cwd))
     for (const agent of this.core.agents.live()) {
@@ -648,6 +658,7 @@ export class ContributedMachines {
       if (source) await git(source, ['worktree', 'remove', '--force', target]).catch(() => null)
       await rm(target, { recursive: true, force: true })
     }
+    if (addedAgain(await read())) return
     writeWorktrees(file, readWorktrees(file).filter(w => w.tabId !== tabId))
     await this.deps.backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `machine-cleaned-${removalId}`,
       command: { type: 'machine.cleaned', machineId: this.machineId, removalId } })

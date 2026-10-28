@@ -155,11 +155,11 @@ void main() {
         );
         // Holding a task with no turn seen running: assigned, never claimed as working.
         expect(
-          _line('Atlas', 'Assigned · Mac Studio · opus high'),
+          _line('Atlas', 'Assigned · Mac Studio · Opus · high'),
           findsOneWidget,
         );
         expect(
-          _line('Sage', 'Idle · MacBook Pro · sonnet medium'),
+          _line('Sage', 'Idle · MacBook Pro · Sonnet · medium'),
           findsOneWidget,
         );
       },
@@ -177,9 +177,12 @@ void main() {
       String line(HarnessActivity? activity) => superTabAgentGlance(
         SuperTabAgentInfo(c, null, atlas, activity: activity),
       ).line;
-      expect(line(HarnessActivity.working), 'Working · Mac Studio · opus high');
-      expect(line(HarnessActivity.idle), 'Assigned · Mac Studio · opus high');
-      expect(line(null), 'Assigned · Mac Studio · opus high');
+      expect(
+        line(HarnessActivity.working),
+        'Working · Mac Studio · Opus · high',
+      );
+      expect(line(HarnessActivity.idle), 'Assigned · Mac Studio · Opus · high');
+      expect(line(null), 'Assigned · Mac Studio · Opus · high');
     });
 
     testWidgets(
@@ -212,16 +215,22 @@ void main() {
             _task('Teal', 'review'),
           ],
         );
-        expect(_line('Moss', 'Stuck · Mac Studio · opus high'), findsOneWidget);
         expect(
-          _line('Teal', 'In review · Mac Studio · opus high'),
+          _line('Moss', 'Stuck · Mac Studio · Opus · high'),
           findsOneWidget,
         );
         expect(
-          _line('Wren', 'Waiting · Mac Studio · opus high'),
+          _line('Teal', 'In review · Mac Studio · Opus · high'),
           findsOneWidget,
         );
-        expect(_line('Lark', 'Lost · Mac Studio · opus high'), findsOneWidget);
+        expect(
+          _line('Wren', 'Waiting · Mac Studio · Opus · high'),
+          findsOneWidget,
+        );
+        expect(
+          _line('Lark', 'Lost · Mac Studio · Opus · high'),
+          findsOneWidget,
+        );
         final tip = tester
             .widgetList<Tooltip>(
               find.ancestor(of: _row('Lark'), matching: find.byType(Tooltip)),
@@ -229,11 +238,14 @@ void main() {
             .single
             .message!;
         expect(tip, contains('Lost "Task of Lark"'));
-        expect(_line('Kite', 'Down · MacBook Pro · opus high'), findsOneWidget);
+        expect(
+          _line('Kite', 'Down · MacBook Pro · Opus · high'),
+          findsOneWidget,
+        );
         expect(
           _line(
             'Rook',
-            'Limited until ${two(until.hour)}:${two(until.minute)} · MacBook Pro · opus high',
+            'Limited until ${two(until.hour)}:${two(until.minute)} · MacBook Pro · Opus · high',
           ),
           findsOneWidget,
         );
@@ -241,9 +253,10 @@ void main() {
     );
 
     // Builders started with opus high were stored as auto (fixed in the CLI, 2026-10-27); one stored before the fix
-    // shows what its start asked for while the start still says, and otherwise that the effort is not known.
+    // shows what its start asked for while the start still says. An effort nobody reported is left out: the PM's row
+    // read "opus unknown" (2026-10-28), and a row says only what is known.
     testWidgets(
-      'shows the requested effort for an auto reading its start still names, else unknown',
+      'shows the requested effort for an auto reading its start still names, else no effort',
       (tester) async {
         await _swarm(
           tester,
@@ -254,13 +267,40 @@ void main() {
           ],
           starts: [_start('Nico', 'high')],
         );
-        expect(_line('Nico', 'Idle · Mac Studio · opus high'), findsOneWidget);
         expect(
-          _line('Quinn', 'Idle · Mac Studio · opus unknown'),
+          _line('Nico', 'Idle · Mac Studio · Opus · high'),
           findsOneWidget,
         );
+        expect(_line('Quinn', 'Idle · Mac Studio · Opus'), findsOneWidget);
+        expect(_line('Avery', 'Idle · Mac Studio · Opus'), findsOneWidget);
+        expect(find.textContaining('unknown'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'names the model by its display name, with its version when reported',
+      (tester) async {
+        await _swarm(
+          tester,
+          agents: [
+            _agent('Iris', 'm1', model: 'claude-opus-5-5'),
+            _agent('Juno', 'm1', model: 'claude-sonnet-5-5', effort: null),
+            _agent(
+              'Kai',
+              'm2',
+              engine: 'codex',
+              model: 'gpt-5.6-sol',
+              effort: 'xhigh',
+            ),
+          ],
+        );
         expect(
-          _line('Avery', 'Idle · Mac Studio · opus unknown'),
+          _line('Iris', 'Idle · Mac Studio · Opus 5.5 · high'),
+          findsOneWidget,
+        );
+        expect(_line('Juno', 'Idle · Mac Studio · Sonnet 5.5'), findsOneWidget);
+        expect(
+          _line('Kai', 'Idle · MacBook Pro · GPT-5.6 Sol · xhigh'),
           findsOneWidget,
         );
       },
@@ -274,7 +314,7 @@ void main() {
         agents: [_agent('Echo', 'm1')],
         starts: [_start('Echo', 'high')],
       );
-      expect(_line('Echo', 'Idle · Mac Studio · opus high'), findsOneWidget);
+      expect(_line('Echo', 'Idle · Mac Studio · Opus · high'), findsOneWidget);
     });
   });
 
@@ -334,16 +374,16 @@ void main() {
       await _openGlance(tester);
       final counts = find.byKey(const ValueKey('glance-models'));
       expect(
-        find.descendant(of: counts, matching: find.text('opus high · 3')),
+        find.descendant(of: counts, matching: find.text('Opus · high · 3')),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: counts, matching: find.text('sonnet medium · 1')),
+        find.descendant(of: counts, matching: find.text('Sonnet · medium · 1')),
         findsOneWidget,
       );
       expect(
-        tester.getTopLeft(find.text('opus high · 3')).dy,
-        lessThan(tester.getTopLeft(find.text('sonnet medium · 1')).dy),
+        tester.getTopLeft(find.text('Opus · high · 3')).dy,
+        lessThan(tester.getTopLeft(find.text('Sonnet · medium · 1')).dy),
       );
     });
 

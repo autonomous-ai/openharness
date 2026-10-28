@@ -296,6 +296,30 @@ describe('the skills of the project the agent joins', () => {
   ])('reads %s as Harness orchestration', async (_name, state) => {
     expect(await started(state)).toMatchObject({ swarmSkillMode: 'orchestration' })
   })
+
+  // Prod logs 2026-10-28: a contributed machine's host asked for a Swarm read it may not make (a 400 at every start) and
+  // launched every agent on Harness orchestration. Its start read names the project's skills instead.
+  const hosted = async (skillMode?: string) => {
+    const f = fixture({ state: projects('orchestration') })
+    Object.assign(f.start, { poolGeneration: 'pool-1', ...(skillMode ? { skillMode } : {}) })
+    expect(await startAgent({ tabId: 'tab', startId: 'start', hostDispatch: true }, f.scoped, where, f.open)).toMatchObject({ ok: true })
+    expect(f.scoped.mock.calls.map(c => c[0].action)).not.toContain('status')
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  }
+  it('starts a contributed machine\'s agent with the skills its start read names, without reading the Swarm', async () => {
+    const payload = await hosted('default')
+    expect(payload).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'default' })
+    expect(payload.prompt).toContain('Use the swarm-dev skill for this session: the team process; otherwise work your usual way.')
+  })
+  it('starts a contributed machine\'s agent on Harness orchestration when an older backend\'s start read names no skills', async () => {
+    expect(await hosted()).toMatchObject({ swarmRole: 'dev', swarmSkillMode: 'orchestration' })
+  })
+  it('takes the start read\'s skills for a Lead\'s own start too', async () => {
+    const f = fixture({ state: projects('orchestration') })
+    Object.assign(f.start, { skillMode: 'default' })
+    await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)
+    expect(f.request.mock.calls.find(call => call[0] === 'agent_create')![1]).toMatchObject({ swarmSkillMode: 'default' })
+  })
 })
 
 it('asks for an owner contribution instead of widening a guest machine connection', async () => {

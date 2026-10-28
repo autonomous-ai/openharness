@@ -6,7 +6,7 @@ import { admission, memoryShortIn, quotaOf, type Requirements } from './capacity
 import { groupSkillMode, identifier, object } from './host.js'
 import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
-import { swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -332,11 +332,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
       // A Buddy's start names its owner (backend buddies.ts): it brainstorms in their chat and is never assigned work.
       const buddy = !!request.buddyOf && typeof request.buddyOf === 'object'
-      const role = buddy ? 'buddy' : reviewer ? 'review' : 'dev', facts = skilled ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
       // readied the start, and prepared it with the app's token if it is another person's (superTabs/projectFolder.ts).
-      const hosted = input.hostDispatch === true ? object(input.github) : null
-      const mode = facts?.mode ?? null
+      // Its Swarm read was refused with a 400 at every start until 2026-10-28, and its agents ran Harness orchestration
+      // whatever their project's skills: the start read names them, and a backend from before that keeps orchestration.
+      const role = buddy ? 'buddy' : reviewer ? 'review' : 'dev', hosted = input.hostDispatch === true ? object(input.github) : null
+      const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
+      const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
       // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token, and a Claude Buddy
       // asks before anything but its Super Tab commands, which its folder's settings pre-approve (lib/swarmSkills.ts).
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
