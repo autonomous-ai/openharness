@@ -1868,6 +1868,50 @@ export class SuperTabStore {
     return !share.superTabId || this.mayObserve(user, share.superTabId, share.machineId, share.agentId, share.ownerId)
   }
 
+  /** The shares among `shares` that mayOpenShare opens, for a person's whole list (routes/harnessShares.ts): each Swarm loaded
+   *  once and the confidential sessions read once, where share by share each loaded its whole Swarm (prod 2026-10-28: half
+   *  the backend's busy time in spike minutes). The same answer as mayOpenShare for each share, in the same order. */
+  async openableShares<T extends { superTabId: string | null; machineId: string; agentId: string; ownerId: string }>(user: AuthUser, shares: T[]): Promise<T[]> {
+    // A session's id is its machine and harness in every Swarm (stableId), so one read answers mayOpenShare's check and mayObserve's.
+    const confidential = await confidentialSessions(this.db, shares.map(s => stableId(s.machineId, s.agentId)),
+      async (tabId, agentIds) => reassemble(await readParts(this.db, await this.view([tabId]), tabId, { agentIds }), { share: true }))
+    const open = shares.filter(s => user.sub === s.ownerId || !confidential.has(stableId(s.machineId, s.agentId)))
+    const byTab = new Map<string, T[]>()
+    for (const share of open) if (share.superTabId) byTab.set(share.superTabId, [...byTab.get(share.superTabId) ?? [], share])
+    const observable = new Set<T>()
+    for (const [tabId, tabShares] of byTab) for (const share of await this.observable(user, tabId, tabShares, confidential)) observable.add(share)
+    return open.filter(s => !s.superTabId || observable.has(s))
+  }
+
+  /** mayObserve for each of `shares`, all in Swarm `tabId`, from one load of it. */
+  private async observable<T extends { machineId: string; agentId: string; ownerId: string }>(user: AuthUser, tabId: string, shares: T[],
+    confidential: Set<string>): Promise<T[]> {
+    if (isTeamSession(user)) return []
+    let state: SuperTabState
+    try {
+      state = (await this.readLoad(user, tabId)).state
+      person(state, user.sub)
+      await requireWorkspaceAccess(this.db, state, user.sub)
+    } catch (error) { if (error instanceof SuperTabError) return []; throw error }
+    // agentGrant reads only the agent's contributor, machine and grant: agents sharing those share its answer.
+    const grants = new Map<string, Promise<boolean>>()
+    const granted = (target: Agent) => {
+      const key = JSON.stringify([target.contributorId, target.machineId, target.machineOwnerId, target.hostGrant])
+      if (!grants.has(key)) grants.set(key, this.agentGrant(this.db, state, target).then(() => true,
+        error => { if (error instanceof SuperTabError) return false; throw error }))
+      return grants.get(key)!
+    }
+    const allowed: T[] = []
+    for (const share of shares) {
+      const target = state.agents.find(a => a.machineId === share.machineId && a.harnessId === share.agentId && a.machineOwnerId === share.ownerId)
+      if (!target) continue
+      try { agent(state, target.id) } catch (error) { if (error instanceof SuperTabError) continue; throw error }
+      if (canWatchAgent(state, { kind: 'person', userId: user.sub, email: user.email }, target, confidential.has(target.id))
+        && await granted(target)) allowed.push(share)
+    }
+    return allowed
+  }
+
   private deliveryAllowed(state: SuperTabState, delivery: SuperTabDelivery): boolean {
     const target = state.agents.find(a => a.id === delivery.agentId)
     const group = state.conversations.find(c => c.id === delivery.conversationId)
