@@ -12,7 +12,11 @@ import 'support/humans_fixture.dart';
 /// real right pane over the in-memory Swarm, never a backend or the live app.
 final shots = Platform.environment['SUPER_TAB_LEADERBOARD_SHOTS'];
 
-Future<void> showHumans(WidgetTester tester, Brightness brightness) async {
+Future<void> showHumans(
+  WidgetTester tester,
+  Brightness brightness, {
+  bool settle = true,
+}) async {
   await tester.binding.setSurfaceSize(const Size(1300, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
   // The app sets the design tokens' brightness from its theme at startup.
@@ -39,7 +43,15 @@ Future<void> showHumans(WidgetTester tester, Brightness brightness) async {
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (settle) {
+    await tester.pumpAndSettle();
+    return;
+  }
+  // The board's read lands, and #1's sparkle is at its brightest.
+  for (var i = 0; i < 5; i++) {
+    await tester.pump();
+  }
+  await tester.pump(const Duration(milliseconds: 650));
 }
 
 void main() {
@@ -55,6 +67,10 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-person-peer')));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, 'person-$name');
+      await tester.pumpWidget(const SizedBox());
+      await showHumans(tester, brightness, settle: false);
+      await captureWindow(tester, shots, 'humans-$name-sparkle');
+      await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
     }
   }, skip: shots == null);

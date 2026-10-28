@@ -247,7 +247,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       showAppDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: Text(superTabPersonName(person.email)),
+          title: Text(leaderboardName(person, score)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -574,7 +574,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             final person = state?.people.where((p) => p.id == id).firstOrNull;
             return person == null
                 ? 'Former member'
-                : superTabPersonName(person.email);
+                : leaderboardName(person, scores[id]);
           },
           onAnswer: widget.onAnswer,
         ),
