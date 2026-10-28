@@ -40,7 +40,7 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
-import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
@@ -1678,8 +1678,7 @@ export class SuperTabStore {
       author(state, actor)
       // Dormant conversations count too: their decisions stay readable (the list loads every group for this).
       const groups = state.conversations.filter(c => canReadGroup(state, actor, c)).map(c => c.id)
-      const rows = await tx.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: groups } }, orderBy: { createdAt: 'desc' }, take: 100 })
-      return rows.map(timedDecisionOf)
+      return (await recentDecisions(tx, tabId, groups)).map(timedDecisionOf)
     })
   }
 
