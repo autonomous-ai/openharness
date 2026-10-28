@@ -88,7 +88,10 @@ class SwarmProfileSheet extends StatefulWidget {
 class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
   final _text = TextEditingController();
   String? _emoji;
-  _Clears _clears = _Clears.never;
+
+  /// When the status clears; null keeps the end it has ([_keptUntil]).
+  _Clears? _clears = _Clears.never;
+  DateTime? _keptUntil;
 
   /// The editor took the person's status once, when it was first read.
   bool _seeded = false;
@@ -180,6 +183,10 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
       _seeded = true;
       _text.text = status?.text ?? '';
       _emoji = status?.emoji;
+      if (status?.until case final until?) {
+        _keptUntil = until;
+        _clears = null;
+      }
     }
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -388,6 +395,13 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
           spacing: 8,
           runSpacing: 8,
           children: [
+            if (_keptUntil case final until?)
+              _Chip(
+                key: const ValueKey('swarm-status-clears-kept'),
+                label: 'At ${SwarmPersonSheet._time(context, until)}',
+                selected: _clears == null,
+                onTap: edit ? () => setState(() => _clears = null) : null,
+              ),
             for (final clears in _Clears.values)
               _Chip(
                 key: ValueKey('swarm-status-clears-${clears.name}'),
@@ -409,7 +423,10 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
                     SuperTabPersonStatus(
                       text: text,
                       emoji: _emoji,
-                      until: _clears.from(clock.now()),
+                      until: switch (_clears) {
+                        final clears? => clears.from(clock.now()),
+                        null => _keptUntil,
+                      },
                     ),
                   ),
                 )
@@ -428,6 +445,8 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
                       if (error == null && mounted) {
                         _text.clear();
                         _emoji = null;
+                        _keptUntil = null;
+                        _clears = _Clears.never;
                       }
                       return error;
                     })

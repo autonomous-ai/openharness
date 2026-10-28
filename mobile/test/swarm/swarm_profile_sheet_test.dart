@@ -319,4 +319,26 @@ void main() {
     await tap(tester, key('swarm-avatar-preset-owl'));
     expect(swarm.commands, isEmpty);
   });
+
+  testWidgets('a status that ends keeps its end when saved again', (
+    tester,
+  ) async {
+    final until = clock.now().toUtc().add(const Duration(hours: 2));
+    await open(
+      tester,
+      extra: {
+        'status': {
+          'text': 'Focusing',
+          'emoji': '🎯',
+          'until': until.toIso8601String(),
+        },
+      },
+    );
+    expect(key('swarm-status-clears-kept'), findsOneWidget);
+    await tester.ensureVisible(key('swarm-status-text'));
+    await tester.enterText(key('swarm-status-text'), 'Deep focus');
+    await tap(tester, key('swarm-status-save'));
+    final status = swarm.commands.single['status'] as Map<String, dynamic>;
+    expect(DateTime.parse(status['until'] as String), until);
+  });
 }
