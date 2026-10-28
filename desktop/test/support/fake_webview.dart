@@ -36,6 +36,7 @@ class FakeWebViewController extends PlatformWebViewController {
 
   final FakeWebViewPlatform _platform;
   final loads = <Uri>[];
+  final scripts = <String>[];
   int reloads = 0;
   FakeNavigationDelegate? delegate;
 
@@ -67,7 +68,9 @@ class FakeWebViewController extends PlatformWebViewController {
   }
 
   @override
-  Future<void> runJavaScript(String javaScript) async {}
+  Future<void> runJavaScript(String javaScript) async {
+    scripts.add(javaScript);
+  }
 
   @override
   Future<String?> currentUrl() async =>

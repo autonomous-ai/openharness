@@ -390,7 +390,7 @@ function relay(device: WebSocket, opts: RelayOpts): void {
   // the picker (or short of `device_hello`) it would otherwise never be pinged and a half-open drop would
   // never be reaped — leaving presence green, the MQTT bridge open and this relay's timers running.
   // The device pings US every 15s, so it earns a much shorter silence deadline than a browser.
-  const releaseLiveness = trackSocketLiveness(device, DEVICE_IDLE_DEADLINE_MS)
+  const releaseLiveness = trackSocketLiveness(device, 'device', DEVICE_IDLE_DEADLINE_MS)
   // Multi-attach: the device is a `commander` on ALL the user's machines at once — ONE per-user socket
   // holding N per-machine commander clients, keyed by machineId. Each machine's node then sees commander>0 and
   // runs its recap, so a background machine's turn-done can badge the device. `activeMachineId` is the ONE

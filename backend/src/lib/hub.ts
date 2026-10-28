@@ -182,6 +182,11 @@ type Alive = WebSocket & {
   __hubLastPing?: number
   __hubDeadlineMs?: number
   __hubLivenessWired?: boolean
+  // For the timeout log only: which endpoint holds it, since when, whether it ever answered and how many pings it has not.
+  __hubClient?: string
+  __hubSince?: number
+  __hubAnswered?: boolean
+  __hubUnanswered?: number
 }
 
 // Liveness is a DEADLINE ON SILENCE, not a count of sweeps. Counting tied how fast a dead peer is noticed
@@ -204,7 +209,13 @@ export const DEVICE_IDLE_DEADLINE_MS = 35_000
 function wireLiveness(socket: WebSocket): void {
   if ((socket as Alive).__hubLivenessWired) return
   ;(socket as Alive).__hubLivenessWired = true
-  const markAlive = (): void => { (socket as Alive).__hubLastAlive = Date.now() }
+  ;(socket as Alive).__hubSince ??= Date.now()
+  const markAlive = (): void => {
+    const alive = socket as Alive
+    alive.__hubLastAlive = Date.now()
+    alive.__hubAnswered = true
+    alive.__hubUnanswered = 0
+  }
   socket.on('message', markAlive)
   socket.on('ping', markAlive)
   socket.on('pong', markAlive)
@@ -220,9 +231,10 @@ const trackedSockets = new Set<WebSocket>()
 
 /** Keep `socket` in the liveness sweep regardless of hub-client attachment, with an optional custom
  *  silence deadline (the deadline is stored ON the socket, so it still applies once clients attach).
- *  Returns the release fn. */
-export function trackSocketLiveness(socket: WebSocket, deadlineMs?: number): () => void {
+ *  `client` names its endpoint in the timeout log. Returns the release fn. */
+export function trackSocketLiveness(socket: WebSocket, client: string, deadlineMs?: number): () => void {
   ;(socket as Alive).__hubLastAlive ??= Date.now()
+  ;(socket as Alive).__hubClient = client
   if (deadlineMs != null) (socket as Alive).__hubDeadlineMs = deadlineMs
   wireLiveness(socket)
   trackedSockets.add(socket)
@@ -237,7 +249,11 @@ function pingOrTerminate(ws: Alive, info: Record<string, unknown>): boolean {
   const deadline = ws.__hubDeadlineMs ?? CLIENT_IDLE_DEADLINE_MS
   const idleMs = now - (ws.__hubLastAlive ??= now)
   if (idleMs >= deadline) {
-    logger.warn('hub client heartbeat timed out', { ...info, idleMs, deadline })
+    // The server pings and the deadline is three pings long, so an idle just past it is the sweep's own 5 s step. What
+    // tells a dead peer (a computer that slept) from a client that never answers pings is `answered` and its age
+    // (prod logs 2026-10-28: 40–78 every 10 minutes, most named only `tracked`).
+    logger.warn('hub client heartbeat timed out', { ...info, ...(ws.__hubClient ? { client: ws.__hubClient } : {}), idleMs, deadline,
+      connectedMs: now - (ws.__hubSince ?? now), answered: ws.__hubAnswered === true, unansweredPings: ws.__hubUnanswered ?? 0 })
     try { ws.terminate() } catch { /* ignore */ }
     return true
   }
@@ -245,6 +261,7 @@ function pingOrTerminate(ws: Alive, info: Record<string, unknown>): boolean {
   const pingEvery = Math.max(LIVENESS_TICK_MS, Math.floor(deadline / 3))
   if (now - (ws.__hubLastPing ?? 0) >= pingEvery) {
     ws.__hubLastPing = now
+    ws.__hubUnanswered = (ws.__hubUnanswered ?? 0) + 1
     try { ws.ping() } catch { /* ignore */ }
   }
   return true
