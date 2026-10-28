@@ -204,11 +204,11 @@ export interface SuperTabStoreHooks {
   teamAccountsIdle?: boolean
   /** A terminal request was answered or refused, after the commit (lib/bus.ts tells every instance). It must not throw. */
   terminalAnswered?: (requestId: string) => void
+  /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
+  watchTerminal?: (requestId: string, onChange: () => void) => Promise<() => void>
   /** Who may watch an agent's terminal in this Swarm may have narrowed, after the commit: its observer sockets check again
    *  at once (lib/observerWs.ts). It must not throw. */
   accessChanged?: (tabId: string) => void
-  /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
-  watchTerminal?: (requestId: string, onChange: () => void) => Promise<() => void>
 }
 
 /** The commands after which someone may no longer watch an agent's terminal (`mayObserve`): a person, agent, machine or
@@ -1374,9 +1374,10 @@ export class SuperTabStore {
    *  reading again when the host's answer or refusal is told, when the request turns late, or every few seconds unwoken. */
   async terminalResult(user: AuthUser, tabId: string, requestId: string, asAgentId?: string, waitMs = 0) {
     const deadline = Date.now() + waitMs
-    let told = false, wake = () => {}
-    const stop = waitMs > 0 && this.hooks.watchTerminal
-      ? await this.hooks.watchTerminal(requestId, () => { told = true; wake() }) : () => {}
+    let told = false, done = false, wake = () => {}, stop = () => {}
+    // Never awaited: while Redis is down a subscribe waits for it, and the wait reads on its own clock meanwhile.
+    if (waitMs > 0) this.hooks.watchTerminal?.(requestId, () => { told = true; wake() })
+      .then(dispose => { if (done) dispose(); else stop = dispose }, () => {})
     try {
       for (;;) {
         told = false
@@ -1411,7 +1412,7 @@ export class SuperTabStore {
         })
         wake = () => {}
       }
-    } finally { stop() }
+    } finally { done = true; stop() }
   }
 
   /** Each waiting request for this host's agents is handed over once. One that waited too long, or whose terminal, agent or

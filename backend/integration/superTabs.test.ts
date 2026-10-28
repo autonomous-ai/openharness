@@ -2542,6 +2542,20 @@ describe('the Lead reads and types in an agent terminal', () => {
     expect(Date.now() - refusedAt).toBeLessThan(1_000)
   })
 
+  it('neither waits for nor fails on a notice channel that cannot subscribe, as while Redis is down', async () => {
+    const { tab, lead, worker, claim } = await terminalFixture()
+    for (const watching of [() => new Promise<() => void>(() => {}), () => Promise.reject(new Error('Redis is down'))]) {
+      const at = new SuperTabStore(db, Date.now, null, { watchTerminal: watching })
+      const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
+      expect(await claim()).toHaveLength(1)
+      const started = Date.now()
+      expect(await at.terminalResult(host, tab, requestId, lead, 1_000)).toEqual({ requestId, pending: true })
+      expect(Date.now() - started).toBeLessThan(2_000)
+      await run(tab, { type: 'agent.screenResult', requestId, ok: true, text: 'screen' }, host, worker)
+      expect(await at.terminalResult(host, tab, requestId, lead, 20_000)).toEqual({ requestId, ok: true, text: 'screen' })
+    }
+  })
+
   it('still returns an answer whose notice was lost, at the next re-check', async () => {
     const { tab, lead, worker, claim } = await terminalFixture()
     const requestId = (await run(tab, { type: 'agent.screen', agentId: worker }, host, lead)).result.requestId as string
