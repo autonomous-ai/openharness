@@ -66,7 +66,7 @@ async function attach(ws: WebSocket, userId: string, share: string, machine: str
   live.get(key)?.close(4409, 'Replaced by a newer connection')
   live.set(key, ws)
   const send = (frame: unknown) => guardedSendJson(ws, frame, 'must')
-  const disposers: Array<() => void> = [trackSocketLiveness(ws)]
+  const disposers: Array<() => void> = [trackSocketLiveness(ws, 'agentMessages')]
   let closed = false
   ws.once('close', () => { closed = true; if (live.get(key) === ws) live.delete(key); for (const d of disposers.splice(0)) d() })
   const keep = (dispose: () => void) => { if (closed) dispose(); else disposers.push(dispose) }

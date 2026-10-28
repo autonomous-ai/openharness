@@ -1100,6 +1100,89 @@ describe('the other machines\' cards', () => {
   })
 })
 
+// A Swarm Reviewer on Diego's Mac's Harness Team account failed every turn in 1–2 s (2026-10-28), and each failure took
+// over the round dial with the engine's raw error for 8 s. A Swarm's workers report to their Lead, not to the person's dial.
+describe('a failed turn of a Swarm worker', () => {
+  const swarmAgents = (sessions: Array<Partial<RegisteredSession>>) => fakeCore({ dataDir, agents: {
+    byAgent: vi.fn((id: string) => sessions.find((s) => s.agentId === id) as RegisteredSession | undefined),
+  } })
+  const teamAccount = (core: CoreApi) => {
+    vi.mocked(core.account.machines).mockResolvedValue({ status: 200, body: { success: true, data: { machines: [
+      { machineId: 'team-mac', name: 'Diego’s Mac', sessionKind: 'team' },
+      { machineId: 'mac-mini', name: 'Mac mini', sessionKind: 'computer' },
+    ] } } })
+    return seen.fleet!.deps.machines.refresh()
+  }
+
+  it('on a Harness Team account never reaches the dial as an error, and ends its tile quietly', async () => {
+    const { core } = start()
+    await teamAccount(core)
+    seen.fleet!.events!({ machineId: 'team-mac', kind: 'processing', agentId: 'reviewer', text: 'go', recap: '' })
+    seen.fleet!.events!({ machineId: 'team-mac', kind: 'error', agentId: 'reviewer', text: 'stream disconnected', recap: '' })
+    await vi.waitFor(() => expect(calls('turnDone')).toEqual([['reviewer']]))
+    expect(calls('turnError')).toEqual([])
+  })
+
+  it('the Swarm started on this computer, a Builder or a Reviewer, never reaches the dial as an error', async () => {
+    const { port } = start({ core: swarmAgents([
+      { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'dev', key: 'k1' } },
+      { agentId: 'reviewer', startedBy: 'agent', swarmSkill: { role: 'review', key: 'k2' } },
+    ]) })
+    port.card({ type: 'commander_event', agentId: 'builder', payload: { kind: 'error', text: 'boom' } })
+    port.card({ type: 'commander_event', agentId: 'reviewer', payload: { kind: 'error', text: 'boom' } })
+    await vi.waitFor(() => expect(calls('turnDone')).toEqual([['builder'], ['reviewer']]))
+    expect(calls('turnError')).toEqual([])
+    expect(logs.some((l) => /notify · .* · silent · rule:swarm-worker/.test(l))).toBe(true)
+  })
+
+  it('the person has on a desk tab still reaches the dial as an error, as every desk agent\'s does', async () => {
+    const { core, port } = start({ core: swarmAgents([
+      { agentId: 'builder', startedBy: 'agent', swarmSkill: { role: 'dev', key: 'k1' } },
+      { agentId: 'mine' },
+    ]) })
+    await teamAccount(core)
+    port.swarms({ active: 't1', swarms: [
+      { id: 't1', name: 'api', agentIds: ['mine'], panes: 1 },
+      { id: 't2', name: 'Swarm', agentIds: ['builder'], panes: 1 },
+    ], tiles: [] })
+    port.desk(['reviewer'], false)
+    port.card({ type: 'commander_event', agentId: 'mine', payload: { kind: 'error', text: 'mine broke' } })
+    port.card({ type: 'commander_event', agentId: 'builder', payload: { kind: 'error', text: 'builder broke' } })
+    seen.fleet!.events!({ machineId: 'team-mac', kind: 'error', agentId: 'reviewer', text: 'reviewer broke', recap: '' })
+    // An agent on one of the person's own computers is the person's, whether or not it is on a tab.
+    seen.fleet!.events!({ machineId: 'mac-mini', kind: 'error', agentId: 'far', text: 'far broke', recap: '' })
+    await vi.waitFor(() => expect(calls('turnError')).toHaveLength(4))
+    expect(calls('turnError')).toEqual([['mine', 'mine broke'], ['builder', 'builder broke'], ['reviewer', 'reviewer broke'], ['far', 'far broke']])
+  })
+
+  it('a person started by hand still reaches the dial as an error, even with a Builder\'s or Reviewer\'s role', async () => {
+    const { port } = start({ core: swarmAgents([
+      { agentId: 'builder', swarmSkill: { role: 'dev', key: 'k1' } },
+      { agentId: 'reviewer', startedBy: undefined, swarmSkill: { role: 'review', key: 'k2' } },
+    ]) })
+    port.card({ type: 'commander_event', agentId: 'builder', payload: { kind: 'error', text: 'builder broke' } })
+    port.card({ type: 'commander_event', agentId: 'reviewer', payload: { kind: 'error', text: 'reviewer broke' } })
+    await vi.waitFor(() => expect(calls('turnError')).toEqual([['builder', 'builder broke'], ['reviewer', 'reviewer broke']]))
+    expect(calls('turnDone')).toEqual([])
+  })
+
+  it('leaves a Lead\'s own failure as it was', async () => {
+    const { port } = start({ core: swarmAgents([{ agentId: 'lead', swarmSkill: { role: 'lead', key: 'k' } }]) })
+    port.card({ type: 'commander_event', agentId: 'lead', payload: { kind: 'error', text: 'lead broke' } })
+    await vi.waitFor(() => expect(calls('turnError')).toEqual([['lead', 'lead broke']]))
+    expect(calls('turnDone')).toEqual([])
+  })
+
+  it('on a machine once listed as a Harness Team account is the person\'s again once the list no longer says so', async () => {
+    const { core } = start()
+    await teamAccount(core)
+    vi.mocked(core.account.machines).mockResolvedValue({ status: 401, body: {} })
+    await seen.fleet!.deps.machines.refresh()
+    seen.fleet!.events!({ machineId: 'team-mac', kind: 'error', agentId: 'reviewer', text: 'boom', recap: '' })
+    await vi.waitFor(() => expect(calls('turnError')).toEqual([['reviewer', 'boom']]))
+  })
+})
+
 describe('⌘K, the Wi-Fi device\'s borrowed walk, the voice router and stopping', () => {
   it('route a typed task and its send through the fleet, saying why a send was refused', async () => {
     const { port } = start()

@@ -668,4 +668,24 @@ describe('one machine: a Mac and its Harness Team account', () => {
     await add()
     expect((await storedState(tab)).machineCleanups).toBeUndefined()
   })
+
+  // Ken's remote-deepseek and WIN-DELL, 2026-10-28: removed while offline, then their machine accounts were deleted. Their
+  // cleanups waited for a host that could never come back, and kept the Swarm in every host's cleanup lookup.
+  it('drops the cleanup of a machine whose account is deleted on the Swarm\'s next change, and keeps a live machine\'s', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Retired machines')).id
+    for (const [machineId, computerId] of [['retired-pc', 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'], ['kept-pc', 'ffffffffffffffffffffffffffffffff']]) {
+      await db.machine.create({ data: { machineId, userId: owner.sub, computerId, sessionKind: 'computer', apiKey: `fixture-${machineId}`,
+        managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+      onTestFinished(() => db.machine.delete({ where: { machineId } }).then(() => undefined))
+      await run(tab, { type: 'machine.contribute', machineId, name: machineId, cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 1 })
+      // Never reported, so offline: its records go at once and its cleanup waits for its host.
+      await run(tab, { type: 'machine.remove', machineId })
+    }
+    const pending = async () => ({ cleanups: (await storedState(tab)).machineCleanups?.map(c => c.machineId).sort() ?? [],
+      indexed: (await db.superTab.findUnique({ where: { id: tab } }))!.cleanupMachineIds.sort() })
+    expect(await pending()).toEqual({ cleanups: ['kept-pc', 'retired-pc'], indexed: ['kept-pc', 'retired-pc'] })
+    await db.machine.update({ where: { machineId: 'retired-pc' }, data: { deletedAt: new Date() } })
+    await run(tab, { type: 'tab.rename', name: 'Next change' })
+    expect(await pending()).toEqual({ cleanups: ['kept-pc'], indexed: ['kept-pc'] })
+  })
 })

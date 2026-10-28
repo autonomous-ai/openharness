@@ -243,6 +243,9 @@ export interface CommandContext {
   confidentialSession?: boolean
   /** For a command that registers a session or can make one confidential: the other Swarms' registrations (confidential.ts). */
   registrations?: import('./projects.js').OtherRegistrations
+  /** The machines of this Swarm's pending cleanups whose machine account is deleted, read by the store: no host will ever
+   *  confirm those cleanups (Ken's remote-deepseek and WIN-DELL, 2026-10-28), so they go. */
+  deletedMachineIds?: string[]
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
@@ -467,6 +470,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   numberConversations(state)
   placeRules(state)
   const ended = expireRemovals(state, context.now)
+  // Their removal already said they left; nothing is said again.
+  const deleted = new Set(context.deletedMachineIds ?? [])
+  if (deleted.size && state.machineCleanups) {
+    state.machineCleanups = state.machineCleanups.filter(c => !deleted.has(c.machineId))
+    if (!state.machineCleanups.length) delete state.machineCleanups
+  }
   assignAgentDisplayNames(state.agents)
   const result: Record<string, unknown> = {}
   const effects: CommandEffects = { state, messages: ended, cancelledAgents: [], previousAttempts: [], routeDecisions: [], result }

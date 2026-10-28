@@ -16,7 +16,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVA
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, watchingNarrowed, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
@@ -24,6 +24,7 @@ import { digestDue, digestMessageId, digestRequest, digestSince } from './digest
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
+import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
@@ -141,17 +142,22 @@ export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {})
  */
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
+  let hintless = false
   for (let attempt = 1; ; attempt++) {
     let committed: Array<() => void> = []
+    const drops = listingDrops()
     try {
       // The cache's stamps are bumped, and awaited, once the attempt commits (cache.ts); after-commit work runs after them.
-      const result = await swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
+      const run = () => swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
+      const result = await (hintless ? withoutHints(run) : run())
       for (const callback of committed) {
         try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
       }
       return result
     } catch (error) {
-      if (!retryable(error)) throw error
+      // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next attempts name none.
+      if (listingDrops() !== drops) hintless = true
+      else if (!retryable(error)) throw error
       // An expired or unstartable transaction (P2028) is load: one more try, then the client retries after Retry-After.
       if (attempt >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
         // A unique key still taken after every retry is a real duplicate, not contention.
@@ -193,6 +199,7 @@ const errorCode = (error: unknown): unknown => error && typeof error === 'object
 function retryable(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   return ['P2034', 'P2002', 'P2028'].includes(errorCode(error) as string) || (error instanceof Error && error.message.includes('TransientTransactionError'))
+
 }
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
@@ -352,6 +359,15 @@ export class SuperTabStore {
         return
       }
     }
+  }
+
+  /** The machines of the Swarm's pending cleanups whose account is deleted or missing: no host of theirs can read the
+   *  Swarm again to confirm (read/host.ts asks for a live account), so applyCommand drops their cleanups. */
+  private async deletedMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
+    const ids = [...new Set((state.machineCleanups ?? []).map(c => c.machineId))]
+    const live = new Set((await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive },
+      select: { machineId: true } })).map(m => m.machineId))
+    return ids.filter(id => !live.has(id))
   }
 
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`,
@@ -781,8 +797,11 @@ export class SuperTabStore {
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
+      // The skills its agent launches with. A contributed machine's host cannot read the Swarm to learn them (cli
+      // superTabs/start.ts): until 2026-10-28 it launched every agent on Harness orchestration, whatever its project ran.
+      const read = { ...start, skillMode: skillModeOf(groupProject(state, group)) }
       // The Lead reads that its machine is still preparing it, and waits instead of starting another (liveness.ts).
-      return startPreparing(state, start, this.now()) ? { ...start, preparing: true as const } : start
+      return startPreparing(state, start, this.now()) ? { ...read, preparing: true as const } : read
     })
   }
 
@@ -911,6 +930,8 @@ export class SuperTabStore {
           // The native receipt remains intact; the operation records the person's resolution.
         } })
       }
+      // Read only while the Swarm has a cleanup pending, which is rare: one indexed read of those machines' accounts.
+      if (original.machineCleanups?.length) context.deletedMachineIds = await this.deletedMachines(tx, original)
       if (command.type === 'machine.contribute' || command.type === 'agent.add' || command.type === 'tab.project') {
         context.contribution = await this.contribution(tx, original, actor, command)
       }
@@ -1670,7 +1691,8 @@ export class SuperTabStore {
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
   async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
     this.personOnly(user)
-    const { state: tab } = await this.readLoad(user, tabId, { allGroups: true })
+    // Not every quiet conversation: listMentions reads the quiet ones its tags are in by id (mentions.ts readable).
+    const { state: tab } = await this.readLoad(user, tabId)
     await this.actor(this.db, user, tab)
     return { mentions: await listMentions(this.db, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
   }
@@ -1958,8 +1980,8 @@ export class SuperTabStore {
       // out: it only gets marked, or every poll would read for it again and fail on the duplicate (prod slow log, 2026-10-28).
       const sentAlready = !!due && !!await tx.superTabMessage.findUnique({ where: { id: digestMessageId(tabId, led!.id, due) }, select: { id: true } })
       if (led && due && !sentAlready) {
-        const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
-          OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
+        const finished = await groupsBy(tx, 'project', [{ $match: quietSince(tabId, led.id, digestSince(led, this.now())) },
+          { $project: { _id: 0, key: 1 } }]) as unknown as Array<{ key: string }>
         // A decision waits in its conversation even once that conversation went quiet.
         asked = await waitingInProject(tx, tabId, led.id)
         const groupIds = [...new Set([...finished.map(g => g.key), ...asked.map(d => d.conversationId)])]
@@ -1976,8 +1998,8 @@ export class SuperTabStore {
       const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
       // The Lead's poll stops its project's idle workers too (tidy.ts): it is where what waits for each agent is known.
       const reviewers = led ? state.agents.filter(a => agentRole(a) === 'reviewer' && a.workDecision !== 'stop' && agentProjectId(state, a) === led.id).map(a => a.id) : []
-      const asleep = reviewers.length ? (await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, agentIds: { hasSome: reviewers } },
-        select: { data: true } })).map(row => row.data as unknown as Conversation) : []
+      const asleep = reviewers.length ? (await groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: true, agentIds: { $in: reviewers } } },
+        { $project: { _id: 0, data: 1 } }])).map(row => row.data as unknown as Conversation) : []
       const idle = led ? stopIdleWorkers(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
         where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId)), asleep) : []
       written.push(...idle)
