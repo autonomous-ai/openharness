@@ -1475,7 +1475,9 @@ model SwarmGroup {
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
-  @@index([tabId, projectId, dormant, lastActivityAt])
+  /// A project's closed conversations, newest activity first (parts/load.ts loadDormant pages by lastActivityAt, then key;
+  /// the digest and the leaderboard read its prefix): without key, each page sorted all of the project's closed ones.
+  @@index([tabId, projectId, dormant, lastActivityAt, key])
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
   @@index([workFinished, archived, lastActivityAt])

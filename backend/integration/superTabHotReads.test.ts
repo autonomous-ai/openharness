@@ -5,12 +5,14 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import * as parts from '../src/superTabs/parts/index.js'
+import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -168,5 +170,83 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   it('no read of these scans a whole collection', () => {
     const scans = entries.filter(e => e.planSummary === 'COLLSCAN' && !e.ns.includes('.system.'))
     expect(scans.map(e => `${e.ns.slice(e.ns.indexOf('.') + 1)} ${queryShape((e.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? e.command?.filter ?? e.command?.q)}`)).toEqual([])
+  })
+})
+
+/** `count` dormant copies of `s`'s finished conversation in `projectId` (null: stored with none, the default project's
+ *  older form), active a minute apart before `newest`. */
+async function sleeping(s: Awaited<ReturnType<typeof scene>>, prefix: string, projectId: string | null, count: number, newest: number) {
+  const done = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.done } }))!
+  const { id: _id, key: _key, ...row } = done
+  await db.swarmGroup.createMany({ data: Array.from({ length: count }, (_, i) => {
+    const key = `${prefix}-${i}`, lastActivityAt = new Date(newest - i * 60_000)
+    return { ...row, id: `${s.tabId}:${key}`, key, projectId, dormant: true, lastActivityAt,
+      data: { ...done.data as object, id: key, projectId, lastActivityAt: lastActivityAt.toISOString() } } as Prisma.SwarmGroupCreateManyInput
+  }) })
+}
+
+describe('closed conversations are read through an index of their own Swarm and project (prod slow log, 2026-10-28)', () => {
+  const CLOSED = 120
+  const profiles: Record<'digest' | 'pages' | 'board', ProfileEntry[]> = { digest: [], pages: [], board: [] }
+  let pages: string[][]
+  beforeAll(async () => {
+    // Set at midnight today, the digest is first due tomorrow.
+    clock = Date.now()
+    const digestAt = clock + DAY
+    // Another Swarm with more recent closed work in its default project: a read not bounded by its Swarm reads those too.
+    const other = await scene()
+    await sleeping(other, 'other', null, 2 * CLOSED, digestAt)
+    const s = await scene()
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'project.digest', projectId: 'lead', time: '00:00', timeZone: 'UTC' } })
+    // The default project's closed conversations, stored with its id and with none; another project's, which the digest skips.
+    await sleeping(s, 'lead', 'lead', CLOSED / 2, digestAt)
+    await sleeping(s, 'none', null, CLOSED / 2, digestAt - 30_000)
+    // Closed before the last digest's day: the digest and the leaderboard's week skip them.
+    await sleeping(s, 'old', null, 2 * CLOSED, digestAt - 8 * DAY)
+    await sleeping(s, 'web', 'web', CLOSED, digestAt)
+    // Ended first, the running work is not lost a day later: the fixture's assignment ids repeat across Swarms, and so would
+    // its wake-up's id.
+    const work = ((await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.web } }))!.data as { assignment: { id: string } }).assignment.id
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'work.cancel', conversationId: s.web, assignmentId: work, reason: 'No longer needed.' } })
+    clock = digestAt
+    profiles.digest = await profiled(() => store.deliveries(owner, s.tabId, s.lead))
+    profiles.pages = await profiled(async () => {
+      const first = await parts.loadDormant(db, s.tabId, { projectId: 'web' })
+      const last = first.at(-1)!
+      const second = await parts.loadDormant(db, s.tabId, { projectId: 'web', before: { lastActivityAt: Date.parse(last.data!.lastActivityAt!), key: last.key } })
+      pages = [first.map(p => p.key), second.map(p => p.key)]
+    })
+    profiles.board = await profiled(() => db.$transaction(tx => recentDormantGroups(tx, s.tabId, 'lead', digestAt - DAY)))
+  })
+
+  it('the digest lists only its project\'s closed conversations since the last digest, and no other Swarm\'s', () => {
+    const rows = reads(profiles.digest, 'SwarmGroup', ['tabId', 'dormant', 'lastActivityAt'])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.planSummary).toMatch(/^IXSCAN \{ tabId: 1, projectId: 1/)
+    // Its first batch: the rest follow in getMores on the same index bounds. A read past its Swarm, project or window would
+    // examine the others' rows here.
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned! + 3)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned!)
+  })
+
+  it('each page of a project\'s closed conversations reads about the 50 it returns', () => {
+    expect(pages.map(p => p.length)).toEqual([50, 50])
+    expect(pages[1]![0]).toBe('web-50')
+    const rows = reads(profiles.pages, 'SwarmGroup', ['tabId', 'dormant', 'projectId'])
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      expect(row.nreturned).toBe(50)
+      expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned! + 1)
+    }
+  })
+
+  it('the leaderboard reads only its project\'s closed conversations', () => {
+    const rows = reads(profiles.board, 'SwarmGroup', ['tabId', 'dormant', 'lastActivityAt'])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.planSummary).toMatch(/^IXSCAN \{ tabId: 1, projectId: 1/)
+    // Its first batch: the rest follow in getMores on the same index bounds. A read past its Swarm, project or window would
+    // examine the others' rows here.
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned! + 3)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(rows[0]!.nreturned!)
   })
 })
