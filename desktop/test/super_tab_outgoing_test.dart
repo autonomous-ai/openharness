@@ -114,8 +114,8 @@ void main() {
     expect(outgoing(controller), isEmpty);
   });
 
-  test('a refused message keeps its text and reason until Edit puts it back '
-      'in the draft, tags and reply included, after a restart too', () async {
+  test('a refused message keeps its text and reason after a restart too; '
+      'Retry sends it as it was, tags and reply included', () async {
     final server = ConversationServer()
       ..append('Which build?')
       ..state['agents'] = [
@@ -150,13 +150,10 @@ void main() {
       reopened.outgoing('lead').single.state,
       SuperTabOutgoingState.refused,
     );
-    expect(reopened.editRefused('lead'), 'message-1');
-    expect(reopened.outgoing('lead'), isEmpty);
-    expect(reopened.draft('lead'), '@Builder the arm64 one');
-    expect(reopened.mentions('lead'), {'builder': '@Builder'});
-
     server.reject = false;
-    await reopened.send(replyTo: 'message-1');
+    await reopened.retryOutgoing(reopened.outgoing('lead').single);
+    expect(reopened.outgoing('lead'), isEmpty);
+    expect(reopened.draft('lead'), isEmpty);
     expect(server.messages.last['text'], '@Builder the arm64 one');
     expect(server.messages.last['replyTo'], 'message-1');
     expect(server.posts.last['command']['recipientIds'], ['builder']);
@@ -181,7 +178,7 @@ void main() {
     await controller.refresh();
     controller.setDraft('lead', 'Not this one');
     await controller.send();
-    controller.discardOutgoing('lead');
+    controller.discardOutgoing(controller.outgoing('lead').single);
     expect(controller.outgoing('lead'), isEmpty);
     expect(controller.operationError, isNull);
     await controller.flush();
@@ -204,7 +201,7 @@ void main() {
     // The server took it and its answer was lost; the read after failed too.
     expect(server.messages, hasLength(1));
 
-    controller.discardOutgoing('lead');
+    controller.discardOutgoing(controller.outgoing('lead').single);
     expect(controller.outgoing('lead'), isEmpty);
     expect(controller.hasPendingAction, isFalse);
     await controller.refresh();
@@ -212,5 +209,38 @@ void main() {
     expect(controller.outgoing('lead'), isEmpty);
     await controller.flush();
     expect(server.saved!.containsKey('pending'), isFalse);
+  });
+
+  test('a refused message stays when the next one is sent, and a second '
+      'refusal keeps both, until each is sent again or deleted', () async {
+    final (:controller, :server) = open();
+    await controller.refresh();
+    server.reject = true;
+    controller.setDraft('lead', 'First');
+    await controller.send();
+    server.reject = false;
+    controller.setDraft('lead', 'Second');
+    await controller.send();
+    expect(outgoing(controller), [('First', SuperTabOutgoingState.refused)]);
+    expect(controller.messages('lead').map((m) => m.text), ['Second']);
+
+    server.reject = true;
+    controller.setDraft('lead', 'Third');
+    await controller.send();
+    expect(outgoing(controller), [
+      ('First', SuperTabOutgoingState.refused),
+      ('Third', SuperTabOutgoingState.refused),
+    ]);
+    await controller.flush();
+    final reopened = open(server: server, initial: server.saved).controller;
+    await reopened.refresh();
+    expect(outgoing(reopened), outgoing(controller));
+
+    server.reject = false;
+    await reopened.retryOutgoing(reopened.outgoing('lead').first);
+    expect(server.messages.last['text'], 'First');
+    expect(outgoing(reopened), [('Third', SuperTabOutgoingState.refused)]);
+    reopened.discardOutgoing(reopened.outgoing('lead').single);
+    expect(outgoing(reopened), isEmpty);
   });
 }

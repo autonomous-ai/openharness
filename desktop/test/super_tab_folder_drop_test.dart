@@ -377,8 +377,8 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('a message that fails to send offers its folder as a zip '
-      'again once edited', (tester) async {
+  testWidgets('a refused message keeps its folder path, and Retry sends '
+      'it', (tester) async {
     final controller = await open(tester, machineId: 'studio');
     await drop(tester, [
       folder('src').path,
@@ -387,14 +387,14 @@ void main() {
     server.refuse = {'code': 'CONFLICT', 'message': 'Try again.'};
     await tester.tap(find.byTooltip('Send message'));
     await tester.pumpAndSettle();
-    // The refused message waits in the chat; Edit brings it back here.
-    await tester.tap(find.text('Edit'));
+    // The refused message waits in the chat with its path.
+    server.refuse = null;
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
 
-    expect(hint, findsOneWidget);
     expect(
-      find.descendant(of: hint, matching: find.text('Attach as zip')),
-      findsOneWidget,
+      (server.messages.single['text'] as String),
+      contains(folder('src').path),
     );
     await close(tester, controller);
   });

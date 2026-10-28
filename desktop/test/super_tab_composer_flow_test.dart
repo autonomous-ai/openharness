@@ -233,7 +233,6 @@ void main() {
       find.text('The action is not confirmed. Retry to check it.'),
       findsNothing,
     );
-    expect(find.text('Edit'), findsNothing);
     composerKeepsKeyboard(tester);
 
     await tester.tap(find.text('Retry'));
@@ -245,8 +244,8 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
-  testWidgets('a refused send reads Not sent with its reason; Edit puts it '
-      'back in the composer with its reply', (tester) async {
+  testWidgets('a refused send reads Not sent with its reason; Retry sends '
+      'it once, with its reply', (tester) async {
     final server = ConversationServer()..append('Which build?');
     await show(tester, server);
     await tester.tap(find.byTooltip('Reply'));
@@ -258,17 +257,19 @@ void main() {
     expect(outgoingRow('The arm64 one'), findsOneWidget);
     expect(find.text('Not sent'), findsOneWidget);
     expect(find.text('Choose an agent in this conversation.'), findsOneWidget);
-    expect(find.text('Retry'), findsNothing);
+    expect(find.text('Edit'), findsNothing);
     // The reply went with the message: the composer holds none.
     expect(find.byTooltip('Cancel reply'), findsNothing);
 
-    await tester.tap(find.text('Edit'));
+    server.reject = false;
+    await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(outgoingRow('The arm64 one'), findsNothing);
-    expect(composerText(tester), 'The arm64 one');
-    expect(find.byTooltip('Cancel reply'), findsOneWidget);
-    expect(composerFocus(tester).hasPrimaryFocus, isTrue);
-    expect(tester.testTextInput.hasAnyClients, isTrue);
+    expect(find.text('Not sent'), findsNothing);
+    expect(server.messages.where((m) => m['text'] == 'The arm64 one'), [
+      containsPair('replyTo', 'message-1'),
+    ]);
+    composerKeepsKeyboard(tester);
     await tester.pump(const Duration(seconds: 1));
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
@@ -286,11 +287,18 @@ void main() {
       await send(tester, 'Never mind');
       await tester.pumpAndSettle();
       expect(outgoingRow('Never mind'), findsOneWidget);
+      // A destructive action reads in the error colour.
+      final delete = tester.element(find.text('Delete'));
+      expect(
+        DefaultTextStyle.of(delete).style.color,
+        Theme.of(delete).colorScheme.error,
+      );
 
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();
       expect(outgoingRow('Never mind'), findsNothing);
       expect(find.text('Not sent'), findsNothing);
+      composerKeepsKeyboard(tester);
       await tester.pump(const Duration(seconds: 1));
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
   }

@@ -56,16 +56,28 @@ enum SuperTabOutgoingState {
   refused,
 }
 
+/// A message the backend refused, with the tags it was sent with.
+typedef _Refused = ({
+  String operationId,
+  Map<String, dynamic> command,
+  Map<String, String> mentions,
+  String error,
+});
+
 /// A message the reader sent that the transcript does not hold yet.
 class SuperTabOutgoing {
   const SuperTabOutgoing({
     required this.conversationId,
     required this.text,
     required this.state,
+    this.operationId,
     this.replyTo,
     this.error,
   });
   final String conversationId, text;
+
+  /// The send's receipt id, while it is not confirmed.
+  final String? operationId;
   final String? replyTo;
   final SuperTabOutgoingState state;
 
@@ -140,21 +152,25 @@ class SuperTabController extends ChangeNotifier {
       final refused = initial['refused'];
       if (refused is Map) {
         for (final MapEntry(:key, :value) in refused.entries) {
-          if (key is String &&
-              value is Map &&
-              value['command'] is Map &&
-              value['error'] is String) {
-            _refused[key] = (
-              command: superTabMap(value['command']),
-              mentions: {
-                for (final MapEntry(key: agent, value: token) in superTabMap(
-                  value['mentions'],
-                ).entries)
-                  if (token is String) agent: token,
-              },
-              error: value['error'] as String,
-            );
-          }
+          if (key is! String || value is! List) continue;
+          final kept = [
+            for (final row in value)
+              if (row is Map &&
+                  row['operationId'] is String &&
+                  row['command'] is Map &&
+                  row['error'] is String)
+                (
+                  operationId: row['operationId'] as String,
+                  command: superTabMap(row['command']),
+                  mentions: {
+                    for (final MapEntry(key: agent, value: token)
+                        in superTabMap(row['mentions']).entries)
+                      if (token is String) agent: token,
+                  },
+                  error: row['error'] as String,
+                ),
+          ];
+          if (kept.isNotEmpty) _refused[key] = kept;
         }
       }
       if (initial['pending'] is Map) {
@@ -304,16 +320,9 @@ class SuperTabController extends ChangeNotifier {
   /// give back.
   final _sendingMentions = <String, Map<String, String>>{};
 
-  /// Per conversation, the message the backend refused, until it is edited.
-  final _refused =
-      <
-        String,
-        ({
-          Map<String, dynamic> command,
-          Map<String, String> mentions,
-          String error,
-        })
-      >{};
+  /// Per conversation, oldest first, the messages the backend refused, each
+  /// kept until it is sent again or deleted.
+  final _refused = <String, List<_Refused>>{};
   final _drafts = <String, String>{};
   final _terminals = <String, String>{};
   final _mentions = <String, Map<String, String>>{};
@@ -853,11 +862,15 @@ class SuperTabController extends ChangeNotifier {
     if (_refused.isNotEmpty)
       'refused': {
         for (final MapEntry(:key, :value) in _refused.entries)
-          key: {
-            'command': value.command,
-            'mentions': value.mentions,
-            'error': value.error,
-          },
+          key: [
+            for (final refused in value)
+              {
+                'operationId': refused.operationId,
+                'command': refused.command,
+                'mentions': refused.mentions,
+                'error': refused.error,
+              },
+          ],
       },
   };
 
@@ -910,12 +923,14 @@ class SuperTabController extends ChangeNotifier {
     SuperTabOutgoing of(
       Map<String, dynamic> command,
       SuperTabOutgoingState state, {
+      String? operationId,
       String? error,
     }) => SuperTabOutgoing(
       conversationId: id,
       text: command['text'] as String? ?? '',
       replyTo: command['replyTo'] as String?,
       state: state,
+      operationId: operationId,
       error: error,
     );
     final pending = _pending,
@@ -923,6 +938,13 @@ class SuperTabController extends ChangeNotifier {
             ? const <String, dynamic>{}
             : superTabMap(pending['command']);
     return [
+      for (final refused in _refused[id] ?? const <_Refused>[])
+        of(
+          refused.command,
+          SuperTabOutgoingState.refused,
+          operationId: refused.operationId,
+          error: refused.error,
+        ),
       for (final MapEntry(key: messageId, value: sent) in _sent.entries)
         if (sent['conversationId'] == id && !held.contains(messageId))
           of(sent, SuperTabOutgoingState.sending),
@@ -936,46 +958,38 @@ class SuperTabController extends ChangeNotifier {
           saving
               ? SuperTabOutgoingState.sending
               : SuperTabOutgoingState.unconfirmed,
-        ),
-      if (_refused[id] case final refused?)
-        of(
-          refused.command,
-          SuperTabOutgoingState.refused,
-          error: refused.error,
+          operationId: pending['operationId'] as String?,
         ),
     ];
   }
 
-  /// Takes the message refused in [id] back into its draft, tags included,
-  /// and returns the id of the message it replied to.
-  String? editRefused(String id) {
-    final refused = _refused.remove(id);
-    if (refused == null) return null;
-    final text = refused.command['text'] as String? ?? '';
-    final draft = _drafts[id] ?? '';
-    _drafts[id] = draft.trim().isEmpty ? text : '$text\n$draft';
-    (_mentions[id] ??= {}).addAll(refused.mentions);
-    if (operationError == refused.error) {
-      operationError = null;
-      operationErrorCode = null;
+  /// Sends failed [message] again: one with no answer under its own receipt
+  /// id, so it is posted once; a refused one as it was, tags and reply too.
+  Future<Map<String, dynamic>?> retryOutgoing(SuperTabOutgoing message) async {
+    if (message.state == SuperTabOutgoingState.unconfirmed) {
+      return _pending?['operationId'] == message.operationId ? retry() : null;
     }
-    _saveSoon();
-    _changed();
-    return refused.command['replyTo'] as String?;
+    if (saving || _pending != null) return null;
+    final refused = _takeRefused(message);
+    if (refused == null) return null;
+    _sendingMentions[refused.operationId] = refused.mentions;
+    _pending = {'operationId': refused.operationId, 'command': refused.command};
+    return retry();
   }
 
-  /// Removes the failed message in [id] from this chat: the refused one, or
-  /// the one sent without an answer. The second may have arrived after all;
-  /// then the next read shows it, once.
-  void discardOutgoing(String id) {
+  /// Removes failed [message] from its chat: a refused one, or one sent
+  /// without an answer. The second may have arrived after all; then the next
+  /// read shows it, once.
+  void discardOutgoing(SuperTabOutgoing message) {
     final command = _pending == null
         ? const <String, dynamic>{}
         : superTabMap(_pending!['command']);
     final unconfirmed =
+        message.state == SuperTabOutgoingState.unconfirmed &&
         !saving &&
         command['type'] == 'message.send' &&
-        command['conversationId'] == id;
-    if (_refused.remove(id) == null && !unconfirmed) return;
+        _pending!['operationId'] == message.operationId;
+    if (!unconfirmed && _takeRefused(message) == null) return;
     if (unconfirmed) {
       _sendingMentions.remove(_pending!['operationId']);
       _pending = null;
@@ -1988,16 +2002,29 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Keeps a refused [pending] message, with its tags, for Edit.
+  /// Keeps a refused [pending] message, with its tags, for Retry.
   void _refuse(Map<String, dynamic> pending, String error) {
     final command = superTabMap(pending['command']);
     final mentions = _sendingMentions.remove(pending['operationId']);
     if (command['type'] != 'message.send') return;
-    _refused[command['conversationId'] as String] = (
+    (_refused[command['conversationId'] as String] ??= []).add((
+      operationId: pending['operationId'] as String,
       command: command,
       mentions: mentions ?? const {},
       error: error,
-    );
+    ));
+  }
+
+  /// Removes refused [message] from what is kept, and returns it.
+  _Refused? _takeRefused(SuperTabOutgoing message) {
+    if (message.state != SuperTabOutgoingState.refused) return null;
+    final kept = _refused[message.conversationId];
+    final i =
+        kept?.indexWhere((r) => r.operationId == message.operationId) ?? -1;
+    if (i < 0) return null;
+    final refused = kept!.removeAt(i);
+    if (kept.isEmpty) _refused.remove(message.conversationId);
+    return refused;
   }
 
   /// Drops the sends the transcript of [id] holds now.
@@ -2059,7 +2086,6 @@ class SuperTabController extends ChangeNotifier {
     // the next one. Both are in the save made before the request.
     if (_pending case final pending? when !identical(pending, before)) {
       _sendingMentions[pending['operationId'] as String] = tags;
-      _refused.remove(conversationId);
       if (_drafts[conversationId]?.trim() == text) {
         _drafts.remove(conversationId);
         _mentions.remove(conversationId);

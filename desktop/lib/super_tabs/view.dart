@@ -1769,23 +1769,27 @@ class _SuperTabViewState extends State<SuperTabView>
         receipts: [
           SuperTabOutgoingReceipt(
             message: sent,
-            onRetry: c.saving ? null : () => unawaited(c.retry()),
-            onEdit: () => _editRefused(id),
-            onDelete: () => c.discardOutgoing(id),
+            // A refused message goes again only when nothing else is on
+            // its way.
+            onRetry:
+                c.saving ||
+                    (sent.state == SuperTabOutgoingState.refused &&
+                        c.hasPendingAction)
+                ? null
+                : () {
+                    unawaited(c.retryOutgoing(sent));
+                    _focus.requestFocus();
+                  },
+            // The click lands in the transcript; typing goes on in the
+            // composer, as after Reply.
+            onDelete: () {
+              c.discardOutgoing(sent);
+              _focus.requestFocus();
+            },
           ),
         ],
       ),
     );
-  }
-
-  /// Puts the message refused in [id] back in the composer, its reply too.
-  void _editRefused(String id) {
-    final replyTo = c.editRefused(id);
-    final original = c.messages(id).where((m) => m.id == replyTo).firstOrNull;
-    setState(() {
-      if (original != null) _replies[id] = original;
-    });
-    _focus.requestFocus();
   }
 
   Widget _message(

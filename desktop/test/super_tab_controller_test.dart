@@ -333,11 +333,10 @@ void main() {
       controller.outgoing('lead').single.state,
       SuperTabOutgoingState.refused,
     );
-    controller.editRefused('lead');
-    expect(controller.draft('lead'), 'Hold this draft');
     server.reject = false;
-    await controller.send();
-    expect(server.messages, hasLength(1));
+    await controller.retryOutgoing(controller.outgoing('lead').single);
+    expect(server.messages.single['text'], 'Hold this draft');
+    expect(controller.outgoing('lead'), isEmpty);
   });
 
   test(

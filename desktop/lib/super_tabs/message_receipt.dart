@@ -301,19 +301,24 @@ TextStyle superTabReceiptStyle(Color color) => DesktopChrome.metadata(
   color: color,
 ).copyWith(fontSize: 12, fontFeatures: const [FontFeature.tabularFigures()]);
 
-/// An action on a receipt line, read as a link in the line's text.
-Widget _receiptAction(String label, VoidCallback? onPressed, TextStyle style) =>
-    TextButton(
-      onPressed: onPressed,
-      style: TextButton.styleFrom(
-        foregroundColor: DesktopChrome.accent,
-        padding: const EdgeInsets.symmetric(horizontal: 2),
-        minimumSize: const Size(0, 32),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        textStyle: style,
-      ),
-      child: Text(label),
-    );
+/// An action on a receipt line, read as a link in the line's text; a
+/// destructive one passes the error [color].
+Widget _receiptAction(
+  String label,
+  VoidCallback? onPressed,
+  TextStyle style, {
+  Color? color,
+}) => TextButton(
+  onPressed: onPressed,
+  style: TextButton.styleFrom(
+    foregroundColor: color ?? DesktopChrome.accent,
+    padding: const EdgeInsets.symmetric(horizontal: 2),
+    minimumSize: const Size(0, 32),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    textStyle: style,
+  ),
+  child: Text(label),
+);
 
 /// The line under a message: [parts] in a row that wraps, announced as it
 /// changes, with [below] under it.
@@ -345,12 +350,11 @@ class SuperTabOutgoingReceipt extends StatelessWidget {
     required this.message,
     required this.onDelete,
     this.onRetry,
-    this.onEdit,
   });
   final SuperTabOutgoing message;
 
   /// Null while it cannot be done now, as during another send.
-  final VoidCallback? onRetry, onEdit;
+  final VoidCallback? onRetry;
   final VoidCallback onDelete;
 
   @override
@@ -383,12 +387,9 @@ class SuperTabOutgoingReceipt extends StatelessWidget {
         Text(message.error!, style: style),
       ],
       Text('·', style: style),
-      if (refused)
-        _receiptAction('Edit', onEdit, style)
-      else
-        _receiptAction('Retry', onRetry, style),
+      _receiptAction('Retry', onRetry, style),
       Text('·', style: style),
-      _receiptAction('Delete', onDelete, style),
+      _receiptAction('Delete', onDelete, style, color: color),
     ]);
   }
 }
