@@ -2641,8 +2641,6 @@ async function logsExportCommand(json: boolean): Promise<void> {
 }
 
 import { orchestratorCommand } from './orchestrator/command.js'
-import { superTabCommand } from './superTabs/command.js'
-import { gitCredentialCommand } from './superTabs/gitCredential.js'
 import { paneOwner, sendCommand } from './messages/command.js'
 import { agentOrigin, closeCommand, psCommand, replyCommand, showCommand, tellCommand, waitCommand, whoamiCommand } from './agentClient/commands.js'
 import { agentsHelp, helpFor } from './agentClient/help.js'
@@ -2726,12 +2724,14 @@ switch (cmd) {
   case 'orchestrator':
     orchestratorCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
+  // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
+  // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
   case 'super-tab':
-    superTabCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    import('./superTabs/command.js').then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
-    gitCredentialCommand(rest).then(code => { process.exitCode = code }).catch(onError)
+    import('./superTabs/gitCredential.js').then(({ gitCredentialCommand }) => gitCredentialCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'login': {
     // The result line goes out FIRST (loginCommand prints it), then the daemon is swapped onto the

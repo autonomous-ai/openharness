@@ -164,7 +164,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     try { return await core.superTabRequest!(payload) } catch { return { error: 'SERVICE_UNAVAILABLE' } }
   }
   // How many attached devices asked for Swarm cards, and which Swarms the desktop has tabs for (read first). The core keeps
-  // whether they are wanted (core/superTabCards.ts); this says it on a change and again when the core connects anew.
+  // whether they are wanted (superTabs/inCore/cards.ts); this says it on a change and again when the core connects anew.
   let cardDevices = 0
   let cardInclude: string[] = []
   const tellCards = (): void => { void askCards({ action: 'cardsWanted', on: cardDevices > 0, include: cardDevices > 0 ? cardInclude : [] }) }
@@ -441,7 +441,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       const close = cableQuestionCloseFor(frame as Parameters<typeof cableQuestionCloseFor>[0])
       if (close) { inOrder(close.agentId, () => { void cable.questionClose(close.agentId, close.requestId) }); return }
       const question = cableQuestionFor(frame as Parameters<typeof cableQuestionFor>[0])
-      // A Super Tab member waiting on a person (core/superTabAttention.ts) is an alert as any question is.
+      // A Super Tab member waiting on a person (superTabs/inCore/attention.ts) is an alert as any question is.
       if (question) { tally(cableHost.describe(question.agentId)?.name ?? '', 'alert', question.superTab ? 'rule:super-tab' : 'rule:question', 'question', 0); inOrder(question.agentId, () => { void cable.question(question.agentId, question.requestId, question.questions, question.superTab) }); return }
       // A shell result is only the stats' input: the dial is told the sums when the turn ends.
       const ran = frame as { type?: string; agentId?: string; payload?: { kind?: string; id?: string; command?: string; isError?: boolean; outputTail?: string } }

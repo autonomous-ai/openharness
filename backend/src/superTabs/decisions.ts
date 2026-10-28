@@ -77,6 +77,11 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */
 const waiting: Prisma.SuperTabDecisionWhereInput = { OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }
 
+/** Whether a person's decision asked in this conversation still waits: a group that has one is never archived by itself. */
+export async function waitingIn(tx: Tx, tabId: string, conversationId: string): Promise<boolean> {
+  return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
+}
+
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
  *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
 const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>
@@ -116,17 +121,29 @@ function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisio
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }
 
+/** What an access check reads of a conversation (projects.ts canReadGroup). */
+const ACCESS_FIELDS = ['id', 'kind', 'projectId', 'audience'] as const
+
 /** The conversations [ids] names: those the read loaded, and the rest (quiet, archived, or left out of a light read) read
- *  here, so a decision in one still counts. A deleted conversation is none. */
-async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids: string[]): Promise<Map<string, Conversation>> {
-  const found = new Map(state.conversations.filter(c => ids.includes(c.id)).map(c => [c.id, c]))
-  const missing = [...new Set(ids.filter(id => !found.has(id)))]
-  if (missing.length) {
-    for (const row of await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })) {
-      found.set(row.key, row.data as unknown as Conversation)
-    }
-  }
+ *  here, so a decision in one still counts. With [only], the rest bring only those fields. A deleted conversation is none. */
+async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids: string[],
+  only?: readonly string[]): Promise<Map<string, Conversation>> {
+  const named = new Set(ids)
+  const found = new Map(state.conversations.filter(c => named.has(c.id)).map(c => [c.id, c]))
+  const missing = [...named].filter(id => !found.has(id))
+  if (!missing.length) return found
+  const rows = only
+    ? await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: missing } } },
+      { $project: { _id: 0, key: 1, ...Object.fromEntries(only.map(field => [`data.${field}`, 1])) } }] }) as unknown as Array<{ key: string; data: unknown }>
+    : await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })
+  for (const row of rows) found.set(row.key, row.data as Conversation)
   return found
+}
+
+/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions. */
+const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conversation>, conversationId: string) => {
+  const group = groups.get(conversationId)
+  return group && canReadGroup(state, actor, group) ? group : undefined
 }
 
 /** ponytail: capped at 200 per state, newest first; page it if a reader ever has more. */
@@ -135,9 +152,8 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
     orderBy: { createdAt: 'desc' }, take: 200 })
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
   return rows.flatMap(row => {
-    const group = groups.get(row.conversationId)
-    // Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions.
-    return group && canReadGroup(state, actor, group) ? [{ row, group }] : []
+    const group = readableIn(state, actor, groups, row.conversationId)
+    return group ? [{ row, group }] : []
   })
 }
 
@@ -150,10 +166,14 @@ export async function waitingInProject(tx: Tx, tabId: string, projectId: string)
 }
 
 /** A person's open decisions: how many, and a digest of which. A client reads its list again when the digest moves, as
- *  when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Never what they ask. */
+ *  when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Read on every poll, so
+ *  only each one's id and conversation, and each quiet conversation's access fields: never what they ask, nor a brief. Not
+ *  capped: a cap counted rows the reader cannot open and left out ones they can, so the badge undercounted. */
 export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabState,
   actor: Extract<Actor, { kind: 'person' }>): Promise<{ count: number; digest: string }> {
-  const ids = (await readable(tx, tabId, state, actor, true)).map(({ row }) => row.id).sort()
+  const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), waiting] }, select: { id: true, conversationId: true } })
+  const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId), ACCESS_FIELDS)
+  const ids = rows.filter(row => readableIn(state, actor, groups, row.conversationId)).map(row => row.id).sort()
   return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 

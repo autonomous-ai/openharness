@@ -67,7 +67,9 @@ export async function sweepWorktrees(input: {
   return removed
 }
 
-async function sweepOne(path: string, now: number, idleMs: number): Promise<boolean> {
+/** Removes one worktree under the rule above: true when it went. The Swarm's host calls it with no idle wait for a worker
+ *  it just stopped (superTabs/machines.ts `removeStoppedWorktree`). */
+export async function sweepOne(path: string, now: number, idleMs: number): Promise<boolean> {
   const gitDir = resolve(path, await git(path, ['rev-parse', '--git-dir']))
   const common = resolve(path, await git(path, ['rev-parse', '--git-common-dir']))
   if (gitDir === common || basename(common) !== '.git') return false

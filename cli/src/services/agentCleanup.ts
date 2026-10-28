@@ -17,7 +17,9 @@
  *   theirs from then on, and kept so in `<data>/agent-cleanup.json` across restarts. A harness the person started is
  *   never one this may close: the core refuses (`CoreApi.agents.closeStarted`).
  * - **Keep shared members.** Super Tab membership also protects a harness from both forms of cleanup, even when its
- *   terminal is hidden or its host is offline. Only a confirmed roster removal releases that protection.
+ *   terminal is hidden or its host is offline. Only a confirmed roster removal releases that protection. The Swarm hands
+ *   that membership in while it is on (`retained`); off (`HARNESS_SWARM`), its saved roster is not read and such a
+ *   harness is cleaned up as any other.
  *
  * A close keeps the conversation, as `harness close` does: the person can resume it, and `harness show` still reads its
  * answer. One line in the log for each close.
@@ -27,7 +29,6 @@ import { dirname, join } from 'node:path'
 import type { AgentCleanupPort, CoreApi, CorePorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { retainedHarnesses } from '../superTabs/retention.js'
 
 /** How long a harness another agent started may sit idle after its last answer before it is closed. */
 export const IDLE_CLOSE_MS = 30 * 60_000
@@ -55,7 +56,12 @@ export interface AgentCleanupDeps {
   every?: (ms: number, look: () => void) => () => void
   /** Waits [ms] before a starter's harnesses are tried again. */
   wait?: (ms: number) => Promise<void>
+  /** The Super Tab members the Swarm keeps here (superTabs/retention.ts `retainedHarnesses`, through
+   *  superTabs/inServices.ts): absent while the Swarm is off, when none is kept. */
+  retained?: (dataDir: string) => ReadonlySet<string>
 }
+
+const NONE_RETAINED: ReadonlySet<string> = new Set()
 
 function readJoined(file: string): Map<string, number> {
   try {
@@ -78,6 +84,7 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   const log = deps.log ?? ((line: string) => console.log(line))
   const refresh = deps.refresh ?? (async () => {})
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((done) => { setTimeout(done, ms).unref() }))
+  const retainedHarnesses = deps.retained ?? (() => NONE_RETAINED)
   const file = joinedPath(core.dataDir)
   const joined = readJoined(file)
   /** When one that would not close may be asked again. */
@@ -220,6 +227,6 @@ export function createAgentCleanup(core: CoreApi, deps: AgentCleanupDeps = {}) {
   return { port, look, closeStartedBy }
 }
 
-export function startAgentCleanup(core: CoreApi, ports: CorePorts): void {
-  ports.agentCleanup = createAgentCleanup(core).port
+export function startAgentCleanup(core: CoreApi, ports: CorePorts, retained?: AgentCleanupDeps['retained']): void {
+  ports.agentCleanup = createAgentCleanup(core, retained ? { retained } : {}).port
 }
