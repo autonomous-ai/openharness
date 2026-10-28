@@ -1490,6 +1490,8 @@ model SwarmAgent {
   @@index([tabId, changedAt])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
+  /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
+  @@index([key, deleted])
 }
 
 /// One machine the Swarm references, contributed or not: its contribution and observation, and its slot ledger.

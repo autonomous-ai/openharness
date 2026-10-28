@@ -151,6 +151,8 @@ describe('the harness shares list on a Swarm-sized database', () => {
     process.stdout.write(`harness shares list reads: ${JSON.stringify(reads)}\n`)
     for (const read of reads) {
       expect(read.plans.filter(p => p.startsWith('COLLSCAN')), read.collection).toEqual([])
+      // Prisma's `in` is planned as one index scan per value (an OR of N branches), each read planned anew: one $in scan instead.
+      expect(read.plans.filter(p => p.includes('}, IXSCAN')), read.collection).toEqual([])
       expect(read.docsExamined, read.collection).toBeLessThanOrEqual(read.returned + 2)
     }
   })
