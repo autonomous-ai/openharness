@@ -8,6 +8,9 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
+import { revokeNativeContexts } from '../src/superTabs/native.js'
+import { outsider, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import type { SuperTabState } from '../src/superTabs/model.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 // Prod Mongo spent hours an hour on the message page's delivery read (2026-10-28): Prisma sends `messageId in [...]` as an
@@ -157,5 +160,79 @@ describe('route decision list', () => {
     expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
     expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
     expect(await recentDecisions(db, 'B', [])).toEqual([])
+  })
+})
+
+// Every command revokes the terminal contexts its change of access ends (native.ts). On 2026-10-28 that read ran on every
+// command, rebuilt from who could not read what rather than from what changed: each viewer, and each member outside each
+// private conversation, became an $or branch tested against every open context of the Swarm (prod mean 965 ms).
+describe('terminal context revoke', () => {
+  const context = (id: string, conversationId: string, userId: string) => ({ id, tabId: 'tab', conversationId, agentId: 'agent', userId, binding: {} })
+  const revoked = async () => (await db.superTabNativeContext.findMany({ where: { tabId: 'tab', revoked: true }, select: { id: true } })).map(row => row.id).sort()
+
+  /** A Swarm with a viewer and a private project its other members cannot read: what made every command revoke before. */
+  function scene() {
+    const s = swarm()
+    s.join(peer)
+    s.join(outsider)
+    const open = s.group('Open work'), done = s.group('Done work')
+    const secret = s.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).projectId as string
+    const hidden = s.group('Secret work', secret)
+    return { s, open, done, hidden, projectId: s.state.conversations.find(c => c.id === open)!.projectId as string }
+  }
+
+  it('sends no query for a command that changes no one\'s access', async () => {
+    await db.superTabNativeContext.deleteMany({})
+    const { s, open, hidden } = scene()
+    s.edit(state => { state.people.find(p => p.id === outsider.userId)!.role = 'viewer' })
+    await db.superTabNativeContext.createMany({ data: [context('owner-open', open, s.state.ownerId), context('owner-secret', hidden, s.state.ownerId)] })
+    const before = structuredClone(s.state) as SuperTabState
+    s.run({ type: 'message.send', conversationId: open, text: 'Status?', replyTo: null, recipientIds: [] })
+    const [, profile] = await profiled('SuperTabNativeContext', () => revokeNativeContexts(db, before, s.state))
+    expect(profile).toEqual({ plans: [], docsExamined: 0, returned: 0 })
+    expect(await revoked()).toEqual([])
+  })
+
+  it('revokes at once a removal, a lost conversation and an archive made by one change, and cancels their waiting turns', async () => {
+    await db.superTabNativeContext.deleteMany({})
+    await db.superTabDelivery.deleteMany({ where: { tabId: 'tab' } })
+    const { s, open, done, projectId } = scene()
+    await db.superTabNativeContext.createMany({ data: [context('peer-open', open, peer.userId), context('outsider-open', open, outsider.userId),
+      context('owner-done', done, s.state.ownerId), context('owner-open', open, s.state.ownerId)] })
+    await db.superTabDelivery.create({ data: { id: 'turn', tabId: 'tab', conversationId: open, messageId: 'm', nativeContextId: 'peer-open', agentId: 'agent',
+      machineId: 'host', membershipGeneration: 'gen', authorKind: 'person', authorId: peer.userId, authorGeneration: 'gen', status: 'queued' } })
+    const before = structuredClone(s.state) as SuperTabState
+    s.run({ type: 'member.remove', userId: peer.userId })
+    s.run({ type: 'project.sharing', projectId, visibility: 'private', memberIds: [] })
+    s.run({ type: 'conversation.archive', conversationId: done, archived: true })
+    await revokeNativeContexts(db, before, s.state)
+    expect(await revoked()).toEqual(['outsider-open', 'owner-done', 'peer-open'])
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: 'turn' } })).status).toBe('cancelled')
+  })
+
+  // A session in a private conversation reads it (projects.ts confidentialSession): only its machine's owner may watch or drive it
+  // from then on. A command can no longer put a Builder there; a session marked before that rule, or made so by the shared
+  // rule's next change, is revoked through the same watchersLost comparison.
+  it('revokes at once everyone\'s terminals on an agent that joins a private conversation, but its machine\'s owner\'s', async () => {
+    await db.superTabNativeContext.deleteMany({})
+    const { s, open } = scene()
+    const worker = s.add('builder-harness', open, false, peer, 'host', peer.userId)
+    await db.superTabNativeContext.createMany({ data: [{ ...context('peer-worker', open, peer.userId), agentId: worker },
+      { ...context('outsider-worker', open, outsider.userId), agentId: worker }, { ...context('owner-worker', open, s.state.ownerId), agentId: worker }] })
+    const before = structuredClone(s.state) as SuperTabState
+    const chat = s.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: [peer.userId] } }, peer).conversationId as string
+    s.edit(state => { state.conversations.find(c => c.id === chat)!.agentIds.push(worker) })
+    await revokeNativeContexts(db, before, s.state)
+    expect(await revoked()).toEqual(['outsider-worker', 'owner-worker'])
+  })
+
+  it('revokes the contexts of a person made a viewer', async () => {
+    await db.superTabNativeContext.deleteMany({})
+    const { s, open } = scene()
+    await db.superTabNativeContext.createMany({ data: [context('peer-open', open, peer.userId), context('owner-open', open, s.state.ownerId)] })
+    const before = structuredClone(s.state) as SuperTabState
+    s.edit(state => { state.people.find(p => p.id === peer.userId)!.role = 'viewer' })
+    await revokeNativeContexts(db, before, s.state)
+    expect(await revoked()).toEqual(['peer-open'])
   })
 })

@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -16,7 +16,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVA
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
@@ -39,10 +39,10 @@ import type { HoldReason } from './holdReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
-import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
+import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -218,6 +218,13 @@ export interface SuperTabStoreHooks {
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
+  /** A terminal request was answered or refused, after the commit (lib/bus.ts tells every instance). It must not throw. */
+  terminalAnswered?: (requestId: string) => void
+  /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
+  watchTerminal?: (requestId: string, onChange: () => void) => Promise<() => void>
+  /** Who may watch an agent's terminal in this Swarm may have narrowed, after the commit: its observer sockets check again
+   *  at once (lib/observerWs.ts). It must not throw. */
+  accessChanged?: (tabId: string) => void
   /** The read cache this store reads through (cache.ts): the process's by default, none when null. */
   readCache?: SwarmCache | null
   /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
@@ -741,7 +748,7 @@ export class SuperTabStore {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
-      const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state), otherWorkspace.includes(pool.machineId))
+      const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
       return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
     }) } }
@@ -922,8 +929,10 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
-        context.openDecisions = await fullFor(tx, tabId, { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId,
-          conversationId: command.conversationId, question: command.result })
+        const ask = { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId, conversationId: command.conversationId,
+          question: command.result }
+        context.repeatedDecision = await repeatOf(tx, tabId, ask) ?? null
+        context.openDecisions = context.repeatedDecision ? null : await fullFor(tx, tabId, ask)
       }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
@@ -1111,6 +1120,10 @@ export class SuperTabStore {
       }
       if (command.type === 'project.delete' || command.type.startsWith('project.role')) await this.writeRoleTexts(tx, tabId, effects.state, command)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
+      if (this.hooks.accessChanged && watchingNarrowed(original, effects.state)) {
+        const told = this.hooks.accessChanged
+        afterCommit(tx, () => told(tabId))
+      }
       if (command.type === 'work.cancel') {
         await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
       }
@@ -1416,34 +1429,57 @@ export class SuperTabStore {
     const answered = await tx.superTabTerminalRequest.updateMany({ where: { id: effect.id, tabId, status: 'claimed', claimedAt: { gte: new Date(now - TERMINAL_ANSWER_MS) } },
       data: { status: 'done', ok: effect.ok, result: effect.text, error: effect.error } })
     if (!answered.count) fail('REQUEST_CLOSED', 'This terminal request is no longer waiting for an answer.')
+    this.terminalAnswered(tx, effect.id)
   }
 
-  /** The requester alone reads the answer, once: the screen text is deleted as it is returned. Waits up to `waitMs` for it. */
+  private terminalAnswered(tx: Transaction, requestId: string) {
+    const told = this.hooks.terminalAnswered
+    if (told) afterCommit(tx, () => told(requestId))
+  }
+
+  /** The requester alone reads the answer, once: the screen text is deleted as it is returned. Waits up to `waitMs` for it,
+   *  reading again when the host's answer or refusal is told, when the request turns late, or every few seconds unwoken. */
   async terminalResult(user: AuthUser, tabId: string, requestId: string, asAgentId?: string, waitMs = 0) {
     const deadline = Date.now() + waitMs
-    for (;;) {
-      const answer = await transaction(this.db, async tx => {
-        const { state } = await this.load(tx, user, tabId)
-        const actor = await this.actor(tx, user, state, asAgentId)
-        author(state, actor)
-        const now = this.now()
-        const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
-        if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
-        // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
-        mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
-        const late = row.status === 'pending' && now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
-          ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
-          : row.status === 'claimed' && now - row.claimedAt!.getTime() > TERMINAL_ANSWER_MS
-            ? 'The agent’s machine picked up the request but did not answer within 30 seconds.' : null
-        if (row.status !== 'done' && !late) return null
-        await tx.superTabTerminalRequest.delete({ where: { id: row.id } })
-        if (late || !row.ok) return { requestId, ok: false, error: late ?? row.error }
-        return { requestId, ok: true, ...(row.result !== null ? { text: row.result } : {}) }
-      })
-      if (answer) return answer
-      if (Date.now() >= deadline) return { requestId, pending: true }
-      await new Promise(resolve => setTimeout(resolve, 250))
-    }
+    let told = false, done = false, wake = () => {}, stop = () => {}
+    // Never awaited: while Redis is down a subscribe waits for it, and the wait reads on its own clock meanwhile.
+    if (waitMs > 0) this.hooks.watchTerminal?.(requestId, () => { told = true; wake() })
+      .then(dispose => { if (done) dispose(); else stop = dispose }, () => {})
+    try {
+      for (;;) {
+        told = false
+        const { answer, lateIn } = await transaction(this.db, async tx => {
+          const { state } = await this.load(tx, user, tabId)
+          const actor = await this.actor(tx, user, state, asAgentId)
+          author(state, actor)
+          const now = this.now()
+          const row = await tx.superTabTerminalRequest.findFirst({ where: { id: requestId, tabId, createdAt: { gte: new Date(now - TERMINAL_EXPIRY_MS) } } })
+          if (!row || row.requesterKey !== actorKey(actor)) fail('NOT_FOUND', 'This terminal request is unavailable.', 404)
+          // A sender who has since lost write access, or is no longer the agent's project Lead, gets nothing.
+          mayDrive(state, actor, agent(state, row.agentId), await this.confidential(tx, row.agentId))
+          // How long until a request still waiting turns late by itself.
+          const lateIn = row.status === 'pending' ? row.createdAt.getTime() + TERMINAL_PICKUP_MS - now
+            : row.status === 'claimed' ? row.claimedAt!.getTime() + TERMINAL_ANSWER_MS - now : 0
+          const late = row.status === 'pending' && lateIn < 0
+            ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
+            : row.status === 'claimed' && lateIn < 0
+              ? 'The agent’s machine picked up the request but did not answer within 30 seconds.' : null
+          if (row.status !== 'done' && !late) return { answer: null, lateIn }
+          await tx.superTabTerminalRequest.delete({ where: { id: row.id } })
+          if (late || !row.ok) return { answer: { requestId, ok: false, error: late ?? row.error }, lateIn }
+          return { answer: { requestId, ok: true, ...(row.result !== null ? { text: row.result } : {}) }, lateIn }
+        })
+        if (answer) return answer
+        const left = deadline - Date.now()
+        if (left <= 0) return { requestId, pending: true }
+        if (told) continue
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(resolve, Math.min(left, lateIn + 1, TERMINAL_RECHECK_MS))
+          wake = () => { clearTimeout(timer); resolve() }
+        })
+        wake = () => {}
+      }
+    } finally { done = true; stop() }
   }
 
   /** Each waiting request for this host's agents is handed over once. One that waited too long, or whose terminal, agent or
@@ -1467,7 +1503,8 @@ export class SuperTabStore {
           ? 'The agent’s machine did not pick up the request within 10 seconds. It may be offline or asleep.'
           : await this.terminalRefusal(tx, states.get(row.tabId)!, row)
         if (refusal) {
-          await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
+          const refused = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'done', ok: false, error: refusal } })
+          if (refused.count) this.terminalAnswered(tx, row.id)
           continue
         }
         const claimed = await tx.superTabTerminalRequest.updateMany({ where: { id: row.id, status: 'pending' }, data: { status: 'claimed', claimedAt: new Date(now) } })
@@ -1580,12 +1617,15 @@ export class SuperTabStore {
       ...(forward ? past(cursor.after!, cursor.afterId, 'gt') : cursor.before !== undefined ? past(cursor.before, cursor.beforeId, 'lt') : {}) }
     // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
     // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
+    // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again.
     const rows: SuperTabMessage[] = []
-    for (let skip = 0; rows.length <= 100; skip += 101) {
-      const order = forward ? 'asc' as const : 'desc' as const
-      const batch = await tx.superTabMessage.findMany({ where, orderBy: [{ sequence: order }, { id: order }], skip, take: 101 })
+    const order = forward ? 'asc' as const : 'desc' as const
+    for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
+      const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
+        orderBy: [{ sequence: order }, { id: order }], take: 101 })
       rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
       if (batch.length < 101) break
+      edge = batch.at(-1)
     }
     const page = rows.slice(0, 100)
     const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null

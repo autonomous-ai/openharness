@@ -190,6 +190,32 @@ export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent,
   return canReadAgent(state, actor, target) && (!isConfidential(state, target, elsewhere) || ownSession(actor, target))
 }
 
+/** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
+ *  watches: machine, harness and machine owner): a person left, the agent left, its project stopped being shared with them,
+ *  or the session turned confidential, by whatever command. Each such agent, with the people who lost it. Its observer
+ *  sockets then check again (watchingNarrowed), and those people's terminals on it are revoked (native.ts). */
+export function watchersLost(before: SuperTabState, after: SuperTabState): Array<{ agentId: string; personIds: string[] }> {
+  const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
+  const now = new Map(after.agents.map(a => [session(a), a]))
+  // canWatchAgent per person, with the agent's confidentiality read once per state.
+  const watchers = (state: SuperTabState, target: Agent) => {
+    const confidential = isConfidential(state, target)
+    return state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
+      .filter(actor => canReadAgent(state, actor, target) && (!confidential || ownSession(actor, target)))
+  }
+  return before.agents.flatMap(target => {
+    const was = watchers(before, target)
+    if (!was.length) return []
+    const still = now.get(session(target))
+    const is = new Set(still ? watchers(after, still).map(actor => actor.userId) : [])
+    const lost = was.filter(actor => !is.has(actor.userId)).map(actor => actor.userId)
+    return lost.length ? [{ agentId: target.id, personIds: lost }] : []
+  })
+}
+
+/** Whether a commit narrows who may watch any agent's terminal (watchersLost). */
+export const watchingNarrowed = (before: SuperTabState, after: SuperTabState): boolean => watchersLost(before, after).length > 0
+
 /** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
 export const ownSession = (actor: Actor, target: Agent): boolean =>
   actor.kind === 'person' ? actor.userId === target.machineOwnerId : actor.agentId === target.id

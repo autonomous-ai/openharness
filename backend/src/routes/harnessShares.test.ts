@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
-    machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() } },
+    machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() }, harnessLink: { findMany: vi.fn() } },
   mayOpenShare: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
 vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayOpenShare = mocks.mayOpenShare } }))
@@ -32,6 +32,7 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.machine.findMany.mockResolvedValue([machine])
     mocks.prisma.user.findMany.mockResolvedValue([{ id: owner.sub, name: 'D', email: owner.email }])
     mocks.prisma.harnessShare.findMany.mockResolvedValue([])
+    mocks.prisma.harnessLink.findMany.mockResolvedValue([])
     mocks.prisma.harnessShare.updateMany.mockResolvedValue({ count: 1 })
     mocks.presence.mockResolvedValue(new Map([['m1', true]]))
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
@@ -188,6 +189,16 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
     expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
+  })
+  it('makes the viewers of the agent’s private links check again when the invitation behind them changes', async () => {
+    const id = randomUUID()
+    mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, ...input(), ownerId: 'owner', autonomousEnv: 'prod', superTabId: null,
+      revokedAt: new Date(), expiresAt: new Date(input().expiresAt) })
+    mocks.prisma.harnessLink.findMany.mockResolvedValue([{ id: 'link-1' }, { id: 'link-2' }])
+    expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
+    expect(mocks.prisma.harnessLink.findMany).toHaveBeenCalledWith({ where: { ownerId: 'owner', machineId: 'm1', agentId: 'agent-1',
+      autonomousEnv: 'prod', revokedAt: null, visibility: { not: 'public' } }, select: { id: true } })
+    expect(mocks.changed.mock.calls).toEqual([[id], ['link-1'], ['link-2']])
   })
   it('invites an address with no account yet, and survives the lookup failing, without telling anyone', async () => {
     const id = randomUUID(), remove = () => app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })
