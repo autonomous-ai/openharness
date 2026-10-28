@@ -3429,7 +3429,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
 
   it('refuses a prompt for an engine with no documented mechanism, naming the engine', async () => {
     const { seen, reply } = await create({ engine: 'cursor', prompt: 'Start a local model on this machine' })
-    expect(reply).toMatchObject({ error: 'PROMPT_UNSUPPORTED', detail: expect.stringContaining('cursor') })
+    expect(reply).toMatchObject({ error: 'PROMPT_UNSUPPORTED', detail: expect.stringContaining('Cursor cannot start with a first message') })
     expect(seen).toHaveLength(0)
   })
 
