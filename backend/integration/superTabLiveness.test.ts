@@ -258,8 +258,12 @@ describe('work that loses its owner', () => {
   describe('a lost notice already stored', () => {
     const lostIds = (f: Awaited<ReturnType<typeof swarm>>) =>
       ({ lead: stableId('work-lost', f.assignmentId, String(f.clock.now)), agent: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') })
-    const store = (f: Awaited<ReturnType<typeof swarm>>, id: string, text: string, conversationId = f.group) => db.superTabMessage.create({ data: { id,
-      tabId: f.tab, conversationId, sequence: 1, author: { kind: 'agent', id: f.lead }, source: { kind: 'work-lost', agentId: f.worker, assignmentId: f.assignmentId },
+    const STOPPED = 'its session on Worker Mac stopped'
+    /** Stores `text` under `id` as the loss notice the time checks write for this task, or as one with `source` changed. */
+    const store = (f: Awaited<ReturnType<typeof swarm>>, id: string, text: string,
+      { conversationId = f.group, source = {} }: { conversationId?: string; source?: Record<string, unknown> } = {}) => db.superTabMessage.create({ data: { id,
+      tabId: f.tab, conversationId, sequence: 1, author: { kind: 'agent', id: f.lead },
+      source: { kind: 'work-lost', agentId: f.worker, assignmentId: f.assignmentId, reason: STOPPED, ...source },
       text, replyTo: null, recipientIds: [], mentions: [] } })
 
     it('is kept on its machine\'s report, and the Lead and the worker still receive it', async () => {
@@ -278,7 +282,7 @@ describe('work that loses its owner', () => {
       const f = await swarm()
       await f.observe('test-host', [f.harness.worker])
       f.clock.now += 3 * MINUTE
-      await store(f, lostIds(f).lead, 'Stored for the Lead')
+      await store(f, lostIds(f).lead, 'Stored for the Lead', { source: { reason: 'its machine Worker Mac has been offline for 2 minutes' } })
       expect((await f.leadInbox()).map(m => m.text)).toContain('Stored for the Lead')
       expect(await f.assignment()).toMatchObject({ status: 'lost' })
     })
@@ -298,9 +302,24 @@ describe('work that loses its owner', () => {
     it('still refuses a stored message that is not this notice', async () => {
       const f = await swarm()
       f.clock.now += MINUTE
-      await store(f, lostIds(f).lead, 'Another message', 'lead')
+      await store(f, lostIds(f).lead, 'Another message', { conversationId: 'lead' })
       await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
       expect(await f.assignment()).toMatchObject({ status: 'working' })
+    })
+
+    // Review of #2034: a loss notice of another task, or of another worker, is not this loss; kept, it would be delivered as it.
+    it.each([
+      ['another task', { assignmentId: 'another-assignment' }],
+      ['another worker', { agentId: 'another-agent' }],
+      ['another reason', { reason: 'it hit a usage limit until 12:00 UTC' }],
+    ])('still refuses a stored loss notice of %s, and delivers nothing', async (_, source) => {
+      const f = await swarm()
+      f.clock.now += MINUTE
+      const ids = lostIds(f)
+      await store(f, ids.lead, 'Another loss', { source })
+      await expect(f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })).rejects.toThrow('Unique constraint failed')
+      expect(await f.assignment()).toMatchObject({ status: 'working' })
+      expect(await db.superTabDelivery.count({ where: { tabId: f.tab, messageId: { in: [ids.lead, ids.agent] } } })).toBe(0)
     })
   })
 

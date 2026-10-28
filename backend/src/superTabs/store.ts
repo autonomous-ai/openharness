@@ -1,5 +1,6 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
@@ -1652,14 +1653,15 @@ export class SuperTabStore {
 
   /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. The time
    *  checks of a machine's report and of a Lead's poll pass `keepStored`: a notice of theirs already stored as that same
-   *  notice (its Swarm, conversation and kind) is kept, and only its missing deliveries are written. One duplicate had
-   *  stopped every later report and poll (2026-10-28); any other message under the id still fails. */
+   *  notice (its Swarm, its conversation and its whole source: the kind, and for a loss its worker, task and reason) is
+   *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
+   *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
     keepStored = false) {
     const stored = keepStored && messages.length ? await tx.superTabMessage.findMany({ where: { id: { in: messages.map(m => m.id) } },
       select: { id: true, tabId: true, conversationId: true, source: true } }) : []
     const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
-      && (row.source as { kind?: unknown } | null)?.kind === m.source?.kind)).map(row => row.id))
+      && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
     if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []
     let deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
