@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
@@ -134,6 +134,24 @@ describe('the leaderboard read', () => {
     expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK + 1}`)).status).toBe(400)
     expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK - 5 * WEEK_MS}`)).status).toBe(400)
     expect((await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK + WEEK_MS}`)).status).toBe(400)
+  })
+
+  it('names people by their profile name, else their email, and scores last week for the arrow', async () => {
+    const s = await scene()
+    await db.user.update({ where: { id: peer.sub }, data: { name: 'Peer Person' } })
+    onTestFinished(() => db.user.update({ where: { id: peer.sub }, data: { name: null } }).then(() => undefined))
+    const { body } = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead`)
+    expect(score(body, peer.sub)).toMatchObject({ displayName: 'Peer Person', points: 3, prevWeekPoints: 3 })
+    expect(score(body, owner.sub).displayName).toBe('owner')
+  })
+
+  it('details what each person shipped, a dormant group\'s too, and never a private chat\'s title', async () => {
+    const s = await scene()
+    const now = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead`, peer)
+    expect(score(now.body, peer.sub).details).toEqual({ shipped: [{ title: 'Fresh', prUrl: PR, mergedAt: NOW - HOUR }], unblocked: [], lent: [] })
+    expect(JSON.stringify(now.body.data)).not.toMatch(/Peer and PM|Hidden/)
+    const last = await get(`/api/super-tabs/${s.tabId}/leaderboard?projectId=lead&week=${WEEK - WEEK_MS}`, peer)
+    expect(score(last.body, peer.sub).details.shipped).toEqual([{ title: 'Old', prUrl: PR, mergedAt: WEEK - 2 * 86_400_000 }])
   })
 
   it('leaves the ledger out of the groups every reader loads', async () => {
