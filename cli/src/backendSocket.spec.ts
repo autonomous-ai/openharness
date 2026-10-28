@@ -46,6 +46,7 @@ import { LocalModels } from './lib/localModels.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
+import { supportsFirstPrompt } from './lib/engineLaunch.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -1880,6 +1881,29 @@ describe('BackendSocket outbound queue', () => {
     finishProbe()
     await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
     await socket.unregisterLocalClient('local:create')
+    await socket.stop()
+  })
+
+  it('answers engines_probe with whether this machine can start each engine with a first prompt (#1788)', async () => {
+    const socket = relaySocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:probe', {
+      sendFrame: (frame) => { frames.push(frame); return true },
+      sendBinary: () => true,
+    })
+    socket.engineProbeProvider = async () => [
+      { engine: 'claude', installed: true, command: 'claude', installable: true, signedIn: true },
+      { engine: 'cursor', installed: false, command: 'cursor-agent', installable: true },
+    ] as never
+    socket.handleLocalFrame('local:probe', { type: 'engines_probe', payload: { requestId: 'probe-fp' } })
+    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
+    const reply = frames.find((frame) => frame.type === 'engines_probe_result')!.payload as {
+      engines: Array<{ engine: string; firstPrompt: boolean }>
+    }
+    const firstPrompt = Object.fromEntries(reply.engines.map((entry) => [entry.engine, entry.firstPrompt]))
+    expect(firstPrompt).toEqual({ claude: supportsFirstPrompt('claude'), cursor: supportsFirstPrompt('cursor') })
+    expect(firstPrompt.claude).toBe(true)
+    await socket.unregisterLocalClient('local:probe')
     await socket.stop()
   })
 

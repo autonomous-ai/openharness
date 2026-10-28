@@ -180,6 +180,8 @@ Machine:
   harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness mcp-servers [add|remove]  local MCP servers (a paired lamp's lamp-mcp) for the agents Harness starts here: yours alone to change
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
+  harness machines engines <machine> [--engine E]… [--json]
+                               ask another of your machines now which engines it has: installed, signed in, first prompt
   harness e2e plan             which coding tools have a new version out (the grid-switch e2e trigger)
   harness e2e grid-switch      move a fresh agent subscription -> grid -> back home with its tool + MCP; leaves a review bundle
   harness remote               from a Harness terminal tile: open a terminal on another of your machines and move this tile to it
@@ -2931,6 +2933,12 @@ switch (cmd) {
     else if (args[0] === 'list') machinesListCommand(flags.includes('--json')).catch(onError)
     else if (args[0] === 'delete' || args[0] === 'rm') {
       machinesDeleteCommand(args[1], flags.includes('--yes')).catch(onError)
+    } else if (args[0] === 'engines') {
+      // The raw words after `engines`: `--engine <name>` takes a value the args/flags split would separate.
+      import('./lib/machineEngines.js')
+        .then(({ runMachinesEngines }) => runMachinesEngines(rest.slice(rest.indexOf('engines') + 1), env.ADAPTER_DATA_DIR, daemonPort()))
+        .then((code) => { process.exitCode = code })
+        .catch(onError)
     } else { console.error(`Unknown command: machines ${args[0]}`); usage(1) }
     break
   case 'link':
