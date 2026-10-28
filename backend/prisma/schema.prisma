@@ -1484,7 +1484,8 @@ model SwarmGroup {
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
-  @@index([tabId, projectId, dormant, lastActivityAt])
+  /// A project's quiet conversations by activity (leaderboard, digest), and their pages newest first, then by key (parts/load.ts loadDormant).
+  @@index([tabId, projectId, dormant, lastActivityAt, key])
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
   @@index([workFinished, archived, lastActivityAt])

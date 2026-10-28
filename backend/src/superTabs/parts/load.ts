@@ -113,14 +113,21 @@ export async function loadChanged(tx: Transaction, tabIds: string[], since: Date
   return changed
 }
 
-/** Dormant groups the caller pages through, newest activity first, 50 at a time. */
+const DORMANT_PAGE = 50
+
+/** Dormant groups the caller pages through, newest activity first, 50 at a time. A project's go through its index in that
+ *  order. A later page is two reads that index bounds: the rest of its cursor's moment by key, then what is older. The
+ *  cursor as one `$or` is no bound, and each page read every newer group again (#1964). */
 export async function loadDormant(tx: Transaction, tabId: string,
   page: { projectId?: string; before?: { lastActivityAt: number; key: string } }): Promise<Part<GroupData>[]> {
-  const before = page.before && { OR: [{ lastActivityAt: { lt: new Date(page.before.lastActivityAt) } },
-    { lastActivityAt: new Date(page.before.lastActivityAt), key: { lt: page.before.key } }] }
-  const rows = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, ...(page.projectId ? { projectId: page.projectId } : {}),
-    ...before }, orderBy: [{ lastActivityAt: 'desc' }, { key: 'desc' }], take: 50 })
-  return rows.map(row => toPart<GroupData>('group', row as unknown as PartRow))
+  const index = page.projectId ? 'project' : 'dormancy'
+  const read = async (match: Where, limit: number) => limit <= 0 ? [] : groupsBy(tx, index, [
+    { $match: { tabId, deleted: false, dormant: true, ...page.projectId ? { projectId: page.projectId } : {}, ...match } as Prisma.InputJsonValue },
+    { $sort: { lastActivityAt: -1, key: -1 } }, { $limit: limit }])
+  const at = page.before && { $date: new Date(page.before.lastActivityAt).toISOString() }
+  const same = page.before ? await read({ lastActivityAt: at, key: { $lt: page.before.key } }, DORMANT_PAGE) : []
+  const older = await read(at ? { lastActivityAt: { $lt: at } } : {}, DORMANT_PAGE - same.length)
+  return [...same, ...older].map(row => toPart<GroupData>('group', rawGroupRow(row)))
 }
 
 /** The newest data change of each Swarm, over all its parts (design section 3.7). A touch does not count.

@@ -219,10 +219,26 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     let count = 0, listed: Array<{ conversationId: string }> = []
     const reads = await profiled(async () => {
       count = (await db.$transaction(tx => decisionsWaiting(tx, s.tabId, state, actor))).count
-      listed = await db.$transaction(tx => listDecisions(tx, s.tabId, state, actor, true)) as Array<{ conversationId: string }>
+      listed = (await db.$transaction(tx => listDecisions(tx, s.tabId, state, actor, 'open'))).decisions
     })
     expect(count).toBe(1)
     expect(listed.map(d => d.conversationId)).toEqual([quiet])
+    expect(reads.length).toBeGreaterThan(0)
+    expectIndexed(reads)
+    expectOnlyReturned(reads)
+  })
+
+  // Folded from #1964: a later page started at no bound, so each page read every newer quiet conversation again.
+  it('each page of a project\'s quiet conversations reads the 50 it returns, newest activity first', async () => {
+    const order = [...s.quietLead].sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime() || (a.key < b.key ? 1 : -1))
+    const pages: string[][] = []
+    const reads = await profiled(async () => {
+      const first = await db.$transaction(tx => parts.loadDormant(tx, s.tabId, { projectId: 'lead' }))
+      const last = order.find(r => r.key === first.at(-1)!.key)!
+      const second = await db.$transaction(tx => parts.loadDormant(tx, s.tabId, { projectId: 'lead', before: { lastActivityAt: last.lastActivityAt.getTime(), key: last.key } }))
+      pages.push(first.map(g => g.key), second.map(g => g.key))
+    })
+    expect(pages).toEqual([order.slice(0, 50).map(r => r.key), order.slice(50, 100).map(r => r.key)])
     expect(reads.length).toBeGreaterThan(0)
     expectIndexed(reads)
     expectOnlyReturned(reads)
