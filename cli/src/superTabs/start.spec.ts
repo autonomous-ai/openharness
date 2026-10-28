@@ -129,6 +129,19 @@ describe('Swarm permission mode', () => {
     expect(f.open).not.toHaveBeenCalled()
   })
 
+  it('tells the Lead a contributed start is still being prepared on its machine, so it waits rather than starting another', async () => {
+    const f = fixture()
+    Object.assign(f.start, { poolGeneration: 'pool', dispatched: true, preparing: true })
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ ok: true, queued: true,
+      preparing: true, startId: 'start', machineId: f.start.request.machineId,
+      detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' })
+    // One its machine has not said it is preparing (an older machine, or not launched yet) reads as queued, as before.
+    delete (f.start as { preparing?: boolean }).preparing
+    expect(await startAgent({ action: 'resume', tabId: 'tab', startId: 'start' }, f.scoped, where, f.open)).toEqual({ ok: true, queued: true,
+      startId: 'start', machineId: f.start.request.machineId, detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' })
+    expect(f.open).not.toHaveBeenCalled()
+  })
+
   it('asks the backend for full mode even when the caller asks for another mode', async () => {
     const f = fixture()
     await startAgent({ action: 'start', tabId: 'tab', operationId: 'op', request: { ...f.start.request, permissionMode: 'ask' } }, f.scoped, where, f.open)

@@ -522,6 +522,60 @@ describe('contributed machine executor', () => {
     expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false, true, false])
   })
 
+  describe('a start this machine launched and is still preparing', () => {
+    const machinePosts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls
+      .filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const pendingCreation = { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending',
+      detail: 'Keep this start ID. Run resume with it to check the same native creation; do not make another start request.' }
+
+    it('is reported as preparing on every report while its creation is under way, and no longer once it runs', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue(pendingCreation as never)
+      // The pass that launches it reports first and launches after; the next pass says so at once.
+      await f.machine.tick()
+      expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+      f.step(5_000); await f.machine.tick()
+      expect(machinePosts(f).at(-1)!.preparingStartIds).toEqual(['start'])
+      // Unchanged, it is sent again with each beat, so the backend sees it fresh.
+      f.advance(); await f.machine.tick()
+      expect(machinePosts(f)).toHaveLength(3)
+      expect(machinePosts(f).at(-1)!.preparingStartIds).toEqual(['start'])
+      f.start.mockResolvedValue({ ok: true, harnessId: 'harness' } as never)
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+    })
+
+    it('is not a start whose launch is uncertain, refused or failed', async () => {
+      for (const result of [{ ...pendingCreation, state: 'unconfirmed' }, { error: 'START_UNCERTAIN', startId: 'start', detail: 'Inspect the machine.' },
+        { error: 'CAPACITY_UNAVAILABLE', startId: 'start', reasons: ['Busy.'] }, { error: 'START_FAILED', startId: 'start', detail: 'Failed.' }]) {
+        const f = fixture()
+        f.start.mockResolvedValue(result as never)
+        await f.machine.tick()
+        f.advance(); await f.machine.tick()
+        expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+      }
+    })
+
+    it('is left out for a backend that refuses it, which then fails it at 3 minutes as before, and offered again ten minutes later', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue(pendingCreation as never)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.preparingStartIds) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: preparingStartIds', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      f.step(5_000); await f.machine.tick()
+      const sent = () => machinePosts(f).map(post => 'preparingStartIds' in post)
+      expect(sent()).toEqual([false, true, false])
+      f.advance(); await f.machine.tick()
+      expect(sent()).toEqual([false, true, false, false])
+      f.step(600_000); await f.machine.tick()
+      expect(sent()).toEqual([false, true, false, false, true, false])
+    })
+  })
+
   it('drops readiness alone for a backend that takes progress, and both, keeping privacy, for one that takes neither', async () => {
     const f = fixture({}, () => ({ mode: 'dedicated' }))
     const usage = f.request.getMockImplementation()!

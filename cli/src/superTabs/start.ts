@@ -267,9 +267,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     ...(permissionWarning ? { permissionWarning } : {}) }
   // Contributed capacity is executed by its owner. A collaborator receives no
   // machine credentials and cannot issue arbitrary commands to that computer.
-  if (start.poolGeneration && input.hostDispatch !== true) return { ok: true, queued: true, startId, machineId: request.machineId,
-    ...(permissionWarning ? { permissionWarning } : {}),
-    detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
+  // Its machine reports it preparing (backend liveness.ts): the backend waits up to 15 minutes, and so should the Lead.
+  if (start.poolGeneration && input.hostDispatch !== true) return start.preparing === true
+    ? { ok: true, queued: true, preparing: true, startId, machineId: request.machineId, ...(permissionWarning ? { permissionWarning } : {}),
+      detail: 'Its machine is still preparing it (fetching the project, checking its worktree out); that can take up to 15 minutes. Resume this start ID to read its receipt; do not start another.' }
+    : { ok: true, queued: true, startId, machineId: request.machineId,
+      ...(permissionWarning ? { permissionWarning } : {}),
+      detail: 'Queued on the contributed machine. Resume this start ID to read its receipt.' }
   const target = await open(where, request.machineId)
   /** What the agent runs now, as its frame says; null when the frame cannot say. */
   const ranNow = async (agentId: string, engine: string) => {

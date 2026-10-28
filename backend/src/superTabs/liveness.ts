@@ -1,8 +1,9 @@
 import { activeWork, stableId, type Agent, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
-import { failureNotice, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
+import { MACHINE_FRESH_MS } from './machines.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -24,6 +25,10 @@ const PROGRESS_FRESH_MS = QUIET_RUNNING_MS - LEASE_MS
 const OFFLINE_LOST_MS = 2 * 60_000
 /** A dispatched start not running this long after has failed. */
 const START_RUN_MS = 3 * 60_000
+/** A start its machine keeps reporting as preparing may take this long: the worktree checkout's own limit (10 minutes,
+ *  cli lib/gitProject.ts WORKTREE_ADD_TIMEOUT) and the fetch before it. 3 minutes failed starts on a busy Mac that was
+ *  still fetching and checking out a 470 MB project (2026-10-27). */
+const START_PREPARE_MS = 15 * 60_000
 /** Any machine's report runs the time checks for its Swarm at most this often. */
 export const SWEEP_EVERY_MS = 30_000
 
@@ -147,16 +152,18 @@ export function loseTasks(state: SuperTabState, now: number, which: (worker: Age
   })
 }
 
-/** The machine parts a loss was judged from (offline, stopped, its reports' renewals). The write that records the loss
- *  touches them, so a fresh report committed since the read makes it retry on current data instead of fencing a live worker. */
-export function judgedMachines(state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
+/** The machine parts a loss was judged from (offline, stopped, its reports' renewals), and those a start failed since
+ *  `before` was judged from (its own machine's preparing report). The write touches them, so a fresh report committed since
+ *  the read makes it retry on current data instead of fencing a live worker or failing a start still being prepared. */
+export function judgedMachines(before: SuperTabState, state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
   const lost = new Set(rows.flatMap(r => r.source?.kind === 'work-lost' ? [r.source.agentId as string] : []))
-  const machines = new Set(state.agents.filter(a => lost.has(a.id)).map(a => a.machineId))
+  const failed = (state.starts ?? []).filter(s => s.error && !before.starts?.find(b => b.id === s.id)?.error).map(s => s.request.machineId)
+  const machines = new Set([...state.agents.filter(a => lost.has(a.id)).map(a => a.machineId), ...failed])
   return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
 }
 
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
- *  every start dispatched over 3 minutes ago that is not running fails. */
+ *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
   return [...loseTasks(state, now), ...failStalledStarts(state, now)]
 }
@@ -164,7 +171,13 @@ export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[]
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
-    start.error = `${machineName(state, start.request.machineId)}${TIMED_OUT_SUFFIX}`
+    // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
+    const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
+    const named = !!report?.preparingStartIds?.includes(start.id)
+    const silent = !!report && now - report.receivedAt > MACHINE_FRESH_MS
+    if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
+    const machine = machineName(state, start.request.machineId)
+    start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
     // Never a lookup that throws: these checks run inside every machine's report.
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
