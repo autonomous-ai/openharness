@@ -16,10 +16,17 @@ import { poolRows } from './hostRows.test-support.js'
 // The harness shares list (routes/harnessShares.ts) against a Swarm-sized database. Prod 2026-10-28: CLI daemons' list calls
 // took half the backend's busy time in spike minutes (p95 13.4 s), each share loading its whole Swarm to check it. Every
 // permission read here is real; Redis is replaced by "every machine is running".
-const shared = vi.hoisted(() => ({ db: null as unknown as PrismaClient }))
+const shared = vi.hoisted(() => ({ db: null as unknown as PrismaClient, busyTabs: new Set<string>() }))
 vi.mock('../src/lib/prisma.js', async original => ({ ...await original<typeof import('../src/lib/prisma.js')>(), get prisma() { return shared.db } }))
 vi.mock('../src/lib/bus.js', async original => ({ ...await original<typeof import('../src/lib/bus.js')>(),
   getAgentPresenceMany: async (ids: string[]) => new Map(ids.map(id => [id, 'running'])) }))
+// A Swarm named in `busyTabs` answers its cached reads as a Swarm under a lock answers them: busy (retry.ts).
+vi.mock('../src/superTabs/cachedReads.js', async original => {
+  const real = await original<typeof import('../src/superTabs/cachedReads.js')>()
+  const { fail } = await import('../src/superTabs/model.js')
+  return { ...real, readParts: (...args: Parameters<typeof real.readParts>) => shared.busyTabs.has(args[2])
+    ? fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503) : real.readParts(...args) }
+})
 const { harnessShareRoutes } = await import('../src/routes/harnessShares.js')
 const { SuperTabStore } = await import('../src/superTabs/store.js')
 
@@ -211,11 +218,11 @@ describe('the harness shares list as permissions change', () => {
     const shares: Record<string, { name: string; to: AuthUser }> = {}
     /** Adds agent `name` to `conversationId` on the host's machine through the owner's grant, and shares it with both members. */
     /** Shares session `harnessId` on `machine`, as `claimedOwner` names it, with both members, under agent name `name`. */
-    const shareWithBoth = async (name: string, machine: string, harnessId: string, claimedOwner: AuthUser) => {
+    const shareWithBoth = async (name: string, machine: string, harnessId: string, claimedOwner: AuthUser, superTabId: string | null = tab) => {
       for (const to of [a, b]) {
         const id = randomUUID()
         shares[id] = { name, to }
-        await db.harnessShare.create({ data: { id, superTabId: tab, ownerId: claimedOwner.sub, machineId: machine, agentId: harnessId,
+        await db.harnessShare.create({ data: { id, superTabId, ownerId: claimedOwner.sub, machineId: machine, agentId: harnessId,
           recipientEmail: to.email, autonomousEnv: 'prod', name, ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } })
       }
     }
@@ -241,7 +248,7 @@ describe('the harness shares list as permissions change', () => {
       expect((await store.openableShares(as, rows)).map(share => share.id).sort(), `${as.email}: the store's batch and each share alone`).toEqual([...alone].sort())
       return mine.filter(id => listed.has(id)).map(id => shares[id]!.name).sort().join('')
     }
-    return { tab, run, agents, sees, shared, shareWithBoth, n }
+    return { tab, run, agents, sees, shared, shareWithBoth, n, shares }
   }
 
   /** Marks agent `agentId` of this Swarm confidential in another Swarm too, as a registration there would have left it. */
@@ -358,5 +365,42 @@ describe('the harness shares list as permissions change', () => {
     await execute({ type: 'agent.startSettled', startId, warning: null }, a, 'a-mac')
     await shareWithBoth('B', 'a-mac', harnessId, a)
     expect([await sees(a), await sees(b)]).toEqual(['BXYZ', 'XYZ'])
+  })
+
+  /** Another Swarm of the owner whose Lead L runs on the owner's machine, with L's part written before the confidential mark
+   *  existed (projects.ts markConfidential): the list learns L is confidential only by reading that Swarm. */
+  async function otherSwarmWithUnmarkedLead(n: number) {
+    const other = (await store.create(owner, randomUUID(), `Other ${n}`)).id
+    const harnessId = `perm-${n}-L`
+    const lead = (await store.execute(owner, other, { operationId: randomUUID(), command: { type: 'agent.add', conversationId: 'lead',
+      machineId: 'own-host', harnessId, name: 'Lead', configuration: AGENT_CONFIGURATION, lead: true } })).result.agentId as string
+    const part = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: other, key: lead } })
+    const { confidential: _mark, ...unmarked } = part.data as Record<string, unknown>
+    await database.db.swarmAgent.update({ where: { id: part.id }, data: { data: unmarked as object } })
+    return { other, harnessId }
+  }
+
+  it('hides a Lead of another Swarm whose part was never marked, read from that Swarm', async () => {
+    const { n, sees, shareWithBoth } = await swarmWithShares()
+    const { harnessId } = await otherSwarmWithUnmarkedLead(n)
+    await shareWithBoth('L', 'own-host', harnessId, owner, null)
+    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+  })
+
+  it('hides only the shares a busy other Swarm would answer for, and lists the rest', async () => {
+    const { tab, n, agents, shareWithBoth, shares } = await swarmWithShares()
+    const { other, harnessId } = await otherSwarmWithUnmarkedLead(n)
+    await shareWithBoth('L', 'own-host', harnessId, owner, null)
+    // X is registered in the other Swarm too, unmarked, as a part written before the mark would be: only that Swarm can say.
+    const { id, ...x } = await database.db.swarmAgent.findFirstOrThrow({ where: { tabId: tab, key: agents.X! } })
+    const { confidential: _mark, ...unmarked } = x.data as Record<string, unknown>
+    await database.db.swarmAgent.create({ data: { ...x, id: `elsewhere-${id}`, tabId: other, data: unmarked as object } })
+    // Each share asked alone would throw while that Swarm is busy (mayOpenShare), so this Swarm's shares are named by hand.
+    const names = async (as: AuthUser) => listedIds(await list(as)).filter(id => shares[id]?.to === as).map(id => shares[id]!.name).sort().join('')
+    expect([await names(a), await names(b)]).toEqual(['XYZ', 'XYZ'])
+    shared.busyTabs.add(other)
+    try {
+      expect([await names(b), await names(a)]).toEqual(['YZ', 'YZ'])
+    } finally { shared.busyTabs.delete(other) }
   })
 })
