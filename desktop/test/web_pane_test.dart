@@ -599,7 +599,11 @@ void main() {
 
         app.appLifecycleChanged(AppLifecycleState.inactive);
         await tester.pump();
-        expect(told(), isTrue, reason: 'a window behind another app can still be seen');
+        expect(
+          told(),
+          isTrue,
+          reason: 'a window behind another app can still be seen',
+        );
         app.appLifecycleChanged(AppLifecycleState.hidden);
         await tester.pump();
         expect(told(), isFalse, reason: 'a minimised or hidden window cannot');
@@ -610,7 +614,11 @@ void main() {
         final stamps = controller.scripts.length;
         app.notifyListeners();
         await tester.pump();
-        expect(controller.scripts, hasLength(stamps), reason: 'nothing new to say, nothing said');
+        expect(
+          controller.scripts,
+          hasLength(stamps),
+          reason: 'nothing new to say, nothing said',
+        );
 
         // A reload is a new page: it hears where it stands.
         controller.delegate!
@@ -620,6 +628,25 @@ void main() {
         expect(controller.scripts.length, greaterThan(stamps));
         expect(told(), isTrue);
         await tester.pump(const Duration(milliseconds: 300));
+      },
+    );
+
+    testWidgets(
+      "closing the Monitor's tab takes its page down, and with it the page's connection",
+      (tester) async {
+        final app = await open(tester, dsh: harnessMonitorId);
+        expect(find.byKey(const ValueKey('fake-webview')), findsOneWidget);
+        final tab = app.activeSwarm;
+        unawaited(app.requestCloseSwarm(tab.id));
+        await tester.pumpAndSettle();
+        expect(app.swarms, isNot(contains(tab)));
+        expect(find.byType(WebPanePanel), findsNothing);
+        expect(find.byKey(const ValueKey('fake-webview')), findsNothing);
+        expect(
+          app.stateOf('m')!.agents.firstWhere((a) => a.id == 'a0').isStopped,
+          isFalse,
+          reason: 'its assistant stays for the next open',
+        );
       },
     );
 
