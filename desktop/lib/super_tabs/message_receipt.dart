@@ -311,11 +311,15 @@ Widget _receiptAction(
 }) => TextButton(
   onPressed: onPressed,
   // Quiet, as inline controls are: no fill or rim at rest, the shared hover
-  // wash, and the focus ring for the keyboard.
+  // wash, and the focus ring for the keyboard. Every receipt action (Retry,
+  // Delete, Add a Lead, Open terminal, Send again, It arrived) is drawn here.
   style:
       TextButton.styleFrom(
         foregroundColor: color ?? DesktopChrome.accent,
         backgroundColor: Colors.transparent,
+        // Given a foreground, styleFrom tints hover with it; quiet controls
+        // share the neutral wash the theme's buttons and rows use.
+        overlayColor: grid.AppSurface.hoverFill,
         padding: const EdgeInsets.symmetric(horizontal: 2),
         minimumSize: const Size(0, 32),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,

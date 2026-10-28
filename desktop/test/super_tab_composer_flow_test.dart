@@ -309,6 +309,19 @@ void main() {
         final side = tester.widget<TextButton>(button).style!.side!;
         expect(side.resolve({})!.color.a, 0, reason: '$label has a rim');
         expect(side.resolve({WidgetState.focused})!.color.a, greaterThan(0));
+        // Hover is the shared neutral wash, never a tint of the label.
+        final quiet = Theme.of(tester.element(button))
+            .textButtonTheme
+            .style!
+            .overlayColor!;
+        final overlay = tester.widget<TextButton>(button).style!.overlayColor;
+        for (final state in [WidgetState.hovered, WidgetState.pressed]) {
+          expect(
+            overlay?.resolve({state}),
+            quiet.resolve({state}),
+            reason: '$label ${state.name}',
+          );
+        }
       }
 
       await tester.tap(find.text('Delete'));
