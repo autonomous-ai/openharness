@@ -384,13 +384,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // A Swarm Reviewer on a Mac's Harness Team account failed every turn in 1-2 s (2026-10-28), and each failure took over
       // the round dial with the engine's raw error for 8 s. A Swarm's workers answer to their Lead, who hears of it in the
       // Swarm: one the person has not put on a tab ends its tile quietly, as a finished turn does, and never stays Working.
-      if (swarmWorker(event) && !onDesk(event.agentId)) {
+      const quiet = (): void => {
         tally(cableHost.describe(event.agentId)?.name ?? '', 'silent', 'rule:swarm-worker', 'turn.error', 0)
         void cable.turnDone(event.agentId)
-        return
       }
-      tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
-      void cable.turnError(event.agentId, event.text)
+      const shown = (): void => {
+        tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
+        void cable.turnError(event.agentId, event.text)
+      }
+      if (onDesk(event.agentId)) return shown()
+      if (swarmWorker(event)) return quiet()
+      // Another of the person's computers says nothing of the Swarm in its card: the Swarm service is asked, and returned so
+      // the agent's next card waits behind the answer. No answer (an older computer, the service down) shows it, as before.
+      if (!event.machineId) return shown()
+      return remoteWorker(event.machineId, event.agentId).then((worker) => worker ? quiet() : shown())
     }
   }
   /** A Builder or Reviewer the Swarm started here (its record's Swarm role, and an agent started it, as every Swarm start
@@ -400,6 +407,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
     return role === 'dev' || role === 'review' || (!!event.machineId && teamMachines.has(event.machineId))
+  }
+  /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
+   *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
+  const WORKER_ANSWER_MS = 60_000
+  const workerAnswers = new Map<string, { worker: boolean; at: number }>()
+  const remoteWorker = async (machineId: string, agentId: string): Promise<boolean> => {
+    const key = `${machineId}/${agentId}`
+    const held = workerAnswers.get(key)
+    if (held && monotonic() - held.at < WORKER_ANSWER_MS) return held.worker
+    const worker = (await askCards({ action: 'cardWorker', machineId, harnessId: agentId })).worker === true
+    // Each key is an agent that failed off the desk; a long-lived process forgets them all rather than grow.
+    if (workerAnswers.size >= 256) workerAnswers.clear()
+    workerAnswers.set(key, { worker, at: monotonic() })
+    return worker
   }
   /** On any of the window's tabs, or the desk the dial walks: the person put it there, so its failure is theirs to see. */
   const onDesk = (agentId: string): boolean =>
