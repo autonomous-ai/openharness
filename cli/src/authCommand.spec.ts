@@ -913,6 +913,54 @@ describe('a Harness session in place of SSO tokens', () => {
     expect(result.stdout + result.stderr).not.toContain(HNR)
   })
 
+  it('a sign-in SSO has not confirmed for 7 days says "sign in again", and is kept, not signed out', async () => {
+    const root = tempRoot()
+    seedSession(root, { expiresInMs: 30_000, overrides: { accessToken: HNA, refreshToken: HNR } })
+    const backend = await fakeBackend({ routes: {
+      '/api/auth/refresh': () => new Refusal(403, 'SIGN_IN_AGAIN', 'Sign in again: this sign-in could not be confirmed with your Autonomous account for 7 days'),
+    } })
+
+    const json = await runAsync(root, ['auth', 'status', '--json'], backend.base)
+    expect(JSON.parse(json.stdout.trim())).toMatchObject({ loggedIn: false, signedOut: 'sign-in-again' })
+    // Kept as it was: not marked signed out, so SSO coming back renews it.
+    expect(sessionOnDisk(root)).toMatchObject({ accessToken: HNA, refreshToken: HNR })
+    expect(sessionOnDisk(root)).not.toHaveProperty('signedOut')
+
+    const text = await runAsync(root, ['auth', 'status'], backend.base)
+    expect(text.stdout).toMatch(/sign in again.*harness login/i)
+  })
+
+  it('reset ends the Harness session on the server too', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
+    const backend = await fakeBackend({ routes: { '/api/auth/revoke': () => ({ revoked: true }) } })
+
+    const result = await runAsync(root, ['reset', '--from-sign-out-button'], backend.base)
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(authCalls(backend.calls)).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+  })
+
+  it('login --force ends the previous Harness session once the new sign-in is in', async () => {
+    const root = tempRoot()
+    seedSession(root, { overrides: { accessToken: HNA, refreshToken: HNR } })
+    const NEW_HNR = `hnr_${'d'.repeat(43)}`
+    let redirectUri = ''
+    const backend = await fakeBackend({
+      authorizeNative: (body) => { redirectUri = body.redirectUri; return { authorizeUrl: 'https://sso.example.test/authorize?tx=abc', tx: 'tx_abc' } },
+      exchange: () => ({ token: `hna_${'e'.repeat(43)}`, refreshToken: NEW_HNR, expiresIn: 3600, kind: 'computer', autonomousEnv: 'prod', harnessSession: true }),
+      resolveComputer: () => ({ machine: { machineId: 'm_new' } }),
+      routes: { '/api/auth/revoke': () => ({ revoked: true }) },
+    })
+    const login = jsonChild(root, backend.base, ['login', '--force', '--google', '--json'])
+    expect(await login.next()).toMatchObject({ type: 'authorize_url' })
+    await fetch(`${redirectUri}?code=code_123&state=state_456`)
+    expect(await login.next()).toMatchObject({ type: 'result', status: 'success' })
+    await login.exit
+    expect(sessionOnDisk(root)).toMatchObject({ refreshToken: NEW_HNR })
+    expect(authCalls(backend.calls).filter((c) => c.url === '/api/auth/revoke')).toEqual([{ url: '/api/auth/revoke', body: { refreshToken: HNR } }])
+  }, 30_000)
+
   it('signing out of an SSO sign-in asks the server nothing, as before', async () => {
     const root = tempRoot()
     seedSession(root)

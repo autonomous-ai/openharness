@@ -46,7 +46,9 @@ export const knownSsoClientId = (raw: unknown): SsoClientId | undefined =>
   Object.values(SSO_CLIENT_IDS).find((id) => id === raw)
 
 export class AuthSessionError extends Error {
-  constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE') {
+  /** `SIGN_IN_AGAIN`: a Harness session SSO has not confirmed for longer than its grace (backend lib/ssoSession.ts). The
+   *  person is asked to sign in again; the session is kept, unmarked, so SSO coming back renews it. */
+  constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE' | 'SIGN_IN_AGAIN') {
     super(message)
     this.name = 'AuthSessionError'
   }
@@ -357,6 +359,10 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
   }
   if (response.status === 401 || body.error?.code === 'REFRESH_TOKEN_INVALID') {
     throw new AuthSessionError('SSO refresh token is invalid. Run `harness login`.', 'INVALID_REFRESH')
+  }
+  if (body.error?.code === 'SIGN_IN_AGAIN') {
+    throw new AuthSessionError('Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account '
+      + 'for 7 days. Run `harness login`.', 'SIGN_IN_AGAIN')
   }
   if (!response.ok || body.success === false || typeof body.data?.token !== 'string' || !body.data.token) {
     throw new AuthSessionError(

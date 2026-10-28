@@ -243,8 +243,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           if (!tokens) return sendError(reply, 'Refresh token is invalid or expired', 'REFRESH_TOKEN_INVALID', 401)
           return sendSuccess(reply, tokens)
         } catch (e) {
-          // SSO not confirming the sign-in within its grace (lib/ssoSession.ts) says so: unavailable, retrying.
-          if (e instanceof SsoAuthError && e.code === 'AUTH_SERVICE_UNAVAILABLE') return sendError(reply, e.message, e.code, 503)
+          // SSO not confirming the sign-in within its grace (lib/ssoSession.ts): its own answer, which clients show as
+          // "Sign in again" and neither sign out over nor retry silently. Not a 401: the session is not over.
+          if (e instanceof SsoAuthError && e.code === 'SIGN_IN_AGAIN') return sendError(reply, e.message, e.code, 403)
           logger.error('harness session refresh failed', e)
           return sendError(reply, 'Authentication service unavailable', 'AUTH_SERVICE_UNAVAILABLE', 503)
         }

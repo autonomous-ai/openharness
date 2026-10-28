@@ -178,6 +178,22 @@ void main() {
       });
     });
 
+    test('a session SSO has not confirmed for 7 days says "sign in again", '
+        'and is not signed out', () async {
+      backend.reply = {
+        'success': false,
+        'error': {'code': 'SIGN_IN_AGAIN', 'message': 'Sign in again'},
+      };
+      await expectLater(
+        native.refresh('hnr_session', autonomousEnv: 'prod'),
+        throwsA(
+          isA<DirectAuthException>()
+              .having((e) => e.signedOut, 'signedOut', isFalse)
+              .having((e) => e.message, 'message', contains('Sign in again')),
+        ),
+      );
+    });
+
     test('signing out ends a Harness session on the server, and asks '
         'nothing for an SSO one', () async {
       backend.reply = {

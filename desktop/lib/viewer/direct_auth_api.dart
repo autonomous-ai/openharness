@@ -285,6 +285,14 @@ class DirectAuthApi {
         signedOut: true,
       );
     }
+    // A Harness session the account service has not confirmed for 7 days (backend `lib/ssoSession.ts`):
+    // the person is asked to sign in again, and the session is kept — not signed out — so the account
+    // service coming back renews it.
+    if (error['code'] == 'SIGN_IN_AGAIN') {
+      throw const DirectAuthException(
+        'Sign in again: this sign-in could not be confirmed with your Autonomous account for 7 days.',
+      );
+    }
     final tokens = body['success'] == false
         ? null
         : IssuedTokens.fromData(body['data']);

@@ -370,12 +370,12 @@ describe('the hourly SSO re-check', () => {
     }
     expect(fakes.sessions[0]!.revokedAt ?? null).toBeNull()
 
-    // Past the grace: unavailable and retrying — never a sign-in prompt, and the session is kept.
+    // Past the grace: its own answer, which clients show as "Sign in again" — and the session is kept, not ended.
     vi.setSystemTime(start + SSO_OUTAGE_GRACE_MS + 1)
     const late = await refresh(refreshToken)
-    expect(late.status).toBe(503)
-    expect(late.body.error?.code).toBe('AUTH_SERVICE_UNAVAILABLE')
-    expect(late.body.error?.message).toMatch(/unavailable.*retrying/i)
+    expect(late.status).toBe(403)
+    expect(late.body.error?.code).toBe('SIGN_IN_AGAIN')
+    expect(late.body.error?.message).toMatch(/sign in again/i)
     expect(fakes.sessions[0]!.revokedAt ?? null).toBeNull()
 
     // SSO back: the next renewal checks and carries on.
@@ -397,9 +397,13 @@ describe('the hourly SSO re-check', () => {
     const renewed = await refresh(refreshToken)
     expect(renewed.status).toBe(200)
     expect(fakes.sessions[0]!.revokedAt ?? null).toBeNull()
-    // Counted as unavailable: the grace still runs from the last good check.
+    // Counted as unavailable: the grace still runs from the last good check, and then the person is asked to sign in
+    // again rather than left retrying a token that will never work.
     vi.setSystemTime(start + SSO_OUTAGE_GRACE_MS + 1)
-    expect((await refresh(refreshToken)).status).toBe(503)
+    const late = await refresh(refreshToken)
+    expect(late.status).toBe(403)
+    expect(late.body.error?.code).toBe('SIGN_IN_AGAIN')
+    expect(fakes.sessions[0]!.revokedAt ?? null).toBeNull()
   })
 
   it('a renewal that fails leaves its mark, so a later refusal is not read as a sign-out', async () => {
@@ -453,7 +457,7 @@ describe('the hourly SSO re-check', () => {
     expect(row.ssoRenewingAt).toBeInstanceOf(Date)
   })
 
-  it('a renewal SSO answers but whose identity cannot be read keeps the rotated token, without counting as a check', async () => {
+  it('a renewal SSO answers but whose identity cannot be read keeps the rotated refresh token, never its access token, and is no check', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const start = Date.now()
     const { refreshToken } = await harnessSignIn()
@@ -465,6 +469,28 @@ describe('the hourly SSO re-check', () => {
     expect(decryptMachineCredential(String(row.ssoRefresh))).toBe('sso-refresh-2-r')
     expect(row.ssoRenewingAt ?? null).toBeNull()
     expect((row.ssoCheckedAt as Date).getTime()).toBe(start)
+    // The unverified access token is not kept: nothing can hand it on (billing).
+    expect(row.ssoAccess ?? null).toBeNull()
+    expect(row.ssoAccessExpiresAt ?? null).toBeNull()
+  })
+
+  it('a renewal SSO answers after the session was signed out writes nothing back onto it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { refreshToken } = await harnessSignIn()
+    vi.setSystemTime(Date.now() + SSO_RECHECK_MS + 1)
+    let open!: () => void
+    fakes.sso.gate = new Promise<void>((resolve) => { open = resolve })
+    const renewing = refresh(refreshToken)
+    await vi.waitFor(() => expect(fakes.sso.calls).toBe(1))
+    // Signed out while SSO is still answering the renewal.
+    await revokeHarnessSession(refreshToken)
+    open()
+    expect((await renewing).status).toBe(401)
+    const row = fakes.sessions[0]!
+    expect(row.revokedAt).toBeInstanceOf(Date)
+    expect(row.ssoRefresh ?? null).toBeNull()
+    expect(row.ssoAccess ?? null).toBeNull()
+    expect(row.ssoRenewingAt ?? null).toBeNull()
   })
 
   it('a session from the phone QR is never re-checked: it has no SSO sign-in behind it', async () => {
@@ -526,6 +552,37 @@ describe('billing, which still needs an SSO access token', () => {
     await revokeHarnessSession(String(data.refreshToken))
     expect(await ssoAccessTokenFor(id, USER.id)).toBeNull()
     expect(await ssoAccessTokenFor('nope', USER.id)).toBeNull()
+  })
+
+  it('never hands on an access token whose identity was not confirmed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    await signIn(ASK_COMPUTER)
+    const id = fakes.sessions[0]!.id
+    vi.mocked(globalThis.fetch).mockImplementation(async () => new Response('', { status: 502 }))
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    // SSO renews it, the profile service cannot say whose it is: not handed on, now or on the next call.
+    await expect(ssoAccessTokenFor(id, USER.id)).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' })
+    await expect(ssoAccessTokenFor(id, USER.id)).rejects.toMatchObject({ code: 'AUTH_SERVICE_UNAVAILABLE' })
+    expect(fakes.sessions[0]!.ssoAccess ?? null).toBeNull()
+    // Once it can be confirmed, billing gets one: the one SSO just gave.
+    stubProfileService()
+    expect(await ssoAccessTokenFor(id, USER.id)).toBe(`sso-access-${fakes.sso.counter}`)
+  })
+
+  it('two billing calls at its expiry both get the renewed token: the second waits for the first', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    await signIn(ASK_COMPUTER)
+    const id = fakes.sessions[0]!.id
+    vi.setSystemTime(Date.now() + 2 * HOUR)
+    let open!: () => void
+    fakes.sso.gate = new Promise<void>((resolve) => { open = resolve })
+    const first = ssoAccessTokenFor(id, USER.id)
+    await vi.waitFor(() => expect(fakes.sso.calls).toBe(1))
+    const second = ssoAccessTokenFor(id, USER.id)
+    open()
+    expect(await first).toBe('sso-access-2')
+    expect(await second).toBe('sso-access-2')
+    expect(fakes.sso.calls).toBe(1)
   })
 
   it('says unavailable, not signed out, when SSO cannot renew it', async () => {

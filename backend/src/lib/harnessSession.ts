@@ -12,7 +12,7 @@ import {
   endedSessionData,
   recheckSsoSession,
   ssoSessionData,
-  ssoUnavailableError,
+  ssoSignInAgainError,
   type SsoGrant,
   type SsoSessionRequest,
 } from './ssoSession.js'
@@ -253,7 +253,7 @@ async function createSession(
  * A new access token for the session [refreshToken] belongs to, or null when that session is gone
  * (unknown, revoked, idle past its lifetime, its user deleted, or its SSO sign-in ended) — the caller's 401.
  * A session an SSO sign-in backs is re-checked with SSO first (lib/ssoSession.ts); one SSO has not confirmed
- * within its grace throws `AUTH_SERVICE_UNAVAILABLE` — the caller's 503, which a client retries.
+ * within its grace throws `SIGN_IN_AGAIN` — shown as "Sign in again", the session itself kept.
  *
  * The refresh token is not rotated. Rotation is only as good as its reuse detection, and a phone
  * that loses the response to a refresh would then present the old token and be signed out for a
@@ -271,11 +271,13 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
   if (!user) return null
   const sso = await recheckSsoSession(session)
   if (sso === 'ended') return null
-  if (sso === 'unavailable') throw ssoUnavailableError()
-  await prisma.harnessSession.update({
-    where: { id: session.id },
+  if (sso === 'sign-in-again') throw ssoSignInAgainError()
+  // Only a session still live moves on: one signed out meanwhile stays ended, and gets no new access token.
+  const { count } = await prisma.harnessSession.updateMany({
+    where: { id: session.id, ...notRevoked },
     data: { lastUsedAt: new Date(), expiresAt: sessionExpiry() },
   })
+  if (count === 0) return null
   return {
     token: await issueAccess(session.id, session.userId, session.kind === 'team' ? 'team' : 'viewer'),
     expiresIn: HARNESS_ACCESS_TTL_SEC,

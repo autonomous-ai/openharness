@@ -23,16 +23,25 @@ Code: `backend/src/lib/ssoSession.ts` (the rules below), `lib/harnessSession.ts`
     the account was disabled. The session ends, so access ends within about 2 hours (re-check plus access lifetime).
   - Anything else counts as SSO unavailable, never a sign-out: slow, down, 5xx, an answer for another account, an
     unreadable identity, or a refusal after an unfinished renewal. The session goes on for 7 days from its last good
-    check. After that, renewals answer "unavailable; retrying", which clients retry and never sign out over.
+    check. After that, renewals answer `SIGN_IN_AGAIN` (403), which the CLI and Desktop show as "Sign in again". The
+    session is not ended, so SSO coming back renews it, but nobody is left retrying silently forever.
 - **Rotation safety.** A renewal takes the session's lock in Redis (`SET NX`, released by compare-and-delete), and
   marks the session (`ssoRenewingAt`) before asking SSO. Only saving SSO's answer clears the mark. A mark left
   behind means a rotated token may have been lost on the way, so a refusal of the stored one proves nothing.
+- **Only live sessions are written.** Every write a renewal makes is conditional on the session not being revoked.
+  A session signed out while SSO was answering gets nothing written back, and its renewal answers 401.
+- **Only confirmed access tokens are kept.** An SSO access token is stored only after SSO's profile service has
+  confirmed whose it is. When that check cannot be made, the rotated refresh token is kept (losing it would lose the
+  sign-in), but the access token is not, so billing can never forward an unconfirmed one.
 - **Moving over.** Today's SSO sign-ins move on their next ordinary renewal, with no sign-in prompt. If the session
   cannot be made, the renewal answers with the SSO tokens as before, so a rotated SSO refresh token is never lost.
 - **Signing out.** `harness logout`, and Desktop sign-out, end the Harness session on the server: best effort,
   bounded, and the CLI says so when the server cannot be reached. Device removal already ends it.
 - **Billing.** Billing and machine deletion forward an SSO access token to the account service. For these sessions,
-  the backend uses the one it keeps, renewed under the same lock. Other Harness sessions are refused as before.
+  the backend uses the confirmed one it keeps, renewed under the same lock. A second call that finds a renewal under
+  way waits for it (up to the lock's 60 s) and reads its answer. Other Harness sessions are refused as before.
+- **Replacing a sign-in.** `harness login --force` and `harness reset` also end the previous Harness session on the
+  server, as `harness team on` does.
 - **No new power.** These sessions name no computer, so they never count as "this computer's own sign-in" for
   turning a computer into a team machine; that still needs the machine-key proof, as an SSO sign-in does.
 
@@ -44,7 +53,8 @@ Reviewed revision: see the PR. Reviewer: two independent security reviews (Ken d
    worker creates (`harness_session_expiry`) deletes a row 30 days after `expiresAt`: ended, or idle past 90 days.
    Before this, nothing deleted these rows. Redis keys: the access token (1 hour TTL) and the renewal lock (60 s TTL).
 2. **Concurrency.** The SSO renewal locks per session in Redis. Under the lock it reads the row again, writes the
-   mark, calls SSO, and saves the answer and clears the mark in one update. A second renewal finds the lock taken and
+   mark, calls SSO, and saves the answer and clears the mark in one update. Every one of those writes is guarded on
+   the row still being live, so a sign-out that lands meanwhile wins (tested: a revoke while SSO answers). A second renewal finds the lock taken and
    goes on without asking SSO, within the grace. A lost reply or failed save leaves the mark, which turns a later
    refusal into "unavailable". Tested: two renewals at once ask SSO once; removing the lock fails that test.
 3. **Read cost.** An ordinary request is unchanged for a Harness token: one Redis read and one session read by id.
@@ -60,8 +70,11 @@ Reviewed revision: see the PR. Reviewer: two independent security reviews (Ken d
    SSO fields.
 6. **Migration and rollback.** No data migration: the fields are optional and new sessions write them. Deploy the
    backend first; clients ask on their next renewal. On rollback, the previous backend already accepts and renews
-   `hna_`/`hnr_` sessions, so moved-over clients stay signed in. Only the hourly re-check and billing for them pause
-   until the release is back. Not checked on a production restore.
+   `hna_`/`hnr_` sessions, so moved-over clients stay signed in. **But an older backend never re-checks SSO**: while it
+   runs, a person who signs out of Autonomous or whose account is disabled keeps a moved-over session (up to its 90
+   idle days) until this release is back, and billing for these sessions answers "needs your Autonomous sign-in".
+   Keep a rollback short, or end these sessions by hand (`harness_sessions` rows with `ssoRefresh` set). Not checked
+   on a production restore.
 7. **Audience.** The stored SSO tokens leave the backend only toward the account service: for a renewal, or for
    billing for that session's own user (`ssoAccessTokenFor` checks the user and that the session is live).
    No route returns them.
@@ -69,7 +82,7 @@ Reviewed revision: see the PR. Reviewer: two independent security reviews (Ken d
    still answers for that account. An answer for another account is refused (counted as unavailable). Never the
    machine owner's login: the CLI's session is the person who signed in on it.
 9. **Failure.** SSO down: people stay signed in, and the backend logs `sso re-check unavailable` per session. Past
-   the grace, the CLI says it could not renew and keeps retrying. Credential key missing or store failing: the sign-in
+   the grace, the CLI's status and the Desktop say "Sign in again"; the daemon retries at its longest backoff. Credential key missing or store failing: the sign-in
    falls back to SSO tokens and logs `harness session not made`. A server sign-out that cannot be reached: the CLI says
    so, and the Desktop logs it.
 10. **Platforms.** Backend: Linux. CLI: macOS, Linux and Windows, with tokens in the same `~/.harness/auth/session.json`

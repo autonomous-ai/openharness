@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { HarnessSession, PrismaClient } from '@prisma/client'
+import type { HarnessSession, Prisma, PrismaClient } from '@prisma/client'
 import { pub } from './bus.js'
 import { prisma } from './prisma.js'
 import { decryptMachineCredential, encryptMachineCredential } from './machineCredential.js'
@@ -24,7 +24,12 @@ import { logger } from '../utils/logger.js'
  *     account was disabled. The session ends, and its stored tokens with it.
  *   - Anything else — SSO slow, down, failing, answering for another account, or refusing a token after a renewal that
  *     never finished — is SSO UNAVAILABLE, never a sign-out: the session goes on for [SSO_OUTAGE_GRACE_MS] from its last
- *     good check, and after that its renewals answer "unavailable", which a client retries and never signs out over.
+ *     good check. After that its renewals answer `SIGN_IN_AGAIN`, which a client shows as "Sign in again": the session
+ *     is not ended (SSO coming back renews it), but nobody is left retrying a sign-in that may never work again.
+ *
+ * Every write a renewal makes is on a session still live: one signed out while SSO was answering gets nothing back.
+ * An access token is kept only once SSO's profile service has confirmed whose it is, so billing never forwards one
+ * that was not.
  *
  * Two renewals of one session never ask SSO at once: a renewal takes the session's lock in Redis, and one that finds it
  * taken goes on without asking. Before asking, a renewal marks the session (`ssoRenewingAt`); only saving SSO's answer
@@ -45,6 +50,11 @@ const RENEW_LOCK_SEC = 60
 const ACCESS_SKEW_MS = 60_000
 
 const lockKey = (sessionId: string): string => `hnauth:ssorenew:${sessionId}`
+/** How long billing waits for another renewal of the same session to finish before it says unavailable. */
+const BUSY_WAIT_MS = RENEW_LOCK_SEC * 1000
+const BUSY_POLL_MS = 100
+// Not yet revoked. On MongoDB `revokedAt: null` alone does not match a field that is absent (lib/harnessSession.ts).
+const notRevoked: Prisma.HarnessSessionWhereInput = { OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }
 // Delete the lock only if it is still this renewal's: one that outlived its lock must not release the next one's.
 const RELEASE_SCRIPT = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0`
 
@@ -86,7 +96,7 @@ export function ssoSessionData(grant: SsoGrant, autonomousEnv: AutonomousEnviron
 /** A session ending: it is revoked, the SSO tokens it held are deleted with it, and it expires now — so the expiry
  *  index deletes the row [ENDED_SESSION_KEEP_MS] later ([ensureHarnessSessionExpiry]). */
 export function endedSessionData(now = new Date()) {
-  return { revokedAt: now, expiresAt: now, ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null }
+  return { revokedAt: now, expiresAt: now, ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null, ssoRenewingAt: null }
 }
 
 type Renewal =
@@ -99,6 +109,16 @@ type Renewal =
 
 const unavailable = (): SsoAuthError =>
   new SsoAuthError('The sign-in service is unavailable; retrying', 'AUTH_SERVICE_UNAVAILABLE')
+
+/** A renewal past the outage grace: shown to the person as "Sign in again" (lib/ssoSession.ts, above). */
+export const ssoSignInAgainError = (): SsoAuthError =>
+  new SsoAuthError('Sign in again: this sign-in could not be confirmed with your Autonomous account for 7 days', 'SIGN_IN_AGAIN')
+
+/** Write [data] on session [sessionId] only while it is live. False when it ended meanwhile: nothing was written. */
+async function writeLive(sessionId: string, data: Prisma.HarnessSessionUpdateManyMutationInput): Promise<boolean> {
+  const { count } = await prisma.harnessSession.updateMany({ where: { id: sessionId, ...notRevoked }, data })
+  return count > 0
+}
 
 /** Why a renewal could not get an answer, for the log: an error's kind, never its text (which could quote a request). */
 const reasonOf = (err: unknown): string =>
@@ -119,7 +139,7 @@ async function renew(sessionId: string, fresh: (row: HarnessSession, now: number
     if (fresh(row, now)) return { outcome: 'fresh', row }
 
     const unfinished = row.ssoRenewingAt instanceof Date
-    if (!unfinished) await prisma.harnessSession.update({ where: { id: sessionId }, data: { ssoRenewingAt: new Date(now) } })
+    if (!unfinished && !(await writeLive(sessionId, { ssoRenewingAt: new Date(now) }))) return { outcome: 'ended' }
     const held = decryptMachineCredential(row.ssoRefresh)
     const autonomousEnv = storedAutonomousEnvironment(row.ssoEnv)
     let tokens: Awaited<ReturnType<typeof refreshAccessToken>>
@@ -127,7 +147,7 @@ async function renew(sessionId: string, fresh: (row: HarnessSession, now: number
       tokens = await refreshAccessToken(held, autonomousEnv, normalizeSsoClientId(row.ssoClientId))
     } catch (err) {
       if (err instanceof SsoTokenError && err.code === 'INVALID_GRANT' && !unfinished) {
-        await prisma.harnessSession.update({ where: { id: sessionId }, data: endedSessionData() })
+        await writeLive(sessionId, endedSessionData())
         logger.info('sso sign-in ended a harness session', { sessionId, userId: row.userId })
         return { outcome: 'ended' }
       }
@@ -150,15 +170,17 @@ async function renew(sessionId: string, fresh: (row: HarnessSession, now: number
       logger.warn('sso re-check answered for another account', { sessionId, userId: row.userId })
       return { outcome: 'unavailable' }
     }
-    // Saved in one write, which also clears the mark. Unidentified, the rotated token is still kept, but the session
-    // is not counted as checked.
-    await prisma.harnessSession.update({ where: { id: sessionId }, data: {
+    // Saved in one write, which also clears the mark — on a session still live: one signed out while SSO answered keeps
+    // nothing. Unidentified, the rotated refresh token is still kept (losing it would lose the sign-in), but its access
+    // token is not, and the session is not counted as checked.
+    const saved = await writeLive(sessionId, {
       ssoRefresh: encryptMachineCredential(refreshToken),
-      ssoAccess: encryptMachineCredential(accessToken),
-      ssoAccessExpiresAt: accessExpiry(tokens.expires_in, now),
+      ssoAccess: identity ? encryptMachineCredential(accessToken) : null,
+      ssoAccessExpiresAt: identity ? accessExpiry(tokens.expires_in, now) : null,
       ssoRenewingAt: null,
       ...(identity ? { ssoCheckedAt: new Date(now) } : {}),
-    } })
+    })
+    if (!saved) return { outcome: 'ended' }
     return identity ? { outcome: 'renewed', accessToken } : { outcome: 'unavailable' }
   } catch (err) {
     // Redis, Mongo or the credential key failing: a mark already written stays.
@@ -170,11 +192,11 @@ async function renew(sessionId: string, fresh: (row: HarnessSession, now: number
 }
 
 /**
- * Whether session [session] may renew, as far as its SSO sign-in goes: `ok`, `ended` (it was just ended: the caller's
- * 401), or `unavailable` (SSO has not confirmed the sign-in within the grace: the caller's 503, which is retried).
- * A session no SSO sign-in backs is always `ok`.
+ * Whether session [session] may renew, as far as its SSO sign-in goes: `ok`, `ended` (it ended: the caller's 401), or
+ * `sign-in-again` (SSO has not confirmed the sign-in within the grace: [ssoSignInAgainError]). A session no SSO sign-in
+ * backs is always `ok`.
  */
-export async function recheckSsoSession(session: HarnessSession): Promise<'ok' | 'ended' | 'unavailable'> {
+export async function recheckSsoSession(session: HarnessSession): Promise<'ok' | 'ended' | 'sign-in-again'> {
   if (!session.ssoRefresh) return 'ok'
   const checkedAt = session.ssoCheckedAt?.getTime() ?? 0
   const recent = (row: HarnessSession, now: number): boolean => now - (row.ssoCheckedAt?.getTime() ?? 0) < SSO_RECHECK_MS
@@ -186,28 +208,31 @@ export async function recheckSsoSession(session: HarnessSession): Promise<'ok' |
   }
   if (renewal.outcome === 'ended') return 'ended'
   if (renewal.outcome === 'renewed' || renewal.outcome === 'fresh') return 'ok'
-  return Date.now() - checkedAt < SSO_OUTAGE_GRACE_MS ? 'ok' : 'unavailable'
+  return Date.now() - checkedAt < SSO_OUTAGE_GRACE_MS ? 'ok' : 'sign-in-again'
 }
-
-/** [recheckSsoSession]'s 'unavailable', as the error a renewal answers with. */
-export const ssoUnavailableError = unavailable
 
 /**
  * An SSO access token for session [sessionId] of [userId], for the routes that forward one to the account service
  * (billing, lib/autonomousBff.ts). Null when the session is not that person's, has ended, or has no SSO sign-in
- * behind it (a QR or handoff session). Throws `AUTH_SERVICE_UNAVAILABLE` when SSO cannot give one now.
+ * behind it (a QR or handoff session). Throws `AUTH_SERVICE_UNAVAILABLE` when SSO cannot give one now. Only a token
+ * whose identity SSO confirmed is ever kept, so only such a token is ever handed on. A call that finds another renewal
+ * of the session under way waits for it and reads its answer, rather than failing.
  */
 export async function ssoAccessTokenFor(sessionId: string, userId: string): Promise<string | null> {
-  const row = await prisma.harnessSession.findUnique({ where: { id: sessionId } })
-  if (!row || row.userId !== userId || row.revokedAt || !row.ssoRefresh) return null
   const usable = (r: HarnessSession, now: number): boolean =>
     !!r.ssoAccess && r.ssoAccessExpiresAt instanceof Date && r.ssoAccessExpiresAt.getTime() > now + ACCESS_SKEW_MS
-  if (usable(row, Date.now())) return decryptMachineCredential(row.ssoAccess!)
-  const renewal = await renew(sessionId, usable)
-  if (renewal.outcome === 'renewed') return renewal.accessToken
-  if (renewal.outcome === 'fresh') return decryptMachineCredential(renewal.row.ssoAccess!)
-  if (renewal.outcome === 'ended') return null
-  throw unavailable()
+  const waitUntil = Date.now() + BUSY_WAIT_MS
+  for (;;) {
+    const row = await prisma.harnessSession.findUnique({ where: { id: sessionId } })
+    if (!row || row.userId !== userId || row.revokedAt || !row.ssoRefresh) return null
+    if (usable(row, Date.now())) return decryptMachineCredential(row.ssoAccess!)
+    const renewal = await renew(sessionId, usable)
+    if (renewal.outcome === 'renewed') return renewal.accessToken
+    if (renewal.outcome === 'fresh') return decryptMachineCredential(renewal.row.ssoAccess!)
+    if (renewal.outcome === 'ended') return null
+    if (renewal.outcome === 'unavailable' || Date.now() >= waitUntil) throw unavailable()
+    await new Promise((resolve) => setTimeout(resolve, BUSY_POLL_MS))
+  }
 }
 
 /**

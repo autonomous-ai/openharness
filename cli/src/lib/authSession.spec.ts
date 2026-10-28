@@ -205,6 +205,17 @@ describe('AuthSessionManager', () => {
     expect(err.message).toMatch(/Authentication service unavailable/)  // the upstream's own words, kept
   })
 
+  it('a renewal answered "sign in again" says so and keeps the session, unmarked', async () => {
+    writeAuthSession({ ...baseSession(), accessToken: 'hna_old', refreshToken: 'hnr_1' })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      success: false, error: { code: 'SIGN_IN_AGAIN', message: 'Sign in again: not confirmed for 7 days' },
+    }), { status: 403 })))
+    const manager = new AuthSessionManager('https://api.example.test')
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'SIGN_IN_AGAIN', message: expect.stringMatching(/harness login/) })
+    expect(readAuthSession()).toMatchObject({ refreshToken: 'hnr_1' })
+    expect(readSignedOut()).toBeNull()
+  })
+
   it('keeps the session when the refresh service is merely unavailable', async () => {
     // The other half of the same ambiguity, and the reason this must NOT be reclassified as
     // INVALID_REFRESH: that branch deletes the session, and deleting it on a transient blip
