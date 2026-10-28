@@ -15,6 +15,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -354,23 +355,21 @@ void main() {
         tester
             .widget<EngineMark>(
               find.descendant(
-                of: find.byType(AlertDialog),
+                of: find.byType(SuperTabDetailDialog),
                 matching: find.byType(EngineMark),
               ),
             )
             .engine,
         'codex',
       );
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await openMachineDetails(tester, offline);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(
         find.descendant(
-          of: find.byWidget(
-            tester.widget<AlertDialog>(find.byType(AlertDialog)).title!,
-          ),
+          of: find.byType(DesktopDialogHeader),
           matching: find.text('M2'),
         ),
         findsOneWidget,
@@ -1226,7 +1225,9 @@ void main() {
       expect(row, findsOneWidget);
       await openMachineDetails(tester, row);
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Attach running agent'));
+      await tester.tap(find.byKey(const ValueKey('super-detail-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Attach running agent'));
       await tester.pumpAndSettle();
       expect(attached, [c.selected!.id]);
       await tester.pumpWidget(const SizedBox());
@@ -1345,7 +1346,7 @@ void main() {
           find.byKey(const ValueKey('super-machine-local-models-run')),
           findsNothing,
         );
-        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
         await tester.pumpWidget(const SizedBox());
         await c.flush();
@@ -1708,7 +1709,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-machine-remove')), findsNothing);
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await owner.flush();
@@ -1729,7 +1730,7 @@ void main() {
         find.byKey(const ValueKey('super-machine-remove')),
         findsOneWidget,
       );
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -1964,7 +1965,7 @@ void main() {
               );
               await tester.pumpAndSettle();
             }
-            final dialog = find.byType(AlertDialog);
+            final dialog = find.byType(SuperTabDetailDialog);
             final details = find.byType(SuperTabMachineDetails);
             expect(dialog, findsOneWidget);
             expect(details, findsOneWidget);
@@ -1986,7 +1987,7 @@ void main() {
               find.descendant(
                 of: details,
                 matching: find.textContaining(
-                  '5-hour: 70% remaining\nResets in ',
+                  '70% left · resets in ',
                 ),
               ),
               findsOneWidget,
@@ -1995,7 +1996,7 @@ void main() {
               find.descendant(
                 of: details,
                 matching: find.textContaining(
-                  'Weekly: 90% remaining\nResets in ',
+                  '90% left · resets in ',
                 ),
               ),
               findsOneWidget,
@@ -2022,7 +2023,7 @@ void main() {
                 'machine-details-more-$captureName',
               );
             }
-            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.tap(find.byTooltip('Close'));
             await tester.pumpAndSettle();
             expect(tester.takeException(), isNull);
             await tester.pumpWidget(const SizedBox());

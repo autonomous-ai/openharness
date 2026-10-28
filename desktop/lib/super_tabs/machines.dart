@@ -24,6 +24,7 @@ import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_subscription_usage.dart';
 import 'agent_details.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'local_models.dart';
@@ -1466,47 +1467,62 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           listenable: c,
           builder: (context, _) {
             final removeReason = _removeReason(id);
-            return AlertDialog(
-              title: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(child: Text(superTabMachineName(name))),
-                      // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
-                      if (_canRemove(id))
-                        AppIconButton(
-                          key: const ValueKey('super-machine-remove'),
-                          icon: AppIcons.trash2,
-                          tooltip: removeReason ?? 'Remove from Swarm',
-                          color: DesktopChrome.muted,
-                          destructive: true,
-                          onPressed: removeReason != null
-                              ? null
-                              : () {
-                                  if (_removeReason(id) != null) return;
-                                  Navigator.pop(context);
-                                  WidgetsBinding.instance.addPostFrameCallback((
-                                    _,
-                                  ) {
-                                    if (mounted) unawaited(_remove(v));
-                                  });
-                                },
-                        ),
-                    ],
+            Future<void> pause() async {
+              final result = await c.command({
+                'type': 'machine.pause',
+                'machineId': id,
+                'paused': !paused,
+              });
+              if (context.mounted && result != null) Navigator.pop(context);
+            }
+
+            void attach() {
+              final group = c.selected!;
+              Navigator.pop(context);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) widget.onAddAgent(group);
+              });
+            }
+
+            // One clear action at the right; the rarer ones behind ⋯ (Ken, 2026-10-28).
+            final more = [
+              if (shared != null && contributor == c.accountId)
+                (
+                  label: paused ? 'Resume new work' : 'Pause new work',
+                  onPressed: () => unawaited(pause()),
+                ),
+              if (c.canWrite && c.selected != null)
+                (label: 'Attach running agent', onPressed: attach),
+            ];
+            return SuperTabDetailDialog(
+              title: superTabMachineName(name),
+              detail: _canRemove(id) ? removeReason : null,
+              headerActions: [
+                // Out of the way of the everyday actions below: a quiet mark that turns red when pointed at.
+                if (_canRemove(id))
+                  AppIconButton(
+                    key: const ValueKey('super-machine-remove'),
+                    icon: AppIcons.trash2,
+                    tooltip: removeReason ?? 'Remove from Swarm',
+                    color: DesktopChrome.muted,
+                    destructive: true,
+                    onPressed: removeReason != null
+                        ? null
+                        : () {
+                            if (_removeReason(id) != null) return;
+                            Navigator.pop(context);
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              if (mounted) unawaited(_remove(v));
+                            });
+                          },
                   ),
-                  if (_canRemove(id) && removeReason != null)
-                    Text(removeReason, style: DesktopChrome.metadata()),
-                ],
-              ),
-              content: SuperTabMachineDetails(
+              ],
+              body: SuperTabMachineDetails(
                 name: name,
                 owner: person?.email,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
-                cwd: shared?['cwd'] as String?,
                 engines: allowed,
                 accounts: dim ? const [] : accounts,
                 footer: SuperTabMachineLocalModels(
@@ -1515,21 +1531,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   now: widget.now,
                 ),
               ),
+              leadingActions: [
+                if (more.isNotEmpty) SuperTabMoreActions(items: more),
+              ],
               actions: [
-                if (shared != null && contributor == c.accountId)
-                  TextButton(
-                    onPressed: () async {
-                      final result = await c.command({
-                        'type': 'machine.pause',
-                        'machineId': id,
-                        'paused': !paused,
-                      });
-                      if (context.mounted && result != null) {
-                        Navigator.pop(context);
-                      }
-                    },
-                    child: Text(paused ? 'Resume new work' : 'Pause new work'),
-                  ),
                 if (contributor == c.accountId)
                   TextButton(
                     onPressed: () {
@@ -1540,21 +1545,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     },
                     child: const Text('Configure'),
                   ),
-                if (c.canWrite && c.selected != null)
-                  TextButton(
-                    onPressed: () {
-                      final group = c.selected!;
-                      Navigator.pop(context);
-                      WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (mounted) widget.onAddAgent(group);
-                      });
-                    },
-                    child: const Text('Attach running agent'),
-                  ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'),
-                ),
               ],
             );
           },
