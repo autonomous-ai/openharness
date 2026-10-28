@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../core/app_version.dart';
 import '../core/sleep_aware.dart';
 import '../core/test_run.dart';
 import '../logging/app_log.dart';
@@ -47,6 +48,19 @@ Duration reconnectDelay(int attempt, Random random) {
 /// the moment a socket was up made a socket the backend dropped right after its handshake redial
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
 const connectionStableAfter = Duration(minutes: 1);
+
+/// This build's version, which every backend socket it dials says (`?v=`), read once at start-up
+/// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
+String? declaredAppVersion;
+
+/// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
+Future<void> rememberAppVersionForSockets() async {
+  try {
+    declaredAppVersion = await runningAppVersion();
+  } catch (_) {
+    // Sockets go on saying what they are, without a version.
+  }
+}
 
 /// The backend's refusals of a `machine_select` that no redial can change: the machine left the
 /// account or was never shared with it, it belongs to another environment, or its subscription stops
@@ -463,8 +477,10 @@ class WsConn {
             if (_directObserver)
               (observerLink ? 'link' : 'share'): observerShareId!,
             // The browser counts its person as on the web today (backend
-            // user_daily_client_presence). Not other viewer builds: they are not the web.
-            if (!_directObserver && kIsWeb) 'client': 'web',
+            // user_daily_client_presence). Other viewer builds say they are the desktop app,
+            // which counts no presence. Both say which build (WebSocket roadmap Phase 0).
+            'client': kIsWeb ? 'web' : 'desktop',
+            'v': ?declaredAppVersion,
           },
         );
       }

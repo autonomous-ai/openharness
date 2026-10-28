@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
-  auth: vi.fn(), admits: vi.fn(), relay: vi.fn(), publish: vi.fn(), changed: vi.fn(), live: vi.fn(), upgrade: vi.fn(),
+  auth: vi.fn(), admits: vi.fn(), relay: vi.fn(), publish: vi.fn(), changed: vi.fn(), live: vi.fn(), upgrade: vi.fn(), info: vi.fn(),
   SsoAuthError: class SsoAuthError extends Error { constructor(message: string, readonly code: string) { super(message) } },
 }))
 vi.mock('./ssoAuth.js', () => ({ authenticateAccessToken: m.auth, SsoAuthError: m.SsoAuthError }))
+vi.mock('../utils/logger.js', () => ({ logger: { info: m.info, warn: vi.fn(), error: vi.fn(), debug: vi.fn() } }))
 vi.mock('./agentMessageShares.js', () => ({ admits: m.admits }))
 vi.mock('./bus.js', () => ({ subscribeTabRelay: m.relay, publishTabRelay: m.publish, subscribeAgentMessageShareChanged: m.changed }))
 vi.mock('./hub.js', () => ({ trackSocketLiveness: m.live }))
@@ -50,6 +51,16 @@ describe('blind shared-tab relay WebSocket', () => {
     }
     expect(socket.destroy).toHaveBeenCalledTimes(6)
     expect(m.auth).not.toHaveBeenCalled(); expect(m.upgrade).not.toHaveBeenCalled()
+  })
+
+  // WebSocket roadmap Phase 0: which daemon, how its socket ended and after how long.
+  it('logs the daemon it declared, and how and when its socket closed', async () => {
+    await connect(req(`share=${SHARE}&machine=ken-mac&client=relay&v=0.9.1`))
+    vi.advanceTimersByTime(1_500)
+    ws.emit('close', 4409, Buffer.from('Replaced by a newer connection'))
+    const lines = m.info.mock.calls.filter(c => c[0] === 'agent-messages disconnected').map(c => c[1])
+    expect(lines).toEqual([expect.objectContaining({ endpoint: 'agentMessages', client: 'relay', version: '0.9.1', userId: 'ken',
+      machineId: 'ken-mac', code: 4409, reason: 'Replaced by a newer connection', aliveMs: 1_500 })])
   })
 
   it('upgrades a refused connection and closes it 4403, authenticating as a daemon', async () => {

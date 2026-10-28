@@ -6,6 +6,7 @@ import type { RelaySession } from '../lib/remoteRelay.js'
 import { DAEMON_LOCAL_ONLY_TYPES } from '../lib/relayFrames.js'
 import { recipientHandshake, type ObserverCipher } from './crypto.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness } from '../lib/wsLiveness.js'
+import { declaredClientQuery } from '../lib/declaredClient.js'
 
 export interface SharedHarnessReference {
   id: string; agentId: string; name: string; engine: string | null; ownerPublicKey: string; expiresAt: string
@@ -29,6 +30,7 @@ export class HarnessShareRelay {
     if (!share) throw new SharingEndedError('Sharing ended or invitation expired')
     const token = await this.auth.accessToken()
     const url = `${this.backendWsBase.replace(/\/$/, '')}/api/observer-ws?share=${encodeURIComponent(shareId)}&autonomousEnv=${encodeURIComponent(this.environment)}`
+      + `&${declaredClientQuery('relay')}`
     const ws = new WebSocket(url, [token], { handshakeTimeout: 10_000, maxPayload: 3 * 1024 * 1024 })
     const ephemeral = newEphemeral()
     let cipher: ObserverCipher | null = null, detached = false, settled = false

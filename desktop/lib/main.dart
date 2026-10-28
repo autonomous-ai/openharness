@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 
 import 'app_shell.dart';
 import 'core/connected_semantics.dart';
+import 'ws/ws_conn.dart' show rememberAppVersionForSockets;
 import 'update/started_marker.dart';
 import 'desktop_workspace.dart'
     if (dart.library.js_interop) 'web/web_entry.dart';
@@ -18,6 +19,7 @@ import 'desktop_workspace.dart'
 Future<void> main() async {
   HarnessWidgetsBinding();
   prepareConsole();
+  unawaited(rememberAppVersionForSockets());
   await startHarness(
     authenticatedScreen: authenticatedWorkspace,
     frame: appFrame,

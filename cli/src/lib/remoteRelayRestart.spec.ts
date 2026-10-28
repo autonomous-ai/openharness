@@ -7,6 +7,7 @@ import { MachinePeerStore } from './e2ee/machinePeers.js'
 import { b64e, newIdentity } from './e2ee/core.js'
 import { E2eeStore } from './e2ee/store.js'
 import type { LocalClientSink } from '../backendSocket.js'
+import { VERSION } from '../version.js'
 
 const machineId = 'abcdabcdabcdabcdabcdabcdabcdabcd'
 type Frame = { type: string; payload?: Record<string, unknown> }
@@ -15,6 +16,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 
 async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
   const sockets = new Map<string, WebSocket>()
+  const urls: string[] = []
   let next = 0
   let hellos = 0
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
@@ -34,7 +36,8 @@ async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
     `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`,
     self, peers, { p2p: false, lingerMs: opts.lingerMs },
   )
-  wss.on('connection', ws => {
+  wss.on('connection', (ws, req) => {
+    urls.push(req.url ?? '')
     const id = `remote-${++next}`
     sockets.set(id, ws)
     ws.on('close', () => { sockets.delete(id); manager.dropSession(id) })
@@ -58,7 +61,7 @@ async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
     await new Promise<void>(resolve => wss.close(() => resolve()))
   })
   return {
-    pool, peers, peerPub, hellos: () => hellos,
+    pool, peers, peerPub, hellos: () => hellos, urls,
     select: { type: 'machine_select', payload: { machineId } },
     restart() { manager = new E2eeManager(managerDeps) },
     status(online: boolean) { for (const ws of sockets.values()) ws.send(JSON.stringify({ type: 'node_status', payload: { online } })) },
@@ -66,6 +69,13 @@ async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
 }
 
 describe('remote daemon restart recovery', () => {
+  // WebSocket roadmap Phase 0: 2,304 of 2,308 web-ws opens in 15 minutes declared nothing (prod, 2026-10-28).
+  it('dials as a daemon relay, saying which CLI', async () => {
+    const f = await fixture({ offline: true })
+    await f.pool.acquire(machineId, 'prod', f.select, { sendFrame: () => true, sendBinary: () => true }, () => {}).catch(() => {})
+    expect(f.urls).toEqual([`/api/web-ws?autonomousEnv=prod&client=relay&v=${encodeURIComponent(VERSION)}`])
+  })
+
   it('reports an offline peer immediately during the handshake and keeps its trust', async () => {
     const f = await fixture({ offline: true })
     await expect(f.pool.acquire(machineId, 'prod', f.select, { sendFrame: () => true, sendBinary: () => true }, () => {}))
