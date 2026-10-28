@@ -74,7 +74,8 @@ async function attach(ws: WebSocket, userId: string, share: string, machine: str
     try { if (!await admits(userId, machine, share, env)) ws.close(4403, 'Not in this shared tab') }
     catch { ws.close(1013, 'Shared tab temporarily unavailable') }
   }
-  const timer = setInterval(() => { void check() }, 5000); timer.unref(); disposers.push(() => clearInterval(timer))
+  // Every change to the tab is told (routes/agentMessages.ts `tell`); the minute's re-check covers the rest.
+  const timer = setInterval(() => { void check() }, 60_000); timer.unref(); disposers.push(() => clearInterval(timer))
   keep(await subscribeAgentMessageShareChanged(share, () => { void check() }))
   keep(await subscribeTabRelay(share, machine, message => { if (!closed) send({ type: 'amsg_frame', ...(message as object) }) }))
   if (closed) return

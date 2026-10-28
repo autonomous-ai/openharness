@@ -338,9 +338,12 @@ export class SuperTabHost {
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
-    // An empty roster in force, which Share reads as everyone gone and withdraws their invitations; a lapsed one
-    // would only pause their views (superTabs/observers.ts `known`).
-    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS, this.stillRuns) } catch { /* The old snapshot expires. */ }
+    // A roster that lapses now: viewing pauses at once, and Share keeps the invitations (superTabs/observers.ts `known`)
+    // until the next host's first roster says who is still a member. A host stops when its backend link drops and when
+    // the daemon restarts for an update; an empty roster in force here withdrew every member's invitation each time,
+    // which took this computer out of their machine lists until their apps next read them, up to 5 minutes later, and
+    // their panes said Harness here was out of date (Ken, 2026-10-28). The confidential marks are kept as they are.
+    try { this.observers(this.core.dataDir, this.machineId, [], this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
