@@ -11,7 +11,7 @@ export interface IsolatedPoll {
 }
 
 /** A raw command's number: plain, or Extended JSON's `$numberLong` / `$numberInt` as Prisma returns some of them. */
-function count(value: unknown): number {
+export function count(value: unknown): number {
   if (typeof value === 'number') return value
   if (value && typeof value === 'object') {
     const wrapped = (value as Record<string, unknown>).$numberLong ?? (value as Record<string, unknown>).$numberInt
