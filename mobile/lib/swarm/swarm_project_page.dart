@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -1234,6 +1235,7 @@ class _Mate extends StatelessWidget {
     AppTheme.watch(context);
     final tty = Tty.of(context);
     final down = glance.state == SwarmAgentState.down;
+    final shell = PhoneShellScope.maybeOf(context);
     return Padding(
       key: ValueKey('swarm-agent-${glance.agent.id}'),
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
@@ -1311,6 +1313,19 @@ class _Mate extends StatelessWidget {
                     height: 1.4,
                   ),
                 ),
+                if (shell != null && glance.agent.harnessId.isNotEmpty)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: SwarmButton(
+                      key: ValueKey('swarm-open-terminal-${glance.agent.id}'),
+                      label: 'Open terminal',
+                      style: SwarmButtonStyle.link,
+                      onPressed: () => shell.onOpenAgent(
+                        glance.agent.machineId,
+                        glance.agent.harnessId,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

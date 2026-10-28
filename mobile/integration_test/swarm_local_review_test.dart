@@ -22,8 +22,7 @@ import 'package:harness_mobile/ws/ws_conn.dart';
 
 /// Swarm on the phone against an isolated local backend, a screenshot at each
 /// step. First the real shell: Home without Swarm, Settings ▸ Experimental,
-/// then Swarm Home at the root, Harness through an agent's notice (its drawer
-/// has no way there), and the terminal's Swarm mark and Find's Swarm command
+/// then Swarm Home at the root, Harness from the project team, and the terminal's Swarm mark and Find's Swarm command
 /// back to Swarm Home, all through the app's own Swarm path to one account
 /// machine. Then the screens: what needs the person and the Swarms, a
 /// project, a chat, a post with a mention, and a decision answered with one
@@ -145,14 +144,16 @@ void main() {
       await walk.waitFor(find.textContaining('River asks you'));
       await walk.shot('swarm-home');
 
-      // ④ Harness through the agent's "agent finished" notice, tapped (the
-      // drawer has no way there): the terminal, its mark with how many
+      // ④ Open terminal from the project team: the terminal, its mark with how many
       // things need the person; the mark goes back to Swarm Home.
       Future<void> harness() async {
-        notifier.agentNotices.system.opened.value = (
-          machineId: machine.machineId,
-          agentId: 'agent-review',
-        );
+        await tester.tap(walk.keyStarting('swarm-project-').first);
+        await walk.waitFor(walk.key('swarm-team-line'));
+        await tester.tap(walk.key('swarm-team-line'));
+        await walk.waitFor(walk.key('swarm-sheet-team'));
+        await tester.tap(walk.key('swarm-sheet-team'));
+        await walk.waitFor(walk.keyStarting('swarm-open-terminal-'));
+        await tester.tap(walk.keyStarting('swarm-open-terminal-').first);
         await walk.waitFor(walk.key('swarm-mark-count'));
       }
 

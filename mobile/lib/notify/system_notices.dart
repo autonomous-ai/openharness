@@ -19,7 +19,12 @@ typedef AgentNoticeMessage = ({
 });
 
 /// Where a Swarm notice leads: the Swarm, and the conversation it is about.
-typedef SwarmNoticeTarget = ({String swarmId, String conversationId});
+typedef SwarmNoticeTarget = ({
+  String swarmId,
+  String conversationId,
+  String? messageId,
+  String? decisionId,
+});
 
 /// One notice about what a Swarm asks of the person. [key] names it, so the
 /// same need posted twice replaces itself; [subtitle] says where it is.
@@ -441,17 +446,33 @@ int swarmNoticeIdFor(String key) {
 @visibleForTesting
 String encodeSwarmPayload(SwarmNoticeTarget target) =>
     '$_swarmPayload${Uri.encodeComponent(target.swarmId)}'
-    '/${Uri.encodeComponent(target.conversationId)}';
+    '/${Uri.encodeComponent(target.conversationId)}'
+    '${target.messageId != null
+        ? '/message/${Uri.encodeComponent(target.messageId!)}'
+        : target.decisionId != null
+        ? '/decision/${Uri.encodeComponent(target.decisionId!)}'
+        : ''}';
 
 @visibleForTesting
 SwarmNoticeTarget? decodeSwarmPayload(String? payload) {
   if (payload == null || !payload.startsWith(_swarmPayload)) return null;
   final parts = payload.substring(_swarmPayload.length).split('/');
-  if (parts.length != 2 || parts.any((p) => p.isEmpty)) return null;
+  if ((parts.length != 2 && parts.length != 4) || parts.any((p) => p.isEmpty)) {
+    return null;
+  }
+  if (parts.length == 4 && !const ['message', 'decision'].contains(parts[2])) {
+    return null;
+  }
   try {
     return (
       swarmId: Uri.decodeComponent(parts[0]),
       conversationId: Uri.decodeComponent(parts[1]),
+      messageId: parts.length == 4 && parts[2] == 'message'
+          ? Uri.decodeComponent(parts[3])
+          : null,
+      decisionId: parts.length == 4 && parts[2] == 'decision'
+          ? Uri.decodeComponent(parts[3])
+          : null,
     );
   } on ArgumentError {
     return null;

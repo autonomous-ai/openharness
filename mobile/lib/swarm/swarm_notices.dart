@@ -40,7 +40,12 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
     title: title,
     subtitle: project,
     body: body,
-    target: (swarmId: need.swarmId, conversationId: need.conversationId),
+    target: (
+      swarmId: need.swarmId,
+      conversationId: need.conversationId,
+      messageId: need is SwarmMentionNeed ? need.mention.messageId : null,
+      decisionId: need is SwarmDecisionNeed ? need.decision.id : null,
+    ),
   );
 }
 

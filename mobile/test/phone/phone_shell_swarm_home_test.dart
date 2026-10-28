@@ -57,13 +57,11 @@ void main() {
     await frames(tester);
   }
 
-  /// An agent opened from its notice: the terminal at the root, over Swarm
+  /// An agent explicitly opened through the shell: the terminal at the root, over Swarm
   /// Home.
   Future<void> toHarness(WidgetTester tester) async {
-    app.agentNotices.system.opened.value = (
-      machineId: 'mac-1',
-      agentId: 'agent-1',
-    );
+    PhoneShellScope.maybeOf(tester.element(find.byType(SwarmPage)))!
+        .onOpenAgent('mac-1', 'agent-1');
     await frames(tester);
   }
 
@@ -139,7 +137,7 @@ void main() {
     );
   });
 
-  testWidgets('an agent opened from its notice puts the terminal at the root; '
+  testWidgets('an agent explicitly opened puts the terminal at the root; '
       'back goes to Swarm Home; each keeps the other out of sight', (
     tester,
   ) async {

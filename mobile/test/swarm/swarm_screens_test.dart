@@ -153,6 +153,7 @@ void main() {
     WidgetTester tester,
     FakeSwarm fake,
     Widget home, {
+    void Function(String, String)? openAgent,
     bool on = true,
     bool settle = true,
   }) async {
@@ -169,7 +170,16 @@ void main() {
     addTearDown(host.dispose);
     await tester.pumpWidget(
       MaterialApp(
-        builder: (context, child) => SwarmScope(notifier: host, child: child!),
+        builder: (context, child) => SwarmScope(
+          notifier: host,
+          child: openAgent == null
+              ? child!
+              : PhoneShellScope(
+                  onMachineLinked: (_) {},
+                  onOpenAgent: openAgent,
+                  child: child!,
+                ),
+        ),
         home: home,
       ),
     );
@@ -444,6 +454,24 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets(
+      'an agent offers Open terminal with its actual machine and harness',
+      (tester) async {
+        final opened = <(String, String)>[];
+        await pump(
+          tester,
+          backend(),
+          page,
+          openAgent: (m, a) => opened.add((m, a)),
+        );
+        await openSheet(tester);
+        await tester.tap(key('swarm-sheet-team'));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-open-terminal-agent-builder'));
+        expect(opened, [('mac-1', 'harness-agent-builder')]);
+      },
+    );
+
     testWidgets('opens on its project chat, the line under its header', (
       tester,
     ) async {
@@ -688,8 +716,11 @@ void main() {
         fake,
         Builder(
           builder: (context) => TextButton(
-            onPressed: () =>
-                showSwarmProjectSheet(context, swarmId: tab, projectId: project),
+            onPressed: () => showSwarmProjectSheet(
+              context,
+              swarmId: tab,
+              projectId: project,
+            ),
             child: const Text('Open'),
           ),
         ),

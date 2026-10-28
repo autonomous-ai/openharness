@@ -7,6 +7,7 @@ import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_home_root.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -88,14 +89,12 @@ void main() {
   });
 
   group('Harness out of sight under Swarm Home', () {
-    /// Harness from an agent notice, then back to Swarm Home: the terminal home
+    /// Harness explicitly opened, then back to Swarm Home: the terminal home
     /// is built, and kept out of sight.
     Future<void> hideHarness(WidgetTester tester) async {
       await open(tester);
-      app.agentNotices.system.opened.value = (
-        machineId: 'mac-1',
-        agentId: 'agent-1',
-      );
+      PhoneShellScope.maybeOf(tester.element(find.byType(SwarmPage)))!
+          .onOpenAgent('mac-1', 'agent-1');
       await frames(tester);
       await tester.binding.handlePopRoute();
       await frames(tester);

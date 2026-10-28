@@ -45,7 +45,7 @@ void main() {
   ) async {
     final swarm = _Swarm();
     final walk = _Walk(tester, binding, 'swarm-home');
-    final notifier = await _openShell(tester, swarm);
+    await _openShell(tester, swarm);
     final navigator = find
         .descendant(
           of: find.byType(PhoneShell),
@@ -136,9 +136,8 @@ void main() {
     await back();
     await walk.waitFor(walk.key('swarm-menu'));
 
-    // ⑧ An agent's notice tapped: Harness, the terminal at the root, as the
-    // drawer has no way there. Its Swarm mark goes back to Swarm Home.
-    _openNotice(notifier);
+    // ⑧ Open terminal from the project team: Harness at the root. Its Swarm mark goes back to Swarm Home.
+    await _openTerminal(tester, walk);
     await walk.waitFor(walk.key('swarm-mark'));
     await walk.wait(1500);
     await walk.shot('harness');
@@ -159,7 +158,7 @@ void main() {
     tester,
   ) async {
     final walk = _Walk(tester, binding, 'swarm-home-kept');
-    final notifier = await _openShell(tester, _Swarm(more: 8));
+    await _openShell(tester, _Swarm(more: 8));
     final list = find
         .descendant(
           of: find.byType(SwarmPage),
@@ -176,8 +175,8 @@ void main() {
     expect(scrolled, greaterThan(0));
     await walk.shot('home-scrolled');
 
-    // ② Harness, through an agent's notice.
-    _openNotice(notifier);
+    // ② Harness, from the project team.
+    await _openTerminal(tester, walk);
     await walk.waitFor(walk.key('swarm-mark'));
     await walk.wait(1500);
     await walk.shot('harness');
@@ -191,7 +190,7 @@ void main() {
 }
 
 /// The real shell on [swarm], Swarm on, with one machine of the account
-/// connected and its one agent listed; its notifier, to tap a notice with.
+/// connected and its one agent listed; its notifier.
 Future<AppNotifier> _openShell(WidgetTester tester, _Swarm swarm) async {
   const machine = Machine(
     machineId: 'mac-1',
@@ -200,7 +199,7 @@ Future<AppNotifier> _openShell(WidgetTester tester, _Swarm swarm) async {
   );
   final agents = [
     <String, dynamic>{
-      'id': 'agent-review',
+      'id': 'harness-agent-builder',
       'name': 'passkeys',
       'sessionId': 'session-review',
       'engine': 'claude',
@@ -234,13 +233,18 @@ Future<AppNotifier> _openShell(WidgetTester tester, _Swarm swarm) async {
   return notifier;
 }
 
-/// The shell's one agent's "agent finished" notice, tapped: Harness at the
-/// root, that agent on screen.
-void _openNotice(AppNotifier notifier) =>
-    notifier.agentNotices.system.opened.value = (
-      machineId: 'mac-1',
-      agentId: 'agent-review',
-    );
+/// Open an agent explicitly from the project's team; Home keeps its scroll.
+Future<void> _openTerminal(WidgetTester tester, _Walk walk) async {
+  await tester.tap(walk.key('swarm-menu'));
+  await walk.waitFor(walk.key('swarm-drawer-project-$tab-$project'));
+  await tester.tap(walk.key('swarm-drawer-project-$tab-$project'));
+  await walk.waitFor(walk.key('swarm-team-line'));
+  await tester.tap(walk.key('swarm-team-line'));
+  await walk.waitFor(walk.key('swarm-sheet-team'));
+  await tester.tap(walk.key('swarm-sheet-team'));
+  await walk.waitFor(walk.key('swarm-open-terminal-agent-builder'));
+  await tester.tap(walk.key('swarm-open-terminal-agent-builder'));
+}
 
 /// One Swarm, "Phone Swarm", as the backend would send it: Mobile app (River
 /// its Product Manager, Nova waiting on the person, Kai working, Atlas

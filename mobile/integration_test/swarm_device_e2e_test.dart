@@ -15,8 +15,7 @@ import 'package:harness_mobile/swarm/swarm_need_rows.dart';
 /// otherwise, so no CI or simulator run reaches a real account.
 ///
 /// It reads: Swarm on (in memory only; the saved switch is left as it was),
-/// Swarm Home and its drawer, Harness through the first listed agent's notice
-/// (the drawer has no way there) and the terminal's mark back to Swarm Home,
+/// Swarm Home and its drawer, Harness from the project team and the terminal's mark back to Swarm Home,
 /// the first project, its project chat. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
 /// decision asks this person: there it posts one short line and answers that
 /// decision with its first option. Nothing else is written.
@@ -104,8 +103,8 @@ void main() {
       experimentalFeaturesStore.value = {...saved, PhoneExperiment.swarm};
 
       // ① Swarm Home at the root: needs first, Chat with PM, the projects.
-      // Its drawer, with no way to Harness; Harness through an agent's
-      // "agent finished" notice, tapped, as the person reaches it; the
+      // Its drawer, with no way to Harness; Harness from the project
+      // team’s Open terminal action; the
       // terminal's mark goes back to Swarm Home.
       await waitFor(keyStarting('swarm-project-'), seconds: 60);
       await shot('swarm');
@@ -115,22 +114,13 @@ void main() {
       await shot('drawer');
       await tester.tap(key('swarm-drawer-home'));
       await waitGone(key('swarm-drawer-home'));
-      final notifier = tester
-          .widget<PhoneShell>(find.byType(PhoneShell))
-          .notifier;
-      ({String machineId, String agentId})? listed() => [
-        for (final machine in notifier.machineStates.values)
-          for (final agent in machine.agents)
-            (machineId: machine.machine.machineId, agentId: agent.id),
-      ].firstOrNull;
-      for (var i = 0; i < 300 && listed() == null; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      final agent = listed();
-      if (agent == null) {
-        fail('No agent listed on your computers: start one, then run again.');
-      }
-      notifier.agentNotices.system.opened.value = agent;
+      await tester.tap(keyStarting('swarm-project-').first);
+      await waitFor(key('swarm-team-line'));
+      await tester.tap(key('swarm-team-line'));
+      await waitFor(key('swarm-sheet-team'));
+      await tester.tap(key('swarm-sheet-team'));
+      await waitFor(keyStarting('swarm-open-terminal-'));
+      await tester.tap(keyStarting('swarm-open-terminal-').first);
       await waitFor(key('swarm-mark'));
       await shot('home-mark');
       await tester.tap(key('swarm-mark'));

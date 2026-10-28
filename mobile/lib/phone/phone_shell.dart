@@ -113,6 +113,9 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
+    // Install tap callbacks and read the launch payload even when no new notice
+    // arrives. Checking permission does not ask for it.
+    unawaited(noticesEnabled(notices));
     // A tap that launched the app is read before this shell exists, so its value is already set and
     // no listener will ever fire for it: take it once the navigator is up.
     if (notices.opened.value != null ||
@@ -192,6 +195,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// connecting at this point and [AgentHome] is already watching for exactly that — it holds
   /// whatever is on screen while the machine dials, then opens the first agent it reports.
   void _followLinkedMachine(String machineId) {
+    ++_navigationRequest;
     _linkedMachineId.value = machineId;
     _home.showHarness();
   }
@@ -208,6 +212,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// person had finished with. The stack is emptied back to its root instead and the root terminal
   /// switches agent, so there is never anything to go back to.
   void _openAgentAtHome(String machineId, String agentId) {
+    ++_navigationRequest;
     _navigator.currentState?.popUntil((route) => route.isFirst);
     // Reset first, so picking the agent already requested last time still notifies.
     _openAgentRequest.value = null;
@@ -218,6 +223,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   /// Swarm Home, from the terminal's Swarm mark or Find: back to the root.
   void _showSwarm() {
+    ++_navigationRequest;
     _navigator.currentState?.popUntil((route) => route.isFirst);
     _home.showSwarm();
   }
@@ -250,7 +256,65 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     final agent = opened.value;
     if (agent == null) return;
     opened.value = null;
-    _openAgentAtHome(agent.machineId, agent.agentId);
+    if (_swarm.session case final session?) {
+      unawaited(_openSwarmAgent(session, agent.machineId, agent.agentId));
+    } else {
+      _openAgentAtHome(agent.machineId, agent.agentId);
+    }
+  }
+
+  // Shared by notification reads, explicit root changes and route transitions.
+  int _navigationRequest = 0;
+
+  Future<void> _openSwarmAgent(
+    SwarmSession session,
+    String machineId,
+    String harnessId,
+  ) async {
+    final request = ++_navigationRequest;
+    // Join the cold-start read; a background tap must use the current assignment.
+    await session.inbox.refresh();
+    if (!mounted ||
+        _swarm.session != session ||
+        request != _navigationRequest) {
+      return;
+    }
+    for (final swarm in session.inbox.swarms) {
+      final snapshot = session.inbox.reader(swarm.id)?.snapshot;
+      if (snapshot == null) continue;
+      for (final agent in snapshot.agents) {
+        if (agent.machineId != machineId || agent.harnessId != harnessId) {
+          continue;
+        }
+        final groups = snapshot.conversations.where(
+          (g) =>
+              !g.closed && !snapshot.isProjectLead(g.id) && g.audience == null,
+        );
+        final assigned = groups.where(
+          (g) =>
+              g.assignment?['agentId'] == agent.id &&
+              !const ['done', 'cancelled'].contains(g.assignment?['status']),
+        );
+        final member = groups.where((g) => g.agentIds.contains(agent.id));
+        final conversationId =
+            assigned.firstOrNull?.id ??
+            member.firstOrNull?.id ??
+            snapshot.projectById(agent.projectId)?.leadConversationId;
+        if (conversationId != null) {
+          _showNoticedChat((
+            swarmId: swarm.id,
+            conversationId: conversationId,
+            messageId: null,
+            decisionId: null,
+          ));
+          return;
+        }
+      }
+    }
+    _showSwarm();
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('This agent’s chat is unavailable.')),
+    );
   }
 
   /// A tapped "new device" notice: that device's page. One this phone has just been told of opens as
@@ -269,9 +333,17 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   void _openNoticedSwarm() {
     final opened = _swarmNotices.openedSwarm;
     final target = opened.value;
-    final navigator = _navigator.currentState;
-    if (target == null || navigator == null) return;
+    if (target == null || _navigator.currentState == null) return;
     opened.value = null;
+    // Swarm off cancels its notices. A stale tap must not open a disabled UI.
+    if (_swarm.session == null) return;
+    _showNoticedChat(target);
+  }
+
+  void _showNoticedChat(SwarmNoticeTarget target) {
+    ++_navigationRequest;
+    final navigator = _navigator.currentState;
+    if (navigator == null) return;
     navigator.popUntil((route) => route.isFirst);
     _home.showSwarm();
     unawaited(
@@ -280,6 +352,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
           (_) => SwarmConversationPage(
             swarmId: target.swarmId,
             conversationId: target.conversationId,
+            messageId: target.messageId,
+            decisionId: target.decisionId,
           ),
           listensForItself: true,
         ),
@@ -385,6 +459,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// with a route under it pops that route instead. `pop`, not `maybePop`: this shell's own
   /// [PopScope] is what refuses the pop, and asking the route again would land straight back here.
   Future<void> _back() async {
+    ++_navigationRequest;
     final handled = await _navigator.currentState?.maybePop() ?? false;
     if (!mounted) return;
     _syncCanPop();
@@ -405,7 +480,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   }
 
   /// The pages on the stack that count on being rebuilt from here — see [_LeansOnShell].
-  final _leaning = _LeansOnShell();
+  late final _leaning = _LeansOnShell(() => ++_navigationRequest);
 
   /// The page stack, made once and handed through every rebuild of the shell untouched, so that
   /// nothing on the stack is rebuilt from here unless a page there needs it ([build]).
@@ -542,6 +617,11 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 /// Told by the [Navigator] of every route that comes and goes. Read by the shell on each tick; it
 /// rebuilds nothing by itself.
 class _LeansOnShell extends NavigatorObserver {
+  _LeansOnShell(this.onNavigation);
+
+  /// A newer route wins over notification navigation still waiting on a read.
+  final VoidCallback onNavigation;
+
   final _pushed = <Route<Object?>>{};
 
   /// A page that needs the stack rebuilt from above is on it.
@@ -554,19 +634,26 @@ class _LeansOnShell extends NavigatorObserver {
   }
 
   @override
-  void didPush(Route<Object?> route, Route<Object?>? previousRoute) =>
-      _add(route);
+  void didPush(Route<Object?> route, Route<Object?>? previousRoute) {
+    onNavigation();
+    _add(route);
+  }
 
   @override
-  void didPop(Route<Object?> route, Route<Object?>? previousRoute) =>
-      _pushed.remove(route);
+  void didPop(Route<Object?> route, Route<Object?>? previousRoute) {
+    onNavigation();
+    _pushed.remove(route);
+  }
 
   @override
-  void didRemove(Route<Object?> route, Route<Object?>? previousRoute) =>
-      _pushed.remove(route);
+  void didRemove(Route<Object?> route, Route<Object?>? previousRoute) {
+    onNavigation();
+    _pushed.remove(route);
+  }
 
   @override
   void didReplace({Route<Object?>? newRoute, Route<Object?>? oldRoute}) {
+    onNavigation();
     _pushed.remove(oldRoute);
     _add(newRoute);
   }

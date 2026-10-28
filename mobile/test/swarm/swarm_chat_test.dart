@@ -156,6 +156,8 @@ void main() {
     WidgetTester tester,
     SwarmHost host, {
     String conversation = 'g1',
+    String? messageId,
+    String? decisionId,
     bool settle = true,
   }) async {
     await tester.pumpWidget(
@@ -164,7 +166,12 @@ void main() {
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
-        home: SwarmConversationPage(swarmId: tab, conversationId: conversation),
+        home: SwarmConversationPage(
+          swarmId: tab,
+          conversationId: conversation,
+          messageId: messageId,
+          decisionId: decisionId,
+        ),
       ),
     );
     if (settle) {
@@ -178,6 +185,8 @@ void main() {
     WidgetTester tester,
     FakeSwarm fake, {
     String conversation = 'g1',
+    String? messageId,
+    String? decisionId,
     bool settle = true,
     SwarmUpload upload = refuseSwarmUpload,
   }) async {
@@ -193,7 +202,14 @@ void main() {
       features: features,
     )..foreground = false;
     addTearDown(host.dispose);
-    await show(tester, host, conversation: conversation, settle: settle);
+    await show(
+      tester,
+      host,
+      conversation: conversation,
+      settle: settle,
+      messageId: messageId,
+      decisionId: decisionId,
+    );
     return host;
   }
 
@@ -296,6 +312,58 @@ void main() {
     await tester.pump();
 
     expect(opened, ['https://cdn.harness.autonomous.ai/f1/plan.md']);
+  });
+
+  testWidgets('a notification opens an earlier message and highlights it', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend([
+        for (var i = 1; i <= 40; i++)
+          message('m$i', i, text: 'Message $i\nMore text', minute: i),
+      ]),
+      messageId: 'm1',
+    );
+    expect(key('swarm-lit-m1'), findsOneWidget);
+    expect(inView(tester, find.text('Message 1\nMore text')), isTrue);
+  });
+
+  testWidgets(
+    'following a quote after a decision notification changes the target',
+    (tester) async {
+      await pump(
+        tester,
+        backend(
+          [
+            message('m1', 1, text: 'Original plan'),
+            message('m2', 2, text: 'Follow up', replyTo: 'm1', minute: 1),
+          ],
+          decisions: [decision('d1')],
+        ),
+        decisionId: 'd1',
+      );
+      await tester.tap(key('swarm-quote-m2'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-lit-m1'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a notification brings its decision card into view', (
+    tester,
+  ) async {
+    await pump(
+      tester,
+      backend(
+        [
+          for (var i = 1; i <= 40; i++)
+            message('m$i', i, text: 'Message $i\nMore text', minute: i),
+        ],
+        decisions: [decision('d1')],
+      ),
+      decisionId: 'd1',
+    );
+    expect(inView(tester, find.text('Ship it behind a flag?')), isTrue);
   });
 
   testWidgets('a reply quotes its original; tapping the quote brings the '

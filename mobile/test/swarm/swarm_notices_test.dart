@@ -78,7 +78,12 @@ void main() {
     expect(notice.title, 'River asks you');
     expect(notice.subtitle, 'Mobile');
     expect(notice.body, 'Open Harness to answer.');
-    expect(notice.target, (swarmId: 'tab-b', conversationId: 'g9'));
+    expect(notice.target, (
+      swarmId: 'tab-b',
+      conversationId: 'g9',
+      messageId: null,
+      decisionId: 'd1',
+    ));
     keepsItsContent(notice, ['Ship it', 'Yes', 'Fix login']);
   });
 
@@ -237,8 +242,30 @@ void main() {
   });
 
   group('the tap', () {
+    test('a message tap retains its exact message through the OS payload', () {
+      expect(decodeSwarmPayload('swarm:tab-b/g9/message/m%2F7'), (
+        swarmId: 'tab-b',
+        conversationId: 'g9',
+        messageId: 'm/7',
+        decisionId: null,
+      ));
+    });
+    test('a decision tap retains its card through the OS payload', () {
+      expect(decodeSwarmPayload('swarm:tab-b/g9/decision/d1'), (
+        swarmId: 'tab-b',
+        conversationId: 'g9',
+        messageId: null,
+        decisionId: 'd1',
+      ));
+    });
+
     test('leads to the Swarm and conversation, never read as an agent', () {
-      const target = (swarmId: 'tab-b', conversationId: 'g9');
+      const target = (
+        swarmId: 'tab-b',
+        conversationId: 'g9',
+        messageId: null,
+        decisionId: null,
+      );
       final payload = encodeSwarmPayload(target);
 
       expect(decodeSwarmPayload(payload), target);
