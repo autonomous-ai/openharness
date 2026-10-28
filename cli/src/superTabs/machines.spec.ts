@@ -1085,6 +1085,55 @@ describe('contributed machine executor', () => {
       ['Swarm start start is waiting: Waiting for the launched engine.']])
   })
 
+  // Diego's Mac, 2026-10-28: 410 connect timeouts on the reading in two days, and every one dropped that Swarm's starts
+  // for the pass with nothing in the log, until the backend's deadline failed them.
+  describe('a reading the backend did not take', () => {
+    const failReading = (f: ReturnType<typeof fixture>, error: () => unknown) => f.backend.mockImplementation(async (_core, method, path) =>
+      path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] }) : method === 'POST' && path.includes('/machines/') ? Promise.reject(error()) : { revision: 1 })
+
+    it('is logged once per error, again when it changes or clears, and the waiting start is still launched', async () => {
+      const f = fixture()
+      failReading(f, () => new Error('Connect Timeout Error'))
+      await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(2)
+      failReading(f, () => new SuperTabHostError('VALIDATION_ERROR', 'Invalid request body', 400))
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(4)
+      failReading(f, () => new SuperTabHostError('BACKEND_UNAVAILABLE', 'Could not reach this Super Tab.', 503))
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(5)
+      f.backend.mockImplementation(async (_core, _method, path) => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] }) : { revision: 1 })
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(7)
+      expect(f.log.mock.calls).toEqual([
+        ['Could not send this machine\'s reading to Swarm tab: Connect Timeout Error'],
+        ['Could not send this machine\'s reading to Swarm tab: Invalid request body'],
+        ['Could not send this machine\'s reading to Swarm tab: Could not reach this Super Tab.'],
+        ['This machine\'s reading reached Swarm tab again.']])
+    })
+
+    it('is logged, and the waiting start still launched, when the local daemon cannot be opened', async () => {
+      const f = fixture()
+      f.open.mockRejectedValueOnce(new Error('The Harness daemon is not running.'))
+      await f.machine.tick()
+      expect(f.start).toHaveBeenCalledOnce()
+      expect(f.log.mock.calls).toEqual([['Could not send this machine\'s reading to Swarm tab: The Harness daemon is not running.']])
+    })
+
+    it('launches nothing when the refusal says this machine lost access to that Swarm', async () => {
+      for (const [code, status] of [['CONTRIBUTION_REVOKED', 403], ['HOST_UNAVAILABLE', 403], ['NOT_FOUND', 404], ['UNAUTHORIZED', 401]] as const) {
+        const f = fixture()
+        failReading(f, () => new SuperTabHostError(code, 'Read the current machine contribution.', status))
+        await f.machine.tick()
+        expect(f.start).not.toHaveBeenCalled()
+        expect(f.log.mock.calls).toEqual([['Could not send this machine\'s reading to Swarm tab: Read the current machine contribution.']])
+      }
+    })
+  })
+
   describe('a start this machine cannot run', () => {
     const failures = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
       .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')

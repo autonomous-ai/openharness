@@ -135,6 +135,9 @@ const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm
 /** A pool's starts this host launches: its agents', and its Buddies', which the backend lists apart so that a host from before
  *  Buddies never launches one as a Builder (backend read/hostRows.ts). */
 const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts)]
+/** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
+ *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
+const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)
 
 export class ContributedMachines {
   private stopped = false
@@ -161,6 +164,8 @@ export class ContributedMachines {
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
   private readonly waiting = new Map<string, string>()
+  /** Per tab, why its last reading did not reach the backend, so the log says it once per error and once when it clears. */
+  private readonly readingFailures = new Map<string, string>()
   /** Per waiting start, since when this machine has refused it without a break. */
   private readonly refusedSince = new Map<string, number>()
   /** The starts this machine launched whose creation the daemon is still carrying out (fetch, worktree, engine), as its
@@ -265,6 +270,18 @@ export class ContributedMachines {
     this.waiting.set(startId, reason)
     this.log(`Swarm start ${startId} is waiting: ${reason}`)
   }
+  /** Diego's Mac, 2026-10-28: 410 reading timeouts in two days, none of them in the log. */
+  private noteReading(tabId: string, error: unknown) {
+    const was = this.readingFailures.get(tabId)
+    if (error === null) {
+      if (was !== undefined) { this.readingFailures.delete(tabId); this.log(`This machine's reading reached Swarm ${tabId} again.`) }
+      return
+    }
+    const reason = error instanceof Error ? error.message : String(error)
+    if (was === reason) return
+    this.readingFailures.set(tabId, reason)
+    this.log(`Could not send this machine's reading to Swarm ${tabId}: ${reason}`)
+  }
   /** One pass at a time, one [MACHINE_POLL_MS] after the last began (or a beat after one that failed). */
   tick(): Promise<void> {
     if (this.stopped || this.deps.now() < this.next) return Promise.resolve()
@@ -305,13 +322,14 @@ export class ContributedMachines {
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
     const pools = list((await this.sources.feed.current(POOLS_FRESH_MS)).pools).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
-    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); return }
+    if (this.stopped || pools.length === 0) { this.published.clear(); this.lastSent.clear(); this.waiting.clear(); this.readingFailures.clear(); return }
     const pendingIds = new Set(pools.flatMap(row => startsOf(row).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
+    for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
     const privacy = this.privacy()
     // A model run or stopped for a Swarm, or an API shared with it, is sent on this pass, not on the next beat: the
     // machine's panel waited up to 15 s more for it (2026-10-26). Files only, so a pass with nothing new asks nobody.
@@ -349,6 +367,7 @@ export class ContributedMachines {
         const last = this.published.get(String(row.tabId))
         // A model still starting is read again every pass until the grid lists it, so the panel shows it live at once.
         if (!last || last.signature !== signature || last.starting || began - last.at >= MACHINE_HEARTBEAT_MS) {
+        try {
         local ??= await this.deps.open(where)
         // The existing usage reader owns its provider cache. Raw responses and
         // account credentials never leave this machine.
@@ -461,8 +480,15 @@ export class ContributedMachines {
             }
           }
           this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
-        } catch (error) { this.failed = true; throw error }
-        finally { this.sending.delete(String(row.tabId)) }
+        } finally { this.sending.delete(String(row.tabId)) }
+        this.noteReading(String(row.tabId), null)
+        } catch (error) {
+          this.failed = true
+          this.noteReading(String(row.tabId), error)
+          // Only a refusal that this machine lost access to the Swarm stops its starts; a timeout, a 5xx or a reading the
+          // backend would not validate says nothing about the starts, which keep their own receipts (Diego's Mac, 2026-10-28).
+          if (lostAccess(error)) throw error
+        }
         }
         this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
         try { await this.repairTrust(row) }
