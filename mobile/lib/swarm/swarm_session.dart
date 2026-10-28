@@ -21,6 +21,7 @@ class SwarmSession extends ChangeNotifier {
   SwarmSession({
     required this.accountId,
     required SwarmRequest request,
+    SwarmUpload upload = refuseSwarmUpload,
     required SwarmNotices notices,
     Duration pollInterval = const Duration(seconds: 15),
     this.undoWindow = swarmUndoWindow,
@@ -28,6 +29,7 @@ class SwarmSession extends ChangeNotifier {
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
+         upload: upload,
          pollInterval: pollInterval,
          homeCache: homeCache,
        ) {
@@ -173,6 +175,7 @@ class SwarmHost extends ChangeNotifier {
     required this.accountId,
     required this.account,
     required this.request,
+    this.upload = refuseSwarmUpload,
     required this.notices,
     ExperimentalFeaturesStore? features,
     this.computers,
@@ -191,6 +194,9 @@ class SwarmHost extends ChangeNotifier {
   /// Tells when [accountId] may have changed.
   final Listenable account;
   final SwarmRequest request;
+
+  /// Sends a chat's file to the backend, straight from the phone.
+  final SwarmUpload upload;
   final SwarmNotices notices;
   final ExperimentalFeaturesStore features;
 
@@ -239,6 +245,7 @@ class SwarmHost extends ChangeNotifier {
         : (SwarmSession(
             accountId: id,
             request: request,
+            upload: upload,
             notices: notices,
             homeCache: homeCache,
           )..foreground = _foreground);

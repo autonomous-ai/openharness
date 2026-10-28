@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_chat_cache.dart';
+import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 
@@ -23,7 +25,11 @@ import 'swarm_request.dart';
 /// had is asked for while its messages are read. One the person cannot read
 /// keeps nothing here: messages, draft and a post not confirmed.
 class SwarmConversation extends ChangeNotifier {
-  SwarmConversation(this.reader, this.id) {
+  SwarmConversation(
+    this.reader,
+    this.id, {
+    this.uploadTimeout = const Duration(minutes: 2),
+  }) {
     _listed = conversation != null;
     if (SwarmChatCache.take(reader, id) case final kept?) {
       messages = kept.messages;
@@ -33,10 +39,22 @@ class SwarmConversation extends ChangeNotifier {
     }
     reader.addListener(_swarmChanged);
     reader.reads.addListener(_swarmChanged);
+    files.addListener(_filesChanged);
   }
 
   final SwarmReader reader;
   final String id;
+
+  /// How long an upload may go without a byte moving before the send gives up.
+  final Duration uploadTimeout;
+
+  /// The files waiting to go with the next post. They stay in memory, and go
+  /// when the chat closes: only what the person typed is kept, and only while
+  /// the chat is open.
+  final files = SwarmOutgoingFiles();
+
+  /// The files of a post are on their way to the backend, before the post.
+  bool uploading = false;
 
   /// Oldest first.
   List<SuperTabMessage> messages = const [];
@@ -95,8 +113,26 @@ class SwarmConversation extends ChangeNotifier {
   Map<String, dynamic>? _pending;
 
   /// What the draft was when [_pending] left it: a refusal puts it back.
-  ({String draft, Map<String, String> mentions, SuperTabMessage? replyTo})?
+  ({
+    String draft,
+    Map<String, String> mentions,
+    SuperTabMessage? replyTo,
+    List<SwarmOutgoingFile> files,
+  })?
   _sent;
+
+  /// Files already uploaded for the post being sent, with their ids, so a
+  /// retry sends the ids rather than uploading the files again.
+  final _uploaded = <SwarmOutgoingFile, String>{};
+
+  /// How much of each file going up has gone, from 0 to 1.
+  final _progress = <SwarmOutgoingFile, double>{};
+
+  /// The files of the upload under way; [_uploadRun] moves when it is given
+  /// up, so an answer that lands after is dropped.
+  List<SwarmOutgoingFile>? _uploading;
+  int _uploadRun = 0;
+  CancelToken? _cancel;
 
   SuperTabMessage? _replyingTo;
 
@@ -125,14 +161,34 @@ class SwarmConversation extends ChangeNotifier {
   /// The post on its way or not confirmed, out of the draft: drawn at the
   /// foot of the chat, "Sending…" and then [unconfirmed], until it is read
   /// back.
-  ({String text, String? replyTo})? get pending {
+  ({String text, String? replyTo, List<SwarmOutgoingFile> files})?
+  get pending {
     final command = _pending?['command'] as Map?;
     if (command == null) return null;
     return (
       text: command['text'] as String,
       replyTo: command['replyTo'] as String?,
+      files: _sent?.files ?? const [],
     );
   }
+
+  /// The composer may post now: there is text or a file, and no post or
+  /// upload is under way.
+  bool get canSend =>
+      canPost &&
+      _pending == null &&
+      !sending &&
+      !uploading &&
+      (_draft.trim().isNotEmpty || files.files.isNotEmpty);
+
+  /// Whether [file] is still on its way to the backend in a send.
+  bool isUploading(SwarmOutgoingFile file) =>
+      uploading &&
+      (_uploading?.contains(file) ?? false) &&
+      !_uploaded.containsKey(file);
+
+  /// How much of [file] has gone up, from 0 to 1, while it is going up.
+  double? uploadProgress(SwarmOutgoingFile file) => _progress[file];
 
   /// The message the draft answers: the reply bar over the composer, and the
   /// post's `replyTo`.
@@ -446,23 +502,37 @@ class SwarmConversation extends ChangeNotifier {
     if (reacted) await _reread();
   }
 
-  /// Posts the draft, to the agents mentioned in it and as a reply to
-  /// [replyingTo] — or, while a post is [unconfirmed], sends that one again.
-  /// The post leaves the draft at once and shows as [pending] until it is
-  /// read back. True once the backend took it.
+  /// Posts the draft and its [files], to the agents mentioned in it and as a
+  /// reply to [replyingTo] — or, while a post is [unconfirmed], sends that one
+  /// again. The files go up first, one by one, the draft and the files staying
+  /// in the composer meanwhile; then the post leaves the draft at once, with
+  /// the files, and shows as [pending] until it is read back. True once the
+  /// backend took it.
   Future<bool> send() async {
-    if (sending || _disposed || !canPost) return false;
-    final pending = _pending ?? _compose();
-    if (pending == null) return false;
-    if (_pending == null) {
+    if (sending || uploading || _disposed || !canPost) return false;
+    var pending = _pending;
+    if (pending == null) {
+      final outgoing = files.files;
+      if ((_draft.trim().isEmpty && outgoing.isEmpty) || conversation == null) {
+        return false;
+      }
+      final ids = await _uploadAll(outgoing);
+      if (ids == null || _disposed) return false;
+      pending = _compose(ids);
+      if (pending == null) return false;
       _sent = (
         draft: _draft,
         mentions: Map.of(_mentions),
         replyTo: _replyingTo,
+        files: outgoing,
       );
       _draft = '';
       _mentions.clear();
       _replyingTo = null;
+      // Only what goes with this post: more may have been added meanwhile.
+      for (final file in outgoing) {
+        files.remove(file);
+      }
     }
     _pending = pending;
     sending = true;
@@ -480,6 +550,13 @@ class SwarmConversation extends ChangeNotifier {
       // post.
       final status = failure.statusCode;
       if (status >= 400 && status < 500 && status != 408 && status != 429) {
+        // A refusal of the files themselves sends them up once more; one of
+        // the post (a mention, a recipient) leaves them uploaded.
+        if (failure.code.contains('ATTACHMENT')) {
+          for (final file in _sent?.files ?? const <SwarmOutgoingFile>[]) {
+            _uploaded.remove(file);
+          }
+        }
         _pending = null;
         _restore();
       }
@@ -492,6 +569,9 @@ class SwarmConversation extends ChangeNotifier {
       sending = false;
       if (!_disposed) _tell();
     }
+    for (final file in _sent?.files ?? const <SwarmOutgoingFile>[]) {
+      _uploaded.remove(file);
+    }
     unawaited(reader.refresh());
     // Shown as on its way until the read that brings it back.
     await load();
@@ -500,6 +580,118 @@ class SwarmConversation extends ChangeNotifier {
     _sent = null;
     _tell();
     return true;
+  }
+
+  /// Uploads each of [outgoing] that has not gone up yet and returns their
+  /// ids, or null with [error] set when one could not. The draft and the
+  /// files stay where they are.
+  Future<List<String>?> _uploadAll(List<SwarmOutgoingFile> outgoing) async {
+    if (outgoing.isEmpty) return const [];
+    final run = ++_uploadRun;
+    uploading = true;
+    error = null;
+    _uploading = outgoing;
+    _uploaded.removeWhere((file, _) => !outgoing.contains(file));
+    _tell();
+    try {
+      final ids = <String>[];
+      for (final file in outgoing) {
+        var id = _uploaded[file];
+        if (id == null) {
+          final answer = await _uploadFile(file);
+          if (run != _uploadRun) return null;
+          id = superTabMap(answer['attachment'])['id'] as String;
+          _uploaded[file] = id;
+          _progress.remove(file);
+          _composer.changed();
+        }
+        ids.add(id);
+      }
+      return ids;
+    } catch (failure) {
+      if (!_disposed && run == _uploadRun) {
+        error = failure is SuperTabFailure
+            ? failure.message
+            : failure is TimeoutException
+            ? 'The upload stopped moving. Try again.'
+            : 'Could not upload ${outgoing.length == 1 ? 'the file' : 'the files'}. Try again.';
+      }
+      return null;
+    } finally {
+      if (run == _uploadRun) {
+        uploading = false;
+        _uploading = null;
+        _progress.clear();
+        if (!_disposed) _tell();
+      }
+    }
+  }
+
+  /// Sends [file] to the backend and returns its attachment. Gives up when no
+  /// byte has moved for [uploadTimeout], or when the upload is given up.
+  Future<Map<String, dynamic>> _uploadFile(SwarmOutgoingFile file) async {
+    final token = _cancel = CancelToken();
+    Timer? watchdog;
+    var stalled = false;
+    void watch() {
+      watchdog?.cancel();
+      watchdog = Timer(uploadTimeout, () {
+        stalled = true;
+        token.cancel('stalled');
+      });
+    }
+
+    watch();
+    try {
+      // The token also ends a transport that ignores it.
+      return await Future.any([
+        reader.upload(
+          tabId: reader.tabId,
+          conversationId: id,
+          name: file.name,
+          mime: swarmMimeForName(file.name),
+          bytes: file.bytes,
+          cancel: token,
+          onProgress: (sent) {
+            if (token.isCancelled) return;
+            watch();
+            _progress[file] = sent;
+            _composer.changed();
+          },
+        ),
+        token.whenCancel.then<Map<String, dynamic>>(
+          (cancelled) => throw cancelled,
+        ),
+      ]);
+    } catch (_) {
+      if (stalled) throw TimeoutException('The upload stopped moving.');
+      rethrow;
+    } finally {
+      watchdog?.cancel();
+    }
+  }
+
+  /// Gives up the files on their way: the composer is free again, and the
+  /// draft and the files stay.
+  void cancelUpload() {
+    if (!uploading) return;
+    _cancel?.cancel('given up');
+    _uploadRun++;
+    uploading = false;
+    _uploading = null;
+    _progress.clear();
+    if (!_disposed) _tell();
+  }
+
+  /// Taking a file off while the files go up gives the upload up.
+  void _filesChanged() {
+    final going = _uploading;
+    if (uploading &&
+        going != null &&
+        !files.files.toSet().containsAll(going)) {
+      cancelUpload();
+    }
+    _composer.changed();
   }
 
   /// [message]'s counts as the person sees them: their own reaction on its
@@ -618,12 +810,18 @@ class SwarmConversation extends ChangeNotifier {
     _draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _mentions.addAll(sent.mentions);
     _replyingTo ??= sent.replyTo;
+    if (sent.files.isNotEmpty) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...sent.files, ...since]);
+    }
   }
 
-  Map<String, dynamic>? _compose() {
+  Map<String, dynamic>? _compose([List<String> attachmentIds = const []]) {
     final text = _draft.trim();
     final group = conversation;
-    if (text.isEmpty || group == null) return null;
+    if ((text.isEmpty && attachmentIds.isEmpty) || group == null) return null;
     return {
       'operationId': superTabOperationId(),
       'command': {
@@ -637,6 +835,7 @@ class SwarmConversation extends ChangeNotifier {
                 group.agentIds.contains(agentId))
               agentId,
         ],
+        if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
       },
     };
   }
@@ -644,6 +843,12 @@ class SwarmConversation extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _cancel?.cancel('closed');
+    _uploadRun++;
+    files
+      ..removeListener(_filesChanged)
+      ..clear()
+      ..dispose();
     // Shown at once when opened again, while the person can still read it.
     if (_read && !_refused) {
       SwarmChatCache.keep(

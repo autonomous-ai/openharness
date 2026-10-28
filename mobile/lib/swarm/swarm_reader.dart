@@ -60,11 +60,15 @@ class SwarmReader extends ChangeNotifier {
     required this.tabId,
     required this.accountId,
     required this.request,
+    this.upload = refuseSwarmUpload,
     this.pollInterval = const Duration(seconds: 5),
   });
 
   final String tabId, accountId;
   final SwarmRequest request;
+
+  /// Sends a chat's file to the backend ([SwarmConversation.send]).
+  final SwarmUpload upload;
   final Duration pollInterval;
 
   /// The Swarm as last read; null before the first read and after access ends.

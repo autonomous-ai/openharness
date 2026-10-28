@@ -6417,6 +6417,47 @@ class AppNotifier extends ChangeNotifier {
     Error.throwWithStackTrace(failure, trace);
   }
 
+  /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
+  /// sign-in ([ApiClient.uploadSwarmAttachment]), not through a machine as [swarmRequest] goes — the
+  /// backend takes a chat file only from the client, and a machine forwards only JSON. An answer
+  /// that lands after the account changed is dropped.
+  Future<Map<String, dynamic>> swarmUpload({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    try {
+      final answer = await api.uploadSwarmAttachment(
+        tabId: tabId,
+        conversationId: conversationId,
+        name: name,
+        mime: mime,
+        bytes: bytes,
+        cancel: cancel,
+        onProgress: onProgress,
+      );
+      stillThisAccount();
+      return answer;
+    } catch (_) {
+      stillThisAccount();
+      rethrow;
+    }
+  }
+
   /// How many machines one Swarm call asks at most, one after another.
   static const _swarmAsksPerCall = 5;
 
