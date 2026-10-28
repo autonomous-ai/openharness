@@ -5,8 +5,9 @@ import 'format.dart';
 import 'model.dart';
 
 /// Who agents wait on now, in words: "3 agents are waiting on Ken", "1 agent
-/// is waiting on you", in name order, never a ranking or blame. Answer goes straight to the viewer's own waiting item, or
-/// to the first one when none waits on them.
+/// is waiting on you", in name order, never a ranking or blame. Answer goes
+/// straight to the viewer's own waiting item, or to the first one when none
+/// waits on them.
 class LeaderboardWaitingLine extends StatelessWidget {
   const LeaderboardWaitingLine({
     super.key,

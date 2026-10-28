@@ -35,12 +35,6 @@ TextStyle _pointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-/// Points of 0 hold the column in quiet ink: nothing to emphasize yet.
-TextStyle _noPointsStyle() => grid.AppType.label(
-  fontWeight: grid.AppFont.regular,
-  color: grid.AppPalette.textSecondary,
-  fontFeatures: grid.AppFont.tabularFigures,
-);
 TextStyle _trendStyle(Color color) =>
     DesktopChrome.metadata(color: color)
         .copyWith(fontFeatures: grid.AppFont.tabularFigures);
@@ -59,14 +53,14 @@ String? leaderboardTrend(SuperTabPersonScore score) {
   return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
 }
 
-/// "16 shipped", "1 unblocked", "43 h lent": each number that would not read
-/// zero, in words; empty when all would.
+/// "16 shipped", "1 unblocked", "43 hours lent": each number that would not
+/// read zero, in words; empty when all would.
 List<String> leaderboardNumbers(SuperTabPersonScore score) {
   final hours = leaderboardHours(score.lentMs);
   return [
     if (score.shipped > 0) '${score.shipped} shipped',
     if (score.unblocked > 0) '${score.unblocked} unblocked',
-    if (hours != '0') '$hours h lent',
+    if (hours != '0') '${plural(int.parse(hours), 'hour')} lent',
   ];
 }
 
@@ -125,8 +119,8 @@ class LeaderboardColumns {
 
 /// One person in the Humans section: their rank as a bold numeral in its own
 /// column, avatar, name and status, and a quiet line of their non-zero
-/// numbers beneath; their points, the one emphasized number, at the right,
-/// with the change against last week beneath. The viewer's own row carries
+/// numbers beneath; at the right the change against last week, then their
+/// points, the one emphasized number. The viewer's own row carries
 /// the selected fill. Without a [score] (no board yet, or a server without
 /// one) only the name and status.
 class LeaderboardPersonRow extends StatelessWidget {
@@ -246,9 +240,7 @@ class LeaderboardPersonRow extends StatelessWidget {
                         child: Text(
                           '${score.points}',
                           maxLines: 1,
-                          style: score.points == 0
-                              ? _noPointsStyle()
-                              : _pointsStyle(),
+                          style: _pointsStyle(),
                         ),
                       ),
                     ),
@@ -298,7 +290,7 @@ class _Numbers extends StatelessWidget {
     final scaler = MediaQuery.textScalerOf(context);
     return Tooltip(
       message: parts
-          .map((part) => part.replaceFirst(' h lent', ' agent-hours lent'))
+          .map((part) => part.replaceFirst(' hour', ' agent-hour'))
           .join(' · '),
       child: LayoutBuilder(
         builder: (context, constraints) {

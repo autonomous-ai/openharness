@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -17,7 +18,7 @@ import 'support/super_tab_fixture.dart';
 /// text with a small week picker, then everyone, most points first, by display
 /// name. Each row is a bold rank in its own column, avatar, name, a quiet line
 /// of the non-zero numbers in words, and the points as the one emphasized,
-/// right-aligned number with the change against last week beneath. No emoji,
+/// right-aligned number with the change against last week beside it. No emoji,
 /// cups or medal colours. A tap shows what the numbers are made of. There is
 /// no separate leaderboard view.
 void main() {
@@ -208,7 +209,7 @@ void main() {
       for (final MapEntry(key: id, value: line) in lines.entries) {
         expect(find.byTooltip(line), findsOneWidget, reason: id);
         // What fits is whole items from the start, never part of a word.
-        final full = line.replaceAll('agent-hours', 'h');
+        final full = line.replaceAll('agent-hours', 'hours');
         final text = shown(id);
         expect(full.startsWith(text), isTrue, reason: '$id: $text');
         expect(
@@ -228,7 +229,7 @@ void main() {
       // Ken's line is too long for the pane: whole items fall off its end.
       expect(
         shown('owner'),
-        isNot(lines['owner']!.replaceAll('agent-hours', 'h')),
+        isNot(lines['owner']!.replaceAll('agent-hours', 'hours')),
       );
       // Nothing to say, no line at all.
       expect(part('meta', 'huy'), findsNothing);
@@ -411,26 +412,64 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('keeps a row with no points in rank order, its 0 in quiet ink', (
-    tester,
-  ) async {
-    final controller = await show(tester, humansSwarm());
-    final zero = styleOf(
-      tester,
-      find.descendant(of: part('points', 'huy'), matching: find.text('0')),
-    );
-    expect(zero.color, grid.AppPalette.textSecondary);
-    expect(zero.fontWeight, isNot(grid.AppFont.semibold));
-    expect(zero.fontFeatures, grid.AppFont.tabularFigures);
-    // Points that count keep the emphasis.
-    final points = styleOf(tester, within('tony', '6'));
-    expect(points.color, grid.AppPalette.textPrimary);
-    expect(
-      tester.getTopLeft(person('huy')).dy,
-      greaterThan(tester.getTopLeft(person('diego')).dy),
-    );
-    await close(tester, controller);
-  });
+  testWidgets(
+    'keeps a row with no points in rank order, its 0 in the points style',
+    (tester) async {
+      final controller = await show(tester, humansSwarm());
+      final zero = styleOf(
+        tester,
+        find.descendant(of: part('points', 'huy'), matching: find.text('0')),
+      );
+      final points = styleOf(tester, within('tony', '6'));
+      // One rule for every points value (Numbers and rankings).
+      expect(zero.color, grid.AppPalette.textPrimary);
+      expect(zero.fontWeight, grid.AppFont.semibold);
+      expect(zero.fontFeatures, grid.AppFont.tabularFigures);
+      expect(zero, points);
+      expect(
+        tester.getTopLeft(person('huy')).dy,
+        greaterThan(tester.getTopLeft(person('diego')).dy),
+      );
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets(
+    "shows hover and keyboard focus over the viewer's own row's fill",
+    (tester) async {
+      final controller = await show(tester, humansSwarm());
+      // The viewer's row: its fill, under the ink of hover and focus.
+      final ink = Material.of(tester.element(person('peer'))) as RenderObject;
+      expect(ink, isNot(paints..rrect(color: grid.AppSurface.hoverFill)));
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: tester.getCenter(person('peer')));
+      addTearDown(mouse.removePointer);
+      await tester.pumpAndSettle();
+      expect(ink, paints..rrect(color: grid.AppSurface.hoverFill));
+
+      await mouse.moveTo(Offset.zero);
+      await tester.pumpAndSettle();
+      expect(ink, isNot(paints..rrect(color: grid.AppSurface.hoverFill)));
+
+      FocusManager.instance.highlightStrategy =
+          FocusHighlightStrategy.alwaysTraditional;
+      addTearDown(
+        () => FocusManager.instance.highlightStrategy =
+            FocusHighlightStrategy.automatic,
+      );
+      Focus.of(
+        tester.element(
+          find
+              .descendant(of: person('peer'), matching: find.byType(Padding))
+              .first,
+        ),
+      ).requestFocus();
+      await tester.pumpAndSettle();
+      expect(ink, paints..rrect(color: grid.AppSurface.hoverFill));
+      await close(tester, controller);
+    },
+  );
 
   testWidgets(
     "names each person by display name, else their email's first part",
