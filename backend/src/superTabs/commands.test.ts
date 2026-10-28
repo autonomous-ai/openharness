@@ -1648,6 +1648,23 @@ describe('a failed start\'s reason', () => {
     // The start keeps the raw reason for those who may read it.
     expect(f.state.starts![0]!.error).toBe(RAW)
   })
+  // Ken's MacBook Pro, 2026-10-28: a start refused for memory read as a broken machine. Members see a machine's free memory in
+  // the Machines view, so that reason, and only its numbers, is told as it is.
+  it('tells the group a memory shortage with its numbers, and keeps every other reason hidden, even one that starts like it', () => {
+    const f = fixture(); f.invite()
+    failed(f)
+    const memory = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.'
+    expect(f.run({ type: 'agent.startFailed', startId: 's1', error: memory }, owner).messages[0]!.text)
+      .toBe('Could not start Builder: its machine has only 1.8 GiB of memory free, and it needs 2 GiB.')
+    // A member who did not make the start reads the same, never the rest of the host's reason.
+    f.state.starts![0]!.actorKey = 'person:someone'
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe('Its machine has only 1.8 GiB of memory free, and it needs 2 GiB.')
+    for (const error of ['Not enough free memory on /Users/ken: 1.8 GiB free, 2 GiB needed.', 'Not enough free memory: lots free, 2 GiB needed.', RAW]) {
+      failed(f)
+      expect(f.run({ type: 'agent.startFailed', startId: 's1', error }, owner).messages[0]!.text)
+        .toBe('Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.')
+    }
+  })
   it('hands the raw reason on the start only to its Lead and the machine owner', () => {
     const f = fixture(); f.invite()
     const lead = f.add('lead-agent', 'owner', 'lead', true), worker = f.add('worker', 'owner')
