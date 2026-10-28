@@ -110,13 +110,15 @@ describe('agent tokens', () => {
   it('keeps tokens apart per agent and seals them in the cache', async () => {
     const stored: string[] = []
     const memory = new MemoryTokenCache()
-    const spy: TokenCache = { get: k => memory.get(k), delete: k => memory.delete(k),
-      set: async (k, v, ttl) => { stored.push(v); await memory.set(k, v, ttl) } }
+    const spy: TokenCache = { get: k => memory.get(k), delete: k => memory.delete(k), take: k => memory.take(k),
+      set: async (k, v, ttl) => { stored.push(v); await memory.set(k, v, ttl) },
+      add: async (k, v, ttl) => { stored.push(v); await memory.add(k, v, ttl) } }
     const { tokens } = setup(spy)
     const one = await tokens.issue(request('attempt-1', 'agent-1'))
     const two = await tokens.issue(request('attempt-2', 'agent-2'))
     expect(one.token).not.toBe(two.token)
-    expect(stored).toHaveLength(2)
+    // Each token twice, as the agent's entry and among its task's minted tokens, both sealed.
+    expect(stored).toHaveLength(4)
     for (const value of stored) {
       expect(value).not.toContain('ghs_')
       expect(value).not.toContain('attempt')
@@ -140,7 +142,8 @@ describe('agent tokens', () => {
 
   it('still answers when the cache is away, and logs that without the token', async () => {
     const broken: TokenCache = { get: async () => { throw new Error('redis down') }, set: async () => { throw new Error('redis down') },
-      delete: async () => { throw new Error('redis down') } }
+      delete: async () => { throw new Error('redis down') }, add: async () => { throw new Error('redis down') },
+      take: async () => { throw new Error('redis down') } }
     const { tokens, log } = setup(broken)
     const issued = await tokens.issue(request())
     expect(issued.token).toBe('ghs_fixture_1')
@@ -151,7 +154,8 @@ describe('agent tokens', () => {
 
   it('ignores a cache entry it cannot open', async () => {
     const memory = new MemoryTokenCache()
-    const { tokens } = setup({ get: async () => 'garbage.value', set: (k, v, t) => memory.set(k, v, t), delete: k => memory.delete(k) })
+    const { tokens } = setup({ get: async () => 'garbage.value', set: (k, v, t) => memory.set(k, v, t), delete: k => memory.delete(k),
+      add: (k, v, t) => memory.add(k, v, t), take: async () => ['garbage.value'] })
     expect((await tokens.issue(request())).token).toBe('ghs_fixture_1')
   })
 })
@@ -223,6 +227,36 @@ describe('revoking when a task ends', () => {
     await expect(renewing.issue(request())).rejects.toMatchObject({ code: 'NO_ASSIGNMENT' })
   })
 
+  // Second security review of #1976: two instances renewing the same live task at once each minted a token, the second's
+  // cache write replaced the first's, and the task's end revoked only the one cached; the other stayed good for an hour.
+  it('revokes every token minted for a task when it ends, also two renewals that ran at once on two instances', async () => {
+    let t = Date.parse('2026-10-24T12:00:00Z')
+    const now = () => t
+    const github = fakeGitHub({ publicKey: key.publicKey, appId: '424242', now })
+    github.installed.set('acme/app', 77)
+    const cache = new MemoryTokenCache(now), secret = randomBytes(32)
+    const instance = () => new GitHubTokens(fakeApp(key.privateKey, github, { now }), cache, { now, log: { warn: vi.fn() }, secret })
+    const one = instance(), two = instance()
+    await one.issue(request())
+    t += 60 * 60_000 - REUSE_MARGIN_MS + 1000
+    // Both instances read the cache before either has minted: GitHub's answers are held until both are asking.
+    let answer!: () => void
+    const held = new Promise<void>(resolve => { answer = resolve })
+    const hold = (tokens: GitHubTokens) => {
+      const create = tokens.app.createToken.bind(tokens.app)
+      return vi.spyOn(tokens.app, 'createToken').mockImplementation(async (...args) => { await held; return create(...args) })
+    }
+    const asked = [hold(one), hold(two)]
+    const renewals = [one.issue(request()), two.issue(request())]
+    await vi.waitFor(() => { for (const spy of asked) expect(spy).toHaveBeenCalled() })
+    answer()
+    const [a, b] = await Promise.all(renewals)
+    expect(a!.token).not.toBe(b!.token)
+    await one.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
+    // The first token and both renewals: none left valid.
+    expect(github.issued.size).toBe(0)
+  })
+
   it('logs a failed revoke without the token, drops it anyway and never throws', async () => {
     const { tokens, github, log } = setup()
     const issued = await tokens.issue(request())
@@ -243,6 +277,32 @@ describe('revoking when a task ends', () => {
 })
 
 describe('token caches', () => {
+  it('adds to a set and takes it whole, in memory and in one Redis transaction each', async () => {
+    let t = 0
+    const memory = new MemoryTokenCache(() => t)
+    await memory.add('s', 'a', 1000)
+    await memory.add('s', 'b', 1000)
+    expect((await memory.take('s')).sort()).toEqual(['a', 'b'])
+    expect(await memory.take('s')).toEqual([])
+    await memory.add('s', 'a', 1000)
+    t = 1000
+    expect(await memory.take('s')).toEqual([])
+    const queued: unknown[][] = []
+    const results: Array<[Error | null, unknown]>[] = [[[null, 1], [null, 1]], [[null, ['x', 'y']], [null, 1]], [[new Error('READONLY'), null]]]
+    const multi = () => {
+      const chain = { sadd: (...a: unknown[]) => (queued.push(['sadd', ...a]), chain), pexpire: (...a: unknown[]) => (queued.push(['pexpire', ...a]), chain),
+        smembers: (...a: unknown[]) => (queued.push(['smembers', ...a]), chain), del: (...a: unknown[]) => (queued.push(['del', ...a]), chain),
+        exec: async () => results.shift() ?? null }
+      return chain
+    }
+    const redis = new RedisTokenCache({ multi } as never)
+    await redis.add('s', 'm', 1234.7)
+    expect(await redis.take('s')).toEqual(['x', 'y'])
+    expect(queued).toEqual([['sadd', 's', 'm'], ['pexpire', 's', 1234], ['smembers', 's'], ['del', 's']])
+    await expect(redis.take('s')).rejects.toThrow('READONLY')
+    await expect(redis.take('s')).rejects.toThrow('discarded')
+  })
+
   it('expires memory entries', async () => {
     let t = 0
     const cache = new MemoryTokenCache(() => t)

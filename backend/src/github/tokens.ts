@@ -17,11 +17,16 @@ export interface TokenCache {
   get(key: string): Promise<string | null>
   set(key: string, value: string, ttlMs: number): Promise<void>
   delete(key: string): Promise<void>
+  /** Adds [member] to the set at [key] in one step, and keeps the set [ttlMs] from now. */
+  add(key: string, member: string, ttlMs: number): Promise<void>
+  /** Takes the set at [key] whole, removing it in the same step: two callers never both get a member. */
+  take(key: string): Promise<string[]>
 }
 
 /** One process's cache, for tests and a backend without Redis. */
 export class MemoryTokenCache implements TokenCache {
   private readonly entries = new Map<string, { value: string; until: number }>()
+  private readonly sets = new Map<string, { members: Set<string>; until: number }>()
   constructor(private readonly now: () => number = Date.now) {}
   async get(key: string) {
     const entry = this.entries.get(key)
@@ -30,14 +35,39 @@ export class MemoryTokenCache implements TokenCache {
   }
   async set(key: string, value: string, ttlMs: number) { this.entries.set(key, { value, until: this.now() + ttlMs }) }
   async delete(key: string) { this.entries.delete(key) }
+  async add(key: string, member: string, ttlMs: number) {
+    const set = this.sets.get(key)
+    const members = set && set.until > this.now() ? set.members : new Set<string>()
+    this.sets.set(key, { members: members.add(member), until: this.now() + ttlMs })
+  }
+  async take(key: string) {
+    const set = this.sets.get(key)
+    this.sets.delete(key)
+    return set && set.until > this.now() ? [...set.members] : []
+  }
 }
 
 /** The backend's shared Redis (lib/bus.ts `pub`), which fails fast rather than queueing while Redis is away. */
 export class RedisTokenCache implements TokenCache {
-  constructor(private readonly redis: Pick<Redis, 'get' | 'set' | 'del'>) {}
+  constructor(private readonly redis: Pick<Redis, 'get' | 'set' | 'del' | 'multi'>) {}
   async get(key: string) { return this.redis.get(key) }
   async set(key: string, value: string, ttlMs: number) { await this.redis.set(key, value, 'PX', Math.max(1, Math.floor(ttlMs))) }
   async delete(key: string) { await this.redis.del(key) }
+  async add(key: string, member: string, ttlMs: number) {
+    failed(await this.redis.multi().sadd(key, member).pexpire(key, Math.max(1, Math.floor(ttlMs))).exec())
+  }
+  async take(key: string) {
+    // SMEMBERS and DEL in one transaction: no other instance reads or adds between them.
+    const members = failed(await this.redis.multi().smembers(key).del(key).exec())[0]
+    return Array.isArray(members) ? members.filter((m): m is string => typeof m === 'string') : []
+  }
+}
+
+/** A Redis transaction's results, or its first error thrown. */
+function failed(results: Array<[Error | null, unknown]> | null): unknown[] {
+  if (!results) throw new Error('The Redis transaction was discarded.')
+  for (const [error] of results) if (error) throw error
+  return results.map(([, value]) => value)
 }
 
 /** What one agent's task may use. */
@@ -52,8 +82,7 @@ export interface IssuedToken {
   defaultBranchProtected: boolean
   defaultBranchProtection: BranchProtection
 }
-/** `replaced`: the task's earlier tokens a renewal replaced and left to their last minutes, revoked with it when the task ends. */
-interface Entry { token: string; expiresAt: string; repository: string; assignmentId: string; replaced?: Array<{ token: string; expiresAt: string }> }
+interface Entry { token: string; expiresAt: string; repository: string; assignmentId: string }
 
 /** A token is handed out again until this long before it expires, so whoever holds it has at least that long. */
 export const REUSE_MARGIN_MS = 10 * 60_000
@@ -83,6 +112,9 @@ export class GitHubTokens {
   }
 
   private key(tabId: string, agentId: string) { return `${KEY_PREFIX}:${tabId}:${agentId}` }
+  /** Every token minted for one task, sealed, in one shared set: what the task's end revokes (security review of #1976: two
+   *  instances renewing at once each minted one, and the cached entry kept only the last). */
+  private mintedKey(tabId: string, agentId: string, assignmentId: string) { return `${KEY_PREFIX}:minted:${tabId}:${agentId}:${assignmentId}` }
   private releasedKey(tabId: string, agentId: string, assignmentId: string) { return `${KEY_PREFIX}:released:${tabId}:${agentId}:${assignmentId}` }
 
   /** Whether the task's end was recorded (release). A cache that cannot say is read as not ended, as before. */
@@ -92,23 +124,28 @@ export class GitHubTokens {
 
   private ended(): GitHubAppError { return new GitHubAppError('NO_ASSIGNMENT', 'This agent has no task in progress.', 409) }
 
-  private seal(entry: Entry): string {
+  private seal(value: unknown): string {
     const iv = randomBytes(12)
     const cipher = createCipheriv('aes-256-gcm', this.secret, iv)
-    const body = Buffer.concat([cipher.update(JSON.stringify(entry), 'utf8'), cipher.final()])
+    const body = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
     return [iv, cipher.getAuthTag(), body].map(part => part.toString('base64url')).join('.')
   }
 
-  private open(value: string | null): Entry | null {
+  private unseal(value: string | null): Record<string, unknown> | null {
     if (!value) return null
     try {
       const [iv, tag, body] = value.split('.').map(part => Buffer.from(part, 'base64url'))
       const decipher = createDecipheriv('aes-256-gcm', this.secret, iv!)
       decipher.setAuthTag(tag!)
-      const entry = JSON.parse(Buffer.concat([decipher.update(body!), decipher.final()]).toString('utf8')) as Entry
-      return typeof entry.token === 'string' && typeof entry.expiresAt === 'string' && typeof entry.assignmentId === 'string'
-        && typeof entry.repository === 'string' ? entry : null
+      const opened = JSON.parse(Buffer.concat([decipher.update(body!), decipher.final()]).toString('utf8')) as unknown
+      return opened && typeof opened === 'object' ? opened as Record<string, unknown> : null
     } catch { return null }
+  }
+
+  private open(value: string | null): Entry | null {
+    const entry = this.unseal(value)
+    return entry && typeof entry.token === 'string' && typeof entry.expiresAt === 'string' && typeof entry.assignmentId === 'string'
+      && typeof entry.repository === 'string' ? entry as unknown as Entry : null
   }
 
   private async read(key: string): Promise<Entry | null> {
@@ -136,15 +173,13 @@ export class GitHubTokens {
     let actual = request.repository
     const cached = await this.read(key)
     let entry: Entry | null = null
-    let replaced: Entry['replaced'] = []
     if (cached && cached.assignmentId === request.assignmentId && cached.repository === repository) {
-      if (Date.parse(cached.expiresAt) - this.now() > REUSE_MARGIN_MS) entry = cached
       // Close to its end, it is left to expire: the agent may still be using it, in a push that took it before this renewal.
-      // It is kept with the new one, so the task's end revokes it too (Lead, 2026-10-28).
-      else replaced = [...cached.replaced ?? [], { token: cached.token, expiresAt: cached.expiresAt }].filter(t => Date.parse(t.expiresAt) > this.now())
+      // It stays among the task's minted tokens, so the task's end revokes it too (Lead, 2026-10-28).
+      if (Date.parse(cached.expiresAt) - this.now() > REUSE_MARGIN_MS) entry = cached
     } else if (cached) {
-      await this.revoke(request.tabId, request.agentId, cached, 'replaced')
-      await this.forget(key)
+      // An earlier task's, or another repository's: every token minted for it goes now. Another task means that one ended.
+      await this.revokeTask(request.tabId, request.agentId, cached.assignmentId, 'replaced', cached.assignmentId !== request.assignmentId, cached)
     }
     if (!entry) {
       // Under the name GitHub knows it by now (app.ts `resolve`); the agent's checkout keeps the name it was given, which
@@ -153,7 +188,12 @@ export class GitHubTokens {
       if (resolved === null) throw this.app.notInstalled(request.repository)
       actual = resolved.repository
       const minted = await this.app.createToken(resolved.installation, actual)
-      entry = { ...minted, repository, assignmentId: request.assignmentId, ...(replaced.length ? { replaced } : {}) }
+      entry = { ...minted, repository, assignmentId: request.assignmentId }
+      // Registered before anything else: the task's end takes this set whole, whichever instance minted what.
+      try { await this.cache.add(this.mintedKey(request.tabId, request.agentId, request.assignmentId), this.seal({ token: entry.token, expiresAt: entry.expiresAt }), RELEASED_MS) } catch (error) {
+        this.log.warn('[github] token not registered', { tabId: request.tabId, agentId: request.agentId, repository,
+          error: error instanceof Error ? error.message : String(error) })
+      }
       const ttl = Date.parse(minted.expiresAt) - this.now()
       if (ttl > 0) {
         try { await this.cache.set(key, this.seal(entry), ttl) } catch (error) {
@@ -166,7 +206,7 @@ export class GitHubTokens {
       // stored) either finds this token there or is seen here, so a token minted for an ended task never stays valid
       // (security review of #1976: a renewal in flight across that end kept a token good for an hour).
       if (await this.released(request)) {
-        await this.revoke(request.tabId, request.agentId, entry, 'task ended while minting')
+        await this.revokeTokens(request.tabId, request.agentId, repository, [entry.token], 'task ended while minting')
         if ((await this.read(key))?.token === entry.token) await this.forget(key)
         throw this.ended()
       }
@@ -188,15 +228,35 @@ export class GitHubTokens {
     return { ...minted, repository: repository.fullName }
   }
 
-  /** Revokes the entry's token and every unexpired one it replaced. */
-  private async revoke(tabId: string, agentId: string, entry: Entry, why: string): Promise<void> {
-    const live = (entry.replaced ?? []).filter(t => Date.parse(t.expiresAt) > this.now()).map(t => t.token)
-    for (const token of [entry.token, ...live]) {
+  private async revokeTokens(tabId: string, agentId: string, repository: string, tokens: readonly string[], why: string): Promise<void> {
+    for (const token of new Set(tokens)) {
       try { await this.app.revoke(token) } catch (error) {
-        this.log.warn('[github] token revoke failed', { tabId, agentId, repository: entry.repository, why,
-          code: error instanceof GitHubAppError ? error.code : 'ERROR' })
+        this.log.warn('[github] token revoke failed', { tabId, agentId, repository, why, code: error instanceof GitHubAppError ? error.code : 'ERROR' })
       }
     }
+  }
+
+  /**
+   * Revokes every unexpired token minted for one task, taken whole from the shared set, and the cached one ([entry], also
+   * from before that set), and forgets the cached one. [ended]: the task is over, so it is marked first: a mint finishing
+   * on another instance after the mark revokes its own token (mint).
+   */
+  private async revokeTask(tabId: string, agentId: string, assignmentId: string, why: string, ended: boolean, entry: Entry | null): Promise<void> {
+    if (ended) {
+      try { await this.cache.set(this.releasedKey(tabId, agentId, assignmentId), RELEASED, RELEASED_MS) } catch (error) {
+        this.log.warn('[github] task end not recorded', { tabId, agentId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    let minted: string[] = []
+    try { minted = await this.cache.take(this.mintedKey(tabId, agentId, assignmentId)) } catch (error) {
+      this.log.warn('[github] minted tokens unreadable', { tabId, agentId, error: error instanceof Error ? error.message : String(error) })
+    }
+    const live = minted.map(value => this.unseal(value))
+      .filter((t): t is { token: string; expiresAt: string } => typeof t?.token === 'string' && typeof t.expiresAt === 'string')
+      .filter(t => Date.parse(t.expiresAt) > this.now()).map(t => t.token)
+    const cached = entry?.assignmentId === assignmentId ? [entry.token] : []
+    await this.revokeTokens(tabId, agentId, entry?.repository ?? '', [...cached, ...live], why)
+    if (entry) await this.forget(this.key(tabId, agentId))
   }
 
   private async forget(key: string): Promise<void> {
@@ -209,15 +269,8 @@ export class GitHubTokens {
    *  revoked and forgotten. Never throws; a failed revoke is logged without the token and leaves the token to expire. */
   async release(tabId: string, ended: readonly WorkHold[]): Promise<void> {
     for (const hold of ended) {
-      const key = this.key(tabId, hold.agentId)
-      // Marked before the stored token is read: a mint finishing on another instance after this sees it (mint).
-      try { await this.cache.set(this.releasedKey(tabId, hold.agentId, hold.assignmentId), RELEASED, RELEASED_MS) } catch (error) {
-        this.log.warn('[github] task end not recorded', { tabId, agentId: hold.agentId, error: error instanceof Error ? error.message : String(error) })
-      }
-      const entry = await this.read(key)
-      if (!entry || entry.assignmentId !== hold.assignmentId) continue
-      await this.revoke(tabId, hold.agentId, entry, 'task ended')
-      await this.forget(key)
+      const entry = await this.read(this.key(tabId, hold.agentId))
+      await this.revokeTask(tabId, hold.agentId, hold.assignmentId, 'task ended', true, entry?.assignmentId === hold.assignmentId ? entry : null)
     }
   }
 }
