@@ -359,6 +359,14 @@ class SuperTabController extends ChangeNotifier {
   /// each poll. The rows cut are read again by scrolling up.
   static const _heldMessages = 500;
 
+  /// Per conversation, the message its view lays its list out from (its
+  /// dividing row): from it on, no row is cut, since cutting them moves the
+  /// rows on screen. Rows before it may be cut.
+  final _cutBefore = <String, SuperTabMessage>{};
+
+  /// The view of [id] lays its list out from [message] on ([_cutBefore]).
+  void keepFrom(String id, SuperTabMessage message) => _cutBefore[id] = message;
+
   /// When the reader left each conversation they opened, until it is open
   /// again or its messages are dropped ([_dropLeft]).
   final _leftAt = <String, DateTime>{};
@@ -2126,11 +2134,20 @@ class SuperTabController extends ChangeNotifier {
       final sorted = combined.values.toList()..sort(superTabMessageOrder);
       // Past the cap the oldest rows go, where earlier history continues;
       // never under a reader scrolled up, nor from an older page they asked
-      // for.
-      final cut =
-          !older && !_readingBack.contains(id) && sorted.length > _heldMessages
-          ? sorted.length - _heldMessages
-          : 0;
+      // for, nor from where the view lays its list out.
+      final floor = _cutBefore[id];
+      final below = floor == null
+          ? -1
+          : sorted.indexWhere((m) => superTabMessageOrder(m, floor) >= 0);
+      final cut = older || _readingBack.contains(id)
+          ? 0
+          : max(
+              0,
+              min(
+                sorted.length - _heldMessages,
+                below < 0 ? sorted.length : below,
+              ),
+            );
       final next = cut > 0 ? sorted.sublist(cut) : sorted;
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);

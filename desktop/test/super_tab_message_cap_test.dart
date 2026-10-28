@@ -83,6 +83,29 @@ void main() {
     expect(c.hasOlder('lead'), isTrue);
   });
 
+  test('rows from where the view lays its list out are never cut', () async {
+    final server = ConversationServer();
+    final c = server.controller();
+    await c.refresh();
+    await pollThrough(server, c, 400);
+    c.keepFrom('lead', c.messages('lead').firstWhere((m) => m.sequence == 301));
+
+    await pollThrough(server, c, 600);
+
+    // Only the 300 before it go, though 1,000 are held.
+    final held = c.messages('lead').map((m) => m.sequence).toList();
+    expect(held, List.generate(700, (i) => i + 301));
+    expect(c.hasOlder('lead'), isTrue);
+
+    // Moved on to the rows on screen, the next poll cuts to the cap.
+    c.keepFrom('lead', c.messages('lead').firstWhere((m) => m.sequence == 990));
+    await pollThrough(server, c, 50);
+    expect(
+      c.messages('lead').map((m) => m.sequence),
+      List.generate(500, (i) => i + 551),
+    );
+  });
+
   group('a conversation left', () {
     late DateTime now;
     late ConversationServer server;
