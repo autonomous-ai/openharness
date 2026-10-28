@@ -22,6 +22,7 @@
 import { spawn } from 'node:child_process'
 import { binaryOnPath } from './binaryOnPath.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath, gridChildEnv, gridCommand } from './gridBinary.js'
+import { gridCallStarted } from './gridCalls.js'
 
 // Which `grid` to run is gridBinary.ts's, which the core keeps for its launches; said again here for
 // every grid call that imports it from this module.
@@ -99,6 +100,8 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
   if (!binaryOnPath(binary, processEnv)) {
     return { code: 'GRID_CLI_MISSING', exitCode: 1, stdout: '', stderr: '', message: MISSING_MESSAGE }
   }
+  // Not while grid's installer replaces the install, and counted so an install waits for this (gridCalls.ts).
+  const ended = await gridCallStarted()
   return await new Promise<GridResult>((resolve) => {
     const command = gridCommand(binary, args)
     const child = spawn(command.file, command.args, { stdio: ['pipe', 'pipe', 'pipe'], env: gridChildEnv(processEnv) })
@@ -109,6 +112,7 @@ export async function gridExec(args: readonly string[], opts: GridExecOptions = 
       if (settled) return
       settled = true
       clearTimeout(timer)
+      ended()
       resolve(result)
     }
     const timer = setTimeout(() => {
