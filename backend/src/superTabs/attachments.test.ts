@@ -1,14 +1,14 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
-import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, imageTypeOf, GcsAttachmentStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
+import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const key = { type: 'service_account', project_id: 'harness-test', client_email: 'uploads@harness-test.iam.gserviceaccount.com',
   private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() }
 const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64')
-const env = (credentials: string, bucket = 'attachments') => ({ NODE_ENV: 'test', SUPER_TAB_ATTACHMENTS_BUCKET: bucket, SUPER_TAB_ATTACHMENTS_CREDENTIALS: credentials,
-  SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test' })
+const env = (credentials: string, bucket = 'attachments', avatars = '') => ({ NODE_ENV: 'test', SUPER_TAB_ATTACHMENTS_BUCKET: bucket, SUPER_TAB_ATTACHMENTS_CREDENTIALS: credentials,
+  SUPER_TAB_ATTACHMENTS_PREFIX: 'super-tabs', SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: 'https://cdn.example.test', SUPER_TAB_AVATARS_BUCKET: avatars })
 
 describe('attachment bucket credentials', () => {
   it('decodes a base64 service account key, also wrapped over lines', () => {
@@ -48,6 +48,21 @@ describe('attachment bucket credentials', () => {
     expect(attachmentsFromEnv({ ...local, NODE_ENV: 'development' })).not.toBeNull()
     expect(() => attachmentsFromEnv({ ...local, NODE_ENV: 'production' })).toThrow('must be an https:// address in production')
     expect(attachmentsFromEnv({ ...env(''), NODE_ENV: 'production' })?.publicBase).toBe('https://cdn.example.test')
+  })
+
+  it('keeps avatars off without a private bucket, and never in the public one', () => {
+    expect(attachmentsFromEnv(env(encoded(key)))?.avatars).toBeNull()
+    expect(attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))?.avatars).toBeInstanceOf(GcsAvatarStore)
+  })
+
+  it('signs an avatar link with the configured key, for a limited time, without a network call', async () => {
+    const avatars = attachmentsFromEnv(env(encoded(key), 'attachments', 'avatars'))!.avatars!
+    const expires = Date.now() + 3_600_000
+    const link = new URL(await avatars.signedUrl('super-tabs/tab/0123/avatar', expires))
+    expect(link.host).toBe('storage.googleapis.com')
+    expect(link.pathname).toBe('/avatars/super-tabs/tab/0123/avatar')
+    expect(link.searchParams.get('X-Goog-Credential')).toContain(key.client_email)
+    expect(Number(link.searchParams.get('X-Goog-Expires'))).toBeLessThanOrEqual(3600)
   })
 
   it('builds the storage client from the configured key, without a network call', async () => {

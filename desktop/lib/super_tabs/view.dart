@@ -17,6 +17,8 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
+import 'identity.dart' show superTabPersonName;
+import 'profile_actions.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -30,6 +32,7 @@ import 'notifications.dart';
 import 'decisions.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
+import 'ship_row.dart';
 import 'terminal_row.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
@@ -1685,6 +1688,16 @@ class _SuperTabViewState extends State<SuperTabView>
     });
   }
 
+  Future<void> _react(
+    SuperTabMessage message,
+    SuperTabReactionEmoji emoji,
+  ) async {
+    final failure = await c.react(message, emoji);
+    if (failure == null || !mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(failure)));
+  }
+
   Widget _message(
     SuperTabMessage message,
     bool grouped,
@@ -1695,6 +1708,13 @@ class _SuperTabViewState extends State<SuperTabView>
       return SuperTabTerminalRow(
         key: ValueKey('super-message-${message.id}'),
         message: message,
+      );
+    }
+    if (SuperTabShipRow.shows(message)) {
+      return SuperTabShipRow(
+        key: ValueKey('super-message-${message.id}'),
+        message: message,
+        controller: c,
       );
     }
     final route = message.route;
@@ -1738,6 +1758,11 @@ class _SuperTabViewState extends State<SuperTabView>
         c.selectTerminal(id, null);
       },
       agent: agent,
+      person: message.fromAgent
+          ? null
+          : c.snapshot?.people
+                .where((p) => p.id == message.authorId)
+                .firstOrNull,
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
@@ -1752,6 +1777,17 @@ class _SuperTabViewState extends State<SuperTabView>
             }
           : null,
       onReturnToComposer: _focus.requestFocus,
+      readerId: c.accountId,
+      reactorName: (kind, id) => kind == 'agent'
+          ? c.snapshot?.agentName(id) ?? 'Agent'
+          : c.snapshot?.people
+                    .where((p) => p.id == id)
+                    .map((p) => superTabPersonName(p.email))
+                    .firstOrNull ??
+                'Someone',
+      onReact: c.canWrite && c.selected?.archived == false
+          ? (emoji) => unawaited(_react(message, emoji))
+          : null,
       receipts: [
         if (message.source['truncated'] == true ||
             message.source['interrupted'] == true)

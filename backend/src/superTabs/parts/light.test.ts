@@ -12,7 +12,7 @@ const assignment: Required<Assignment> = {
 const conversation: Required<Conversation> = {
   id: 'g', kind: 'leads', projectId: 'p', number: 1, title: 't', leadId: null, agentIds: [], archived: false, brief: '',
   task: { goal: '', changes: '', constraints: '', owns: [] }, reviewOf: 'r', checks: [], assignment, lastMessageSequence: 0, pullRequestUrls: [],
-  messageSeq: 0, reportSeq: 0, dormant: false, lastActivityAt: '', audience: { people: [] }, lostAttempt: { id: 'w', agentId: 'a' },
+  messageSeq: 0, reportSeq: 0, dormant: false, lastActivityAt: '', audience: { people: [] }, lostAttempt: { id: 'w', agentId: 'a' }, reactionSeq: 0,
   requesterId: 'p', ledger: {},
 }
 
