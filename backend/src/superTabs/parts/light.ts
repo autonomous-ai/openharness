@@ -88,11 +88,17 @@ export async function loadDeliveryParts(tx: Transaction, tabId: string, groupIds
   // additionally inspect every group of the terminal's agent, which need not be the delivery's receiver.
   const related = [...agents.filter(a => agentIds.includes(a.key) && !(a.data as unknown as Agent).projectId).map(a => a.key),
     ...nativeAgentId ? [nativeAgentId] : []]
-  const rows = await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false,
-    $or: [{ key: { $in: groupIds } }, { dormant: false, $or: [{ key: { $in: keys } }, { agentIds: { $in: related } }] }] } }, { $project: LIGHT_GROUP }] })
+  // One read per index, like loadLight: an $or spanning key and membership indexes would invoke the query planner again.
+  const [named, linked] = await Promise.all([
+    groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: [...groupIds, ...keys] },
+      $or: [{ dormant: false }, { key: { $in: groupIds } }] } }, { $project: LIGHT_GROUP }]),
+    related.length ? groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: false,
+      agentIds: { $in: related } } }, { $project: LIGHT_GROUP }]) : Promise.resolve([]),
+  ])
+  const groups = [...new Map([...named, ...linked].map(row => [row.key, lightGroup(row)])).values()]
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow),
     members: members.map(row => toPart('member', row)), agents: agents.map(row => toPart('agent', row)),
-    groups: (rows as unknown as Array<Record<string, unknown>>).map(lightGroup), machines: [], starts: [], progress: [],
+    groups, machines: [], starts: [], progress: [],
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }
 

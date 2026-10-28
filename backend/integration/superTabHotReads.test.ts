@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
@@ -40,6 +41,7 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   await db.user.create({ data: { id: owner.sub, externalId: `fixture-${owner.sub}`, email: owner.email, autonomousEnv: 'prod' } })
   store = new SuperTabStore(db, () => clock)
+  await listGroupIndexes(db)
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -92,7 +94,8 @@ async function profiled(run: () => Promise<unknown>): Promise<ProfileEntry[]> {
   } finally {
     await db.$runCommandRaw({ profile: 0 })
   }
-  const reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: PROFILE_STAGES, cursor: { batchSize: 100000 } }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }
+  const reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: [
+    { $project: { ...PROFILE_STAGES[0]!.$project, 'command.hint': 1 } }], cursor: { batchSize: 100000 } }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }
   return reply.cursor.firstBatch.map(profileEntry)
 }
 
@@ -156,6 +159,7 @@ describe('delivery authority reads', () => {
       console.log(`delivery ${action.type}: groups=${returned}, docs=${entries.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)}`)
       // The project and Swarm Lead conversations plus the receiver's group; no quiet groups or finished work.
       expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(3)
+      expect(groups.every(e => !!e.command?.hint), 'delivery reads use the installed group indexes').toBe(true)
       expect(entries.filter(e => e.ns.endsWith('.SwarmMachine'))).toEqual([])
     }
   })
