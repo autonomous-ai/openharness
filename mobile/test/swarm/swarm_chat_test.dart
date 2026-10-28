@@ -3,23 +3,27 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_chat_cache.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// A Swarm chat on the phone, as Tony's prototype has it: who wrote each
 /// message and in what role, follow-ups grouped, a reply's quote that brings
-/// its original into view, Reply, the @ picker, no way to attach a file, and
-/// a post that shows at once and says when it is not confirmed.
+/// its original into view, Reply, the @ picker, files attached from the photo
+/// library, the camera or Files, and a post that shows at once and says when it
+/// is not confirmed.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const commands = '/api/super-tabs/$tab/commands';
@@ -175,6 +179,7 @@ void main() {
     FakeSwarm fake, {
     String conversation = 'g1',
     bool settle = true,
+    SwarmUpload upload = refuseSwarmUpload,
   }) async {
     features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
@@ -183,6 +188,7 @@ void main() {
       accountId: () => account.value,
       account: account,
       request: fake.request,
+      upload: upload,
       notices: SilentSystemNotices(),
       features: features,
     )..foreground = false;
@@ -253,9 +259,7 @@ void main() {
     expect(find.text('Then the build'), findsOneWidget);
   });
 
-  testWidgets('no button attaches a file; a file in a message opens', (
-    tester,
-  ) async {
+  testWidgets('a file in a message opens', (tester) async {
     // Review of #1802 at bd73842: this test once passed with opening off.
     final opened = <Object?>[];
     const launcher = MethodChannel('plugins.flutter.io/url_launcher');
@@ -287,17 +291,6 @@ void main() {
     );
 
     expect(find.textContaining('plan.md'), findsOneWidget);
-    expect(find.textContaining('Attach'), findsNothing);
-    expect(
-      find.byWidgetPredicate(
-        (w) =>
-            w is Icon &&
-            (w.icon == LucideIcons.paperclip ||
-                w.icon == LucideIcons.paperclip300 ||
-                w.icon == LucideIcons.plus300),
-      ),
-      findsNothing,
-    );
 
     await tester.tap(find.textContaining('plan.md'));
     await tester.pump();
@@ -1563,6 +1556,262 @@ void main() {
 
     test('a date ahead of the phone\'s clock is a date', () {
       expect(swarmDayLabel(DateTime(2026, 10, 28), now), '28 Oct');
+    });
+  });
+
+  group('attaching files', () {
+    final picker = (
+      photos: pickSwarmPhotos,
+      camera: takeSwarmPhoto,
+      documents: pickSwarmFiles,
+      settings: openSwarmSettings,
+      copies: swarmPickerCopyFolders,
+    );
+    // No plugin answers in a widget test: the pickers' copies here are in memory.
+    setUp(() => swarmPickerCopyFolders = () async => const []);
+    tearDown(() {
+      swarmPickerCopyFolders = picker.copies;
+      pickSwarmPhotos = picker.photos;
+      takeSwarmPhoto = picker.camera;
+      pickSwarmFiles = picker.documents;
+      openSwarmSettings = picker.settings;
+    });
+
+    /// A picker's file held in memory, named as on a phone: by its path.
+    XFile picked(String name, int size) => XFile.fromData(
+      Uint8List(size),
+      path: '/picker-copies/$name',
+      length: size,
+    );
+
+    /// Uploads the test answers: each held until [answer] completes it.
+    final uploads =
+        <
+          ({
+            String name,
+            void Function(double) progress,
+            Completer<Map<String, dynamic>> answer,
+          })
+        >[];
+    setUp(uploads.clear);
+    Future<Map<String, dynamic>> held({
+      required String tabId,
+      required String conversationId,
+      required String name,
+      required String mime,
+      required Uint8List bytes,
+      required dynamic cancel,
+      required void Function(double sent) onProgress,
+    }) {
+      final answer = Completer<Map<String, dynamic>>();
+      uploads.add((name: name, progress: onProgress, answer: answer));
+      return answer.future;
+    }
+
+    Map<String, dynamic> attachment(String id) => {
+      'attachment': {
+        'id': id,
+        'name': 'x',
+        'mime': 'image/jpeg',
+        'size': 1,
+        'url': 'https://cdn.harness.autonomous.ai/$id/x',
+      },
+    };
+
+    Future<void> attach(WidgetTester tester, String row) async {
+      await tester.tap(key('swarm-attach'));
+      await tester.pumpAndSettle();
+      await tester.tap(key(row));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('+ opens a sheet with Photo library, Camera and Files', (
+      tester,
+    ) async {
+      await pump(tester, backend([message('m1', 1)]));
+
+      await tester.tap(key('swarm-attach'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Photo library'), findsOneWidget);
+      expect(find.text('Camera'), findsOneWidget);
+      expect(find.text('Files'), findsOneWidget);
+      for (final row in ['library', 'camera', 'files']) {
+        expect(
+          tester.getSize(key('swarm-attach-$row')).height,
+          greaterThanOrEqualTo(44),
+        );
+      }
+    });
+
+    testWidgets('the sheet rounds at the theme\'s sheet radius', (
+      tester,
+    ) async {
+      await pump(tester, backend([message('m1', 1)]));
+
+      await tester.tap(key('swarm-attach'));
+      await tester.pumpAndSettle();
+
+      expect(sheetTopRadius(tester), grid.AppControl.sheetRadius);
+    });
+
+    testWidgets('photos picked show as chips with their size; ✕ takes one '
+        'off before sending', (tester) async {
+      pickSwarmPhotos = (limit) async => [
+        picked('a.jpg', 2 * 1024 * 1024),
+        picked('b.jpg', 4 * 1024),
+      ];
+      await pump(tester, backend([message('m1', 1)]));
+
+      await attach(tester, 'swarm-attach-library');
+
+      expect(key('swarm-outgoing-photo.jpg'), findsOneWidget);
+      expect(key('swarm-outgoing-photo-2.jpg'), findsOneWidget);
+      expect(find.text('2.0 MB'), findsOneWidget);
+      expect(find.text('4 KB'), findsOneWidget);
+
+      await tester.tap(key('swarm-outgoing-remove-photo.jpg'));
+      await tester.pump();
+
+      expect(key('swarm-outgoing-photo.jpg'), findsNothing);
+      expect(key('swarm-outgoing-photo-2.jpg'), findsOneWidget);
+    });
+
+    testWidgets('Send with files and no text uploads them, shows each one\'s '
+        'progress, then posts them', (tester) async {
+      pickSwarmFiles = () async => [picked('crash.log', 12)];
+      final fake = backend([message('m1', 1)]);
+      await pump(tester, fake, upload: held);
+
+      await attach(tester, 'swarm-attach-files');
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+
+      expect(uploads.single.name, 'crash.log');
+      uploads.single.progress(0.6);
+      await tester.pump();
+      expect(find.text('60%'), findsOneWidget);
+
+      uploads.single.answer.complete(attachment('f1'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single['attachmentIds'], ['f1']);
+      expect(key('swarm-outgoing-crash.log'), findsNothing);
+    });
+
+    testWidgets('a post of files alone shows them while it is sent', (
+      tester,
+    ) async {
+      pickSwarmFiles = () async => [picked('crash.log', 12)];
+      final fake = backend([message('m1', 1)]);
+      fake.routes[commands] = (_) => Completer<Object?>().future;
+      await pump(tester, fake, upload: held);
+
+      await attach(tester, 'swarm-attach-files');
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+      uploads.single.answer.complete(attachment('f1'));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.descendant(
+          of: key('swarm-pending'),
+          matching: find.textContaining('crash.log'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a refused upload says why and keeps the files', (
+      tester,
+    ) async {
+      pickSwarmFiles = () async => [picked('crash.log', 12)];
+      final fake = backend([message('m1', 1)]);
+      await pump(tester, fake, upload: held);
+
+      await attach(tester, 'swarm-attach-files');
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+      uploads.single.answer.completeError(
+        const SuperTabFailure(
+          'UPLOAD_FAILED',
+          'Could not upload the file. Try again.',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Could not upload the file. Try again.'),
+        findsOneWidget,
+      );
+      expect(key('swarm-outgoing-crash.log'), findsOneWidget);
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('a file over 10 MB is named under the files', (tester) async {
+      pickSwarmFiles = () async => [
+        picked('big.zip', 10 * 1024 * 1024 + 1),
+        picked('ok.txt', 3),
+      ];
+      await pump(tester, backend([message('m1', 1)]));
+
+      await attach(tester, 'swarm-attach-files');
+
+      expect(find.text('big.zip is over 10 MB.'), findsOneWidget);
+      expect(key('swarm-outgoing-ok.txt'), findsOneWidget);
+    });
+
+    testWidgets('camera access turned off offers Settings', (tester) async {
+      takeSwarmPhoto = () async =>
+          throw PlatformException(code: 'camera_access_denied');
+      var opened = 0;
+      openSwarmSettings = () async {
+        opened++;
+        return true;
+      };
+      await pump(tester, backend([message('m1', 1)]));
+
+      await attach(tester, 'swarm-attach-camera');
+
+      expect(find.text('Camera access is off'), findsOneWidget);
+      await tester.tap(find.text('Open Settings'));
+      await tester.pumpAndSettle();
+
+      expect(opened, 1);
+      expect(find.text('Camera access is off'), findsNothing);
+    });
+
+    testWidgets('Not now closes the camera box without Settings', (
+      tester,
+    ) async {
+      takeSwarmPhoto = () async =>
+          throw PlatformException(code: 'camera_access_denied');
+      var opened = 0;
+      openSwarmSettings = () async {
+        opened++;
+        return true;
+      };
+      await pump(tester, backend([message('m1', 1)]));
+
+      await attach(tester, 'swarm-attach-camera');
+      await tester.tap(find.text('Not now'));
+      await tester.pumpAndSettle();
+
+      expect(opened, 0);
+      expect(find.text('Camera access is off'), findsNothing);
+    });
+
+    testWidgets('a person who cannot post has no attach button', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend([message('m1', 1)], members: [person(me, role: 'viewer')]),
+      );
+
+      expect(key('swarm-read-only'), findsOneWidget);
+      expect(key('swarm-attach'), findsNothing);
     });
   });
 }

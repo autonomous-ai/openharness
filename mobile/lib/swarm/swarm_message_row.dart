@@ -590,6 +590,12 @@ class SwarmSmallButton extends StatelessWidget {
   }
 }
 
+/// A file's size as a chat shows it: whole kilobytes, rounded up, or megabytes to one place.
+String swarmFileSize(int bytes) {
+  final kb = (bytes / 1024).ceil();
+  return kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
+}
+
 /// A message's file: opened in the browser when its link is the backend's.
 class SwarmFileChip extends StatelessWidget {
   const SwarmFileChip({super.key, required this.file, required this.link});
@@ -600,8 +606,7 @@ class SwarmFileChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final kb = (file.size / 1024).ceil();
-    final size = kb < 1024 ? '$kb KB' : '${(kb / 1024).toStringAsFixed(1)} MB';
+    final size = swarmFileSize(file.size);
     final url = link;
     final color = url == null ? AppPalette.textFaint : tty.blue;
     return Padding(

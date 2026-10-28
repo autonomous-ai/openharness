@@ -100,6 +100,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       accountId: () => widget.notifier.currentUser?.id,
       account: widget.notifier,
       request: widget.notifier.swarmRequest,
+      upload: widget.notifier.swarmUpload,
       notices: _swarmNotices,
       // Swarm Home's start screens: which computers the account has, and
       // whether any is online.

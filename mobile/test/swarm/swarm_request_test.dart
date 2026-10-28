@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
@@ -652,5 +654,53 @@ void main() {
         isA<SuperTabFailure>().having((f) => f.code, 'code', 'ACCOUNT_CHANGED'),
       ),
     );
+  });
+
+  group('a chat file', () {
+    Future<Map<String, dynamic>> upload(ViewerRig rig) => rig.app.swarmUpload(
+      tabId: 't',
+      conversationId: 'g1',
+      name: 'shot.jpg',
+      mime: 'image/jpeg',
+      bytes: Uint8List(1),
+      cancel: CancelToken(),
+      onProgress: (_) {},
+    );
+
+    test('goes straight to the backend, through no machine', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+
+      final answer = await upload(rig);
+
+      expect(answer, {
+        'attachment': {'id': 'att'},
+      });
+      expect(rig.api.swarmUploads, ['t/g1/shot.jpg']);
+      expect(rig.conn('m').payloadsOf('super_tabs'), isEmpty);
+    });
+
+    test('an answer that lands after sign-out is dropped', () async {
+      final rig = await signedInWith({'m': []});
+      addTearDown(rig.app.dispose);
+      final answer = Completer<Map<String, dynamic>>();
+      rig.api.onSwarmUpload = () => answer.future;
+
+      final sending = upload(rig);
+      await settle();
+      await rig.app.logout();
+      answer.complete({'attachment': <String, dynamic>{}});
+
+      await expectLater(
+        sending,
+        throwsA(
+          isA<SuperTabFailure>().having(
+            (f) => f.code,
+            'code',
+            'ACCOUNT_CHANGED',
+          ),
+        ),
+      );
+    });
   });
 }

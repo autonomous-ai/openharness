@@ -84,6 +84,7 @@ class SwarmInbox extends ChangeNotifier {
   SwarmInbox({
     required this.accountId,
     required this.request,
+    this.upload = refuseSwarmUpload,
     this.pollInterval = const Duration(seconds: 15),
     SwarmHomeCache? homeCache,
     Duration homeWait = const Duration(seconds: 30),
@@ -121,6 +122,9 @@ class SwarmInbox extends ChangeNotifier {
 
   final String accountId;
   final SwarmRequest request;
+
+  /// Handed to each Swarm's reader, for its chats' files.
+  final SwarmUpload upload;
   final Duration pollInterval;
 
   /// The account's Swarms, in the list's order.
@@ -440,6 +444,7 @@ class SwarmInbox extends ChangeNotifier {
       tabId: id,
       accountId: accountId,
       request: request,
+      upload: upload,
     )..addListener(_relay);
     _asks[id] = SwarmAsks(reader)
       ..onArrived = ((ask) => onArrived?.call(switch (ask) {
