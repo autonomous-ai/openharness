@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
@@ -7,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_face.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -21,6 +23,8 @@ import 'swarm_fixture.dart';
 /// arrives unless they are looking at it, and holding a decision's answer
 /// for Undo.
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   /// One Swarm `a` whose open decision is d1, asked in conversation g9.
   FakeSwarm backend() {
     final fake = FakeSwarm();
@@ -144,6 +148,44 @@ void main() {
       );
 
       expect(sent, ['a/g9/shot.jpg']);
+    });
+
+    group('the photos drawn', () {
+      setUp(() => features.set(PhoneExperiment.swarm, true));
+
+      /// A photo of the Swarm's as drawing holds it in memory.
+      ImageProvider drawn(String url) {
+        final image = swarmAvatarImage(Uri.parse(url));
+        PaintingBinding.instance.imageCache.putIfAbsent(
+          image,
+          () => OneFrameImageStreamCompleter(Completer<ImageInfo>().future),
+        );
+        expect(PaintingBinding.instance.imageCache.containsKey(image), isTrue);
+        return image;
+      }
+
+      test('go when the person signs out', () {
+        host();
+        final photo = drawn('https://storage.googleapis.com/a.png?sig=1');
+        account.value = null;
+        expect(PaintingBinding.instance.imageCache.containsKey(photo), isFalse);
+      });
+
+      test('go when another account signs in', () {
+        host();
+        final photo = drawn('https://storage.googleapis.com/b.png?sig=1');
+        account.value = 'person-other';
+        expect(PaintingBinding.instance.imageCache.containsKey(photo), isFalse);
+      });
+
+      test('stay while the same account is signed in', () {
+        final h = host();
+        final photo = drawn('https://storage.googleapis.com/c.png?sig=1');
+        h.foreground = false;
+        h.foreground = true;
+        expect(PaintingBinding.instance.imageCache.containsKey(photo), isTrue);
+        PaintingBinding.instance.imageCache.clear();
+      });
     });
 
     group('the Home kept', () {

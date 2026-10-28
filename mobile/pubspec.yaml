@@ -21,6 +21,9 @@ dependencies:
     sdk: flutter
   # `compareNatural` — the desktop's name order, so `harness 9` sorts before `harness 10` on both.
   collection: ^1.19.1
+  # The time a Swarm status clears by (`swarm/swarm_face.dart`), which tests move
+  # with the fake clock `testWidgets` runs under.
+  clock: ^1.1.2
 
   cupertino_icons: ^1.0.8
   lucide_icons_flutter: ^3.1.15

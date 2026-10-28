@@ -357,6 +357,54 @@ void main() {
       },
     );
 
+    test(
+      "a Swarm avatar goes up as one PNG of its own and answers the upload's id",
+      () async {
+        backend.answer = (_, _) => (
+          status: 200,
+          body: ok({
+            'avatar': {'id': 'up-1'},
+          }),
+        );
+        final png = Uint8List.fromList(List.generate(32, (i) => i));
+        expect(
+          await client(_Tokens(['t'])).uploadSwarmAvatar('tab/1', png),
+          'up-1',
+        );
+        final sent = backend.requests.single;
+        expect(sent.path, '/api/super-tabs/tab%2F1/avatars');
+        expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+        final body = latin1.decode(sent.body);
+        expect(body, contains('filename="avatar.png"'));
+        expect(body, contains('Content-Type: image/png'));
+      },
+    );
+
+    test('a Swarm avatar the server refuses says why', () async {
+      backend.answer = (_, _) => (
+        status: 503,
+        body: {
+          'success': false,
+          'error': {
+            'code': 'AVATARS_UNAVAILABLE',
+            'message': 'Uploading pictures is not set up on this server yet.',
+          },
+        },
+      );
+      await expectLater(
+        client(_Tokens(['t'])).uploadSwarmAvatar('tab-1', Uint8List(4)),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.status, 'status', 503)
+              .having(
+                (e) => e.message,
+                'message',
+                'Uploading pictures is not set up on this server yet.',
+              ),
+        ),
+      );
+    });
+
     test('no transcript is an empty one', () async {
       backend.answer = (_, _) => (status: 200, body: ok(<String, Object?>{}));
       expect(
