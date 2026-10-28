@@ -1,5 +1,6 @@
 /** Grid's complete argv API, carried over the existing paired-machine connection. No shell. */
 import { spawn } from 'node:child_process'
+import { gridCallStarted } from './gridCalls.js'
 import { gridBinaryPath, gridChildEnv, gridCommand } from './gridExec.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from './gridFleetProtocol.js'
 
@@ -57,6 +58,8 @@ export class GridFleetRpc {
     const controller = new AbortController()
     this.jobs.set(key, controller)
     try {
+      // Not while grid's installer replaces the install, and counted so an install waits for this (gridCalls.ts).
+      const ended = await gridCallStarted()
       return await new Promise<GridFleetResult>(resolve => {
         const output = { stdout: new GridOutputCapture(), stderr: new GridOutputCapture() }
         let stopped: string | null = null, done = false
@@ -69,7 +72,7 @@ export class GridFleetRpc {
         })
         const finish = (code: number, error: string | null) => {
           if (done) return
-          done = true; clearTimeout(timeout); clearTimeout(kill)
+          done = true; clearTimeout(timeout); clearTimeout(kill); ended()
           resolve({ ok: code === 0 && !error, code, stdout: output.stdout.text, stderr: output.stderr.text, error })
         }
         const stop = (reason: string) => {
