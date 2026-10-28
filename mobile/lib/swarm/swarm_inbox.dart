@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_asks.dart';
+import 'swarm_home_cache.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
@@ -83,7 +85,39 @@ class SwarmInbox extends ChangeNotifier {
     required this.accountId,
     required this.request,
     this.pollInterval = const Duration(seconds: 15),
-  });
+    SwarmHomeCache? homeCache,
+    Duration homeWait = const Duration(seconds: 30),
+  }) : _home = homeCache == null
+           ? null
+           : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
+    if (_home != null) unawaited(_restore());
+  }
+
+  /// Keeps the last Home ([SwarmHomeCache]), so a cold start draws it at once.
+  final SwarmHomeKeeper? _home;
+
+  /// Draws the Home kept until the list is read: each Swarm's reader holds
+  /// the view kept, which its first read replaces. One that does not read
+  /// back is not drawn.
+  Future<void> _restore() async {
+    final kept = await _home!.restore();
+    if (kept == null || _disposed || loaded || swarms.isNotEmpty) return;
+    final shown = <SwarmListing>[];
+    for (final swarm in kept) {
+      final SuperTabSnapshot snapshot;
+      try {
+        snapshot = SuperTabSnapshot.fromJson(swarm.view.state);
+      } on FormatException {
+        continue;
+      }
+      _readers.putIfAbsent(swarm.id, () => _open(swarm.id))
+        ..snapshot = snapshot
+        ..partners = swarm.view.partners;
+      shown.add((id: swarm.id, name: swarm.name));
+    }
+    swarms = List.unmodifiable(shown);
+    _rebuild(told: true);
+  }
 
   final String accountId;
   final SwarmRequest request;
@@ -254,7 +288,11 @@ class SwarmInbox extends ChangeNotifier {
     _shown = value;
     _poll?.cancel();
     _poll = null;
-    if (value) unawaited(_tick());
+    if (value) {
+      unawaited(_tick());
+    } else {
+      _home?.flush(_readers, swarms);
+    }
   }
 
   Future<void> _tick() async {
@@ -468,7 +506,10 @@ class SwarmInbox extends ChangeNotifier {
           if (!seen.contains(need.key)) onArrived?.call(need);
         }
       }
-      _workSeen[id] = {for (final need in waiting) need.key};
+      // The Home kept is not a read: what it shows waiting is not seen.
+      if (reader.generation > 0) {
+        _workSeen[id] = {for (final need in waiting) need.key};
+      }
       work.addAll(waiting);
     }
     int newest(SwarmNeed a, SwarmNeed b) =>
@@ -482,7 +523,9 @@ class SwarmInbox extends ChangeNotifier {
     if (!same) needs = List.unmodifiable(next);
     final tell = told || !same || _below;
     _below = false;
-    if (tell) notifyListeners();
+    if (!tell) return;
+    notifyListeners();
+    _home?.keep(_readers, swarms);
   }
 
   /// The same asks of the same reads, in the same order: decisions and tags

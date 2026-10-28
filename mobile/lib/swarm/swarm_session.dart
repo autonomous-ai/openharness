@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import '../notify/system_notices.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_choices.dart';
+import 'swarm_home_cache.dart';
 import 'swarm_inbox.dart';
 import 'swarm_notices.dart';
 import 'swarm_request.dart';
@@ -23,10 +24,12 @@ class SwarmSession extends ChangeNotifier {
     required SwarmNotices notices,
     Duration pollInterval = const Duration(seconds: 15),
     this.undoWindow = swarmUndoWindow,
+    SwarmHomeCache? homeCache,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
          pollInterval: pollInterval,
+         homeCache: homeCache,
        ) {
     _announcer = SwarmAnnouncer(
       notices,
@@ -173,7 +176,9 @@ class SwarmHost extends ChangeNotifier {
     required this.notices,
     ExperimentalFeaturesStore? features,
     this.computers,
-  }) : features = features ?? experimentalFeaturesStore {
+    SwarmHomeCache? homeCache,
+  }) : features = features ?? experimentalFeaturesStore,
+       homeCache = homeCache ?? SwarmHomeCache.device() {
     account.addListener(_update);
     this.features.addListener(_update);
     computers?.addListener(_computersChanged);
@@ -193,8 +198,15 @@ class SwarmHost extends ChangeNotifier {
   /// where nobody handed them in, and no start screen shows.
   final SwarmComputers? computers;
 
+  /// The last Home of the session's account, kept for a cold start; cleared
+  /// when the account leaves or Swarm is turned off.
+  final SwarmHomeCache homeCache;
+
   SwarmSession? session;
   bool _foreground = true;
+
+  /// Whether Swarm was on at the last [_update]; null before the first.
+  bool? _on;
 
   set foreground(bool value) {
     _foreground = value;
@@ -208,13 +220,28 @@ class SwarmHost extends ChangeNotifier {
   }
 
   void _update() {
-    final id = features.isOn(PhoneExperiment.swarm) ? accountId() : null;
-    if (id == session?.accountId) return;
+    final on = features.isOn(PhoneExperiment.swarm);
+    final wasOn = _on;
+    _on = on;
+    final id = on ? accountId() : null;
+    if (id == session?.accountId) {
+      // Swarm off with no session to end: its switch is read before the first
+      // frame, so this is known, and what an earlier run kept goes. A missing
+      // account is not: the signed-in shell is up before the account is read.
+      if (!on && wasOn != false) unawaited(homeCache.clear());
+      return;
+    }
+    // Signed out, another account, or Swarm turned off: nothing of it stays.
+    if (session != null) unawaited(homeCache.clear());
     session?.dispose();
     session = id == null
         ? null
-        : (SwarmSession(accountId: id, request: request, notices: notices)
-            ..foreground = _foreground);
+        : (SwarmSession(
+            accountId: id,
+            request: request,
+            notices: notices,
+            homeCache: homeCache,
+          )..foreground = _foreground);
     notifyListeners();
   }
 

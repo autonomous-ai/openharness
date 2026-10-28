@@ -3,6 +3,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -64,6 +66,7 @@ void main() {
     late ExperimentalFeaturesStore features;
     late ValueNotifier<String?> account;
     late _Notices notices;
+    late SwarmHomeCache home;
 
     SwarmHost host() {
       final h = SwarmHost(
@@ -72,6 +75,7 @@ void main() {
         request: backend().request,
         notices: notices,
         features: features,
+        homeCache: home,
       );
       addTearDown(h.dispose);
       return h;
@@ -81,6 +85,106 @@ void main() {
       features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore());
       account = ValueNotifier(me);
       notices = _Notices();
+      home = memoryHomeCache();
+    });
+
+    /// The account's Home, kept as a Swarm it read.
+    Future<void> keep(String account) => home.write(account, [
+      (
+        id: 'a',
+        name: 'Swarm a',
+        view: (
+          state: SuperTabParts.firstLoad(firstLoad(tabId: 'a')).state,
+          partners: const <String, String>{},
+        ),
+      ),
+    ]);
+
+    group('the Home kept', () {
+      setUp(() => features.set(PhoneExperiment.swarm, true));
+
+      test('goes when the person signs out', () async {
+        host();
+        await keep(me);
+
+        account.value = null;
+
+        expect(await home.read(me), isNull);
+      });
+
+      test('goes when Swarm is turned off', () async {
+        host();
+        await keep(me);
+
+        await features.set(PhoneExperiment.swarm, false);
+
+        expect(await home.read(me), isNull);
+      });
+
+      test('goes when another account signs in', () async {
+        host();
+        await keep(me);
+
+        account.value = 'person-other';
+
+        expect(await home.read(me), isNull);
+      });
+
+      test(
+        'stays while the same account is signed in, in front or not',
+        () async {
+          final h = host();
+          await keep(me);
+
+          h.foreground = false;
+          h.foreground = true;
+
+          expect(await home.read(me), isNotNull);
+        },
+      );
+    });
+
+    group('the Home kept, at a cold start', () {
+      /// Nothing of it on the phone: no view, and no key that opens one.
+      Future<void> expectGone() async {
+        expect(await home.read(me), isNull);
+        expect(home.file.existsSync(), isFalse);
+        expect((home.key as MemorySwarmHomeKey).value, isNull);
+      }
+
+      test('goes when Swarm is already off, with no session to end', () async {
+        await keep(me);
+
+        host();
+
+        await expectGone();
+      });
+
+      test('stays while the account is still being read', () async {
+        await features.set(PhoneExperiment.swarm, true);
+        account.value = null;
+        await keep(me);
+
+        final h = host();
+        account.value = me;
+
+        expect(h.session?.accountId, me);
+        expect(await home.read(me), isNotNull);
+      });
+
+      test(
+        'goes when Swarm is turned off before the account is read',
+        () async {
+          await features.set(PhoneExperiment.swarm, true);
+          account.value = null;
+          await keep(me);
+          host();
+
+          await features.set(PhoneExperiment.swarm, false);
+
+          await expectGone();
+        },
+      );
     });
 
     test(

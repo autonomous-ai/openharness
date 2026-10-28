@@ -93,6 +93,11 @@ dependencies:
   # interactive demo. It also plays a video a terminal printed, downloaded from the agent's machine
   # (`phone/media_preview_page.dart`).
   video_player: ^2.14.0
+  # The key the last Swarm Home is sealed under, in the iOS Keychain (Android: Keystore-backed), so a
+  # cold start draws it at once (`swarm/swarm_home_cache.dart`); the sealed view sits beside the
+  # state file. Pinned exactly: a native plugin, and 10.x is the line with a Swift package, which the
+  # iOS build needs (no CocoaPods).
+  flutter_secure_storage: 10.3.4
 
 dev_dependencies:
   flutter_test:
