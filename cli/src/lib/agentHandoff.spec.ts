@@ -137,6 +137,7 @@ describe('redactHandoffSecrets', () => {
   const removed: Array<[string, string]> = [
     ['a GitHub token', `ghp_${'A'.repeat(36)}`],
     ['a fine-grained GitHub token', 'github_pat_11ABCDEFG0123456789_abcdefghijklmnop'],
+    ['a stateless GitHub App installation token', `ghs_123456_eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiIxMjM0NTYifQ.${'s'.repeat(342)}-x_y`],
     ['an AWS key id', 'AKIAIOSFODNN7EXAMPLE'],
     ['a Slack token', 'xoxb-1234567890-abcdefghij'],
     ['a Google API key', `AIza${'b'.repeat(35)}`],

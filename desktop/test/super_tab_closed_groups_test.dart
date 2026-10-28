@@ -107,9 +107,7 @@ void main() {
         final sidebar = find.byType(ProjectSidebar);
         Finder inside(Finder f) => find.descendant(of: sidebar, matching: f);
         if (closedRow.evaluate().isEmpty) {
-          await tester.tap(
-            find.byKey(const ValueKey('super-project-expand-lead')),
-          );
+          await tester.tap(find.byKey(const ValueKey('super-group-lead')));
           await tester.pumpAndSettle();
         }
 
@@ -188,9 +186,7 @@ void main() {
       await tester.pumpWidget(_app(server, controller));
       await tester.pumpAndSettle();
       if (closedRow.evaluate().isEmpty) {
-        await tester.tap(
-          find.byKey(const ValueKey('super-project-expand-lead')),
-        );
+        await tester.tap(find.byKey(const ValueKey('super-group-lead')));
         await tester.pumpAndSettle();
       }
       expect(find.text('Closed (1)'), findsOneWidget);

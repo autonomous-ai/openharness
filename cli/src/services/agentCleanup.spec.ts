@@ -6,7 +6,7 @@ import { emptyPorts } from '../core/api.js'
 import type { AgentCloseResult } from '../lib/closeAgentService.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { RETENTION_LAPSE_MS, retainContributions, retentionFile } from '../superTabs/retention.js'
+import { RETENTION_LAPSE_MS, retainContributions, retainedHarnesses, retentionFile } from '../superTabs/retention.js'
 import { ASK_AGAIN_MS, CASCADE_RETRY_MS, CASCADE_TRIES, createAgentCleanup, IDLE_CLOSE_MS, JOINED_MAX, joinedPath, LOOK_EVERY_MS, startAgentCleanup, type AgentCleanupDeps } from './agentCleanup.js'
 
 const NOW = Date.parse('2026-10-12T12:00:00Z')
@@ -45,8 +45,9 @@ function setup(sessions: RegisteredSession[], quietFor: Record<string, number | 
   const log = vi.fn()
   let tick: (() => void) | null = null
   const waited: number[] = []
+  // The Swarm on, as by default (`HARNESS_SWARM`): its members are kept. A test of it off leaves `retained` out.
   const cleanup = createAgentCleanup(core, { now: () => clock, log, every: (_ms, run) => { tick = run; return () => { tick = null } },
-    wait: async (ms) => { waited.push(ms) }, ...over })
+    wait: async (ms) => { waited.push(ms) }, retained: (dataDir) => retainedHarnesses(dataDir), ...over })
   return { cleanup, core, closeStarted, lastActivity, log, waited, advance: (ms: number) => { clock += ms }, tick: () => tick }
 }
 
@@ -91,6 +92,36 @@ it('never closes a Swarm Lead, idle or orphaned, even once its roster has lapsed
   expect(t.closeStarted.mock.calls).toEqual([['member', 'idle']])
   expect(sessions.map(s => s.agentId)).toEqual(['pm'])
   t.cleanup.port.stop()
+})
+
+// HARNESS_SWARM=off: the Swarm hands in no members, its saved roster is not read, and a harness it kept is an ordinary
+// one another agent started: closed with its starter, closed once idle, and closable by the core. The review of #1765
+// found it kept, where the same harness on a computer without the Swarm is closed.
+it('with the Swarm off, cleans up a harness its saved roster names, as any other', async () => {
+  retainContributions(dir, 'machine-1', [{ tabId: 'tab', lead: true, agent: { harnessId: 'pm', machineId: 'machine-1' } },
+    { tabId: 'tab', agent: { harnessId: 'orphan', machineId: 'machine-1' } }, { tabId: 'tab', agent: { harnessId: 'idle', machineId: 'machine-1' } }])
+  expect(retainedHarnesses(dir)).toEqual(new Set(['pm', 'orphan', 'idle']))
+  const sessions = [kid('orphan'), kid('idle', { parentAgentId: 'alive' }), kid('pm', { parentAgentId: 'alive' }), row('alive')]
+  const t = setup(sessions, { idle: 2 * IDLE_CLOSE_MS, pm: 2 * IDLE_CLOSE_MS }, { retained: undefined })
+  await t.cleanup.closeStartedBy('lead')
+  expect(t.closeStarted.mock.calls).toEqual([['orphan', 'now']])
+  await t.cleanup.look()
+  t.advance(IDLE_CLOSE_MS)
+  await t.cleanup.look()
+  expect(t.closeStarted.mock.calls).toEqual([['orphan', 'now'], ['idle', 'idle'], ['pm', 'idle']])
+  expect(sessions.map(s => s.agentId)).toEqual(['alive'])
+  t.cleanup.port.stop()
+  // In the core's process too (services/inline.ts): started without the Swarm it keeps no one, and with it, its members.
+  for (const [retained, closed] of [[undefined, ['orphan']], [(dataDir: string) => retainedHarnesses(dataDir), []]] as const) {
+    const ports = emptyPorts(), live = [kid('orphan')]
+    const closeStarted = vi.fn(async (agentId: string) => { live.splice(live.findIndex(s => s.agentId === agentId), 1); return { closed: true as const } })
+    startAgentCleanup(fakeCore({ dataDir: dir, agents: { live: vi.fn(() => [...live]), resolve: vi.fn(() => undefined), closeStarted } }), ports, retained)
+    ports.agentCleanup!.closed('lead')
+    await vi.waitFor(() => expect(live.map(s => s.agentId)).toEqual(closed.length ? [] : ['orphan']))
+    await settle()
+    expect(closeStarted.mock.calls.map(([id]) => id)).toEqual(closed)
+    ports.agentCleanup!.stop()
+  }
 })
 
 it('rechecks retention after waiting on activity or another orphan close', async () => {

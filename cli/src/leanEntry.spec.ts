@@ -45,6 +45,10 @@ describe('the lean bundle a release carries', () => {
     const roots = role === 'core' ? [LEAN_CORE_ENTRY, runner!]
       : role === 'master' ? [LEAN_ENTRY, runner!]
         : [LEAN_ENTRY, [...files.keys()].find((name) => name.startsWith('serviceProcess-'))!, runner!]
+    return reach(roots)
+  }
+  /** The files [roots] import, and what those import, but not what any imports only when asked (`import("…")`). */
+  function reach(roots: string[]): Set<string> {
     const seen = new Set<string>()
     const visit = (name: string): void => {
       if (seen.has(name)) return
@@ -104,6 +108,31 @@ describe('the lean bundle a release carries', () => {
     // core's own, which Node reads only then.
     expect([...files].some(([name, code]) => name.startsWith('core-') && code.includes(marker))).toBe(true)
     expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
+  })
+
+  // HARNESS_SWARM=off (the review of #1765): the Swarm's code is in files of its own, which a process loads only through
+  // a door while the Swarm is on (src/architecture.spec.ts `SWARM_DOORS`). With it off, the core, with every service in
+  // it too (`HARNESSD_SERVICES=none`), the master and every other service load none of it.
+  it.each([
+    ['its side of the core', 'Only a stopped Product Manager of a Swarm project is reopened.'],
+    ['its skills', 'A Swarm skill needs a role and session key'],
+    ['its GitHub App', 'The Harness GitHub App token is not in the form GitHub gives.'],
+    ['its retention', 'Super Tab retention'],
+    ['its replacements', 'Invalid agent replacement.'],
+    ['its shared APIs', 'This computer could not open a local endpoint for the API.'],
+  ])('leaves the Swarm\'s code, %s, out of every process but its own until it is on', (_, marker) => {
+    expect([...files.values()].some((code) => code.includes(marker)), 'the marker is in the build').toBe(true)
+    const inline = [...files.keys()].find((name) => name.startsWith('core-inline-'))
+    expect(inline, 'the core\'s inline services').toBeDefined()
+    const processes: Array<[string, Set<string>]> = [...ROLES.filter((role) => role !== 'superTabs').map((role) => [role, loads(role)] as [string, Set<string>]),
+      ['core with every service in it', new Set([...loads('core'), ...reach([inline!])])]]
+    for (const [role, loaded] of processes) expect([...loaded].filter((name) => files.get(name)!.includes(marker)), role).toEqual([])
+  })
+
+  it('loads the Swarm\'s code in its own process, which the master starts only while it is on', () => {
+    for (const marker of ['Super Tab retention', 'A Swarm skill needs a role and session key']) {
+      expect([...loads('superTabs')].some((name) => files.get(name)!.includes(marker)), marker).toBe(true)
+    }
   })
 
   it('loads native hook declarations eagerly without importing the optional compatibility entry', () => {

@@ -150,14 +150,15 @@ device (`BACKPRESSURE`). A proposal not decided within `holdsMs` becomes `expire
 stay readable ten minutes; at most 256 are kept, and a proposal still inside the rate window is never
 dropped to make room: a new one is refused `BACKPRESSURE` instead.
 
-**No answer in time.** The CLI waits 5 seconds for the Wi-Fi device service. A `propose` with no answer
-in time is `OUTCOME_UNKNOWN` (504): it may have been sent. Retry with the same `--key` and it is sent at
-most once. A read with no answer is `UNAVAILABLE` (503).
+**No answer in time.** The CLI waits 5 seconds for the Wi-Fi device service, and cannot tell a service
+that is down from one that answered late. So a `propose` with no answer is always `OUTCOME_UNKNOWN`
+(504), even when the service turns out to be down: it may have been sent, and retrying with the same
+`--key` sends it at most once. Only a read (`state`, `proposal`) with no answer is `UNAVAILABLE` (503).
 
 **Errors** (HTTP status): `INVALID_REQUEST` 400, `PAYLOAD_TOO_LARGE` 413, `DEVICE_NOT_FOUND` 404,
 `PROPOSAL_UNKNOWN` 404, `MISSING_TARGET` 409, `DEVICE_OFFLINE` 409, `IDEMPOTENCY_CONFLICT` 409,
-`RATE_LIMITED` 429, `BACKPRESSURE` 429, `UNAVAILABLE` 503 when the Wi-Fi device service is not running,
-`OUTCOME_UNKNOWN` 504 for a propose with no answer in time.
+`RATE_LIMITED` 429, `BACKPRESSURE` 429, `UNAVAILABLE` 503 for a read the Wi-Fi device service did not
+answer, `OUTCOME_UNKNOWN` 504 for a propose it did not answer (down or late).
 
 ## A device that is a Harness machine
 

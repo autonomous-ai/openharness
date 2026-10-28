@@ -9,16 +9,20 @@ import Fastify, { type FastifyInstance } from 'fastify'
 // checks for a team session is covered against a real database in integration/superTabTeam.test.ts.
 const m = vi.hoisted(() => {
   const machines: Array<Record<string, unknown>> = []
+  const shares: Array<Record<string, unknown>> = []
+  // Like Prisma, a filter field left undefined filters nothing.
   const matches = (row: Record<string, unknown>, where: Record<string, unknown>) => !row.deletedAt &&
-    Object.entries(where).every(([k, v]) => k === 'OR' || (typeof v === 'object' && v !== null) || row[k] === v)
+    Object.entries(where).every(([k, v]) => k === 'OR' || v === undefined || (typeof v === 'object' && v !== null) || row[k] === v)
   return {
     machines,
+    shares,
     prisma: {
       machine: {
         findMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => machines.filter(row => matches(row, where))),
         findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => machines.find(row => matches(row, where)) ?? null),
       },
-      harnessShare: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
+      harnessShare: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), updateMany: vi.fn(),
+        findFirst: vi.fn(async ({ where }: { where: Record<string, unknown> }) => shares.find(row => matches(row, where)) ?? null) },
       user: { findMany: vi.fn(), findUnique: vi.fn() },
     },
     deviceKeys: { read: vi.fn(), seen: vi.fn(), append: vi.fn(), acks: vi.fn(), ack: vi.fn(), touch: vi.fn() },
@@ -94,6 +98,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   m.machines.length = 0
   m.machines.push({ ...ownerMac }, { ...teamMac })
+  m.shares.length = 0
   m.deviceKeys.read.mockResolvedValue({ acct: 'owner', head: { seq: 0, hash: 'h' }, entries: [] })
   m.prisma.harnessShare.updateMany.mockResolvedValue({ count: 1 })
   m.prisma.harnessShare.findUnique.mockResolvedValue(null)
@@ -274,9 +279,24 @@ describe('a team session reaching past its own machine', () => {
     const { superTabId: _dropped, ...noSwarm } = share()
     limited(await call('PUT', `/api/harness-shares/${randomUUID()}`, noSwarm))
     expect(m.prisma.harnessShare.upsert).not.toHaveBeenCalled()
-    // A share of the owner's own Mac is not this machine's to revoke: the update matches nothing.
+    // A share of the owner's own Mac is not this machine's to revoke: the update matches nothing, and the answer is the
+    // same as for no share at all, even when that share was taken back already.
+    const ownerShare = { id: randomUUID(), ownerId: 'owner', autonomousEnv: 'prod', machineId: 'owner-mac', revokedAt: new Date(0) }
+    m.shares.push(ownerShare)
+    m.prisma.harnessShare.updateMany.mockResolvedValueOnce({ count: 0 })
+    const res = await call('DELETE', `/api/harness-shares/${ownerShare.id}`)
+    expect(res.statusCode).toBe(404)
+    expect(res.json().error?.code).toBe('NOT_FOUND')
     m.prisma.harnessShare.updateMany.mockResolvedValueOnce({ count: 0 })
     expect((await call('DELETE', `/api/harness-shares/${randomUUID()}`)).statusCode).toBe(404)
+    // Its own machine's share, taken back again, is answered as removed without telling anyone again.
+    const teamShare = { ...ownerShare, id: randomUUID(), machineId: 'team-mac' }
+    m.shares.push(teamShare)
+    m.prisma.harnessShare.updateMany.mockResolvedValueOnce({ count: 0 })
+    const again = await call('DELETE', `/api/harness-shares/${teamShare.id}`)
+    expect(again.statusCode).toBe(200)
+    expect(again.json().data).toEqual({ removed: true })
+    expect(m.bus.changed).not.toHaveBeenCalled()
     // And never lists harnesses shared with the person.
     limited(await call('GET', '/api/harness-shares'))
   })

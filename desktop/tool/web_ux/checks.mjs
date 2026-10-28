@@ -35,6 +35,9 @@ const TAP_FLOWS = FIXTURE !== 'app' ? FLOWS.map((f) => f.name) : [
   'taken-over', 'view-only',
   'shared-link', 'shared-link-private', 'shared-link-refused', 'shared-link-offline',
   'shared-link-failed', 'settings-account',
+  // The phone search's list and details pages (flows/search.mjs).
+  'search-machines', 'search-machine-details', 'search-machines-back', 'search-harnesses',
+  'search-harness-details',
 ];
 
 // Scrolling areas: the flow that shows one, and where it is.

@@ -149,8 +149,8 @@ export function isLocalDevBuild(version: string): boolean {
  * worth that — a developer who wants the release can ask for it (`harness update --force`) and a
  * release install, which is every user's, still updates exactly as before.
  */
-export function shouldAutoUpdate(candidate: string, current: string): boolean {
-  if (isLocalDevBuild(current)) return false
+export function shouldAutoUpdate(candidate: string, current: string, followReleases = false): boolean {
+  if (isLocalDevBuild(current) && !followReleases) return false
   return semverGt(candidate, current)
 }
 
@@ -632,6 +632,12 @@ export function startSelfUpdater(opts: {
    * itself (HARNESSD_JUDGES_SUPERSEDED).
    */
   stageWhileJudged?: boolean
+  /**
+   * Take releases over a local build too. The Harness Team account's daemon: setup copies its owner's CLI into it, and
+   * an owner on a local build left it on that build for good, without what came after it (2026-10-27: no subscription
+   * relay, so its engines read signed out and the Lead routed nothing there). Nobody develops in the team account.
+   */
+  followReleases?: boolean
   /** Whose layout `dir` has; this process's when left out. */
   platform?: NodeJS.Platform
   /**
@@ -711,7 +717,7 @@ export function startSelfUpdater(opts: {
       // review). What is installed is the build `cli\current` names; this process's own version only when the
       // pointer cannot be read. The dev-build rule then applies to that build, the one a developer installed.
       const installed = pointed() ?? opts.currentVersion
-      if (!shouldAutoUpdate(entry.version, installed)) return
+      if (!shouldAutoUpdate(entry.version, installed, opts.followReleases)) return
       const unremembered = settleRolledBack(opts.dir, platform)
       if (unremembered === entry.version || rejectedVersions(opts.dir).includes(entry.version)) {
         if (toldRejected !== entry.version) console.log(`[update] ${entry.version} was rolled back on this machine — waiting for a newer build (\`harness update\` installs it anyway)`)
@@ -773,7 +779,7 @@ export function startSelfUpdater(opts: {
         // above, and the installer or another process may have put a newer build in meanwhile. The next
         // check's gate then refuses it, so this is said once.
         const pointedNow = pointed()
-        if (pointedNow !== null && !shouldAutoUpdate(ready.version, pointedNow)) {
+        if (pointedNow !== null && !shouldAutoUpdate(ready.version, pointedNow, opts.followReleases)) {
           console.log(`[update] ${ready.version} is no longer an update: the installed build is now ${pointedNow}. Nothing was staged.`)
           return
         }

@@ -103,6 +103,19 @@ describe('the owner\'s daemon, for the Harness Team account', () => {
       .rejects.toThrow()
   })
 
+  it('after each look, says when it last published, for a team account on an older build to be updated', async () => {
+    const afterPass = vi.fn(async () => {})
+    let present: TeamConfig | null = config
+    const f = publisher({ afterPass, now: () => 7, config: () => present })
+    await f.p.tick()
+    expect(afterPass).toHaveBeenLastCalledWith(7)
+    await f.p.tick()
+    expect(afterPass).toHaveBeenCalledTimes(2)
+    present = null
+    await f.p.tick()
+    expect(afterPass).toHaveBeenCalledTimes(2)
+  })
+
   it('names one folder per owner under /Users/Shared', () => {
     expect(teamRelayDir('owner')).toBe('/Users/Shared/.harness-team-relay-owner')
     expect(teamRelayFile('owner')).toBe('/Users/Shared/.harness-team-relay-owner/relay.json')

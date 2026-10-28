@@ -12,11 +12,11 @@ const sharedId = z.string().regex(/^[a-f0-9]{24}$/)
 const DAY = 86_400_000
 
 const STATUS: Record<string, number> = { FORBIDDEN: 403, STALE_ROSTER: 409, ROSTER_TOO_LARGE: 413, SELF_INVITE: 400,
-  TAB_FULL: 409, NOT_FOUND: 404, EXPIRED: 410 }
+  TAB_FULL: 409, ALREADY_MEMBER: 409, NOT_FOUND: 404, EXPIRED: 410 }
 const MESSAGE: Record<string, string> = {
   FORBIDDEN: 'Only the tab\'s owner, from the computer that shares it, can do that.',
   STALE_ROSTER: 'A newer roster is already shared.', ROSTER_TOO_LARGE: 'The roster is too large.',
-  SELF_INVITE: 'You are already in this tab.', TAB_FULL: 'This tab has 8 people already.',
+  SELF_INVITE: 'You are already in this tab.', TAB_FULL: 'This tab has 8 people already.', ALREADY_MEMBER: 'They are already in this tab.',
   NOT_FOUND: 'This invitation is no longer available.', EXPIRED: 'This invitation expired.',
 }
 /** A move's refusals mean something else than the same codes elsewhere: they are told in words of their own. */

@@ -235,6 +235,8 @@ const envSchema = z.object({
   SUPER_TAB_ATTACHMENTS_PREFIX: z.string().default('super-tabs'),
   // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
   SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
+  // A private bucket (no public read) for Swarm avatars, served only through signed links. Unset: avatar uploads are off.
+  SUPER_TAB_AVATARS_BUCKET: z.string().default(''),
 
   // The Harness GitHub App (github/app.ts, docs/swarm-github-app.md): a Swarm agent doing a task pushes and opens pull
   // requests with a one-hour token for its project's repository alone. Both empty: off, and POST

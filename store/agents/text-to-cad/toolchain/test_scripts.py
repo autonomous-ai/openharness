@@ -132,7 +132,7 @@ class Scripts(unittest.TestCase):
         ])
         calls = self.calls()
         self.assertIn("uv venv --quiet --seed --python 3.12 --python-preference only-managed .venv", calls)
-        self.assertIn(f"uv pip install --quiet --python .venv/bin/python cadgen[snapshot]=={CADGEN_VERSION} trimesh numpy scipy rtree networkx lxml", calls)
+        self.assertIn(f"uv pip install --quiet --python .venv/bin/python cadgen[snapshot]=={CADGEN_VERSION} cadquery-ocp==7.9.3.1.1 build123d==0.11.1 trimesh numpy scipy rtree networkx lxml", calls)
         self.assertEqual(calls[-2:], ["venv-python -m playwright install --only-shell chromium", f"PLAYWRIGHT_BROWSERS_PATH={self.root}/.playwright"])
         self.assertTrue((self.root / ".venv" / "bin" / "python").exists())
 

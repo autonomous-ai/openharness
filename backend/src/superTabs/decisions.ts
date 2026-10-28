@@ -3,13 +3,19 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
  *  through Chat with PM. Called inside SuperTabStore's transactions. */
+import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { LEDGER_WEEKS } from './leaderboard/record.js'
+import { WEEK_MS } from './leaderboard/week.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
+/** Open decisions one asker may hold for one person: an asker whose question changes a little every turn would otherwise
+ *  write without end, and push real decisions out of the person's list. */
+export const MAX_OPEN_DECISIONS = 20
 
 const line = (max: number) => z.string().trim().min(1).max(max)
 /** What a question offers besides itself: 2–5 distinct options, the index of the recommended one, and what an answer unblocks. */
@@ -76,22 +82,48 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 /** Mongo omits unset fields, so `answeredAt: null` alone would miss a row written without it. */
 const waiting: Prisma.SuperTabDecisionWhereInput = { OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] }
 
+/** Whether a person's decision asked in this conversation still waits: a group that has one is never archived by itself. */
+export async function waitingIn(tx: Tx, tabId: string, conversationId: string): Promise<boolean> {
+  return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
+}
+
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
  *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
 const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>
   JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks])
 
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
- *  decision again, not a second one. Read and written in the command's transaction; two identical asks committing at the
- *  same moment can still both be written. */
+ *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
+ *  writing them removes the tab's decisions answered before the leaderboard's weeks. Read and written in the command's
+ *  transaction; asks committing at the same moment each pass the check, so together they can still be written twice or
+ *  go past the cap by what they add. */
 export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraft[], now: number): Promise<string[]> {
   if (!drafts.length) return []
-  const open = await tx.superTabDecision.findMany({ where: { tabId, personId: drafts[0]!.personId, conversationId: drafts[0]!.conversationId,
-    askerAgentId: drafts[0]!.askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
+  const { personId, askerAgentId } = drafts[0]!
+  const open = await tx.superTabDecision.findMany({ where: { tabId, personId, conversationId: drafts[0]!.conversationId,
+    askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
   const held = new Map(open.map(o => [repeatKey(o), o.id]))
   const fresh = drafts.filter(d => !held.has(repeatKey(d)))
-  if (fresh.length) await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+  if (fresh.length) {
+    const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
+    if (asked + fresh.length > MAX_OPEN_DECISIONS) {
+      fail('DECISIONS_FULL', `${asked} decisions you asked this person are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`)
+    }
+    await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+    await tx.superTabDecision.deleteMany({ where: { tabId, answeredAt: { lt: new Date(now - LEDGER_WEEKS * WEEK_MS) } } })
+  }
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
+}
+
+/** How many decisions this asker has open for this person when one more question would pass MAX_OPEN_DECISIONS, or null when
+ *  it fits: an exact repeat of an open one is that decision again and always fits. Read before a worker's needs_human, which
+ *  at the cap still records its status and only skips the question (review of #1859). */
+export async function fullFor(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<number | null> {
+  const { personId, askerAgentId } = ask
+  const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
+  if (asked < MAX_OPEN_DECISIONS) return null
+  const same = await tx.superTabDecision.findMany({ where: { tabId, personId, askerAgentId, conversationId: ask.conversationId, question: ask.question, ...waiting } })
+  return same.some(o => repeatKey(o) === repeatKey(ask)) ? null : asked
 }
 
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
@@ -115,17 +147,29 @@ function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisio
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }
 
+/** What an access check reads of a conversation (projects.ts canReadGroup). */
+const ACCESS_FIELDS = ['id', 'kind', 'projectId', 'audience'] as const
+
 /** The conversations [ids] names: those the read loaded, and the rest (quiet, archived, or left out of a light read) read
- *  here, so a decision in one still counts. A deleted conversation is none. */
-async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids: string[]): Promise<Map<string, Conversation>> {
-  const found = new Map(state.conversations.filter(c => ids.includes(c.id)).map(c => [c.id, c]))
-  const missing = [...new Set(ids.filter(id => !found.has(id)))]
-  if (missing.length) {
-    for (const row of await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })) {
-      found.set(row.key, row.data as unknown as Conversation)
-    }
-  }
+ *  here, so a decision in one still counts. With [only], the rest bring only those fields. A deleted conversation is none. */
+async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids: string[],
+  only?: readonly string[]): Promise<Map<string, Conversation>> {
+  const named = new Set(ids)
+  const found = new Map(state.conversations.filter(c => named.has(c.id)).map(c => [c.id, c]))
+  const missing = [...named].filter(id => !found.has(id))
+  if (!missing.length) return found
+  const rows = only
+    ? await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: missing } } },
+      { $project: { _id: 0, key: 1, ...Object.fromEntries(only.map(field => [`data.${field}`, 1])) } }] }) as unknown as Array<{ key: string; data: unknown }>
+    : await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })
+  for (const row of rows) found.set(row.key, row.data as Conversation)
   return found
+}
+
+/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions. */
+const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conversation>, conversationId: string) => {
+  const group = groups.get(conversationId)
+  return group && canReadGroup(state, actor, group) ? group : undefined
 }
 
 /** ponytail: capped at 200 per state, newest first; page it if a reader ever has more. */
@@ -134,14 +178,37 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
     orderBy: { createdAt: 'desc' }, take: 200 })
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
   return rows.flatMap(row => {
-    const group = groups.get(row.conversationId)
-    // Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions.
-    return group && canReadGroup(state, actor, group) ? [{ row, group }] : []
+    const group = readableIn(state, actor, groups, row.conversationId)
+    return group ? [{ row, group }] : []
   })
 }
 
-export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>): Promise<number> {
-  return (await readable(tx, tabId, state, actor, true)).length
+/** How many of a project's open decisions wait in each conversation for each person, for its digest (digest.ts
+ *  decisionLines): never what they ask. Every open one is read, so every one counts, however many there are, and private
+ *  ones filtered out later never crowd out shared ones (review of #1772). Counted here, reading only who and where:
+ *  groupBy on this model once panicked the Prisma engine on Mongo (review of #1855). */
+export async function waitingInProject(tx: Tx, tabId: string, projectId: string): Promise<Array<{ conversationId: string; personId: string; count: number }>> {
+  const rows = await tx.superTabDecision.findMany({ where: { tabId, projectId, ...waiting }, select: { conversationId: true, personId: true } })
+  const counts = new Map<string, { conversationId: string; personId: string; count: number }>()
+  for (const { conversationId, personId } of rows) {
+    const key = JSON.stringify([conversationId, personId])
+    const entry = counts.get(key)
+    if (entry) entry.count++
+    else counts.set(key, { conversationId, personId, count: 1 })
+  }
+  return [...counts.values()]
+}
+
+/** A person's open decisions: how many, and a digest of which. A client reads its list again when the digest moves, as
+ *  when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Read on every poll, so
+ *  only each one's id and conversation, and each quiet conversation's access fields: never what they ask, nor a brief. Not
+ *  capped: a cap counted rows the reader cannot open and left out ones they can, so the badge undercounted. */
+export async function decisionsWaiting(tx: Tx, tabId: string, state: SuperTabState,
+  actor: Extract<Actor, { kind: 'person' }>): Promise<{ count: number; digest: string }> {
+  const rows = await tx.superTabDecision.findMany({ where: { tabId, AND: [readerWhere(state, actor), waiting] }, select: { id: true, conversationId: true } })
+  const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId), ACCESS_FIELDS)
+  const ids = rows.filter(row => readableIn(state, actor, groups, row.conversationId)).map(row => row.id).sort()
+  return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 
 export async function listDecisions(tx: Tx, tabId: string, state: SuperTabState, actor: Actor, open: boolean) {

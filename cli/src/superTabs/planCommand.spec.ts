@@ -147,6 +147,22 @@ describe('runSolver', () => {
       .toEqual({ error: 'SOLVER_FAILED', detail: expect.stringContaining('The scheduler stopped (exit 1)') })
   })
 
+  // Diego's issue, 2026-10-27: --time-limit is only the solver's own promise. A python3 stuck on an import or in a deadlock
+  // left the plan command waiting forever, and its private copy of the package on disk.
+  it.skipIf(process.platform === 'win32')('a solver that never exits is killed and reported', async () => {
+    const dataDir = temp(), bin = temp()
+    // A first run publishes the package; with a file missing from it, the next run works from a private copy of its own.
+    await runSolver(instance, { dataDir, python: join(bin, 'no-python3') })
+    const [version] = readdirSync(join(dataDir, 'scheduler'))
+    rmSync(join(dataDir, 'scheduler', version!, 'scheduler', 'solver.py'))
+    const hung = join(bin, 'python3')
+    writeFileSync(hung, '#!/bin/sh\nexec sleep 60\n', { mode: 0o755 })
+    const started = Date.now()
+    expect(await runSolver(instance, { dataDir, python: hung, timeoutMs: 200 })).toEqual({ error: 'SOLVER_FAILED', detail: 'timed out' })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    expect(readdirSync(join(dataDir, 'scheduler'))).toEqual([version])
+  }, 10_000)
+
   it.skipIf(!hasPython('python3'))('says when OR-Tools is not installed', async () => {
     const fake = temp()
     mkdirSync(join(fake, 'ortools'))
