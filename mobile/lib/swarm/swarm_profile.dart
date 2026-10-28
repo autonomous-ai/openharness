@@ -93,8 +93,9 @@ class SwarmProfile {
     }
     try {
       final png = await swarmAvatarPng(picked);
-      if (png.length > kSwarmAvatarMaxBytes)
+      if (png.length > kSwarmAvatarMaxBytes) {
         return 'That picture is over 1 MB.';
+      }
       final id = await upload(tabId: reader.tabId, png: png);
       return await _send({
         'type': 'member.avatar',
