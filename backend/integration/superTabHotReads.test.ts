@@ -16,7 +16,7 @@ import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { NOW, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 // The hot reads of the roadmap's 2.7 (indexes) under Mongo's profiler: each must read only the documents it returns, never
@@ -247,5 +247,13 @@ describe('the owner\'s grid poll', () => {
     const people = entries.filter(e => e.ns.endsWith('.SwarmMember'))
     expect(people.length).toBeGreaterThan(0)
     expect(JSON.stringify(people.map(e => e.command))).not.toContain(off.tabId)
+  })
+
+  it('leaves out someone removed from a Swarm with Local models', async () => {
+    const s = await scene(s => { s.join(peer); s.join(outsider) })
+    clock = Date.now()
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: outsider.userId } })
+    expect(await db.swarmMember.findFirst({ where: { tabId: s.tabId, key: outsider.userId }, select: { deleted: true } })).toEqual({ deleted: true })
+    expect((await store.hostGrids(owner)).find(g => g.tabId === s.tabId)!.members).toEqual([peer.email])
   })
 })
