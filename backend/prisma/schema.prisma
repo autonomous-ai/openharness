@@ -260,6 +260,11 @@ model Machine {
   // overwrite-every-connect rule as `hostname`/`clientVersion`. Null when the upgrade did not come
   // through Cloudflare (local dev) or the row predates the field.
   countryCode                     String?
+  // When this machine's daemon was last seen on /api/adapter-ws: stamped on connect, on close, and at most every
+  // MACHINE_PRESENCE_WRITE_MS while the socket stays open (adapterWs.ts), so it lags real liveness by at most
+  // that. One overwritten value, never a history. Redis `machine:{id}:mgr` is still "online right now"; this
+  // answers "since when is it offline". Null on rows that have not connected since the field shipped.
+  lastSeenAt                      DateTime?
   // Billing lifecycle for newly-created campaign machines. Missing on old rows means legacy-active.
   // Grandfathered Remote machines are `not_required`; new paid Remote and managed machines move pending -> active only after
   // checkout verification. A cancelled paid subscription stays active until its period end, then
@@ -1122,6 +1127,8 @@ model SuperTabDecision {
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
   @@index([tabId, projectId, createdAt])
+  /// Whether a decision waits in a conversation (decisions.ts waitingIn).
+  @@index([tabId, conversationId])
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1204,6 +1211,11 @@ model SuperTabDelivery {
   @@index([tabId, messageId])
   // The delivery pass reads only the open ones (superTabs/deliverySettle.ts).
   @@index([status, id])
+  /// A Swarm's open deliveries, whoever they are for (the Lead's poll, store.ts fullDeliveries).
+  @@index([tabId, status])
+  /// An ended task's open deliveries, cancelled with it (store.ts releaseRuns and stopped): by [tabId, status] alone the
+  /// planner sometimes walked every delivery of the Swarm (180 read for 1 in the benchmark).
+  @@index([tabId, assignmentId])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.
@@ -1214,6 +1226,9 @@ model SuperTabRun {
   machineId     String
   harnessId     String
   createdAt     DateTime @default(now())
+
+  /// A Swarm's run records (store.ts staleRuns).
+  @@index([tabId])
 }
 
 // One routing policy document per account and environment (superTabs/routingPolicy.ts).
@@ -1471,7 +1486,10 @@ model SwarmGroup {
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
   @@index([workFinished, archived, lastActivityAt])
-  @@index([executionMachineId])
+  /// A Swarm's running work (parts/light.ts, the host's light load).
+  @@index([tabId, executionMachineId])
+  /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
+  @@index([tabId, deleted, key, hostDigest, dormant])
 }
 
 model SwarmAgent {
@@ -1492,6 +1510,8 @@ model SwarmAgent {
   @@index([tabId, changedAt])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
+  /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
+  @@index([key, deleted])
 }
 
 /// One machine the Swarm references, contributed or not: its contribution and observation, and its slot ledger.
@@ -1518,6 +1538,8 @@ model SwarmMachine {
   @@index([tabId, changedAt])
   @@index([tabId, readAt])
   @@index([machineId, deleted])
+  /// Machines whose settings changed since a host's cursor (read/host.ts woken).
+  @@index([tabId, hostChangedAt])
 }
 
 model SwarmStart {

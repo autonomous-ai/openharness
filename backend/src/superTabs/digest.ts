@@ -35,11 +35,15 @@ export function digestDue(project: SwarmProject, now: number): string | null {
 /** Where a project's digest starts: its last one, or the day before the first. */
 export const digestSince = (project: SwarmProject, now: number): number => project.digest?.lastAt ?? now - FIRST_SPAN_MS
 
-/** The date a newly set digest counts as sent for: today, when today's time has already passed, so it starts tomorrow. */
-export function digestStartsAfter(time: string, timeZone: string, now: number): string | undefined {
+/** The date a newly set digest counts as sent for: today, when today's time has already passed, so it starts tomorrow, or
+ *  when today's was already sent (`sentOn`): its message has today's id (digestMessageId), so it is never sent twice. */
+export function digestStartsAfter(time: string, timeZone: string, now: number, sentOn?: string): string | undefined {
   const local = localNow(timeZone, now)
-  return local.time >= time ? local.date : undefined
+  return local.time >= time || sentOn === local.date ? local.date : undefined
 }
+
+/** The id of a project's digest wake-up for one local date: one a day. */
+export const digestMessageId = (tabId: string, projectId: string, on: string): string => stableId('digest', tabId, projectId, on)
 
 /**
  * A project's digest: what shipped since `since` (finished with a pull request; the Lead checks each is merged), what is
@@ -98,7 +102,7 @@ export function digestRequest(state: SuperTabState, target: Agent, now: number,
     + 'Check that each pull request under Shipped is merged, and move one that is not to In progress. Then post one message to the people in this chat '
     + 'with these parts, in plain words, without commands or internal IDs.\n\n'
     + projectDigest(state, project, digestSince(project, now), decisionLines(state, project, waiting))
-  return { id: stableId('digest', state.id, project.id, on), conversationId: project.leadConversationId,
+  return { id: digestMessageId(state.id, project.id, on), conversationId: project.leadConversationId,
     author: author(state, { kind: 'agent', agentId: target.id, machineOwnerId: target.machineOwnerId }),
     text, replyTo: null, recipients: [target.id], source: { kind: 'digest-request', projectId: project.id, on } }
 }
