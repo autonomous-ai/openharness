@@ -16,7 +16,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVA
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, watchingNarrowed, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
@@ -778,8 +778,11 @@ export class SuperTabStore {
       if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
         fail('CONTRIBUTION_REVOKED', 'This start belongs to a machine grant that was revoked.', 403)
       }
+      // The skills its agent launches with. A contributed machine's host cannot read the Swarm to learn them (cli
+      // superTabs/start.ts): until 2026-10-28 it launched every agent on Harness orchestration, whatever its project ran.
+      const read = { ...start, skillMode: skillModeOf(groupProject(state, group)) }
       // The Lead reads that its machine is still preparing it, and waits instead of starting another (liveness.ts).
-      return startPreparing(state, start, this.now()) ? { ...start, preparing: true as const } : start
+      return startPreparing(state, start, this.now()) ? { ...read, preparing: true as const } : read
     })
   }
 
