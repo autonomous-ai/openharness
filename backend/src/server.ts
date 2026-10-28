@@ -17,6 +17,7 @@ import { handleWebUpgrade } from './lib/webWs.js'
 import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
+import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
@@ -128,13 +129,7 @@ async function start(): Promise<void> {
 
   registerJsonBodyParser(app)
 
-  app.addHook('onSend', async (_request, reply) => {
-    reply.header('X-Content-Type-Options', 'nosniff')
-    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-    if (env.NODE_ENV === 'production') {
-      reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
-    }
-  })
+  registerSecurityHeaders(app)
 
   // Allow all origins (reflect the request origin so credentialed requests work too). Methods +
   // headers are reflected (allowedHeaders omitted → echoes Access-Control-Request-Headers), so any

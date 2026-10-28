@@ -13,7 +13,8 @@ import { sendSuccess } from '../utils/response.js'
 import { environment } from './community.js'
 
 export async function communityNotificationRoutes(app: FastifyInstance): Promise<void> {
-  app.addHook('onSend', async (_req, reply) => { reply.header('Cache-Control', 'no-store') })
+  // Synchronous, as every header-only hook (middlewares/securityHeaders.ts).
+  app.addHook('onSend', (_req, reply, payload, done) => { reply.header('Cache-Control', 'no-store'); done(null, payload) })
   const unread = (autonomousEnv: string, userId: string) => prisma.communityNotification.count({ where: { autonomousEnv, userId, readAt: null } })
 
   app.get('/api/community/notifications', async (req, reply) => {

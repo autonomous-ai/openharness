@@ -85,9 +85,17 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
 async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
     if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
-    if (!(error instanceof SuperTabError)) throw error
-    sendError(reply, error.message, error.code, error.status)
+    // A Swarm refusal, a busy Swarm (503 with Retry-After), an expired transaction or a duplicate key: the shared
+    // error handler answers each deliberately, and every other failure stays a 500 with its stack logged.
+    throw error
   }
+}
+
+/** A terminal recording's host stops recording for good on a 409 (cli superTabs/native.ts). A duplicate key that outlived
+ *  every transaction retry is not the recording's fault, so it answers busy, which the host retries. */
+function busyOnDuplicate(error: unknown): never {
+  if ((error as { code?: unknown } | null)?.code === 'P2002') fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
+  throw error
 }
 
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
@@ -154,7 +162,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.native.read(req.user!, req.params.tabId, req.params.contextId)))
   app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeEventSchema> }>('/api/super-tabs/:tabId/native/:contextId',
     { preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
-    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body)))
+    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body).catch(busyOnDuplicate)))
   app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
   app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
     (req, reply) => respond(reply, () => store.saveAccountPolicy(req.user!, req.body.revision, req.body.policy)))
