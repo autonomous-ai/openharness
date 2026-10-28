@@ -9,7 +9,7 @@
  * sign-in. Every removal is written to harness.log with the command and the processes above it.
  */
 import { execFileSync } from 'child_process'
-import { appendFileSync, existsSync, readlinkSync } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readlinkSync } from 'fs'
 import { dirname, join } from 'path'
 import { env } from '../config/env.js'
 import { clearAuthSession } from './authSession.js'
@@ -120,6 +120,8 @@ function stamp(at: Date): string {
 export function removeSignIn(reason: string, asked: SignOutAsked, chain: readonly Asker[] = ancestors()): void {
   try {
     const self = { pid: process.pid, command: process.argv.join(' ') }
+    // `harness reset` has just emptied the folder the log lives in.
+    mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
     appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain }) + '\n')
   } catch { /* the log is a record, not a gate */ }
   clearAuthSession()

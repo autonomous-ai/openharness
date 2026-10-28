@@ -240,6 +240,17 @@ describe('signing out takes a person', () => {
     expect(existsSync(sessionFile(root))).toBe(true)
   })
 
+  it('reset logs its removal though it empties the data folder that holds harness.log', () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = runSync(root, ['reset', '--from-sign-out-button'])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(sessionFile(root))).toBe(false)
+    expect(readFileSync(logFile(root), 'utf8')).toMatch(/\[auth\] sign-in removed · reason=reset · asked=sign-out button/)
+  })
+
   it('logout from the sign-out button signs out, and harness.log names what asked and its parent', () => {
     const root = tempRoot()
     seedSession(root)
