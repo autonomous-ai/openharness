@@ -467,8 +467,10 @@ async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
       : 'Harness will remove the Harness Team account. sudo asks for your password here.')
   }
   const result = await deps.admin(() => ({
+    // Only the Linux removal names the owner (the relay folder setup made for them); a Mac's removal never read it, so its
+    // name is not checked there.
     script: scripts.remove({ user: config?.user ?? TEAM_USER, home: config?.home ?? layout.home, ownerHome,
-      owner: checkUser(config?.owner ?? deps.user(), 'owner account') }),
+      ...mac ? {} : { owner: checkUser(config?.owner ?? deps.user(), 'owner account') } }),
   }), prompts(here.where).remove, inTerminal ? 'sudo' : 'prompt')
   if (!result.ok) {
     if (result.code === 'CANCELLED') {
