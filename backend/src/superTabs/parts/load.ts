@@ -83,15 +83,15 @@ export async function loadDormant(tx: Transaction, tabId: string,
   return rows.map(row => toPart<GroupData>('group', row as unknown as PartRow))
 }
 
-/** The newest data change of each Swarm, over all its parts (design section 3.7). A touch does not count. */
+/** The newest data change of each Swarm, over all its parts (design section 3.7). A touch does not count.
+ *  One newest-row read per Swarm and kind on the (tabId, changedAt) index: a groupBy here can panic the Prisma engine on
+ *  Mongo, which then fails every later query of the process (as groupBy on SuperTabDecision did, 2026-10-27). */
 export async function lastChangedAt(tx: Transaction, tabIds: string[]): Promise<Map<string, number>> {
   const newest = new Map<string, number>()
-  if (!tabIds.length) return newest
-  for (const kind of PART_KINDS) {
-    for (const row of await delegate(tx, kind).groupBy({ by: ['tabId'], where: { tabId: { in: tabIds } }, _max: { changedAt: true } })) {
-      const at = row._max.changedAt?.getTime() ?? 0
-      if (at > (newest.get(row.tabId) ?? 0)) newest.set(row.tabId, at)
-    }
+  const rows = await Promise.all(tabIds.flatMap(tabId => PART_KINDS.map(kind => delegate(tx, kind)
+    .findFirst({ where: { tabId }, orderBy: { changedAt: 'desc' }, select: { tabId: true, changedAt: true } }))))
+  for (const row of rows) {
+    if (row && row.changedAt.getTime() > (newest.get(row.tabId) ?? 0)) newest.set(row.tabId, row.changedAt.getTime())
   }
   return newest
 }

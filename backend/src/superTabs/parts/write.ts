@@ -39,7 +39,7 @@ export function delegate(tx: Transaction, kind: PartKind) {
     create(args: { data: Record<string, unknown> }): Promise<unknown>
     createMany(args: { data: Record<string, unknown>[] }): Promise<unknown>
     updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>
-    groupBy(args: unknown): Promise<Array<{ tabId: string; _max: { changedAt: Date | null } }>>
+    findFirst(args: unknown): Promise<{ tabId: string; changedAt: Date } | null>
   }
 }
 export interface PartRow { id: string; tabId: string; key: string; version: number; changedAt: Date; deleted: boolean; ordinal: number; data: unknown
