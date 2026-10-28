@@ -12,6 +12,7 @@ import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
 import 'swarm_choices.dart';
+import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
 import 'swarm_inbox.dart';
@@ -160,14 +161,17 @@ class _SwarmPageState extends State<SwarmPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SwarmTopBar(
-              leading: pushed
-                  ? SwarmBackButton(
-                      onPressed: () => Navigator.of(context).maybePop(),
-                    )
-                  : const _MenuButton(),
-              title: 'Swarm',
-            ),
+            if (session == null)
+              _topBar(context, pushed: pushed)
+            else
+              ListenWhileInSight(
+                listenable: Listenable.merge([session, session.inbox]),
+                builder: (context) => _topBar(
+                  context,
+                  pushed: pushed,
+                  updating: _updating(session.inbox),
+                ),
+              ),
             Expanded(
               child: session == null
                   ? const _Unavailable()
@@ -198,16 +202,40 @@ class _SwarmPageState extends State<SwarmPage> {
     );
   }
 
+  /// Home's top bar: the menu or back button and its title, with a quiet
+  /// "Updating…" under it while it shows the Home kept ([_updating]).
+  Widget _topBar(
+    BuildContext context, {
+    required bool pushed,
+    bool updating = false,
+  }) => SwarmTopBar(
+    leading: pushed
+        ? SwarmBackButton(onPressed: () => Navigator.of(context).maybePop())
+        : const _MenuButton(),
+    title: 'Swarm',
+    subtitle: updating ? 'Updating…' : null,
+  );
+
   List<Widget> _body(BuildContext context, SwarmSession session, Tty tty) {
     final inbox = session.inbox;
+    // No computer answering: a card that says so over what Home has, never a
+    // screen in its place, and no red line besides.
+    final notice = inbox.noComputer
+        ? SwarmConnectionNotice(
+            inbox: inbox,
+            computers: SwarmScope.computersOf(context),
+          )
+        : null;
+    final error = notice == null ? inbox.error : null;
     // Before the list there is nothing to read, unless a Home was kept; a
     // list that could not be read says so alone, without rows on their way.
     if (!inbox.loaded && inbox.swarms.isEmpty) {
       return [
-        if (inbox.error case final error?)
+        ?notice,
+        if (error != null)
           _error(error, key: 'swarm-error')
         else
-          ..._reading(),
+          ..._reading(first: notice == null),
       ];
     }
     final several = inbox.swarms.length > 1;
@@ -313,17 +341,20 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
       ],
     ];
+    final first = notice == null;
     return [
-      if (inbox.error case final error?) _error(error, key: 'swarm-error'),
+      ?notice,
+      if (error != null) _error(error, key: 'swarm-error'),
       ...swarmNeedsFirst
-          ? [...needs(first: true), ...swarms(first: false)]
-          : [...swarms(first: true), ...needs(first: false)],
+          ? [...needs(first: first), ...swarms(first: false)]
+          : [...swarms(first: first), ...needs(first: false)],
     ];
   }
 
   /// Home before the list answers: Needs you, Chat with PM and the projects
-  /// as rows on their way, in the order Home shows them.
-  List<Widget> _reading() {
+  /// as rows on their way, in the order Home shows them; under a card, its
+  /// first caption not [first].
+  List<Widget> _reading({bool first = true}) {
     List<Widget> needs({required bool first}) => [
       SwarmCaption('Needs you', first: first),
       SwarmSkeletonRows(id: 'swarm-needs-loading', rows: 1),
@@ -335,8 +366,8 @@ class _SwarmPageState extends State<SwarmPage> {
       SwarmSkeletonRows(id: 'swarm-projects-loading'),
     ];
     return swarmNeedsFirst
-        ? [...needs(first: true), ...swarms(first: false)]
-        : [...swarms(first: true), ...needs(first: false)];
+        ? [...needs(first: first), ...swarms(first: false)]
+        : [...swarms(first: first), ...needs(first: false)];
   }
 
   /// What went wrong, in the danger colour, up to three lines.
@@ -400,6 +431,23 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 }
+
+/// Home shows the Home kept, not read again yet: the list not read, or a
+/// Swarm on it holding only what was kept. Not while no computer answers:
+/// the card says so then ([SwarmConnectionNotice]).
+bool _updating(SwarmInbox inbox) =>
+    inbox.swarms.isNotEmpty &&
+    !inbox.noComputer &&
+    (!inbox.loaded ||
+        inbox.swarms.any((swarm) => _kept(inbox.reader(swarm.id))));
+
+/// [reader] holds the view kept ([SwarmHomeCache]), and no read of its own:
+/// a first load moves its generation.
+bool _kept(SwarmReader? reader) =>
+    reader != null &&
+    reader.generation == 0 &&
+    reader.snapshot != null &&
+    reader.error == null;
 
 /// Why Needs you is empty.
 enum _EmptyNeeds {

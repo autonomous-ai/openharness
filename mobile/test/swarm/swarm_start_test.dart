@@ -56,30 +56,27 @@ void main() {
     expect(swarmStart(i, null), isNull);
   });
 
-  test(
-    'every computer away, before any Swarm was read: no computer online',
-    () {
-      final i = inbox(backend());
+  // "No computer online" never takes Home's place: Home draws what it has,
+  // and says so in a line (owner's iPhone, 2026-10-28).
+  test('every computer away, before any Swarm was read: no start screen', () {
+    final i = inbox(backend());
 
-      expect(swarmStart(i, const [macAway]), SwarmStart.offline);
-    },
-  );
+    expect(swarmStart(i, const [macAway]), isNull);
+  });
 
-  test(
-    'a list that failed for want of a computer: no computer online',
-    () async {
-      final fake = FakeSwarm();
-      fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
-        'MACHINE_UNAVAILABLE',
-        'Connect one of your computers to open Swarm.',
-      );
-      final i = inbox(fake);
+  test('a list that failed for want of a computer: no start screen', () async {
+    final fake = FakeSwarm();
+    fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      'Connect one of your computers to open Swarm.',
+    );
+    final i = inbox(fake);
 
-      await i.refresh();
+    await i.refresh();
 
-      expect(swarmStart(i, const [mac]), SwarmStart.offline);
-    },
-  );
+    expect(i.noComputer, isTrue);
+    expect(swarmStart(i, const [mac]), isNull);
+  });
 
   test('a list that failed otherwise is not "no computer"', () async {
     final fake = FakeSwarm();

@@ -10,52 +10,13 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_start.dart';
 
 import '../voice_fakes.dart';
+import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
-
-/// The person's computers as a test scripts them.
-class FakeComputers extends ChangeNotifier implements SwarmComputers {
-  FakeComputers(this.computers);
-
-  @override
-  List<SwarmComputer>? computers;
-
-  @override
-  bool rechecking = false;
-
-  int rechecks = 0, adds = 0;
-
-  /// Holds a recheck until completed.
-  Completer<void>? held;
-
-  /// What a recheck finds.
-  List<SwarmComputer>? found;
-
-  void set(List<SwarmComputer>? next) {
-    computers = next;
-    notifyListeners();
-  }
-
-  @override
-  Future<void> recheck() async {
-    rechecks++;
-    rechecking = true;
-    notifyListeners();
-    await held?.future;
-    rechecking = false;
-    if (found case final next?) computers = next;
-    notifyListeners();
-  }
-
-  @override
-  void add(BuildContext context) => adds++;
-}
 
 /// Swarm Home's body before there is a Swarm to show: one screen per start
 /// state, each with one button, over a scripted backend.
 void main() {
   const mac = (name: 'MacBook Pro', away: false);
-  const macAway = (name: 'MacBook Pro', away: true);
-  const miniAway = (name: 'Mac mini', away: true);
 
   /// The account's Swarm list answers [tabs]; its invitations, [invites].
   FakeSwarm backend({
@@ -130,87 +91,6 @@ void main() {
   }
 
   Finder primary() => find.byType(TtyPrimaryButton);
-
-  testWidgets('no computer online: the computers, Try again, and how to add '
-      'one', (tester) async {
-    final fake = backend();
-    fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
-      'MACHINE_UNAVAILABLE',
-      'Connect one of your computers to open Swarm.',
-    );
-    final computers = FakeComputers([macAway, miniAway]);
-    await pump(tester, fake, computers);
-
-    expect(find.text('No computer online'), findsOneWidget);
-    expect(
-      find.text(
-        'Swarm reaches your team through your computers. Turn one on and '
-        'open Harness.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('MacBook Pro'), findsOneWidget);
-    expect(find.text('Mac mini'), findsOneWidget);
-    expect(find.text('Offline'), findsNWidgets(2));
-    expect(primary(), findsOneWidget, reason: 'one button on the screen');
-    expect(find.text('Try again'), findsOneWidget);
-
-    await tester.tap(find.text('Add a computer'));
-    expect(computers.adds, 1);
-  });
-
-  testWidgets('Try again looks for the computers, says so, then reads the '
-      'Swarms again', (tester) async {
-    final fake = backend(tabs: ['a']);
-    var away = true;
-    fake.routes['/api/super-tabs/list'] = (_) => away
-        ? throw const SuperTabFailure(
-            'MACHINE_UNAVAILABLE',
-            'Connect one of your computers to open Swarm.',
-          )
-        : {
-            'tabs': [
-              {'id': 'a', 'name': 'Swarm a', 'ownerId': me},
-            ],
-            'next': null,
-          };
-    final computers = FakeComputers([macAway])
-      ..held = Completer<void>()
-      ..found = [mac];
-    await pump(tester, fake, computers);
-
-    await tester.tap(find.text('Try again'));
-    await tester.pump();
-    expect(computers.rechecks, 1);
-    expect(find.text('Looking for your computers…'), findsOneWidget);
-    await tester.tap(find.text('Looking for your computers…'));
-    expect(computers.rechecks, 1, reason: 'one look at a time');
-
-    away = false;
-    computers.held!.complete();
-    await tester.pumpAndSettle();
-
-    expect(find.text('No computer online'), findsNothing);
-    expect(find.text('Your Swarms'), findsOneWidget);
-  });
-
-  testWidgets('a Try again that finds nothing stays, ready to try again', (
-    tester,
-  ) async {
-    final fake = backend();
-    fake.routes['/api/super-tabs/list'] = (_) => throw const SuperTabFailure(
-      'MACHINE_UNAVAILABLE',
-      'Connect one of your computers to open Swarm.',
-    );
-    final computers = FakeComputers([macAway]);
-    await pump(tester, fake, computers);
-
-    await tester.tap(find.text('Try again'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('No computer online'), findsOneWidget);
-    expect(find.text('Try again'), findsOneWidget);
-  });
 
   testWidgets('no computer at all: Connect a computer, which opens the steps '
       'to add one', (tester) async {
@@ -388,35 +268,6 @@ void main() {
     await app.session.inbox.refresh();
     await tester.pumpAndSettle();
     expect(find.text('No Swarm yet'), findsOneWidget, reason: 'read again');
-  });
-
-  testWidgets('a computer coming back takes the start screen away', (
-    tester,
-  ) async {
-    final fake = backend(tabs: ['a']);
-    var away = true;
-    fake.routes['/api/super-tabs/list'] = (_) => away
-        ? throw const SuperTabFailure(
-            'MACHINE_UNAVAILABLE',
-            'Connect one of your computers to open Swarm.',
-          )
-        : {
-            'tabs': [
-              {'id': 'a', 'name': 'Swarm a', 'ownerId': me},
-            ],
-            'next': null,
-          };
-    final computers = FakeComputers([macAway]);
-    final app = await pump(tester, fake, computers);
-    expect(find.text('No computer online'), findsOneWidget);
-
-    away = false;
-    computers.set([mac]);
-    await app.session.inbox.refresh();
-    await tester.pumpAndSettle();
-
-    expect(find.text('No computer online'), findsNothing);
-    expect(find.text('Your Swarms'), findsOneWidget);
   });
 
   group('Swarm turned off', () {
