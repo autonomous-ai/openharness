@@ -289,3 +289,51 @@ describe('what a Buddy may do', () => {
     expect(f.state.agents.find(a => a.id === 'buddy')!.configuration.model).toBe('opus')
   })
 })
+
+describe('a Buddy\'s proposal to the PM', () => {
+  const buddy = agentActor('buddy')
+  const proposal = { goal: 'Sync edits made offline', scope: 'Desktop drafts only; no phone yet', priority: 'high' as const }
+  /** setup()'s Buddy with Buddies on, and the message its owner asked with, as the store reads it. */
+  function asked(author: { kind: 'person' | 'agent'; id: string; generation?: string } = { kind: 'person', id: 'peer' }, extra: Record<string, unknown> = {}) {
+    const f = setup()
+    f.run({ type: 'tab.buddies', enabled: true })
+    const ask = { conversationId: f.chat, source: false, createdAt: 900,
+      author: { kind: author.kind, id: author.id, name: author.id, membershipGeneration: author.generation ?? 'first' }, ...extra }
+    const propose = (ownerMessageId = 'ask', context: Record<string, unknown> = { proposalAsk: { id: ownerMessageId, ...ask } }) =>
+      f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId, ...proposal }, buddy, context)
+    return { f, propose }
+  }
+
+  it('posts one message in the project chat, to the PM, written by the server as on its owner\'s behalf', () => {
+    const { f, propose } = asked()
+    const posted = propose().messages
+    expect(posted).toEqual([expect.objectContaining({ conversationId: f.app.conversationId, recipients: [f.pm],
+      author: expect.objectContaining({ kind: 'agent', id: 'buddy' }), source: { kind: 'buddy-proposal', personId: 'peer', ownerMessageId: 'ask' },
+      text: 'Proposal from peer\'s Buddy, on peer\'s behalf.\n\nGoal: Sync edits made offline\nScope: Desktop drafts only; no phone yet\nPriority: high' })])
+  })
+
+  it('is one per ask: the same message never asks twice', () => {
+    const { propose } = asked()
+    propose()
+    expect(() => propose()).toThrow('already sent')
+  })
+
+  it('is refused without its owner\'s own message in its chat asking for it', () => {
+    expect(() => asked().propose('ask', {})).toThrow('your owner\'s message')
+    expect(() => asked({ kind: 'agent', id: 'buddy' }).propose()).toThrow('your owner\'s message')
+    expect(() => asked({ kind: 'person', id: 'owner' }).propose()).toThrow('your owner\'s message')
+    expect(() => asked({ kind: 'person', id: 'peer', generation: 'old' }).propose()).toThrow('your owner\'s message')
+    expect(() => asked(undefined, { source: true }).propose()).toThrow('your owner\'s message')
+    expect(() => asked(undefined, { conversationId: 'elsewhere' }).propose()).toThrow('your owner\'s message')
+    const { f } = asked()
+    expect(() => f.run({ type: 'buddy.propose', conversationId: f.app.conversationId, ownerMessageId: 'ask', ...proposal }, buddy)).toThrow('A Buddy posts only in its own chat')
+  })
+
+  it('is a Buddy\'s alone, and only while Buddies are on', () => {
+    const { f, propose } = asked()
+    expect(() => f.run({ type: 'buddy.propose', conversationId: f.app.conversationId, ownerMessageId: 'ask', ...proposal }, agentActor(f.pm))).toThrow('Only a Buddy')
+    expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal }, peer)).toThrow('Only a Buddy')
+    f.state.buddies = undefined
+    expect(() => propose()).toThrow('Buddies are off')
+  })
+})

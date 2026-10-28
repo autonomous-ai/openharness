@@ -33,10 +33,18 @@ const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.re
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
   if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
-  if (command.type === 'message.send' || command.type === 'message.react') {
+  if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose') {
     const group = groups.find(g => g.id === command.conversationId)
     if (!group || !isBuddyChat(group) || !group.agentIds.includes(buddy.id)) {
       fail('BUDDY_FORBIDDEN', 'A Buddy posts only in its own chat. Send a proposal to reach the PM.', 403)
     }
   }
+}
+
+/** The asks a Buddy chat remembers having proposed for, newest last: an older one could be named again only after 200 more. */
+export const MAX_PROPOSAL_ASKS = 200
+
+/** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
+export function proposalText(owner: string, proposal: { goal: string; scope: string; priority: string }): string {
+  return `Proposal from ${owner}'s Buddy, on ${owner}'s behalf.\n\nGoal: ${proposal.goal}\nScope: ${proposal.scope}\nPriority: ${proposal.priority}`
 }
