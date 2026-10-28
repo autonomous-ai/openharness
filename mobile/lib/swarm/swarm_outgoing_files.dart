@@ -73,24 +73,11 @@ class SwarmOutgoingFiles extends ChangeNotifier {
     return add(
       [
         for (final file in files)
-          SwarmOutgoingFile(_freeName(file.name, taken), file.bytes),
+          SwarmOutgoingFile(swarmFreeName(file.name, taken), file.bytes),
       ],
       oversized: oversized,
       surplus: surplus,
     );
-  }
-
-  /// [name], or `name-2.ext`, `name-3.ext`… — the first not in [taken], which
-  /// then holds it.
-  static String _freeName(String name, Set<String> taken) {
-    final dot = name.lastIndexOf('.');
-    final stem = dot > 0 ? name.substring(0, dot) : name;
-    final extension = dot > 0 ? name.substring(dot) : '';
-    var candidate = name;
-    for (var count = 2; !taken.add(candidate); count++) {
-      candidate = '$stem-$count$extension';
-    }
-    return candidate;
   }
 
   void remove(SwarmOutgoingFile file) {
@@ -102,6 +89,19 @@ class SwarmOutgoingFiles extends ChangeNotifier {
     _files.clear();
     notifyListeners();
   }
+}
+
+/// [name], or `name-2.ext`, `name-3.ext`… — the first not in [taken], which
+/// then holds it.
+String swarmFreeName(String name, Set<String> taken) {
+  final dot = name.lastIndexOf('.');
+  final stem = dot > 0 ? name.substring(0, dot) : name;
+  final extension = dot > 0 ? name.substring(dot) : '';
+  var candidate = name;
+  for (var count = 2; !taken.add(candidate); count++) {
+    candidate = '$stem-$count$extension';
+  }
+  return candidate;
 }
 
 /// The content type a file of this [name] is sent as: the kinds a chat shows
