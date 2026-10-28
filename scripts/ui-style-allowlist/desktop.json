@@ -18,17 +18,6 @@
   "desktop/lib/super_tabs/decisions_view.dart": {
     "edge-insets": 6
   },
-  "desktop/lib/super_tabs/leaderboard/goal_line.dart": {
-    "edge-insets": 2,
-    "border-radius": 1
-  },
-  "desktop/lib/super_tabs/leaderboard/person_row.dart": {
-    "hex-color": 4,
-    "edge-insets": 5
-  },
-  "desktop/lib/super_tabs/leaderboard/waiting_line.dart": {
-    "edge-insets": 1
-  },
   "desktop/lib/super_tabs/local_models.dart": {
     "edge-insets": 7,
     "border-radius": 3
@@ -66,7 +55,7 @@
     "font-size": 1
   },
   "desktop/lib/super_tabs/project_github.dart": {
-    "edge-insets": 3
+    "edge-insets": 4
   },
   "desktop/lib/super_tabs/project_sidebar.dart": {
     "edge-insets": 10
@@ -87,7 +76,7 @@
     "edge-insets": 1
   },
   "desktop/lib/super_tabs/roster.dart": {
-    "edge-insets": 5,
+    "edge-insets": 4,
     "border-radius": 1
   },
   "desktop/lib/super_tabs/route_row.dart": {
