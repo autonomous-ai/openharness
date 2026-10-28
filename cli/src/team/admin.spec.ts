@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { GuestRunner } from '../lib/guestAccounts.js'
-import { adminRunner } from './admin.js'
+import { adminPromptShows, adminRunner } from './admin.js'
 
 const cleanup: string[] = []
 afterEach(() => { for (const dir of cleanup.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -132,6 +132,15 @@ describe('adminRunner', () => {
         .toEqual({ ok: false, code: 'NO_PROMPT', message: 'No administrator prompt here: run harness team setup in a terminal.' })
       expect(f.runner).not.toHaveBeenCalled()
       expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('can show the prompt only with pkexec and a display', () => {
+      const pkexec = (path: string) => path === '/usr/bin/pkexec'
+      expect(adminPromptShows({ DISPLAY: ':0' }, pkexec)).toBe(true)
+      expect(adminPromptShows({ WAYLAND_DISPLAY: 'wayland-0' }, pkexec)).toBe(true)
+      // The owner's daemon under systemd --user, as it usually runs: no display in its environment.
+      expect(adminPromptShows({}, pkexec)).toBe(false)
+      expect(adminPromptShows({ DISPLAY: ':0' }, () => false)).toBe(false)
     })
 
     it('runs it with sudo in the terminal when asked, desktop session or not', async () => {

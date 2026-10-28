@@ -54,7 +54,9 @@ export function writeTeamSetupDecision(file: string, decision: TeamSetupDecision
 /** A failed setup is offered again on its own after this long. */
 export const AUTO_SETUP_RETRY_MS = 24 * 60 * 60_000
 
-export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared' | 'wanted' | 'started'
+/** `no-prompt`: Linux with no administrator prompt to show (no desktop session): run `harness team setup` in a terminal. */
+export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared'
+  | 'no-prompt' | 'wanted' | 'started'
 
 /** The moment the person is at this Mac: they joined a Swarm, added this Mac to one, or opened the app (`startup`); or
  *  they asked for it (`manual`: Desktop's explanation was accepted, or the machine row's Set up button). */
@@ -72,6 +74,9 @@ export interface AutoSetupDeps {
   setup(): Promise<{ code: number; result: Record<string, unknown> | null }>
   now(): number
   log(line: string): void
+  /** Linux: whether the administrator prompt can be shown from here (pkexec and a desktop session, ./admin.ts
+   *  `adminPromptShows`). Setup runs from the daemon with no terminal, so without one nothing could ask. */
+  canPrompt?(): boolean
 }
 
 /** What a setup that made nothing answers: not cancelled, and not an account that exists but did not report in time.
@@ -111,6 +116,10 @@ export class TeamAutoSetup {
       if (decision?.state === 'failed' && deps.now() - decision.at < AUTO_SETUP_RETRY_MS && deps.now() >= decision.at) return 'waiting'
       if (reason === 'startup' && !await sharedSwarm().catch(() => false)) return 'not-shared'
     }
+    // Said before anything starts: a setup started anyway answered `started`, and Desktop told the person their system was
+    // asking for a password when nothing could (the owner's daemon under systemd --user has no display). Nothing is
+    // remembered: the terminal, or a session with a display, can still set it up.
+    if (deps.platform === 'linux' && deps.canPrompt && !deps.canPrompt()) return 'no-prompt'
     if (check) return 'wanted'
     if (this.running) return 'running'
     this.running = this.run().finally(() => { this.running = null })
@@ -154,8 +163,8 @@ export class TeamAutoSetup {
 
 /** The owner's daemon's own: this account's sign-in and data folder, and `harness team setup --json` run in this process. */
 export async function realTeamAutoSetup(dataDir: string, log: (line: string) => void): Promise<TeamAutoSetup> {
-  const [{ readAuthSession }, { readTeamConfig }, { runGuestCommand }, { teamAccountExists }] = await Promise.all([
-    import('../lib/authSession.js'), import('./config.js'), import('../lib/guestAccounts.js'), import('./deps.js')])
+  const [{ readAuthSession }, { readTeamConfig }, { runGuestCommand }, { teamAccountExists }, { adminPromptShows }] = await Promise.all([
+    import('../lib/authSession.js'), import('./config.js'), import('../lib/guestAccounts.js'), import('./deps.js'), import('./admin.js')])
   const file = teamSetupDecisionFile(dataDir)
   return new TeamAutoSetup({
     platform: process.platform,
@@ -178,5 +187,7 @@ export async function realTeamAutoSetup(dataDir: string, log: (line: string) => 
     },
     now: () => Date.now(),
     log,
+    // Read at each offer: this daemon's environment, as `harness team setup --json` above would run in it.
+    canPrompt: () => adminPromptShows(),
   })
 }

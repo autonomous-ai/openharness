@@ -49,6 +49,12 @@ export interface AdminDeps {
   owner?: () => string
 }
 
+/** Linux: whether polkit's dialog can be shown from this process (pkexec and a desktop session to show it in), as the
+ *  guest helper's install decides it (lib/guestHelperInstall.ts). Without it, the prompt answers `NO_PROMPT`. */
+export function adminPromptShows(env: NodeJS.ProcessEnv = process.env, exists: (path: string) => boolean = existsSync): boolean {
+  return exists('/usr/bin/pkexec') && !!(env.DISPLAY || env.WAYLAND_DISPLAY)
+}
+
 /** What a Linux computer with no desktop session answers for the prompt (over SSH, or Desktop's daemon with no display). */
 export const NO_PROMPT_MESSAGE = 'No administrator prompt here: run harness team setup in a terminal.'
 
@@ -148,8 +154,7 @@ export function adminRunner(deps: AdminDeps = {}): RunAdmin {
   const makeStage = deps.makeStage ?? (() => mkdtempSync(join(tmpdir(), 'harness-team-')))
   const removeStage = deps.removeStage ?? ((dir: string) => rmSync(dir, { recursive: true, force: true }))
   const platform = deps.platform ?? 'darwin'
-  // As the guest helper's install decides it (lib/guestHelperInstall.ts).
-  const graphical = () => deps.graphical ?? (existsSync('/usr/bin/pkexec') && !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY))
+  const graphical = () => deps.graphical ?? adminPromptShows()
   return async (build, prompt, via = 'prompt') => {
     const stageDir = makeStage()
     try {

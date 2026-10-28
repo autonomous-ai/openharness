@@ -104,7 +104,8 @@ class _Words {
 
   final String title, account, prompt, started, exists, update, cannot, unreachable;
 
-  /// For `NO_PROMPT`: no desktop session to ask in, so the terminal is the way. Null where that never happens.
+  /// For the daemon's `no-prompt` (cli/src/team/autoSetup.ts): no desktop session to ask in, so the terminal is the
+  /// way. Null where that never happens.
   final String? noPrompt;
 }
 
@@ -138,7 +139,9 @@ class _TeamAccountSetupState extends State<_TeamAccountSetup> {
         'started' || 'running' => words.started,
         'exists' => words.exists,
         'update' => words.update,
-        'NO_PROMPT' when words.noPrompt != null => words.noPrompt!,
+        // The daemon's answer when no prompt can be shown here (Linux with no
+        // desktop session in its environment): nothing ran.
+        'no-prompt' when words.noPrompt != null => words.noPrompt!,
         _ => words.cannot,
       };
     } on SuperTabFailure catch (failure) {

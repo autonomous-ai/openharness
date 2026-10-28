@@ -114,6 +114,21 @@ describe('the Harness Team account, set up on its own', () => {
     expect(await fake({ platform: 'win32' }).auto.offer('join', undefined, true)).toEqual({ state: 'unsupported' })
   })
 
+  it('on Linux with no prompt it can show, answers no-prompt up front, runs nothing and remembers nothing', async () => {
+    // The owner's daemon under systemd --user has no DISPLAY: setup would only answer NO_PROMPT after "started" was said.
+    for (const [reason, check] of [['join', true], ['manual', false], ['manual', true]] as const) {
+      const f = fake({ platform: 'linux', canPrompt: () => false })
+      expect(await f.auto.offer(reason, undefined, check), `${reason} ${check}`).toEqual({ state: 'no-prompt' })
+      expect(f.deps.setup).not.toHaveBeenCalled()
+      expect(f.deps.writeDecision).not.toHaveBeenCalled()
+      expect(f.log).toEqual([`the Harness Team account was not offered (${reason}): no-prompt`])
+    }
+    // An account that is there, or a Mac (osascript always asks), is answered as before.
+    expect(await fake({ platform: 'linux', canPrompt: () => false, accountExists: vi.fn(async () => true) }).auto.offer('manual')).toEqual({ state: 'exists' })
+    expect(await fake({ platform: 'darwin', canPrompt: () => false }).auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+    expect(await fake({ platform: 'linux', canPrompt: () => true }).auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+  })
+
   it('remembers a setup Linux refused before it made anything as failed: no systemd, no tmux, no prompt to show', async () => {
     for (const code of ['NO_SYSTEMD', 'NO_TMUX', 'NO_PROMPT']) {
       const f = fake({ setup: vi.fn(async () => ({ code: 1, result: { ok: false, code, message: `refused: ${code}` } })) })
