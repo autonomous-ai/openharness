@@ -11,6 +11,7 @@ import 'package:harness/super_tabs/project_options.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/widgets/engine_identity.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'swarm_sharing_test.dart' show SwarmSharingServer;
@@ -247,6 +248,14 @@ void main() {
       );
       final row = find.byKey(const ValueKey('super-machine-mbp'));
       await tester.longPress(row);
+      await tester.pumpAndSettle();
+      // Codex's mark is a picture decoded off the frame: wait for it before photographing, as the app shows it.
+      await tester.runAsync(
+        () => precacheImage(
+          AssetImage(engineIdentity('codex').asset!),
+          tester.element(find.byType(EngineMark).first),
+        ).timeout(const Duration(seconds: 10)),
+      );
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, '1-machine-details-$theme');
       await tester.pumpWidget(const SizedBox());

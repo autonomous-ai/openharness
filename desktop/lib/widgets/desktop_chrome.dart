@@ -307,47 +307,84 @@ class DesktopDialogHeader extends StatelessWidget {
   final List<Widget> trailing;
   final EdgeInsets padding;
 
+  /// The icon controls' target, centred on the title's first line.
+  static const _control = 32.0;
+
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: padding,
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (leading case final leading?) ...[
-          leading,
-          const SizedBox(width: 12),
-        ],
-        Expanded(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Semantics(
-                header: true,
-                child: Text(title, style: DesktopChrome.heading()),
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.heading();
+    final measure = TextPainter(
+      text: TextSpan(text: title, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final line = measure.height;
+    measure.dispose();
+    final controls = trailing.isNotEmpty || onClose != null;
+    // Whichever is shorter, the title line or a control, moves down to share the other's centre.
+    final titleTop = controls ? ((_control - line) / 2).clamp(0.0, 99.0) : 0.0;
+    final controlsTop = ((line - _control) / 2).clamp(0.0, 99.0);
+    return Padding(
+      padding: padding,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (leading case final leading?) ...[
+            leading,
+            const SizedBox(width: 12),
+          ],
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(top: titleTop),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Semantics(header: true, child: Text(title, style: style)),
+                  if (detail != null) ...[
+                    const SizedBox(height: 4),
+                    Text(detail!, style: DesktopChrome.metadata()),
+                  ],
+                ],
               ),
-              if (detail != null) ...[
-                const SizedBox(height: 4),
-                Text(detail!, style: DesktopChrome.metadata()),
-              ],
-            ],
+            ),
           ),
-        ),
-        if (trailing.isNotEmpty) ...[const SizedBox(width: 12), ...trailing],
-        if (onClose != null) ...[
-          SizedBox(width: trailing.isEmpty ? 12 : 4),
-          IconButton(
-            tooltip: 'Close',
-            onPressed: onClose,
-            icon: const Icon(AppIcons.close, size: 16),
-            constraints: const BoxConstraints.tightFor(width: 32, height: 32),
-            padding: const EdgeInsets.all(8),
-            visualDensity: VisualDensity.standard,
-          ),
+          if (controls)
+            Padding(
+              padding: EdgeInsets.only(top: controlsTop),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (trailing.isNotEmpty) ...[
+                    const SizedBox(width: 12),
+                    ...trailing,
+                  ],
+                  if (onClose != null) ...[
+                    SizedBox(width: trailing.isEmpty ? 12 : 4),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: onClose,
+                      icon: const Icon(AppIcons.close, size: 16),
+                      constraints: const BoxConstraints.tightFor(
+                        width: _control,
+                        height: _control,
+                      ),
+                      padding: const EdgeInsets.all(8),
+                      visualDensity: VisualDensity.standard,
+                      // The 32-point target itself, not padded to 48 below the title.
+                      style: const ButtonStyle(
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
         ],
-      ],
-    ),
-  );
+      ),
+    );
+  }
 }
 
 /// Keep the identifying end of a branch name without reversing its text
