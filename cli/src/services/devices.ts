@@ -411,12 +411,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
    *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
   const WORKER_ANSWER_MS = 60_000
+  /** How long a failure waits for the answer before it shows as before: a hung service must not leave the tile working. */
+  const WORKER_WAIT_MS = 2_000
   const workerAnswers = new Map<string, { worker: boolean; at: number }>()
   const remoteWorker = async (machineId: string, agentId: string): Promise<boolean> => {
     const key = `${machineId}/${agentId}`
     const held = workerAnswers.get(key)
     if (held && monotonic() - held.at < WORKER_ANSWER_MS) return held.worker
-    const worker = (await askCards({ action: 'cardWorker', machineId, harnessId: agentId })).worker === true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // No answer in time is held as "not a worker" like any other, so the next failures in the minute do not wait again.
+    const worker = await Promise.race([
+      askCards({ action: 'cardWorker', machineId, harnessId: agentId }).then((answer) => answer.worker === true),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), WORKER_WAIT_MS) }),
+    ]).finally(() => clearTimeout(timer))
     // Each key is an agent that failed off the desk; a long-lived process forgets them all rather than grow.
     if (workerAnswers.size >= 256) workerAnswers.clear()
     workerAnswers.set(key, { worker, at: monotonic() })

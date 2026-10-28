@@ -1217,6 +1217,25 @@ describe('a failed turn of a Swarm worker', () => {
       expect(asks(superTabRequest).filter(([p]) => (p as { harnessId: string }).harnessId === 'agent-0')).toHaveLength(2)
     })
 
+    it('waits 2 s at most for an answer, then shows the failure, so a hung service never leaves a tile working', async () => {
+      vi.useFakeTimers()
+      try {
+        const superTabRequest = vi.fn((payload: Record<string, unknown>) =>
+          payload.action === 'cardWorker' ? new Promise<Record<string, unknown>>(() => {}) : Promise.resolve({ ok: true }))
+        start({ core: { ...fakeCore({ dataDir }), superTabRequest } as CoreApi })
+        failed('builder', 'builder broke')
+        await vi.advanceTimersByTimeAsync(1_999)
+        expect(calls('turnError')).toEqual([])
+        await vi.advanceTimersByTimeAsync(1)
+        expect(calls('turnError')).toEqual([['builder', 'builder broke']])
+        // Its next failure within the minute does not wait again.
+        failed('builder', 'again')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(calls('turnError')).toHaveLength(2)
+        expect(asks(superTabRequest)).toHaveLength(1)
+      } finally { vi.useRealTimers() }
+    })
+
     it('shows the failure when the Swarm service cannot say', async () => {
       askedWorker([], true)
       failed('builder', 'builder broke')
