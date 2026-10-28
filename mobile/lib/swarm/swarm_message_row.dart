@@ -11,6 +11,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
 import 'swarm_attachment.dart';
+import 'swarm_ship_row.dart';
 
 /// The host the backend serves message files from: a link anywhere else is
 /// not opened (the desktop's `attachmentLink`).
@@ -180,6 +181,13 @@ class SwarmMessageRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // A ship line is a card, not a message from its author.
+    if (swarmShips(message)) {
+      return SwarmShipRow(
+        key: ValueKey('swarm-message-${message.id}'),
+        message: message,
+      );
+    }
     // A row kept as it was is not built again: it follows a theme or font
     // change itself.
     AppTheme.watch(context);
