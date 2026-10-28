@@ -54,6 +54,7 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
 | **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
+| **Workspace** | The level above Swarms: several Swarms on one account and the people who may be in them, each with a role (owner, admin, member or guest). A person can belong to several Workspaces. Not the Harness **Team account**, a Mac's privacy-checked account for teammates' work. System name: workspace. | Create the Swarm in your company Workspace. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
 | **Instructions** | The visible name for a project's skill set and each role's text. System name: skill. | Open Instructions; edit Product Manager instructions. |
 | **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. System name: lead. | Message Product Manager. |

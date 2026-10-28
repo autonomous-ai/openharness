@@ -1,31 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { mayAssignRole, mayManageMember, orgCan, type OrgRole } from './orgs.js'
+import { mayAssignRole, mayManageMember, workspaceCan, type WorkspaceRole } from './workspaces.js'
 
-const roles: OrgRole[] = ['owner', 'admin', 'member', 'guest']
-const allowed = (action: Parameters<typeof orgCan>[1]) => roles.filter(role => orgCan(role, action))
+const roles: WorkspaceRole[] = ['owner', 'admin', 'member', 'guest']
+const allowed = (action: Parameters<typeof workspaceCan>[1]) => roles.filter(role => workspaceCan(role, action))
 
-describe('what each Team role may do (design: Roles)', () => {
-  it('shows the Team people list to members and above, never to guests', () => {
+describe('what each Workspace role may do (design: Roles)', () => {
+  it('shows the Workspace people list to members and above, never to guests', () => {
     expect(allowed('people.list')).toEqual(['owner', 'admin', 'member'])
   })
 
-  it('shows every Team Swarm name only to owners and admins', () => {
+  it('shows every Workspace Swarm name only to owners and admins', () => {
     expect(allowed('swarms.listAll')).toEqual(['owner', 'admin'])
   })
 
-  it('lets members and above create Swarms and join those open to the Team', () => {
+  it('lets members and above create Swarms and join those open to the Workspace', () => {
     expect(allowed('swarm.create')).toEqual(['owner', 'admin', 'member'])
     expect(allowed('swarm.joinOpen')).toEqual(['owner', 'admin', 'member'])
     expect(allowed('swarm.invite')).toEqual(['owner', 'admin', 'member'])
   })
 
-  it('lets only owners and admins invite to the Team or manage any Swarm of it', () => {
-    expect(allowed('org.invite')).toEqual(['owner', 'admin'])
+  it('lets only owners and admins invite to the Workspace or manage any Swarm of it', () => {
+    expect(allowed('workspace.invite')).toEqual(['owner', 'admin'])
     expect(allowed('swarm.manage')).toEqual(['owner', 'admin'])
   })
 
-  it('keeps renaming, transferring and deleting the Team to its owner', () => {
-    for (const action of ['org.rename', 'org.transfer', 'org.delete'] as const) expect(allowed(action)).toEqual(['owner'])
+  it('keeps renaming, transferring and deleting the Workspace to its owner', () => {
+    for (const action of ['workspace.rename', 'workspace.transfer', 'workspace.delete'] as const) expect(allowed(action)).toEqual(['owner'])
   })
 })
 

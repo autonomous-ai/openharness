@@ -29,19 +29,19 @@ const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
 const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional(),
-  orgId: id.optional() }).strict()
+  workspaceId: id.optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
-// Teams (superTabs/orgStore.ts). A Team session (lib/teamSession.ts) never acts on a Team: only the signed-in person does.
-const orgParams = z.object({ orgId: id })
-const orgMemberParams = z.object({ orgId: id, userId: id })
-const orgName = z.string().trim().min(1).max(160)
-const orgCreate = z.object({ operationId: id, name: orgName }).strict()
-const orgRename = z.object({ name: orgName }).strict()
-const orgInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
-const orgRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
-const orgTransfer = z.object({ userId: id }).strict()
-const orgVisibility = z.object({ visibility: z.enum(['invite-only', 'org']) }).strict()
-const orgJoin = z.object({ operationId: id }).strict()
+// Workspaces (superTabs/workspaceStore.ts). A Team session (lib/teamSession.ts) never acts on a Workspace: only the signed-in person does.
+const workspaceParams = z.object({ workspaceId: id })
+const workspaceMemberParams = z.object({ workspaceId: id, userId: id })
+const workspaceName = z.string().trim().min(1).max(160)
+const workspaceCreate = z.object({ operationId: id, name: workspaceName }).strict()
+const workspaceRename = z.object({ name: workspaceName }).strict()
+const workspaceInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
+const workspaceRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
+const workspaceTransfer = z.object({ userId: id }).strict()
+const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
+const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
@@ -165,37 +165,37 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
-    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.orgId)))
-  // Teams (docs/plans/2026-10-27-swarm-teams.md): the person's Teams and the Swarms they may see in each.
-  app.get('/api/super-tabs/orgs', (req, reply) => respond(reply, () => store.orgList(req.user!)))
-  app.post<{ Body: z.infer<typeof orgCreate> }>('/api/super-tabs/orgs', { preHandler: validateBody(orgCreate) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.create(req.user!, req.body.operationId, req.body.name) }))
-  app.get('/api/super-tabs/org-invitations', (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.invitationsFor(req.user!) }))
-  app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgRename> }>('/api/super-tabs/orgs/:orgId',
-    { preHandler: [validateParams(orgParams), validateBody(orgRename)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.rename(req.user!, req.params.orgId, req.body.name) }))
-  app.get<{ Params: z.infer<typeof orgParams> }>('/api/super-tabs/orgs/:orgId/members', { preHandler: validateParams(orgParams) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.members(req.user!, req.params.orgId) }))
-  app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgInvite> }>('/api/super-tabs/orgs/:orgId/invitations',
-    { preHandler: [validateParams(orgParams), validateBody(orgInvite)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.invite(req.user!, req.params.orgId, req.body.email, req.body.role) }))
-  app.post<{ Params: z.infer<typeof orgParams> }>('/api/super-tabs/orgs/:orgId/accept', { preHandler: validateParams(orgParams) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.accept(req.user!, req.params.orgId) }))
-  app.post<{ Params: z.infer<typeof orgMemberParams>; Body: z.infer<typeof orgRole> }>('/api/super-tabs/orgs/:orgId/members/:userId',
-    { preHandler: [validateParams(orgMemberParams), validateBody(orgRole)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.setRole(req.user!, req.params.orgId, req.params.userId, req.body.role) }))
+    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.workspaceId)))
+  // Workspaces (docs/plans/2026-10-27-swarm-workspaces.md): the person's Workspaces and the Swarms they may see in each.
+  app.get('/api/super-tabs/workspaces', (req, reply) => respond(reply, () => store.workspaceList(req.user!)))
+  app.post<{ Body: z.infer<typeof workspaceCreate> }>('/api/super-tabs/workspaces', { preHandler: validateBody(workspaceCreate) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.create(req.user!, req.body.operationId, req.body.name) }))
+  app.get('/api/super-tabs/workspace-invitations', (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invitationsFor(req.user!) }))
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceRename> }>('/api/super-tabs/workspaces/:workspaceId',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceRename)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.rename(req.user!, req.params.workspaceId, req.body.name) }))
+  app.get<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/members', { preHandler: validateParams(workspaceParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.members(req.user!, req.params.workspaceId) }))
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceInvite> }>('/api/super-tabs/workspaces/:workspaceId/invitations',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceInvite)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invite(req.user!, req.params.workspaceId, req.body.email, req.body.role) }))
+  app.post<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/accept', { preHandler: validateParams(workspaceParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.accept(req.user!, req.params.workspaceId) }))
+  app.post<{ Params: z.infer<typeof workspaceMemberParams>; Body: z.infer<typeof workspaceRole> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId',
+    { preHandler: [validateParams(workspaceMemberParams), validateBody(workspaceRole)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.setRole(req.user!, req.params.workspaceId, req.params.userId, req.body.role) }))
   // A POST, not a DELETE: Desktop reaches the backend through the daemon, which forwards only GET and POST (cli superTabs/service.ts).
-  app.post<{ Params: z.infer<typeof orgMemberParams> }>('/api/super-tabs/orgs/:orgId/members/:userId/remove', { preHandler: validateParams(orgMemberParams) },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.remove(req.user!, req.params.orgId, req.params.userId) }))
-  app.post<{ Params: z.infer<typeof orgParams>; Body: z.infer<typeof orgTransfer> }>('/api/super-tabs/orgs/:orgId/transfer',
-    { preHandler: [validateParams(orgParams), validateBody(orgTransfer)] },
-    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.orgs.transfer(req.user!, req.params.orgId, req.body.userId) }))
-  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof orgVisibility> }>('/api/super-tabs/:tabId/org-visibility',
-    { preHandler: [validateParams(tabParams), validateBody(orgVisibility)] },
-    (req, reply) => respond(reply, () => store.setOrgVisibility(req.user!, req.params.tabId, req.body.visibility)))
-  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof orgJoin> }>('/api/super-tabs/:tabId/org-join',
-    { preHandler: [validateParams(tabParams), validateBody(orgJoin)] },
-    (req, reply) => respond(reply, () => store.orgJoin(req.user!, req.params.tabId, req.body.operationId)))
+  app.post<{ Params: z.infer<typeof workspaceMemberParams> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId/remove', { preHandler: validateParams(workspaceMemberParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.remove(req.user!, req.params.workspaceId, req.params.userId) }))
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceTransfer> }>('/api/super-tabs/workspaces/:workspaceId/transfer',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceTransfer)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.transfer(req.user!, req.params.workspaceId, req.body.userId) }))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof workspaceVisibility> }>('/api/super-tabs/:tabId/workspace-visibility',
+    { preHandler: [validateParams(tabParams), validateBody(workspaceVisibility)] },
+    (req, reply) => respond(reply, () => store.setWorkspaceVisibility(req.user!, req.params.tabId, req.body.visibility)))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof workspaceJoin> }>('/api/super-tabs/:tabId/workspace-join',
+    { preHandler: [validateParams(tabParams), validateBody(workspaceJoin)] },
+    (req, reply) => respond(reply, () => store.workspaceJoin(req.user!, req.params.tabId, req.body.operationId)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
   app.get<{ Params: z.infer<typeof tabParams> }>('/api/super-tabs/:tabId/sharing',
     { preHandler: validateParams(tabParams) },

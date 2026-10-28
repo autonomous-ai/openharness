@@ -18,7 +18,7 @@ import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { orgCan, type OrgRole } from './orgs.js'
+import { workspaceCan, type WorkspaceRole } from './workspaces.js'
 import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
@@ -272,10 +272,10 @@ export interface CommandContext {
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
-  /** The person's role in the Swarm's Team, read by the store for invitations (orgs.ts); absent outside a Team. */
-  orgRole?: OrgRole
-  /** Machines of this Swarm also contributed to a Swarm of another Team (store.ts otherOrgMachines). */
-  otherOrgMachines?: string[]
+  /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
+  workspaceRole?: WorkspaceRole
+  /** Machines of this Swarm also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
+  otherWorkspaceMachines?: string[]
   /** No Harness GitHub App on this server (routes/superTabs.ts): a Mac's Harness Team account has no git login to fetch or
    *  push with, so starts on the Mac stay with the Mac, as before team accounts (machines.ts teamMachineFor). */
   teamAccountsIdle?: boolean
@@ -422,12 +422,12 @@ export function postable(state: SuperTabState, actor: Actor, conversationId: str
 function owner(state: SuperTabState, actor: Actor): void {
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can manage invitations.', 403)
 }
-/** Inviting to a Team's Swarm (design, Roles): its owner, or anyone in it whose Team role may invite to a Swarm they are
- *  in — owners, admins and members, never guests. Revoking: its owner, or the Team's owners and admins. A Swarm from
- *  before Teams keeps invitations to its owner. */
+/** Inviting to a Workspace's Swarm (design, Roles): its owner, or anyone in it whose Workspace role may invite to a Swarm they are
+ *  in — owners, admins and members, never guests. Revoking: its owner, or the Workspace's owners and admins. A Swarm from
+ *  before Workspaces keeps invitations to its owner. */
 function inviter(state: SuperTabState, actor: Actor, context: Partial<CommandContext>, action: 'swarm.invite' | 'swarm.manage'): void {
   if (actor.kind === 'person' && actor.userId === state.ownerId) return
-  if (state.orgId && actor.kind === 'person' && context.orgRole && orgCan(context.orgRole, action)) return
+  if (state.workspaceId && actor.kind === 'person' && context.workspaceRole && workspaceCan(context.workspaceRole, action)) return
   fail('OWNER_REQUIRED', 'Your role cannot manage invitations to this Swarm.', 403)
 }
 /** A requester is a member who can read the project the work is in. */
@@ -611,7 +611,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
     const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines)
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
-    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherOrgMachines)
+    return teamWorkCheck(state, machineId, contributor, project, context.now, context.teamMachines, context.otherWorkspaceMachines)
   }
   /** Deleting its project is the only removal that takes a Lead. `close: false` when its host already closed the session. */
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
@@ -1234,9 +1234,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       // A teammate's project started on a Mac runs in that Mac's Harness Team account, never as its owner (machines.ts).
       const request = teamStartRequest(state, command.request, home, context.teamAccountsIdle, context.teamMachines)
-      const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherOrgMachines)
+      const pool = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
       // Off the Machines list, a teammate's project never runs: nothing there shows a privacy check (machines.ts).
-      if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherOrgMachines)
+      if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null })
@@ -1279,7 +1279,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (grant.machineOwnerId !== start.machineOwnerId || (grant.hostGrant ?? null) !== start.hostGrant) {
           fail('CONTRIBUTION_REVOKED', 'The original machine grant was revoked.', 403)
         }
-        admitMachineStart(state, start.request, context.now, start, context.teamMachines, context.otherOrgMachines)
+        admitMachineStart(state, start.request, context.now, start, context.teamMachines, context.otherWorkspaceMachines)
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
         start.dispatchedAt = context.now
@@ -1476,7 +1476,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           fail('AUDIENCE_LEAD_ONLY', 'A private conversation holds only the Lead among agents.', 403)
         }
         // A Reviewer added to a group is handed its review, as an assignment hands a Builder its task.
-        if (reviewer) requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherOrgMachines)
+        if (reviewer) requireTeamWork(state, member.machineId, member.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
         ruled(agentTarget(state, member), group.id, `${who} added ${member.name}`)
         if (!group.agentIds.includes(command.agentId)) group.agentIds.push(command.agentId)
         // Adding a Reviewer to a group reuses it, as assigning work reuses a Builder.
@@ -1696,7 +1696,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.roleId) worker.roleId = chosenRole(home, command.roleId, agentKind(state, worker)).id
       else requireCustomRole(home, agentKind(state, worker))
       // A teammate's agent on a personal machine keeps what it has; it takes no new task for another person's project.
-      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherOrgMachines)
+      requireTeamWork(state, worker.machineId, worker.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
       requireWorkerDecisions(state, actor, group, worker.id)
       if (worker.workDecision === 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === worker.id)) fail('AGENT_BUSY', 'This agent already owns an active assignment.')

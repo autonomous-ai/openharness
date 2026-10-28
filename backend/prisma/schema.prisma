@@ -1009,12 +1009,12 @@ model SuperTab {
   format         Int      @default(1)
   migratedAt     DateTime?
   legacyState    Json?
-  /// The Team (SwarmOrg) it belongs to, also on its head part. Null only on a Swarm from before Teams, until migrated.
-  orgId          String?
+  /// The Workspace (SwarmWorkspace) it belongs to, also on its head part. Null only on a Swarm from before Workspaces, until migrated.
+  workspaceId          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  @@index([autonomousEnv, orgId])
+  @@index([autonomousEnv, workspaceId])
   @@index([autonomousEnv, memberIds])
   @@index([autonomousEnv, invitedEmails])
   @@index([autonomousEnv, machineIds])
@@ -1326,9 +1326,9 @@ model SuperTabTerminalRequest {
 // (`deleted`) until `purgeAt`, so readers learn it is gone. `data` keeps the record's shape from `SuperTab.state`.
 
 /// The Swarm's scalars and settings: projects (without progress), rules, invitations, sharing, routing, Local models.
-/// A Team: Swarms and the people who may be in them (docs/plans/2026-10-27-swarm-teams.md). `org` in code, so `team` keeps
-/// meaning the Harness Team account. It never grants reading a Swarm: that needs the Swarm's own membership too.
-model SwarmOrg {
+/// A Workspace: Swarms and the people who may be in them (docs/plans/2026-10-27-swarm-workspaces.md). Not the Harness Team
+/// account. It never grants reading a Swarm: that needs the Swarm's own membership too.
+model SwarmWorkspace {
   id            String    @id @map("_id")
   autonomousEnv String
   name          String
@@ -1339,11 +1339,11 @@ model SwarmOrg {
   purgeAt       DateTime?
 }
 
-/// One person of a Team. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
-model SwarmOrgMember {
-  /// `orgId:userId`
+/// One person of a Workspace. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
+model SwarmWorkspaceMember {
+  /// `workspaceId:userId`
   id         String    @id @map("_id")
-  orgId      String
+  workspaceId      String
   userId     String
   email      String
   role       String
@@ -1355,16 +1355,16 @@ model SwarmOrgMember {
   removedBy  String?
   purgeAt    DateTime?
 
-  @@index([orgId, removedAt])
+  @@index([workspaceId, removedAt])
   @@index([userId, removedAt])
 }
 
-/// One removal of one Team membership, open until the person has left every Swarm of the Team. While one is open the
-/// person cannot be brought back into the Team; the hourly sweep finishes them in order (superTabs/orgStore.ts).
-model SwarmOrgRemoval {
-  /// `orgId:userId:generation`: the membership generation that was removed.
+/// One removal of one Workspace membership, open until the person has left every Swarm of the Workspace. While one is open the
+/// person cannot be brought back into the Workspace; the hourly sweep finishes them in order (superTabs/workspaceStore.ts).
+model SwarmWorkspaceRemoval {
+  /// `workspaceId:userId:generation`: the membership generation that was removed.
   id            String    @id @map("_id")
-  orgId         String
+  workspaceId         String
   userId        String
   email         String
   generation    String
@@ -1375,21 +1375,21 @@ model SwarmOrgRemoval {
   purgeAt       DateTime?
 
   @@index([finishedAt, id])
-  @@index([orgId, userId, finishedAt])
+  @@index([workspaceId, userId, finishedAt])
 }
 
-/// An invitation to a Team, by email; deleted when accepted or revoked, purged when it expires.
-model SwarmOrgInvitation {
-  /// `orgId:email`
+/// An invitation to a Workspace, by email; deleted when accepted or revoked, purged when it expires.
+model SwarmWorkspaceInvitation {
+  /// `workspaceId:email`
   id        String   @id @map("_id")
-  orgId     String
+  workspaceId     String
   email     String
   role      String
   invitedBy String
   expiresAt DateTime
 
   @@index([email, expiresAt])
-  @@index([orgId])
+  @@index([workspaceId])
 }
 
 model SwarmHead {

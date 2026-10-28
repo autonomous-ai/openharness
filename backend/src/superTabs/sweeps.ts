@@ -12,11 +12,11 @@ export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
     await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] })
   }
-  // Teams (orgStore.ts): a removed person's row, a finished removal and a deleted Team 30 days on, an invitation when it expires.
-  for (const collection of ['SwarmOrg', 'SwarmOrgMember', 'SwarmOrgRemoval']) {
-    await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'org_purge', expireAfterSeconds: 0 }] })
+  // Workspaces (workspaceStore.ts): a removed person's row, a finished removal and a deleted Workspace 30 days on, an invitation when it expires.
+  for (const collection of ['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']) {
+    await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 }] })
   }
-  await db.$runCommandRaw({ createIndexes: 'SwarmOrgInvitation', indexes: [{ key: { expiresAt: 1 }, name: 'org_invitation_expiry', expireAfterSeconds: 0 }] })
+  await db.$runCommandRaw({ createIndexes: 'SwarmWorkspaceInvitation', indexes: [{ key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 }] })
 }
 
 /** A removed person, agent or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds
@@ -122,10 +122,10 @@ export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
     tombstonesCompacted: await compactTombstones(db, now) }
 }
 
-/** Runs the sweeps every hour in the singleton worker. `finishOrgRemovals` finishes Team removals whose Swarm removals
- *  did not all run (orgStore.ts SwarmOrgs.finishRemovals); it needs the store, so the worker passes it in. */
-export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishOrgRemovals?: () => Promise<number>): () => void {
-  const run = () => void sweepSwarms(db).then(async result => ({ ...result, orgRemovalsPending: await finishOrgRemovals?.() }))
+/** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals
+ *  did not all run (workspaceStore.ts SwarmWorkspaces.finishRemovals); it needs the store, so the worker passes it in. */
+export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishWorkspaceRemovals?: () => Promise<number>): () => void {
+  const run = () => void sweepSwarms(db).then(async result => ({ ...result, workspaceRemovalsPending: await finishWorkspaceRemovals?.() }))
     .then(result => logger.info('[swarm-sweeps] done', result))
     .catch(error => logger.warn('[swarm-sweeps] failed', { error: error instanceof Error ? error.message : String(error) }))
   run()

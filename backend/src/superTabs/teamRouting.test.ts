@@ -602,28 +602,28 @@ describe('one machine: a Mac whose Harness Team account was made again', () => {
   })
 })
 
-// A Harness Team account runs every teammate's work as one macOS user, so in Swarms of two Teams one Team's agents could
-// read the other's folders there (docs/plans/2026-10-27-swarm-teams.md, Audience). `otherOrgMachines`: the machines this
-// Swarm's store found contributed to a Swarm of another Team.
-describe('a Team machine serving more than one Team', () => {
-  it('takes no teammate\'s work while it is in Swarms of another Team, and says why', () => {
+// A Harness Team account runs every teammate's work as one macOS user, so in Swarms of two Workspaces one Workspace's agents could
+// read the other's folders there (docs/plans/2026-10-27-swarm-workspaces.md, Audience). `otherWorkspaceMachines`: the machines this
+// Swarm's store found contributed to a Swarm of another Workspace.
+describe('a Team machine serving more than one Workspace', () => {
+  it('takes no teammate\'s work while it is in Swarms of another Workspace, and says why', () => {
     const f = swarm(), group = f.group()
-    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, { ...f.pooled('mate-team'), otherOrgMachines: ['mate-team'] })))
-      .toMatchObject({ code: 'MACHINE_IN_OTHER_TEAM', status: 403,
-        message: 'The Harness Team account on MacBook Pro · Team also serves another Team\'s Swarms, so it runs only its owner\'s projects here.' })
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, { ...f.pooled('mate-team'), otherWorkspaceMachines: ['mate-team'] })))
+      .toMatchObject({ code: 'MACHINE_IN_OTHER_WORKSPACE', status: 403,
+        message: 'The Harness Team account on MacBook Pro · Team also serves another Workspace\'s Swarms, so it runs only its owner\'s projects here.' })
     expect(f.state.starts ?? []).toEqual([])
   })
 
-  it('still runs its owner\'s own projects there, and a teammate\'s work once it serves this Team alone', () => {
+  it('still runs its owner\'s own projects there, and a teammate\'s work once it serves this Workspace alone', () => {
     const f = swarm()
-    f.run({ type: 'agent.start', request: f.request(f.group(f.mine, mate), 'mate-team', f.mine) }, mate, { ...f.pooled('mate-team'), otherOrgMachines: ['mate-team'] })
-    f.run({ type: 'agent.start', request: f.request(f.group(), 'mate-team') }, owner, { ...f.pooled('mate-team'), otherOrgMachines: [] })
+    f.run({ type: 'agent.start', request: f.request(f.group(f.mine, mate), 'mate-team', f.mine) }, mate, { ...f.pooled('mate-team'), otherWorkspaceMachines: ['mate-team'] })
+    f.run({ type: 'agent.start', request: f.request(f.group(), 'mate-team') }, owner, { ...f.pooled('mate-team'), otherWorkspaceMachines: [] })
     expect(f.state.starts).toHaveLength(2)
   })
 
   it('shows routing the reason, like any other refusal', () => {
     const f = swarm()
-    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, true)?.code).toBe('MACHINE_IN_OTHER_TEAM')
+    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, true)?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
     expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, false)).toBeNull()
   })
 })

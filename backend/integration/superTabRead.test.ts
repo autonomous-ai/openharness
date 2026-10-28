@@ -330,7 +330,7 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
   it('lists the caller\'s Swarms with their newest change', async () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
-    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, orgId: null, paused: false, lastChangedAt: MIGRATED })
+    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
   })
 
   it.each(['/api/super-tabs', '/api/super-tabs/TAB', '/api/super-tabs/hosts/host', '/api/super-tabs/hosts/host/pools', '/api/super-tabs/hosts/host/assignments'])(

@@ -72,7 +72,7 @@ async function start(): Promise<void> {
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
   const swarms = new SuperTabStore(prisma)
-  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.orgs.finishRemovals())
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
