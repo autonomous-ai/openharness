@@ -285,6 +285,49 @@ the arrow's direction, the number and the accessible label ("up 3 from last
 week") say the same thing. Hover and keyboard focus keep their ordinary
 treatment over the current person's fill, so focus stays visible on that row.
 
+## Phone
+
+The phone app speaks the same language at a thumb's scale. It uses the same
+role names in `mobile/lib/shared/theme` (`AppType`, `AppPalette`, `AppSurface`,
+`AppControl`, `AppMenu`, `AppCard`) with the sizes below. A role keeps its
+meaning, color and weight on both; only the size changes, and only where this
+section says so. Every other rule in this document holds on the phone.
+
+| Role | Desktop | Phone |
+| --- | --- | --- |
+| Display (`AppType.display`) | 28, semibold | 34, semibold |
+| Page title (`AppType.title`) | 20, semibold | 22, semibold |
+| Heading (`AppType.heading`) | 17, semibold | 17, semibold |
+| Body and control (`AppType.body`, `AppType.label`) | 13 | 17 |
+| Metadata (`AppType.caption`) | 12 | 13 |
+| Code (`AppType.mono`, `monoLabel`, `monoMeta`) | 13 / 12 / 11 | 13 / 12 / 11 |
+| Touch target | 32 icon, 28 compact | 44 (`minTouchTarget`) |
+| Icon beside text / standalone | 16 / 20 | 20 / 24 |
+| Screen side inset | 24 (dialog content) | 16 |
+| Spacing scale | 4, 8, 12, 16, 24 | 4, 8, 12, 16, 24 |
+| Field / row / pane radius | 10 | 10 |
+| Card / inset tile radius | 12 / 8 | 12 / 8 |
+| Popover and menu radius | 16 | 16 |
+| Dialog radius, sheet top corners | 20 | 20 |
+| Action buttons | capsule | capsule |
+
+Every independently tappable control reaches 44 points. A control drawn
+smaller, such as a 32-point icon button in a header, keeps its drawn size and
+extends its hit area with `TouchTarget` rather than growing the row around it.
+A screen's own primary action is drawn 44 points tall.
+
+Deliberate differences from Desktop, and only these:
+
+- Type, touch target, icon and side-inset sizes, as in the table.
+- No hover state and no hand cursor. Press feedback replaces hover; focus
+  outlines appear only with a hardware keyboard.
+- Swarm screens set their top-bar titles in the terminal face, as the approved
+  phone prototype does. Everything else on them uses the system face.
+- The terminal keeps its own font, size and palette, as on Desktop.
+
+The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
+with the same rules and allowlist as Desktop's Swarm code.
+
 ## Surface families
 
 **Titlebar dropdowns** — the avatar's menu, the bell's inbox and the other
@@ -512,6 +555,33 @@ Increase Contrast. Exercise mouse, keyboard, nested dismissal, drafts and
 composition. Use synthetic review data, not real agent launches or permissions.
 Inspect the rebuilt app; widget tests alone do not prove native VoiceOver or
 physical IME behavior. Record evidence and limitations in the migration ledger.
+
+## UI checklist
+
+Every pull request that changes UI pastes this into its description and ticks
+what it checked, or says why an item does not apply:
+
+```text
+UI checklist (desktop/design/desktop-design-system.md)
+- [ ] ASCII mockup confirmed by the requester before visuals were built
+- [ ] Named roles only (AppType, AppPalette/AppSurface, AppDesktop/AppControl,
+      AppIcons); scripts/check-ui-style.py passes and its allowlist only shrank
+- [ ] Numbers follow Numbers and rankings: tabular, right-aligned, one
+      emphasized number, zeros hidden, no emoji or medals
+- [ ] Color is never the only signal; a trend or state also has a shape or words
+- [ ] Light and dark, 160–200% text, long and missing names, empty, loading and
+      error states, with screenshots
+- [ ] Phone: Phone table sizes, 44-point targets, differences from Desktop listed
+- [ ] Copy follows the Naming System
+- [ ] Keyboard, focus return and hand cursor (Desktop)
+```
+
+`scripts/check-ui-style.py` runs in CI for `desktop/lib/super_tabs` and
+`mobile/lib/swarm`. It fails on a new `Color(0x…)`, Material `Colors.*` other
+than transparent, numeric `fontSize`, `EdgeInsets` with a number, or numeric
+`BorderRadius.circular` outside theme folders. Fix the call site with a role;
+when a count falls, run `python3 scripts/check-ui-style.py --update` and commit
+the smaller allowlist. The update never raises a count.
 
 ## Standard of finish
 
