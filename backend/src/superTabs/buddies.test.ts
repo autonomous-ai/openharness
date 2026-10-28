@@ -477,3 +477,16 @@ describe('a Buddy\'s terminal alert', () => {
     expect(rows.map(r => [r.conversationId, r.recipients])).toEqual([[f.chat, []]])
   })
 })
+
+describe('a decision left to the PM while Buddies are on', () => {
+  it('puts the PM\'s line in the person\'s Buddy chat, to no one, not in their read-only Chat with PM', () => {
+    const f = setup()
+    const decision = { id: 'decision-1', personId: 'peer', conversationId: f.group, projectId: f.app.projectId, askerAgentId: f.pm,
+      question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
+    const delegate = () => f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision }).messages
+      .filter(m => (m.source as { kind?: string } | undefined)?.kind === 'decision-delegated')
+    expect(delegate().map(m => m.conversationId)).toEqual([f.pmChat])
+    f.run({ type: 'tab.buddies', enabled: true })
+    expect(delegate()).toEqual([expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?' })])
+  })
+})
