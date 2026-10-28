@@ -1,14 +1,14 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
-import { ContributedMachines } from './machines.js'
+import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
 import { NativeRecorder, nativeJournalFile } from './native.js'
-import { attachedFiles } from './attachments.js'
+import { attachedFiles, attachmentsOf } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -19,25 +19,17 @@ import { prepareContribution, prepareTeamContribution } from './contribution.js'
 import { hostname } from 'node:os'
 import { replacementObservations } from './replacements.js'
 import { TerminalHost } from './terminal.js'
+import { LimitResume } from './limitResume.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
+import { UPDATE_REQUIRED } from './readContract.js'
 
 type Json = Record<string, unknown>
-export class SuperTabHostError extends Error {
-  constructor(readonly code: string, message: string, readonly status = 503) { super(message) }
-}
-export { identifier, object } from './wire.js'
-import { ENDED_WORK, identifier, object } from './wire.js'
+const agentCommandOf = (entry: Entry, prefix: string) => `${prefix} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
+const readCommand = (entry: Entry, prefix: string, group: string, id: string) => `${agentCommandOf(entry, prefix)} message ${shellQuote(group)} ${shellQuote(id)}`
+export { backend, identifier, object, SuperTabHostError } from './wire.js'
+import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
-
-/** The core signs each request. Neither the service nor its journal holds an account credential. */
-export async function backend(core: CoreApi, method: string, path: string, body?: unknown): Promise<unknown> {
-  const reply = await core.account.backend(method, path, body)
-  if (reply.status < 200 || reply.status >= 300 || reply.body.success === false) {
-    const error = object(reply.body.error)
-    throw new SuperTabHostError(String(error.code ?? reply.body.code ?? 'BACKEND_UNAVAILABLE'),
-      String(error.message ?? reply.body.message ?? 'Could not reach this Super Tab.'), reply.status)
-  }
-  return reply.body.data
-}
 
 /** The skills of a group's project in a tab state: a group from before projects is in the first, and a project from before
  *  modes, or a Swarm from before projects, is orchestration. */
@@ -46,20 +38,22 @@ export function groupSkillMode(state: Record<string, unknown>, group: Record<str
   return project?.skillMode === 'default' ? 'default' : 'orchestration'
 }
 
+/** Where a machine reads its Swarms: the host form of its rosters, and each Swarm by parts (design 2026-10-26 section 5.3). */
+export interface SwarmSources { feed: HostFeed; reads: SwarmReads }
+
 /** Restart/resume can include stopped harnesses, so the live process list is not membership proof.
  * Re-read the exact machine roster and its groups; a removed contribution must never adopt a skill. */
-export async function swarmRoleFor(core: CoreApi, machineId: string, harnessId: string): Promise<SwarmSkillGrant | null> {
+export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Promise<SwarmSkillGrant | null> {
+  const machineId = sources.feed.machineId
   if (!identifier(machineId) || !identifier(harnessId)) return null
-  const rows = await backend(core, 'GET', `/api/super-tabs/hosts/${machineId}`)
-  if (!Array.isArray(rows)) return null
+  const rows = (await sources.feed.refresh()).roster
   const grants = await Promise.all(rows.map(object).filter(row => {
     const agent = object(row.agent)
     return identifier(row.tabId) && identifier(agent.id) && agent.machineId === machineId
       && agent.harnessId === harnessId && row.stopRequested !== true
   }).map(async row => {
     const target = object(row.agent)
-    const answer = object(await backend(core, 'GET', `/api/super-tabs/${row.tabId}?asAgentId=${target.id}`))
-    const state = object(answer.state)
+    const { state } = await sources.reads.read(String(row.tabId), String(target.id))
     const agent = Array.isArray(state.agents) && state.agents.map(object).find(agent => agent.id === target.id
       && agent.harnessId === harnessId && agent.machineId === machineId && agent.workDecision !== 'stop')
     if (!agent) return null
@@ -84,7 +78,8 @@ interface Entry {
 }
 interface Journal { version: 1; machineId: string; entries: Record<string, Entry> }
 /** `skillMode` is the agent's project's skills; a row without it (an older backend, a project from before modes) is orchestration. */
-interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown }
+interface HostAgent { tabId: string; agent: { id: string; harnessId: string; machineId: string; releaseId?: string }; skillMode?: unknown; lead?: unknown; role?: unknown
+  leadsConversationId?: unknown }
 export interface SuperTabHostOptions {
   now?: () => number
   write?: (file: string, journal: Journal) => void
@@ -98,6 +93,10 @@ export interface SuperTabHostOptions {
   agentCommand?: (core: CoreApi, machineId: string) => Promise<string>
   /** The Swarm start this machine made of a harness (superTabs/reservations.ts), or null. */
   startReceipt?: (harnessId: string) => string | null
+  /** The machine's host form and Swarm reads, shared with the service's other readers (superTabs/service.ts). */
+  sources?: SwarmSources
+  /** What the contributed-machine executor reaches the local daemon with (superTabs/machines.ts), for a spec. */
+  machines?: Partial<MachineDeps>
 }
 
 const defaultAgentCommand = (core: CoreApi, machineId: string) => agentCommandPrefix(core.daemon, machineId,
@@ -126,10 +125,26 @@ function skillSetOf(target: HostAgent): string {
   return role ? JSON.stringify([role.projectId, role.id, role.version, role.name]) : 'none'
 }
 const JOIN_RETRY_MAX_MS = 30 * 60_000
+/** A server that no longer serves this client's reads (HTTP 426): said once, then asked again a minute later (design 5.1). */
+const UPDATE_BACKOFF_MS = 60_000
+/** How old the host form may be for the stop check, which runs every 5 s beside the one-second tick that reads it. */
+const STOPS_FRESH_MS = 5_000
 /** Refusals no retry can change while this host runs: the Swarm has all its machines, or this account does not own it. */
 const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
 /** A Lead's reopen that failed (an engine that cannot start, a busy pane) waits this long, doubling up to half an hour, so a
  *  crash loop never spins; one the core took waits a minute for its session to show before it is asked again. */
+/** A delivery poll or claim the backend refused is asked again after 1 s, doubling to 30 s: every host retried each second, which
+ *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
+const DELIVERY_RETRY_MS = 1_000
+const DELIVERY_RETRY_MAX_MS = 30_000
+/** Stability roadmap 2.4 (2026-10-28): every host read each running agent's delivery list each second, almost always to find
+ *  nothing. A server that says it pushes (a `super_tab_deliveries` notice over the daemon socket, backend lib/adapterWs.ts)
+ *  names the agent when work waits; an idle agent's list is then read only this often, as the safety net for a lost push.
+ *  It matches the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read still runs a Lead's time checks. */
+const DELIVERY_FALLBACK_MS = 30_000
+/** The server repeats that it pushes every 4 minutes on each socket: without it for this long (an older server, a rollback,
+ *  this process started after the last one), every list is read each second again. */
+const PUSH_LEASE_MS = 10 * 60_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
@@ -167,6 +182,8 @@ export class SuperTabHost {
   private readonly log: (message: string) => void
   private retentionError: string | null = null
   private readonly observers: typeof publishObservers
+  /** Whether a session still runs on this machine: a confidential session's mark stays until it closes (observers.ts). */
+  private readonly stillRuns = (harnessId: string) => !!this.core.agents.byAgent(harnessId)
   /** Share was asked to run once a roster here first named someone to show an agent to. */
   private shareWoken = false
   private readonly attachedFiles: typeof attachedFiles
@@ -179,10 +196,22 @@ export class SuperTabHost {
   /** Each delivery's downloaded files, so input held by a busy terminal is not downloaded again on every retry. Only a
    * complete download is kept: a failed one is tried again before the next delivery of the same message. */
   private readonly files = new Map<string, string>()
+  /** Each delivery's quote of the message it replies to ('' when none is shown), read once like its files. A failed read is
+   * not kept, so the next try reads again. */
+  private readonly quotes = new Map<string, string>()
   private readonly active = new Set<string>()
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
   private readonly stopHearing: () => void
+  private readonly stopNotices: () => void
+  /** Until when the server is known to push deliveries (PUSH_LEASE_MS). */
+  private pushUntil = 0
+  /** The agents' lists the server said have work since the last poll took them, by list key; `pushAll` reads every one. */
+  private readonly pushes = new Set<string>()
+  private pushAll = false
+  /** Per agent's list, when it was last read, what it held, and whether any of it is still in this host's hands: input in
+   *  flight needs a fresh read each second for its 2.5 s lease (accept), so only a list with nothing to do may wait. */
+  private readonly lists = new Map<string, { readAt: number; ids: string[]; busy: boolean }>()
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
@@ -202,8 +231,11 @@ export class SuperTabHost {
   private replacementsRunning: Promise<void> | null = null
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
+  /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; list?: string }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
+  private readonly machineDeps: Partial<MachineDeps>
   private grids: SwarmGrids | null = null
   /** The waits last handed to the core (superTabs/attention.ts); null until the first roster, which is always handed
    *  over whole, so a restarted service closes what its predecessor raised and no longer holds. */
@@ -227,11 +259,17 @@ export class SuperTabHost {
   private readonly keepAlives = new Map<string, { running: boolean; failures: number; retryAt: number; reason?: string }>()
   /** Per session the backend ends: a close or acknowledgement in progress, how far it got, and when the next try may run. */
   private readonly endings = new Map<string, { running: boolean; closed: boolean; acked: boolean; failures: number; retryAt: number }>()
-  /** Per agent that leads nothing (tab:agent): the conversations its own view of the tab lists, and the deliveries refused. */
-  private readonly readable = new Map<string, Set<string>>()
+  /** Deliveries withheld from an agent that leads nothing, each said once. */
   private readonly unreadable = new Set<string>()
+  /** The machine's host form and Swarm reads: the tick, stops, releases and skill notices read Swarms only through them. */
+  private readonly sources: SwarmSources
+  /** Until when the host waits after an update-required answer, and whether it has said so. */
+  private updateUntil = 0
+  private updateSaid = false
   /** A Lead's reads of and typing into this machine's agents' terminals, and the stuck and usage-limit alerts. */
   private readonly terminal: TerminalHost
+  /** Gives a task lost to a usage limit back to its session once the limit has reset. */
+  private readonly limitResume: LimitResume
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: SuperTabHostOptions = {}) {
     if (!identifier(machineId)) throw new SuperTabHostError('MACHINE_UNAVAILABLE', 'This machine is not signed in.')
@@ -239,6 +277,7 @@ export class SuperTabHost {
     this.observers = options.observers ?? publishObservers
     this.attachedFiles = options.attachedFiles ?? attachedFiles
     this.prepareContribution = options.prepareContribution ?? prepareContribution
+    this.machineDeps = options.machines ?? {}
     this.prepareTeam = options.prepareTeam ?? ((core, input) => prepareTeamContribution(core, input))
     this.agentCommand = options.agentCommand ?? defaultAgentCommand
     this.startReceipt = options.startReceipt ?? (() => null)
@@ -246,6 +285,10 @@ export class SuperTabHost {
     this.write = options.write ?? writeJournal
     this.log = options.log ?? (message => console.warn(`[super-tabs] ${message}`))
     this.terminal = new TerminalHost(core, machineId, { now: this.now, log: this.log })
+    this.limitResume = new LimitResume(core, machineId, { now: this.now, log: this.log,
+      owns: async (tabId, assignmentId, harnessId) => (await this.sources.feed.fresh()).assignments
+        .some(a => a.tabId === tabId && a.assignmentId === assignmentId && a.harnessId === harnessId) })
+    this.sources = options.sources ?? { feed: new HostFeed(core, machineId, { now: this.now }), reads: new SwarmReads(core) }
     this.journal = { version: 1, machineId, entries: {} }
     if (existsSync(this.file)) {
       const raw = readFileSync(this.file, 'utf8')
@@ -269,6 +312,7 @@ export class SuperTabHost {
     }
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
+    this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
     if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
       try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
     }
@@ -290,12 +334,16 @@ export class SuperTabHost {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
+    this.stopNotices()
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
-    // An empty roster in force, which Share reads as everyone gone and withdraws their invitations; a lapsed one
-    // would only pause their views (superTabs/observers.ts `known`).
-    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS) } catch { /* The old snapshot expires. */ }
+    // A roster that lapses now: viewing pauses at once, and Share keeps the invitations (superTabs/observers.ts `known`)
+    // until the next host's first roster says who is still a member. A host stops when its backend link drops and when
+    // the daemon restarts for an update; an empty roster in force here withdrew every member's invitation each time,
+    // which took this computer out of their machine lists until their apps next read them, up to 5 minutes later, and
+    // their panes said Harness here was out of date (Ken, 2026-10-28). The confidential marks are kept as they are.
+    try { this.observers(this.core.dataDir, this.machineId, [], this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
@@ -312,9 +360,13 @@ export class SuperTabHost {
     this.native ??= new NativeRecorder(this.core, this.machineId)
     return this.native.prepare(tabId, contextId, renew, closed)
   }
+  /** The machine report sends when each agent's screen last changed, from this host's own screen reads. */
+  private contributed(): ContributedMachines {
+    return this.machines ??= new ContributedMachines(this.core, this.machineId,
+      { ...this.machineDeps, sources: this.sources, progress: ids => this.terminal.progressOf(ids) })
+  }
   private pollMachines() {
-    this.machines ??= new ContributedMachines(this.core, this.machineId)
-    void this.machines.tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
     this.grids ??= new SwarmGrids(this.core, this.machineId)
     void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
   }
@@ -325,23 +377,46 @@ export class SuperTabHost {
     void this.native.flush().catch(failed)
   }
   tick(): Promise<void> {
-    if (this.stopped) return Promise.resolve()
-    return this.running ??= this.poll().catch(error => {
-      this.log(error instanceof Error ? error.message : String(error))
-    }).finally(() => { this.running = null })
+    if (this.stopped || this.now() < this.updateUntil) return Promise.resolve()
+    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => {
+      this.running = null
+      // Work the server announced during that poll is read now, not at the next second.
+      if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
+    })
+  }
+  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. */
+  private pushed(notice: BackendNotice): void {
+    if (notice.type !== 'super_tab_deliveries' || this.stopped) return
+    this.pushUntil = this.now() + PUSH_LEASE_MS
+    if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
+    else this.pushAll = true
+    void this.tick()
+  }
+  /** A delivery this host has nothing more to do for until someone acts: withheld from an agent that may not read it, or
+   *  reported uncertain and waiting for a person. Any other keeps its agent's list read each second. */
+  private settled(delivery: Json): boolean {
+    const id = delivery.id as string, entry = this.journal.entries[id]
+    return this.unreadable.has(id) || (!!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt)
+  }
+  /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second. */
+  private failed(error: unknown): void {
+    if (error instanceof SuperTabHostError && error.code === UPDATE_REQUIRED) {
+      this.updateUntil = this.now() + UPDATE_BACKOFF_MS
+      if (this.updateSaid) return
+      this.updateSaid = true
+    }
+    this.log(error instanceof Error ? error.message : String(error))
   }
 
   /** A saved native stop, never a timeout or missing live snapshot, releases
    * ownership. This also runs for contributions withdrawn while working. */
   reconcileStops(): Promise<void> {
-    if (this.stopped || !this.core.agents.stopped || this.now() < this.nextStopsAt) return Promise.resolve()
-    return this.stopsRunning ??= this.checkStops().catch(error => {
-      this.log(error instanceof Error ? error.message : String(error))
-    }).finally(() => { this.stopsRunning = null; this.nextStopsAt = this.now() + 5_000 })
+    if (this.stopped || !this.core.agents.stopped || this.now() < Math.max(this.nextStopsAt, this.updateUntil)) return Promise.resolve()
+    return this.stopsRunning ??= this.checkStops().catch(error => this.failed(error))
+      .finally(() => { this.stopsRunning = null; this.nextStopsAt = this.now() + 5_000 })
   }
   private async checkStops(): Promise<void> {
-    const rows = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}/assignments`)
-    if (!Array.isArray(rows)) throw new Error('Invalid Super Tab execution list.')
+    const rows = (await this.sources.feed.current(STOPS_FRESH_MS)).assignments
     for (const value of rows) {
       if (this.stopped) return
       const work = object(value)
@@ -368,7 +443,7 @@ export class SuperTabHost {
     this.releaseAttempts.set(key, attempt)
     this.releases.add(key)
     try {
-      const current = object(object(await backend(this.core, 'GET', `/api/super-tabs/${tabId}?asAgentId=${agent.id}`)).state)
+      const current = (await this.sources.reads.read(tabId, agent.id)).state
       const member = Array.isArray(current.agents) ? current.agents.map(object).find(a => a.id === agent.id) : undefined
       if (this.stopped || member?.workDecision !== 'stop' || member.harnessId !== agent.harnessId || member.machineId !== this.machineId || member.releaseId !== agent.releaseId) return
       if (!Array.isArray(current.conversations) || current.conversations.map(object).some(c => {
@@ -443,6 +518,16 @@ export class SuperTabHost {
             command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
           })).result)
           if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          // The idle check's stop trusted a report up to a minute old (machines.ts): an edit since, or a folder git cannot
+          // read now, withdraws it instead (review of #1807). Read after the lease, whose answer can take minutes, so it
+          // is the last thing before the close. A stop its Lead asked for closes as before.
+          if (member.idleStop && (!native.cwd || await uncommittedIn(native.cwd, this.machineDeps.git) !== false)) {
+            // A failed withdrawal retries with backoff, reading the folder again; the unused lease simply expires.
+            await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `idle-stop-withdrawn-${agent.releaseId ?? agent.id}`,
+              asAgentId: agent.id, command: { type: 'agent.stopRefused', agentId: agent.id, releaseId: agent.releaseId } })
+            attempt.retryAt = Infinity
+            return
+          }
           result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + leased.durationMs,
             creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
         }
@@ -457,6 +542,9 @@ export class SuperTabHost {
         operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
       })
       attempt.retryAt = Infinity
+      // Its worktree goes now that it is stopped for good, not after the weekly sweep's idle week (machines.ts).
+      await this.contributed().removeStoppedWorktree(tabId, agent.harnessId)
+        .catch(error => this.log(`Kept the worktree of a stopped worker: ${error instanceof Error ? error.message : String(error)}`))
     } catch (error) {
       attempt.failures++
       // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.
@@ -498,10 +586,22 @@ export class SuperTabHost {
   private async leases(): Promise<boolean> {
     return this.core.turns.leaseDeliveries('superTabs', Object.fromEntries(this.authorized))
   }
+  private backedOff(key: string): boolean {
+    const retry = this.deliveryRetries.get(key)
+    return !!retry && this.now() < retry.retryAt
+  }
+  private retryLater(key: string, list?: string): void {
+    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, ...(list ? { list } : {}) }
+    retry.retryAt = this.now() + Math.min(DELIVERY_RETRY_MAX_MS, DELIVERY_RETRY_MS * 2 ** retry.failures++)
+    this.deliveryRetries.set(key, retry)
+  }
   private async poll(): Promise<void> {
-    const data = await backend(this.core, 'GET', `/api/super-tabs/hosts/${this.machineId}`)
+    const data = (await this.sources.feed.refresh()).roster
     if (this.stopped) return
-    if (!Array.isArray(data)) throw new Error('Invalid Super Tab host roster.')
+    // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
+    const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
+    this.pushes.clear()
+    this.pushAll = false
     // Multiply was closed by the ordinary 30-minute idle cleanup while still a
     // shared member. Membership outlives its task, terminal view and host process.
     // Retention only pauses cleanup when it fails; it must never hold up delivery.
@@ -514,14 +614,14 @@ export class SuperTabHost {
       this.retentionError = message
     }
     // Valid from this answer until the next is due, slow reads included, so it never lapses between two reads.
-    this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS)
+    this.observers(this.core.dataDir, this.machineId, data, this.now() + OBSERVER_VALID_MS, this.stillRuns)
     this.wakeShare(data)
     this.publishAttention(data)
     this.joinSwarms(data)
     this.joinTeams(data)
     this.cleanRemoved(data)
     // Off the poll: a screen read waits on the core, and never delays the input leases below.
-    if (this.core.superTabs) void this.terminal.tick(data)
+    if (this.core.superTabs) { void this.terminal.tick(data); void this.limitResume.tick(data) }
     // Recovery can wait on a native receipt. Run it beside leases, so another worker's input
     // never expires while an old Change agent is being reconciled.
     if (!this.replacementsRunning && this.now() >= this.nextReplacementsAt) {
@@ -550,6 +650,10 @@ export class SuperTabHost {
     const stopKeys = new Set(data.filter(item => object(item).stopRequested === true).map(item => { const row = object(item); return `${row.tabId}:${object(row.agent).id}` }))
     for (const key of this.releaseAttempts.keys()) if (!stopKeys.has(key)) this.releaseAttempts.delete(key)
     const seen = new Set<string>()
+    /** The agents whose delivery list was read in this poll: only such a list can say a delivery is gone. */
+    const listsRead = new Set<string>()
+    /** Every delivery of those lists, also those after one whose claim threw: only a list read without it says it is gone. */
+    const listed = new Set<string>()
     const running: HostAgent[] = []
     const leads = new Set<string>(), ended = new Set<string>()
     for (const item of data) {
@@ -575,26 +679,46 @@ export class SuperTabHost {
       if (!this.core.agents.byAgent(target.agent.harnessId) || !this.core.agents.terminalAvailable(target.agent.harnessId)) continue
       running.push(target)
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
+      const listKey = `list:${target.tabId}:${target.agent.id}`
+      if (this.backedOff(listKey)) continue
+      const last = this.lists.get(listKey)
+      if (last && !pushAll && !last.busy && !pushes.has(listKey) && this.now() - last.readAt < DELIVERY_FALLBACK_MS) {
+        // Unread this time, its deliveries are as the last read left them: none is taken as gone.
+        for (const id of last.ids) seen.add(id)
+        continue
+      }
+      let listRead = false
       try {
         const deliveries = await backend(this.core, 'GET', path)
         if (this.stopped) return
         if (!Array.isArray(deliveries)) throw new Error('Invalid Super Tab delivery list.')
+        listRead = true
+        listsRead.add(listKey)
+        for (const item of deliveries) { const id = object(item).id; if (identifier(id)) listed.add(id) }
+        const read = { readAt: this.now(), ids: deliveries.map(item => object(item).id).filter(identifier), busy: true }
+        this.lists.set(listKey, read)
+        this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
           if (!identifier(delivery.id)) continue
           seen.add(delivery.id)
+          const claimKey = `claim:${delivery.id}`
+          if (this.backedOff(claimKey)) continue
           // Checked before anything is typed: a new delivery, or one held while its agent may since have stopped leading. A
           // claimed one with no journal is never typed, only reported as uncertain; a delivered one only acknowledged.
           const entry = this.journal.entries[delivery.id]
-          if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !await this.mayRead(target, delivery)) continue
-          try { await this.accept(target, delivery, path) } catch (error) {
+          if ((entry ? entry.stage === 'prepared' : !delivery.claimId) && !this.mayRead(target, delivery)) continue
+          try { await this.accept(target, delivery, path); this.deliveryRetries.delete(claimKey) } catch (error) {
             // Answered (or resolved by a person) between the roster read and this call: nothing is owed, and the
             // agent's other deliveries go on.
-            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') throw error
+            if (!(error instanceof SuperTabHostError) || error.code !== 'DELIVERY_RESOLVED') { this.retryLater(claimKey, listKey); throw error }
+            this.deliveryRetries.delete(claimKey)
             this.retire(delivery.id as string)
           }
         }
+        read.busy = deliveries.some(item => !this.settled(object(item)))
       } catch (error) {
+        if (!listRead) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
         this.log(error instanceof Error ? error.message : String(error))
       }
@@ -603,9 +727,21 @@ export class SuperTabHost {
     // A Lead the roster no longer marks (its project deleted) is never reopened again.
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
-    for (const key of this.readable.keys()) if (!running.some(target => `${target.tabId}:${target.agent.id}` === key)) this.readable.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
+    // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
+    for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
+      for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
+    }
+    // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
+    // longer has the delivery, or when its agent is no longer here.
+    for (const [key, retry] of this.deliveryRetries) {
+      const agentKey = retry.list ?? key
+      if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === agentKey)) this.deliveryRetries.delete(key)
+      else if (key.startsWith('claim:') && listsRead.has(agentKey) && !listed.has(key.slice('claim:'.length))) this.deliveryRetries.delete(key)
+    }
     for (const deliveryId of this.files.keys()) if (!this.journal.entries[deliveryId]) this.files.delete(deliveryId)
+    for (const deliveryId of this.quotes.keys()) if (!this.journal.entries[deliveryId]) this.quotes.delete(deliveryId)
     for (const entry of Object.values(this.journal.entries)) {
       const id = typedId(entry)
       if (!seen.has(entry.deliveryId)) {
@@ -732,8 +868,8 @@ export class SuperTabHost {
   /** False when nothing was sent: no open group, or the roster has moved on (`current`) and the next refresh decides. */
   private async tellSkill(target: HostAgent, refresh: SkillRefresh, current: () => boolean): Promise<boolean> {
     const id = target.agent.id
-    const answer = object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}?asAgentId=${id}`))
-    const groups = (Array.isArray(object(answer.state).conversations) ? object(answer.state).conversations as unknown[] : []).map(object)
+    const { state } = await this.sources.reads.read(target.tabId, id)
+    const groups = (Array.isArray(state.conversations) ? state.conversations : []).map(object)
       .filter(group => group.archived !== true && identifier(group.id) && Array.isArray(group.agentIds) && group.agentIds.includes(id))
     const group = groups.find(g => g.leadId === id) ?? groups.find(g => object(g.assignment).agentId === id) ?? groups[0]
     if (!group || !current()) return false
@@ -770,7 +906,7 @@ export class SuperTabHost {
       join.running = true
       this.joins.set(tabId, join)
       void (async () => {
-        const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' })
+        const prepared = await this.prepareContribution(this.core, { tabId, scope: 'swarm' }, { reads: this.sources.reads })
         await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: randomUUID(), command: {
           type: 'machine.contribute', machineId: this.machineId, name: this.core.account.machineName() ?? hostname(),
           cwd: prepared.cwd, scope: 'swarm', engines: prepared.engines, maxAgents: prepared.maxAgents, ifMissing: true } })
@@ -822,8 +958,7 @@ export class SuperTabHost {
     for (const row of rows.map(object)) {
       const cleanup = object(row.cleanup)
       if (!identifier(row.tabId) || cleanup.machineId !== this.machineId || !identifier(cleanup.removalId)) continue
-      this.machines ??= new ContributedMachines(this.core, this.machineId)
-      void this.machines.clean(row.tabId, cleanup.removalId).catch(error => this.log(error instanceof Error ? error.message : String(error)))
+      void this.contributed().clean(row.tabId, cleanup.removalId).catch(error => this.log(error instanceof Error ? error.message : String(error)))
     }
   }
 
@@ -866,16 +1001,11 @@ export class SuperTabHost {
   }
 
   /** Leads see each other's work and talk (spec 2026-10-23): the Leads conversation reaches Leads alone. The server
-   *  delivers it only to them; an agent that leads nothing is also given only what its own view of the tab lists. */
-  private async mayRead(target: HostAgent, delivery: Json): Promise<boolean> {
-    if (target.lead === true) return true
-    const key = `${target.tabId}:${target.agent.id}`
-    if (this.readable.get(key)?.has(String(delivery.conversationId))) return true
-    const state = object(object(await backend(this.core, 'GET', `/api/super-tabs/${target.tabId}?asAgentId=${target.agent.id}`)).state)
-    const readable = new Set((Array.isArray(state.conversations) ? state.conversations.map(object) : [])
-      .filter(c => identifier(c.id) && c.kind !== 'leads' && c.id !== state.leadsConversationId).map(c => c.id as string))
-    this.readable.set(key, readable)
-    if (readable.has(String(delivery.conversationId))) return true
+   *  delivers it only to them; an agent that leads nothing is also never given it here. The roster names the Leads
+   *  conversation, so this needs no read of the Swarm (design 2026-10-26 section 5.3); the server's delivery rules decide
+   *  every other conversation, a private one's audience included. */
+  private mayRead(target: HostAgent, delivery: Json): boolean {
+    if (target.lead === true || delivery.conversationId !== target.leadsConversationId) return true
     if (!this.unreadable.has(delivery.id as string)) {
       this.unreadable.add(delivery.id as string)
       this.log(`Withheld delivery ${String(delivery.id)}: it is not in a conversation ${target.agent.harnessId} can read.`)
@@ -947,6 +1077,11 @@ export class SuperTabHost {
     }
     this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
+    let quote = this.quotes.get(deliveryId)
+    if (quote === undefined) {
+      quote = await this.repliedTo(entry, message, command)
+      if (quote !== undefined) this.quotes.set(deliveryId, quote)
+    }
     if (this.stopped || this.journal.entries[deliveryId] !== entry) return
     this.authorized.set(id, this.now() + 2_500)
     if (!(await this.leases()) || this.stopped) { this.authorized.delete(id); return }
@@ -956,7 +1091,32 @@ export class SuperTabHost {
     entry.stage = 'submitting'
     this.persist()
     this.active.add(id)
-    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files, command), id)
+    this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, files, command, quote ?? ''), id)
+  }
+
+  /** The message a reply answers, quoted into the delivery: agents skipped the command that reads it, and a Lead took Ken's
+   * "GO" as approving a different plan. It is read as this agent through the conversation's own one-message read, so the
+   * server shows only what this agent may already read there; what comes back must still be that message, in that
+   * conversation, and not another agent's private notice. '' when nothing may be quoted, undefined when the read failed. */
+  private async repliedTo(entry: Entry, message: Json, prefix: string): Promise<string | undefined> {
+    const group = message.conversationId as string, id = message.replyTo
+    if (!identifier(id) || object(message.source).kind === 'agent-only') return ''
+    let page: Json
+    try {
+      page = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/conversations/${group}/messages?asAgentId=${entry.agentId}&messageId=${id}`))
+    } catch (error) {
+      this.log(`reply ${id} for delivery ${entry.deliveryId} unreadable: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+    const quoted = (Array.isArray(page.messages) ? page.messages : []).map(object).find(m => m.id === id && m.conversationId === group)
+    if (!quoted || typeof quoted.text !== 'string') return ''
+    if (object(quoted.source).kind === 'agent-only' && !(Array.isArray(quoted.recipientIds) && quoted.recipientIds.includes(entry.agentId))) return ''
+    const at = typeof quoted.createdAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(quoted.createdAt) ? ` (${quoted.createdAt.slice(0, 16).replace('T', ' ')} UTC)` : ''
+    const names = attachmentsOf(quoted).map(a => a.name)
+    // About 600 characters keeps a long plan from crowding out the answer; the cut says where the rest is.
+    const text = quoted.text.length > 600 ? `${quoted.text.slice(0, 600)}… (cut; read it all: ${readCommand(entry, prefix, group, id)})` : quoted.text
+    return `Replying to ${String(object(quoted.author).name ?? 'a collaborator')}${at}: ${text}\n`
+      + (names.length ? `Its attachments: ${names.join(', ')}\n` : '') + '\n'
   }
 
   private async recordConfigurations(rows: unknown[]): Promise<void> {
@@ -980,12 +1140,12 @@ export class SuperTabHost {
     } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
   }
 
-  private prompt(entry: Entry, message: Json, files: string, prefix: string): string {
-    const command = `${prefix} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
+  private prompt(entry: Entry, message: Json, files: string, prefix: string, quote: string): string {
+    const command = agentCommandOf(entry, prefix)
     const group = message.conversationId as string
-    const reply = identifier(message.replyTo)
-      ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${command} message ${shellQuote(group)} ${shellQuote(message.replyTo)}\n\n`
-      : ''
+    const reply = quote || (identifier(message.replyTo)
+      ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo)}\n\n`
+      : '')
     const source = object(message.source)
     // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.
     if (source.kind === 'agent-only') return String(message.text)

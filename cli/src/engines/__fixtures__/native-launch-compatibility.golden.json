@@ -76,7 +76,7 @@
   ],
   "cursor first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "cursor has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Cursor cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "opencode fresh": [
     "opencode"
@@ -118,7 +118,7 @@
   ],
   "pi first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "pi has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Pi cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "omp fresh": [
     "omp"
@@ -178,7 +178,7 @@
   ],
   "commandcode first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "commandcode has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Command Code cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "devin fresh": [
     "devin"
@@ -198,7 +198,7 @@
   ],
   "devin first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "devin has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Devin cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "muse fresh": [
     "muse"
@@ -218,7 +218,7 @@
   ],
   "muse first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "muse has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Muse cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "amp fresh": [
     "amp"
@@ -239,7 +239,7 @@
   ],
   "amp first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "amp has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Amp cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "kilo fresh": [
     "kilo"
@@ -259,7 +259,7 @@
   ],
   "kilo first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "kilo has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Kilo cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "grok fresh": [
     "grok"
@@ -279,7 +279,7 @@
   ],
   "grok first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "grok has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Grok cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "agy fresh": [
     "agy"
@@ -299,7 +299,7 @@
   ],
   "agy first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "agy has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Antigravity cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "copilot fresh": [
     "copilot"
@@ -319,7 +319,7 @@
   ],
   "copilot first": {
     "refused": "FirstPromptUnsupportedError",
-    "detail": "copilot has no documented way to start with a first prompt, so the agent was not created."
+    "detail": "Copilot cannot start with a first message. Start it without one and type the message once it opens, or choose Claude, Codex, OpenCode, Oh My Pi or Hermes to start with one."
   },
   "installation installed": {
     "code": 0,

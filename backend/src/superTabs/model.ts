@@ -1,11 +1,22 @@
 import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
-import { downSince, expireRemovals } from './machines.js'
-import { agentProjectId, agentSetRole, canReadAgent, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
+import { withAvatarView } from './profile.js'
+import { downSince, expireRemovals, startPreparing } from './machines.js'
+import { publicReason, readsRawReason } from './startFailure.js'
+import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
-export interface Person { id: string; email: string; role: Role; generation: string }
+export interface Person {
+  id: string
+  email: string
+  role: Role
+  generation: string
+  /** Their own short status (profile.ts); only Swarm members read it. */
+  status?: import('./profile.js').PersonStatus
+  /** Their own avatar (profile.ts); only Swarm members read it. */
+  avatar?: import('./profile.js').Avatar
+}
 export interface AgentConfiguration {
   engine: string
   model: string | null
@@ -31,9 +42,17 @@ export interface Agent {
   roleId?: string | null
   /** A finished worker stays undecided even when its group receives a new brief. */
   workDecision?: 'awaiting' | 'keep' | 'stop'
+  /** When its Lead last decided keep: a kept worker is idle from then (tidy.ts). */
+  keptAt?: number
+  /** Set while its stop is the idle check's (tidy.ts), with the decision it had before: its host withdraws that stop when
+   *  the session's folder has changes by the time it would close it (agent.stopRefused). */
+  idleStop?: { previous: 'awaiting' | 'keep' | null }
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
+  /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
+   *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
+  gridModel?: string
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -41,12 +60,20 @@ export interface Agent {
   replacement?: { previousHarnessId: string; harnessId: string }
   /** When a reading first showed its session gone or its host confirmed a stop; cleared when it is back (machines.ts). */
   downSince?: string
-  /** The down time already named in the Lead's scheduled wake-up (projectUpdates.ts), so each time down is named once. */
+  /** Written by the two-hour down wake-up that lost work replaced (liveness.ts); older states may still carry it, never shown. */
   downNamed?: string
+  /** Its last task was lost (liveness.ts): routing leaves it out, even once that task is cancelled or reassigned, until it
+   *  finishes a new task, a person assigns it work by hand, or its terminal is replaced (commands.ts). */
+  lostTask?: { conversationId: string; assignmentId: string; reason: string; at: number; resumeAt?: string }
   /** A usage limit seen on its terminal; routing skips the agent until then. Shown as null once passed (terminal.ts). */
   limitedUntil?: string | null
   /** Terminal alert episodes in progress, so each one posts a single row (terminal.ts). */
   alerting?: Array<'prompt' | 'limit' | 'model'>
+  /** Set once its session is a Lead or in a private conversation, and kept until the session leaves: nobody but its
+   *  machine's person watches it (projects.ts canWatchAgent). */
+  confidential?: true
+  /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
+  avatar?: import('./profile.js').Avatar
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -82,11 +109,17 @@ export interface AgentStart {
   request: AgentStartRequest
   harnessId: string | null
   dispatched: boolean
+  /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
+   *  reports it preparing (liveness.ts). */
+  dispatchedAt?: number
+  /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
+  preparing?: true
   error: string | null
 }
 /** `needs_human`: the agent needs a person's decision (its result is the question). `blocked`: it cannot go on (its result
- * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts). */
-export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling'
+ * says why). Both stay active work; the machine running the agent alerts its Harness Pro (cli/src/superTabs/attention.ts).
+ * `lost`: its agent died, stalled or hit a limit (liveness.ts); no longer active, so the Lead assigns it again or cancels it. */
+export type WorkStatus = 'planned' | 'working' | 'needs_human' | 'blocked' | 'review' | 'done' | 'stopped' | 'cancelled' | 'reconciling' | 'lost'
 export interface Check {
   id: string
   description: string
@@ -103,12 +136,38 @@ export interface Assignment {
   result: string | null
   /** Explicit progress fences delayed recording gaps; absent on older backends. */
   recordingProgress?: { at: number; revision: number }
+  /** Its agent owns it until then; progress renews it (liveness.ts). Absent on assignments from before leases. */
+  leaseUntil?: number
+  /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
+  progressAt?: number
+  /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
+   *  take it back (work.resume) unless it was handed on first. */
+  lost?: { reason: string; at: number; resumeAt?: string }
 }
 export interface WorkTask {
   goal: string
   changes: string
   constraints: string
   owns: string[]
+  requires?: TaskRequirement
+}
+/** Where a task can be done at all (2026-10-27: a task to check a device plugged into one person's Mac was routed to another
+ *  machine by policy order). `machines`: it runs only there, or on a Mac's Harness Team account of one of them. `devices`:
+ *  full paths every start for it asks its machine to check (cli superTabs/capacity.ts). Never in the rendered brief, since
+ *  a reader may not see the machine. A reader is handed only the machines they see, and how many others (`unseenMachines`). */
+export interface TaskRequirement { machines?: string[]; devices?: string[]; unseenMachines?: number }
+
+/** The machines a reader sees: listed in their visible state, or running an agent they see. */
+export const seenMachineIds = (visible: Pick<SuperTabState, 'machines' | 'agents'>): Set<string> =>
+  new Set([...(visible.machines ?? []).map(m => m.machineId), ...visible.agents.map(a => a.machineId)])
+
+/** [group] with its requirement as a reader who sees [seen] may read it. The same group read again gives the same result. */
+export function withSeenRequirement<T extends Pick<Conversation, 'task'>>(group: T, seen: ReadonlySet<string>): T {
+  const requires = group.task?.requires
+  if (!requires?.machines?.some(id => !seen.has(id))) return group
+  const machines = requires.machines.filter(id => seen.has(id))
+  return { ...group, task: { ...group.task!, requires: { ...requires, machines,
+    unseenMachines: (requires.unseenMachines ?? 0) + requires.machines.length - machines.length } } }
 }
 
 export function renderWorkTask(task: WorkTask): string {
@@ -135,6 +194,25 @@ export interface Conversation {
   lastMessageSequence: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
+  messageSeq?: number
+  /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
+  reportSeq?: number
+  /** Out of first loads and changes: work done or cancelled and quiet for a day, or archived by hand. A message wakes it. */
+  dormant?: boolean
+  /** When its last message was written (ISO). */
+  lastActivityAt?: string
+  /** A private conversation: only these people and the project's Lead read it (projects.ts canReadGroup). */
+  audience?: import('./parts/types.js').Audience
+  /** The last attempt here that was lost: its agent's status and checks for it are refused, even after reassignment. Where it
+   *  ran (machine and engine) stays too, so routing the work again avoids that account even once its agent is gone. */
+  lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
+  /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
+  reactionSeq?: number
+  /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
+  requesterId?: string
+  /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
+  ledger?: import('./leaderboard/record.js').GroupLedger
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -167,6 +245,10 @@ export interface SuperTabState {
   /** Read-only, for a Lead's own reads (visibleState): the active work of the other projects it may know about. */
   otherProjectsWork?: OtherProjectWork[]
   ownerId: string
+  /** The Workspace it belongs to (workspaceStore.ts); absent on a Swarm from before Workspaces until the migration gives it one. */
+  workspaceId?: string
+  /** Who in the Workspace may find and join it by themselves: `workspace` lets members and up join; absent reads as invite-only. */
+  workspaceVisibility?: 'invite-only' | 'workspace'
   environment: string
   /** Fields this tab overrides from its owner's account routing policy (routingPolicy.ts). */
   routingPolicy?: import('./routingPolicy.js').RoutingOverride
@@ -175,6 +257,8 @@ export interface SuperTabState {
   /** Owner-only sharing configuration; visibleState always removes it. */
   sharing?: import('./sharing.js').SwarmSharing
   paused: boolean
+  /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
+  tidy?: false
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
@@ -196,6 +280,10 @@ export interface SuperTabState {
   /** The Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): off until the owner turns it on, and only
    * then does anything call grid. The grid is kept when it is turned off, so turning it on again is instant. */
   localModels?: SwarmLocalModels
+  /** The highest workgroup number ever given (store by parts); numbers are never given twice. */
+  groupCounter?: number
+  /** The tab revision when this Swarm was split into parts; every later message sequence is above it. */
+  sequenceBase?: number
 }
 export interface SwarmLocalModels {
   /** The Swarm's own grid, minted on first turn-on and never renamed. */
@@ -244,6 +332,9 @@ export interface CommandEffects {
   result: Record<string, unknown>
   /** A terminal request or its answer, written outside the tab state by the store (terminal.ts). */
   terminal?: import('./terminal.js').TerminalEffect
+  /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
+  decisions?: import('./decisions.js').DecisionDraft[]
+  decisionAnswer?: import('./decisions.js').DecisionAnswer
 }
 export class SuperTabError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {
@@ -255,14 +346,18 @@ export function fail(code: string, message: string, status = 409): never { throw
 export const stableId = (...parts: string[]): string => createHash('sha256').update(JSON.stringify(parts)).digest('hex').slice(0, 24)
 export const actorKey = (actor: Actor): string => actor.kind === 'person' ? `person:${actor.userId}` : `agent:${actor.agentId}`
 export const activeWork = (group: Conversation): boolean => !!group.assignment &&
-  !['done', 'stopped', 'cancelled'].includes(group.assignment.status)
+  !['done', 'stopped', 'cancelled', 'lost'].includes(group.assignment.status)
 
 /** Old states derive pending decisions from their closed assignments; new states persist them on the worker. */
 export function awaitingWorkers(state: SuperTabState, projectId: string): Agent[] {
   return state.agents.filter(a => {
-    if (state.conversations.some(c => c.leadId === a.id) || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)
-      || reviewing(state, a.id)) return false
-    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id)
+    // A Reviewer never waits for a decision: a finished one is kept until the Lead stops it (finishWorker), and one an older
+    // release left waiting must not hold up routing either.
+    if (agentRole(a) === 'reviewer' || state.conversations.some(c => c.leadId === a.id)
+      || state.conversations.some(c => activeWork(c) && c.assignment?.agentId === a.id)) return false
+    // A lost task's agent is not waiting for a decision, even once the task is cancelled: it may be gone, and it must not
+    // hold up the next assignment.
+    const groups = state.conversations.filter(c => c.assignment?.agentId === a.id && !c.assignment.lost)
     return (a.projectId ?? groups.map(c => groupProject(state, c).id)[0] ?? 'lead') === projectId &&
       (a.workDecision === 'awaiting' || (!a.workDecision && groups.some(c => !activeWork(c))))
   })
@@ -274,12 +369,14 @@ export function requireWorkerDecisions(state: SuperTabState, actor: Actor, group
     .filter(a => a.id !== reuseId && !(agentRole(a) === 'reviewer' && group.agentIds.includes(a.id)))
   if (waiting.length) fail('WORKER_DECISION_REQUIRED', `Decide what to do with ${waiting.map(a => a.displayName ?? a.name).join(', ')}: reuse, keep or stop. Prefer stop unless more work is coming soon.`)
 }
-/** A group's work ended: its worker, and each of its Reviewers not reviewing other active work, await the Lead's decision. */
+/** A group's work ended: its worker awaits the Lead's decision. A finished Reviewer, and each of the group's Reviewers not
+ *  reviewing other active work, is kept instead: the Lead never has to decide about one, only stop it when it wants. */
 export function finishWorker(state: SuperTabState, workerId: string, group?: Conversation): void {
   const ids = [workerId, ...(group?.agentIds ?? []).filter(id => id !== workerId &&
     state.agents.some(a => a.id === id && agentRole(a) === 'reviewer') && !reviewing(state, id))]
   for (const target of state.agents.filter(a => ids.includes(a.id))) {
-    if (!state.conversations.some(c => c.leadId === target.id) && target.workDecision !== 'stop') target.workDecision = 'awaiting'
+    if (state.conversations.some(c => c.leadId === target.id) || target.workDecision === 'stop') continue
+    target.workDecision = agentRole(target) === 'reviewer' ? 'keep' : 'awaiting'
   }
 }
 /** A Reviewer is busy while any group it is in has active work. */
@@ -317,10 +414,11 @@ export function parkLaterConversations(state: SuperTabState): void {
 }
 
 /** Work a Lead of another project should know about: assigned and moving, not finished, stuck or archived. */
-export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group)
+export const crossProjectActive = (group: Conversation): boolean => !group.archived && !isLeads(group) && !group.audience
   && ['working', 'review', 'needs_human'].includes(group.assignment?.status ?? '')
 
-function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
+/** The active work of the other projects a project's Lead may know about (shared with the read API, design 7.2). */
+export function otherProjectsWork(state: SuperTabState, own: SwarmProject): OtherProjectWork[] {
   return state.conversations.filter(crossProjectActive).flatMap(group => {
     const project = groupProject(state, group), assignment = group.assignment!
     if (project.id === own.id || !sharedWithLeads(project)) return []
@@ -337,8 +435,9 @@ export function syncLeads(state: SuperTabState): void {
   const id = state.leadsConversationId ??= stableId(state.id, 'leads')
   const group = state.conversations.find(c => c.id === id) ?? { id, kind: 'leads', title: 'Leads', leadId: null, agentIds: [],
     archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }
-  state.conversations = [...state.conversations.filter(c => c !== group), group]
-  group.agentIds = state.agents.filter(a => ledProject(state, a.id)).map(a => a.id)
+  // A new record, not the one found: a read's state shares the stored ones (parts/shape.ts reassemble).
+  state.conversations = [...state.conversations.filter(c => c !== group),
+    { ...group, agentIds: state.agents.filter(a => ledProject(state, a.id)).map(a => a.id) }]
 }
 
 /** Legacy groups keep their append order, including archived groups. Persisted
@@ -347,11 +446,14 @@ export function numberConversations(state: SuperTabState): void {
   let next = nextConversationNumber(state)
   const leads = new Set(projectsOf(state).map(p => p.leadConversationId))
   for (const group of state.conversations) {
-    if (!leads.has(group.id) && !isLeads(group) && group.number == null) group.number = next++
+    if (!leads.has(group.id) && !isLeads(group) && group.number == null) state.groupCounter = group.number = next++
   }
 }
+/** The store by parts keeps the highest number ever given (`groupCounter`): a dormant group is not loaded, and its
+ *  number must not be given again. */
 export function nextConversationNumber(state: SuperTabState): number {
-  return Math.max(state.retiredConversationNumber ?? 0, 0, ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
+  return Math.max(state.groupCounter ?? 0, state.retiredConversationNumber ?? 0, 0,
+    ...[...state.conversations, ...state.parkedConversations ?? []].map(c => c.number ?? 0)) + 1
 }
 export function author(state: SuperTabState, actor: Actor, write = false): Author {
   if (actor.kind === 'person') {
@@ -382,7 +484,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
   state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
-  // Swarm as it is, and the owner's first share or run in Manage models sets the models up then.
+  // Swarm as it is, and the owner's first share or run in Your models sets the models up then.
   state.localModels = { grid: swarmGridName(id), enabled: true }
   syncLeads(state)
   return state
@@ -392,6 +494,8 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
+  visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)
   // People and Leads read the Leads conversation; it is not there for any other agent.
   if (actor.kind === 'agent' && !ledProject(visible, actor.agentId)) {
@@ -411,7 +515,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   delete visible.harnessReservations
   delete visible.releasedHarnesses
   delete visible.overlapAlerts
-  // Only that machine's host roster lists them (store.ts hostTabs); a removed private agent's session is not every member's.
+  // Only that machine's host roster lists them (read/hostRows.ts); a removed private agent's session is not every member's.
   delete visible.closingSessions
   // A failing privacy check's detail is its contributor's: an error from the check can name paths on their Mac. Everyone
   // else reads which item failed (machines.ts teamWorkRefusal).
@@ -420,16 +524,18 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     if (privacy && 'detail' in privacy && !(actor.kind === 'person' && actor.userId === pool.contributorId)) delete (privacy as { detail?: string }).detail
   }
   expireRemovals(visible, now)
-  // A read never hands out the cleanup records it just applied (store.ts hostTabs delivers them to the machine's host).
+  // A read never hands out the cleanup records it just applied (read/hostRows.ts delivers them to the machine's host).
   delete visible.machineCleanups
   delete visible.parkedConversations
   numberConversations(visible)
   delete visible.retiredConversationNumber
+  delete visible.groupCounter
+  delete visible.sequenceBase
   placeRules(visible)
   if (visible.rules) visible.rules = visible.rules.filter(r => projectsOf(state).some(p => p.id === r.projectId && canReadProject(state, actor, p)))
   if (visible.projects) {
     visible.projects = visible.projects.filter(p => canReadProject(state, actor, p))
-    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadProject(state, actor, groupProject(state, c)))
+    visible.conversations = visible.conversations.filter(c => isLeads(c) || canReadGroup(state, actor, c))
     visible.agents = visible.agents.filter(a => canReadAgent(state, actor, a))
     for (const group of visible.conversations.filter(isLeads)) group.agentIds = group.agentIds.filter(id => visible.agents.some(a => a.id === id))
     visible.starts = visible.starts?.filter(s => visible.conversations.some(c => c.id === s.request.conversationId))
@@ -442,12 +548,18 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
       if (!pool.observation) continue
       pool.observation.runningHarnessIds = pool.observation.runningHarnessIds.filter(id => harnesses.has(id))
       pool.observation.stoppedHarnessIds = pool.observation.stoppedHarnessIds.filter(id => harnesses.has(id))
+      if (pool.observation.harnessProgress) pool.observation.harnessProgress = Object.fromEntries(Object.entries(pool.observation.harnessProgress).filter(([id]) => harnesses.has(id)))
       if (pool.observation.stoppedReservations) pool.observation.stoppedReservations = pool.observation.stoppedReservations.filter(r => harnesses.has(r.harnessId))
+      if (pool.observation.preparingStartIds) pool.observation.preparingStartIds = pool.observation.preparingStartIds.filter(id => visible.starts?.some(s => s.id === id))
     }
+    for (const start of visible.starts ?? []) if (startPreparing(state, start, now)) start.preparing = true
     visible.invitations = visible.invitations.filter(i => visible.conversations.some(c => c.id === i.conversationId))
   }
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
+  // An uploaded avatar's stored key stays on the server; readers get a signed link with each parts read (avatarLinks.ts).
+  visible.people = visible.people.map(withAvatarView) as Person[]
+  visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {
     const home = projectsOf(state).find(p => p.id === agentProjectId(state, target))
@@ -455,5 +567,10 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     else delete target.roleId
   }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
+  for (const start of visible.starts ?? []) {
+    if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
+  }
+  const seen = seenMachineIds(visible)
+  visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))
   return visible
 }

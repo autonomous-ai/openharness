@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
-import type { Prisma, SuperTab, SuperTabNativeContext } from '@prisma/client'
+import type { Prisma, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadProject, groupProject, readConversation } from './projects.js'
+import { canReadGroup, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
+import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
+import type { DeliveriesWaiting } from './store.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 export const openNativeSchema = z.object({ operationId: id, conversationId: id, agentId: id }).strict()
@@ -24,13 +26,22 @@ interface Binding {
   tabId: string; conversationId: string; agentId: string; harnessId: string; machineId: string; machineOwnerId: string
   operator: Author; contributorId: string; contributionGeneration: string; contributionGrant: string | null; inputGrant: string | null
 }
+interface Loaded { state: SuperTabState }
 interface Deps {
   transaction<T>(body: (tx: Transaction) => Promise<T>): Promise<T>
-  row(tx: Transaction, user: AuthUser, tabId: string): Promise<{ row: SuperTab; state: SuperTabState }>
+  /** The Swarm loaded from its parts, with these groups even when dormant. */
+  load(tx: Transaction, user: AuthUser, tabId: string, groupIds: string[]): Promise<Loaded>
+  /** Writes what changed from the loaded state, touching the parts the write relied on (store.ts save). */
+  save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[]): Promise<unknown>
+  stamp(): number
   agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void>
   contribution(tx: Transaction, state: SuperTabState, actor: Actor, command: { machineId: string }): Promise<Grant>
   /** The one machine a team session (lib/teamSession.ts) hosts for; null for any other sign-in. */
   teamHost(tx: Transaction, user: AuthUser): Promise<string | null>
+  /** Refuses a person no longer in the Swarm's Workspace (workspaceStore.ts requireWorkspaceAccess). */
+  workspaceAccess(tx: Transaction, state: SuperTabState, userId: string): Promise<void>
+  /** Tells the agent's machine, once `tx` commits, that a delivery waits for it (store.ts announce). */
+  announce(tx: Transaction, waiting: DeliveriesWaiting): void
 }
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -66,6 +77,7 @@ export class SuperTabNativeStore {
       fail('NATIVE_CONTEXT_REVOKED', 'This terminal context no longer belongs to the current contribution.', 403)
     }
     await this.deps.agentGrant(tx, state, target)
+    await this.deps.workspaceAccess(tx, state, binding.operator.id)
     // Read the person's current identity, rather than trusting a name supplied by
     // a terminal client or reusing an old email after an account change.
     const user = await tx.user.findUnique({ where: { id: operator.id }, select: { email: true, autonomousEnv: true } })
@@ -82,7 +94,8 @@ export class SuperTabNativeStore {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const request = openNativeSchema.parse(input)
     return this.deps.transaction(async tx => {
-      const { state } = await this.deps.row(tx, user, tabId)
+      const { state } = await this.deps.load(tx, user, tabId, [request.conversationId])
+      await this.deps.workspaceAccess(tx, state, user.sub)
       const operator = author(state, { kind: 'person', userId: user.sub, email: user.email }, true)
       const target = agent(state, request.agentId)
       const group = readConversation(state, { kind: 'person', userId: user.sub, email: user.email }, request.conversationId)
@@ -108,16 +121,16 @@ export class SuperTabNativeStore {
   }
 
   private async hosted(tx: Transaction, user: AuthUser, tabId: string, contextId: string) {
-    const { row, state } = await this.deps.row(tx, user, tabId)
     const record = await tx.superTabNativeContext.findFirst({ where: { id: contextId, tabId } })
       ?? fail('NOT_FOUND', 'This terminal context is unavailable.', 404)
+    const loaded = await this.deps.load(tx, user, tabId, [record.conversationId]), state = loaded.state
     const binding = record.binding as unknown as Binding
     if (binding.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can record this terminal.', 403)
     // A team session records only the terminals of its own machine's agents.
     const team = await this.deps.teamHost(tx, user)
     if (team !== null && binding.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const verified = await this.validate(tx, state, record)
-    return { ...verified, row, state, record, team: team !== null }
+    return { ...verified, loaded, record, team: team !== null }
   }
 
   async read(user: AuthUser, tabId: string, contextId: string) {
@@ -137,7 +150,7 @@ export class SuperTabNativeStore {
   }
 
   private async recovery(tx: Transaction, tabId: string, group: Conversation, target: Agent, record: SuperTabNativeContext,
-    event: NativeEvent, eventId: string, revision: number): Promise<{ source: Recovery; text: string } | null> {
+    event: NativeEvent, eventId: string): Promise<{ source: Recovery; text: string } | null> {
     const assignment = group.assignment
     // A recording gap can also mean ordinary human typing or an expired view.
     // Older recorders do not distinguish those, so only known interruptions wake the Lead.
@@ -172,14 +185,16 @@ export class SuperTabNativeStore {
       + `${next} Do not replay earlier input or commands; they may already have taken effect.`
     if (required && assignment.status === 'working') { assignment.status = 'blocked'; assignment.result = text }
     if (!prior) await tx.superTabOperation.create({ data: { id: receiptId, tabId, actorKey: `agent:${target.id}`,
-      requestHash: digest([assignment.id, incidentId]), revision, result: json({ eventId, recovery }) } })
+      requestHash: digest([assignment.id, incidentId]), revision: 0, result: json({ eventId, recovery }) } })
     return { source: recovery, text }
   }
 
   async append(user: AuthUser, tabId: string, contextId: string, input: NativeEvent) {
     const event = nativeEventSchema.parse(input)
     return this.deps.transaction(async tx => {
-      const { row, state, record, binding, target, group, team } = await this.hosted(tx, user, tabId, contextId)
+      const { loaded, record, binding, team } = await this.hosted(tx, user, tabId, contextId)
+      const state = structuredClone(loaded.state)
+      const target = agent(state, record.agentId), group = conversation(state, record.conversationId)
       const eventId = stableId('native-event', contextId, event.turnId, event.kind), requestHash = digest(event)
       const prior = await tx.superTabOperation.findUnique({ where: { id: eventId } })
       if (prior) {
@@ -191,9 +206,7 @@ export class SuperTabNativeStore {
       if (event.kind === 'answer' && !await tx.superTabOperation.findUnique({ where: { id: promptId } })) {
         fail('NATIVE_PROMPT_MISSING', 'The terminal prompt was not recorded. Record the observation gap first.')
       }
-      const revision = row.revision + 1
-      const recovery = await this.recovery(tx, tabId, group, target, record, event, eventId, revision)
-      group.lastMessageSequence = revision
+      const recovery = await this.recovery(tx, tabId, group, target, record, event, eventId)
       const observedBy = author(state, { kind: 'agent', agentId: target.id, machineOwnerId: user.sub }, true)
       // What a person typed in the terminal, or the agent answered, is recorded without any credential in it.
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
@@ -203,7 +216,14 @@ export class SuperTabNativeStore {
       // Inform the coordinating lead without replaying this input into the agent
       // that already received it. Its resulting programmatic turn is not native input.
       const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []
-      await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence: revision,
+      const draft = { id: eventId, conversationId: group.id, author: observedBy, text, replyTo: null, recipients }
+      const now = Date.now(), sequences = numberMessages(state, [draft], now), sequence = sequences.get(eventId)!
+      noteProjectReports(state, [draft], sequences, now)
+      // The turn touches its agent (spec ruling 2). The person who opened the terminal is guarded by this context's row,
+      // which the turn writes: removing that person, or taking away their access, revokes the context (rule b,
+      // revokeNativeContexts). Touching the person instead would make one person's terminals in different groups conflict.
+      await this.deps.save(tx, loaded, state, this.deps.stamp(), [{ kind: 'agent', key: target.id }])
+      await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
           operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted, ...(recovery ? { recovery: recovery.source } : {}) }),
         text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients } })
@@ -218,35 +238,40 @@ export class SuperTabNativeStore {
           ...(team
             ? { authorKind: 'agent', authorId: target.id, authorGeneration: target.membershipGeneration }
             : { authorKind: 'person', authorId: binding.operator.id, authorGeneration: binding.operator.membershipGeneration }) } })
+        this.deps.announce(tx, { machineId: lead.machineId, tabId, agentId: recipient })
       }
-      noteProjectReports(state, [{ id: eventId, conversationId: group.id, author: observedBy, text,
-        replyTo: null, recipients }], revision, Date.now())
-      await tx.superTab.update({ where: { id: tabId, revision: row.revision }, data: { revision, state: json(state) } })
       await tx.superTabNativeContext.update({ where: { id: contextId }, data: { lastEventId: eventId } })
-      const result = { eventId, revision }
-      await tx.superTabOperation.create({ data: { id: eventId, tabId, actorKey: `agent:${target.id}`, requestHash, revision, result } })
+      const result = { eventId, sequence }
+      await tx.superTabOperation.create({ data: { id: eventId, tabId, actorKey: `agent:${target.id}`, requestHash, revision: 0, result } })
       return result
     })
   }
 }
 
-/** Removal followed by rejoining must not revive an old terminal binding. */
+/** Removal followed by rejoining must not revive an old terminal binding. Only what this change ended is revoked: what
+ *  ended earlier was revoked by the change that ended it, and no context opens without access (open; validate checks it
+ *  again at every use). Most commands change no access and read nothing here: rebuilding every viewer and every member
+ *  outside every private conversation on each command kept prod Mongo busy (2026-10-28). */
 export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState) {
   const conditions: Prisma.SuperTabNativeContextWhereInput[] = []
   for (const member of before.people) {
     const current = after.people.find(p => p.id === member.id)
-    if (!current || current.generation !== member.generation || current.role === 'viewer') conditions.push({ userId: member.id })
+    if (!current || current.generation !== member.generation || (current.role === 'viewer' && member.role !== 'viewer')) conditions.push({ userId: member.id })
   }
-  for (const target of before.agents) if (!after.agents.some(a => a.id === target.id)) conditions.push({ agentId: target.id })
+  // A removed agent's contexts, and those of an agent given a replacement terminal: they name the old terminal, and its
+  // waiting turns are cancelled with them, so a claim racing the change conflicts on their rows (rule b).
+  for (const target of before.agents) {
+    const current = after.agents.find(a => a.id === target.id)
+    if (!current || current.harnessId !== target.harnessId) conditions.push({ agentId: target.id })
+  }
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
-    if (!current || current.archived) conditions.push({ conversationId: group.id })
+    if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
     // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
     else if (!isLeads(current)) {
       for (const member of after.people) {
-        if (!canReadProject(after, { kind: 'person', userId: member.id, email: member.email }, groupProject(after, current))) {
-          conditions.push({ conversationId: group.id, userId: member.id })
-        }
+        const reader = { kind: 'person' as const, userId: member.id, email: member.email }
+        if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })
       }
       const removed = group.agentIds.filter(id => !current.agentIds.includes(id))
       if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })

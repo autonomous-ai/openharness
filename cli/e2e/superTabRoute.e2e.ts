@@ -9,6 +9,7 @@ import { superTabCommand } from '../src/superTabs/command.js'
 import { LocalClient } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { FakeBackend, type FakeMachine } from './harness/fakeBackend.js'
+import { overOldRoutes } from './harness/swarmReads.js'
 
 const ME: FakeMachine = { machineId: 'c9'.repeat(16), computerId: 'e2e-super-tab-route-computer', name: 'Fixture', token: 'e2e-super-tab-route-token' }
 const TAB = 'route-tab'
@@ -64,7 +65,7 @@ async function setup(hostedJev: FakeBackend['jev'], options: { workerBusy?: bool
   const records: Array<Record<string, any>> = []
   const commands: Array<Record<string, any>> = []
   const starts = new Map<string, Record<string, any>>()
-  relay.superTabs = async (method, raw, body) => {
+  relay.superTabs = overOldRoutes(async (method, raw, body) => {
     const url = new URL(raw, relay.httpUrl), path = url.pathname
     if (path === `/api/super-tabs/${TAB}` && method === 'GET') return { data: { revision: records.length, state: { id: TAB, agents, conversations } } }
     if (path === `/api/super-tabs/${TAB}/routing-policy`) return { data: { policy: POLICY, warnings: [], overridden: [] } }
@@ -73,7 +74,10 @@ async function setup(hostedJev: FakeBackend['jev'], options: { workerBusy?: bool
       records.push(body)
       return { data: { revision: records.length, result: { routeDecisionId: `d-${records.length}` } } }
     }
-    if (path === `/api/super-tabs/hosts/${ME.machineId}` || path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: [] }
+    // The roster lists this machine's agents, as a server's does: the daemon learns its caller there (#1726).
+    if (path === `/api/super-tabs/hosts/${ME.machineId}`) return { data: agents.filter(agent => agent.machineId === ME.machineId)
+      .map(agent => ({ tabId: TAB, agent, lead: agent.id === leadId, leadsConversationId: null, observers: [] })) }
+    if (path === `/api/super-tabs/hosts/${ME.machineId}/assignments`) return { data: [] }
     if (path.startsWith(`/api/super-tabs/${TAB}/starts/`)) return { data: starts.get(path.split('/').at(-1)!) }
     if (path === `/api/super-tabs/${TAB}/commands`) {
       const command = body.command
@@ -89,7 +93,7 @@ async function setup(hostedJev: FakeBackend['jev'], options: { workerBusy?: bool
       return { data: { result: {} } }
     }
     throw new Error(`Unexpected request ${method} ${raw}`)
-  }
+  })
   const where = { port: d.port, dataDir: d.dataDir, machineId: ME.machineId, harnessPane: true }
   async function route(group = 'g1') {
     let answer: Record<string, any> = {}

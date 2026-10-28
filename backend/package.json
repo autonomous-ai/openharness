@@ -23,6 +23,7 @@
     "test": "NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= vitest run",
     "test:watch": "vitest",
     "test:super-tabs": "vitest run --config vitest.super-tabs.config.ts",
+    "bench:swarm-state": "NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used tsx integration/bench/run.ts",
     "test:agent-messages": "NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= vitest run src/lib/agentMessageShares.test.ts src/routes/agentMessages.test.ts src/lib/agentMessagesWs.test.ts --coverage --coverage.include=src/lib/agentMessageShares.ts --coverage.include=src/routes/agentMessages.ts --coverage.include=src/lib/agentMessagesWs.ts --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.functions=100 --coverage.thresholds.branches=100",
     "test:sharing": "NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= vitest run src/routes/harnessShares.test.ts src/routes/harnessLinks.test.ts src/lib/observerWs.test.ts --coverage --coverage.include=src/routes/harnessShares.ts --coverage.include=src/routes/harnessLinks.ts --coverage.include=src/lib/observerWs.ts --coverage.thresholds.lines=100 --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.functions=100",
     "postinstall": "prisma generate"

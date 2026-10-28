@@ -84,6 +84,9 @@ How it works (`backend/src/superTabs/machines.ts`, `teamWorkCheck`):
 - **Routing.** The tab read gives each machine `teamWork`: `{ allowed: true }`, or `{ allowed: false, code, reason }`. The CLI's route leaves those machines out for a teammate's project and lists the reason in `excluded[]`. The backend does the same with any candidate an older CLI still sends, and refuses a pick there ("… Route again.").
 - **Migration.** Nothing is stopped. Agents already running on personal machines keep their current task, its reports, messages and their sessions. New starts, new assignments and new Reviewer groups for another person's project follow the rule. A personal machine contributed with scope "swarm" now serves only its owner's projects. So does a machine contributed before projects (no scope) by someone other than the Swarm's owner: the Swarm's first project is the owner's.
 - **Switch.** The backend shipped (1.3.28) before the CLI that makes team accounts. So the rule is held to every machine only with `SWARM_TEAM_ACCOUNT_REQUIRED=1` (`machines.ts` `teamAccountRequired`). Until then, a machine without a team account takes a teammate's work as it did before, and a machine with one already follows the rule. Turn it on with the CLI and Desktop release that makes team accounts.
+- **One person's Swarms first.** `SWARM_TEAM_ACCOUNT_OWNERS`, comma-separated emails, holds the switch to the Swarms
+  those people own (2026-10-27), so it can be tried on production without changing anyone else's: every other Swarm
+  behaves as with the switch off. Empty, the switch is every Swarm's.
 - **GitHub App first.** A team account has no git login, so it can fetch and push only with the Harness GitHub App. Until the server has the app (`docs/swarm-github-app.md`), a team account joins no Swarm and takes no teammates' work, and starts on its Mac stay with the Mac (`teamAccountsIdle`). Configure the app before turning `SWARM_TEAM_ACCOUNT_REQUIRED` on, or teammates' work has nowhere to run.
 
 ## Task 4: Harness GitHub App (backend, CLI)
@@ -102,6 +105,51 @@ Files: `backend/src/superTabs/commands.ts` (`message.send`), a small detector mo
 
 - [ ] Tests for JWTs, GitHub tokens, OpenAI and Anthropic keys, AWS keys, Slack tokens and private key blocks; ordinary hashes and commit ids pass.
 - [ ] Redact before storing, keep the rest of the message, and tell the sender what was removed and that the credential should be revoked.
+
+## Task 6: The owner's subscriptions, and setting it up from the app (CLI, Desktop)
+
+Added 2026-10-27, after the Swarm had the GitHub App and the switch on and four of five Macs read "Teammates' agents
+paused: not set up": nobody had been asked, or had cancelled a prompt titled "osascript", and nothing in the app could
+ask again. The team account's engines also needed signing in by hand, and the Lead routed nothing there until they were.
+
+- **Set up from the row.** This Mac's own row, for its own person, shows Set up under "not set up". Desktop explains the
+  account before macOS asks (the prompt's "osascript" title included); the daemon's `teamSetupCheck` says whether it is
+  wanted, `teamSetup` with reason `manual` runs it (past a remembered cancel or failure), `teamSetupDecline` is "Not now".
+  An older daemon refuses the new action names, so it never asks unexplained.
+- **The owner's subscriptions.** The owner's daemon runs an owner subscription relay (lib/subscriptionRelay.ts, machine
+  sharing's) for the team account while one exists, and leaves its loopback address and a token in
+  `/Users/Shared/.harness-team-relay-<owner>/relay.json`: the owner's folder, mode 700, with a macOS ACL letting the team
+  user alone read it. The team daemon uses it for an engine it has not signed in itself, on every launch and relaunch
+  (Codex is named the relay's provider in place of its own login's), and reports that engine ready to the Swarm.
+
+- **Nothing to run by hand (2026-10-27).** Two things kept a Mac's team account out of its Swarms, each fixed in code:
+  - *A device list frozen by the backend's race (#1789)* trusted no new device, the team account's machine included,
+    so its owner's daemon could not reach it ("not linked"). A list frozen as `invalid` now heals itself once the
+    backend serves the entries it claimed, when they continue the chain this machine verified
+    (lib/e2ee/deviceLogSyncer.ts); a rollback or fork still waits for a person.
+  - *A team account copied from a local build* never updated itself. Its updater now follows releases
+    (lib/selfUpdate.ts `followReleases`), and one already on such a build is updated by its owner's daemon: when its
+    status file shows engines neither signed in nor using the relay, checked after the relay was published, the owner's
+    daemon runs `harness update --force` as the team account over the link (`shell_open`), at most once a day
+    (team/refresh.ts).
+
+### Design
+
+- **Growth:** one file per Mac, rewritten in place; removed when the team account is gone or the owner's daemon stops.
+- **Concurrency:** one writer, the owner's daemon, writing a temporary file and renaming it; readers read it whole.
+- **Read cost:** one small file read per team-account launch, and per readiness probe (every ten minutes).
+- **Scale:** per Mac, not per Swarm; 10x Swarms changes nothing. The relay's requests are the owner's subscription's.
+- **Compatibility:** a team daemon without this reads no file and launches as before (its own sign-in, or none). Desktop
+  with an older daemon gets no answer to `teamSetupCheck` and shows nothing; Set up says to update.
+- **Migration and rollback:** nothing stored to migrate; rolling back leaves one unused file in /Users/Shared, removed by hand or by a later start.
+- **Audience:** the file is the owner's, readable by the team user through an ACL and by nobody else; the team daemon
+  reads it only when the folder and file belong to the owner the root-owned team config names, so another local user
+  cannot plant a relay of their own. The token reaches the relay on loopback only, and spends the owner's subscription.
+- **Identity:** the owner's sign-ins never leave the owner's daemon; the team account holds only a revocable token.
+  Teammates' agents spend the owner's subscription, as a guest's do on a shared machine: the owner chose to add the Mac.
+- **Failure:** a relay that cannot start is retried each minute and logged; without it the team account's engines read
+  "not signed in" as before, and the Lead routes elsewhere.
+- **Platforms:** macOS only, like the team account.
 
 ## One machine
 

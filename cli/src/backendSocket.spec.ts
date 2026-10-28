@@ -46,6 +46,7 @@ import { LocalModels } from './lib/localModels.js'
 import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
 import { env } from './config/env.js'
+import { supportsFirstPrompt } from './lib/engineLaunch.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
@@ -827,7 +828,8 @@ describe('BackendSocket outbound queue', () => {
     // … but once the handshake is abandoned, the ordinary backoff schedules a fresh attempt.
     ws1.handshakeTimeout()
     expect(socket.isConnected()).toBe(false)
-    await vi.advanceTimersByTimeAsync(1_000)
+    // The first redial lands at random between 1 and 2 s.
+    await vi.advanceTimersByTimeAsync(2_000)
     expect(wsMock.instances).toHaveLength(2)
     const ws2 = wsMock.instances[1]
     expect(ws2.options?.handshakeTimeout).toBe(15_000)
@@ -918,7 +920,10 @@ describe('BackendSocket outbound queue', () => {
       expect(statuses).toEqual([true, false])
       expect(calls).toEqual([{ force: true, failedToken: 'stale-token' }])
       expect(revoked).not.toHaveBeenCalled()
-      // And the refresh, not a backoff timer, opened the next socket — with the new token.
+      // The next socket waits out the backoff like any other drop (1–2 s for the first), then dials
+      // once, with the new token.
+      expect(wsMock.instances).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(2_000)
       expect(wsMock.instances).toHaveLength(2)
       expect(wsMock.instances[1].protocols).toEqual(['fresh-token'])
       await vi.advanceTimersByTimeAsync(60_000)
@@ -939,8 +944,8 @@ describe('BackendSocket outbound queue', () => {
       await vi.advanceTimersByTimeAsync(0)
       expect(revoked).not.toHaveBeenCalled()
       expect(wsMock.instances).toHaveLength(1)
-      await vi.advanceTimersByTimeAsync(1_000)
-      expect(wsMock.instances).toHaveLength(2) // the ordinary backoff, session intact
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(wsMock.instances).toHaveLength(2) // the ordinary backoff (1–2 s for the first), session intact
       await socket.stop()
     })
 
@@ -974,7 +979,7 @@ describe('BackendSocket outbound queue', () => {
     ;(gatewayOf(socket) as any).sendTo('conn-1', { type: 'e2e_rekey', payload: { n: 1 } })
     expect(ws1.sent).toHaveLength(0)
 
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(2_000)
     const ws2 = wsMock.instances[1]
     ws2.open()
     const sent = parseSent(ws2)
@@ -1879,6 +1884,29 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('answers engines_probe with whether this machine can start each engine with a first prompt (#1788)', async () => {
+    const socket = relaySocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:probe', {
+      sendFrame: (frame) => { frames.push(frame); return true },
+      sendBinary: () => true,
+    })
+    socket.engineProbeProvider = async () => [
+      { engine: 'claude', installed: true, command: 'claude', installable: true, signedIn: true },
+      { engine: 'cursor', installed: false, command: 'cursor-agent', installable: true },
+    ] as never
+    socket.handleLocalFrame('local:probe', { type: 'engines_probe', payload: { requestId: 'probe-fp' } })
+    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'engines_probe_result')).toBe(true))
+    const reply = frames.find((frame) => frame.type === 'engines_probe_result')!.payload as {
+      engines: Array<{ engine: string; firstPrompt: boolean }>
+    }
+    const firstPrompt = Object.fromEntries(reply.engines.map((entry) => [entry.engine, entry.firstPrompt]))
+    expect(firstPrompt).toEqual({ claude: supportsFirstPrompt('claude'), cursor: supportsFirstPrompt('cursor') })
+    expect(firstPrompt.claude).toBe(true)
+    await socket.unregisterLocalClient('local:probe')
+    await socket.stop()
+  })
+
   it('opens a harness on a conversation Harness did not start, and refuses what a resume cannot take', async () => {
     const socket = relaySocket('token')
     bindLaunchRequests(socket)
@@ -2054,6 +2082,27 @@ describe('BackendSocket outbound queue', () => {
     } finally {
       finish?.()
       await socket.unregisterLocalClient('local:receipt')
+      await socket.stop()
+    }
+  })
+
+  it('tells the gateway a launch an agent started, apart from a person\'s', async () => {
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    const signals: Array<Record<string, unknown>> = []
+    vi.spyOn(gatewayOf(socket), 'usageLaunch').mockImplementation((signal) => { signals.push(signal as never) })
+    socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'SPAWN_FAILED' }))
+    socket.registerLocalClient('local:started-by', { sendFrame: () => true, sendBinary: () => true })
+    try {
+      const agentId = randomUUID(), personId = randomUUID()
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'agent', creationId: agentId, engine: 'codex',
+        cwd: '/tmp/work', startedBy: 'agent', parentAgentId: 'parent-agent' } })
+      socket.handleLocalFrame('local:started-by', { type: 'agent_create', payload: { requestId: 'person', creationId: personId, engine: 'codex', cwd: '/tmp/work' } })
+      await vi.waitFor(() => expect(signals.filter(signal => signal.phase === 'start')).toHaveLength(2))
+      expect(signals).toContainEqual({ id: agentId, phase: 'start', engine: 'codex', agentStarted: true })
+      expect(signals).toContainEqual({ id: personId, phase: 'start', engine: 'codex' })
+    } finally {
+      await socket.unregisterLocalClient('local:started-by')
       await socket.stop()
     }
   })
@@ -2737,6 +2786,30 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // Stability roadmap 2.4: the server says over this socket when work waits for an agent here (backend lib/adapterWs.ts).
+  it('hands the backend\'s super_tab_deliveries to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-1' } } })
+    // Naming no agent, or naming one wrongly, it only says the server pushes.
+    ws.message({ t: 'down', connId: '', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 7 } } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: 'super_tab_deliveries', tabId: 'tab-1', agentId: 'agent-1' }, { type: 'super_tab_deliveries' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-2' } } })
+    socket.handleLocalFrame('local:swarm', { type: 'super_tab_deliveries', payload: { tabId: 'tab-1', agentId: 'agent-3' } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(2)
+    expect(frames.filter((f) => f.type === 'super_tab_deliveries')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   it('hands the backend\'s zoo_changed to the window as its own frame, and only the backend\'s', async () => {
     const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []
@@ -2979,6 +3052,19 @@ describe('agent_restart RPC', () => {
       requestId: 'stale-stop', error: 'SESSION_CHANGED', detail: 'This conversation changed. Refresh and review it before stopping.',
     } }))
     expect(stop).not.toHaveBeenCalled()
+    await socket.unregisterLocalClient('local:restart'); await socket.stop()
+  })
+
+  it.each([false, true])('counts which check refused a resume\'s preparation (receipt: %s)', async withReceipt => {
+    const { socket } = localSocket()
+    const counted: string[] = []
+    vi.spyOn(gatewayOf(socket), 'usageCounter').mockImplementation(metric => { counted.push(metric) })
+    bindLaunchRequests(socket, { resume: vi.fn(async () => ({ ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason: 'changed_during', detail: 'PRIVATE' })) })
+    socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId: 'prepare', agentId: 'agent-1',
+      ...(withReceipt ? { creationId: `resume-${randomUUID()}` } : {}) } })
+    await vi.waitFor(() => expect(counted).toContain('request_app_resume_preparation_changed_during'))
+    expect(counted).toContain('request_app_resume_reason_preparation_failed')
+    expect(JSON.stringify(counted)).not.toContain('PRIVATE')
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 
@@ -3391,7 +3477,7 @@ describe('agent_create with a prompt, a name and a named agent', () => {
 
   it('refuses a prompt for an engine with no documented mechanism, naming the engine', async () => {
     const { seen, reply } = await create({ engine: 'cursor', prompt: 'Start a local model on this machine' })
-    expect(reply).toMatchObject({ error: 'PROMPT_UNSUPPORTED', detail: expect.stringContaining('cursor') })
+    expect(reply).toMatchObject({ error: 'PROMPT_UNSUPPORTED', detail: expect.stringContaining('Cursor cannot start with a first message') })
     expect(seen).toHaveLength(0)
   })
 

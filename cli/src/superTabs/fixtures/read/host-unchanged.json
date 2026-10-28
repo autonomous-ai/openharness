@@ -1,0 +1,30 @@
+{
+ "format": 2,
+ "full": false,
+ "cursor": "eyJ2IjoyLCJ0IjoxNzkzMDEwMDgwMzc1LCJlIjowfQ",
+ "tabs": [
+  {
+   "tabId": "f1a5c0de0000000000000001",
+   "etag": "etag-tab1-a",
+   "lastChangedAt": 1793010101002,
+   "unchanged": true
+  },
+  {
+   "tabId": "f1a5c0de0000000000000009",
+   "lastChangedAt": 1793010108000,
+   "roster": [
+    {
+     "tabId": "f1a5c0de0000000000000009",
+     "cleanup": {
+      "machineId": "d00000000000000000000001",
+      "removalId": "r0000000000000000000002"
+     }
+    }
+   ],
+   "pool": null,
+   "assignments": [],
+   "etag": "etag-tab9-b"
+  }
+ ],
+ "removedTabIds": []
+}

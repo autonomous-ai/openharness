@@ -1,5 +1,3 @@
-import { prepareSwarmSkill } from '../../lib/swarmSkills.js'
-import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import type { NativeLaunch, NativeLaunchResult, NativeLaunchSource } from '../../engines/nativeLaunch.js'
 /**
  * Creating an agent (`agent_create`): open a fresh pane running the chosen engine in the chosen
@@ -13,7 +11,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
-import type { ModelsPort } from '../api.js'
+import type { ModelsPort, SwarmLaunch } from '../api.js'
 import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
@@ -32,6 +30,7 @@ import {
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.js'
+import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
@@ -96,17 +95,23 @@ export interface CreateAgentDeps {
   gridSetup: () => ModelsPort['ensure'] | null
   privateGridName: () => Promise<string | null>
   dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
+  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
+   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
+  ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
+  /** The Swarm's part of a start with a Swarm role (superTabs/inCore/launch.ts); absent while the Swarm is off. */
+  swarmLaunch?: SwarmLaunch
 }
 
 export function createAgentCreator({
   native: inspectNative, publishConfig, createBackend: initialBackend, recoverBackend, noBackendCode = 'TMUX_UNAVAILABLE', registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName, dshLaunch,
+  gridSetup, privateGridName, dshLaunch, ownerRelay, swarmLaunch,
 }: CreateAgentDeps) {
   const prepare = async (input: Parameters<CreateAgent>[0], authority: LaunchAuthority, context?: { local: boolean }): Promise<LaunchPreparation<Awaited<ReturnType<CreateAgent>>>> => {
     if (input.resumeSessionId) return { ok: true, dispatch: () => externalResume(input) }
     const stale = () => ({ ok: false as const, error: 'LAUNCH_AUTHORITY_CHANGED', unavailable: 'launch', detail: 'Waiting for the original launch request’s authority.' })
     if (!authority.current()) return stale()
+    if (input.swarmRole && !swarmLaunch) return { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }
     let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord, startedBy, parentAgentId, launchModel } = input
     let createBackend = initialBackend
     if (!createBackend && recoverBackend) {
@@ -284,6 +289,9 @@ export function createAgentCreator({
       // normally launched one. The key is never printed.
       console.log(describeGridLaunch(engine, grid, built.launch.webSearch))
     }
+    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
+    // owner's relay (team/relay.ts), where a grid would otherwise sit: a grid launch is its own provider.
+    const relay = !grid && ownerRelay ? await ownerRelay(engine) : null
     if (!current()) return stale()
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode
@@ -340,9 +348,9 @@ export function createAgentCreator({
     // is supposed to use exactly these variables.
     // Another person's project work (superTabs/start.ts): git and gh use the Harness GitHub App's token for the task,
     // never this machine owner's own GitHub login (lib/swarmGitHub.ts). Kept on the row's skill, so a relaunch keeps it.
-    let swarmGitHub: ReturnType<typeof swarmGitHubLaunch> = null
-    if (input.swarmRole && input.swarmGitHub) {
-      try { swarmGitHub = swarmGitHubLaunch(label) }
+    let swarmGitHub: ReturnType<SwarmLaunch['github']> = null
+    if (swarmLaunch && input.swarmRole && input.swarmGitHub) {
+      try { swarmGitHub = swarmLaunch.github(label) }
       catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const clearEnv = [...(gridLaunch ? gridConflictingEnvToClear(gridLaunch) : []), ...harnessEnvToClear(dshEnv), ...swarmGitHub?.clearEnv ?? []]
@@ -355,12 +363,15 @@ export function createAgentCreator({
     const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
       ...(swarmGitHub ? { github: true as const } : {}) } : undefined
     let swarmInstructions: string | undefined
-    if (swarmSkill) {
-      try { swarmInstructions = prepareSwarmSkill(cwd, swarmSkill).instructions }
+    if (swarmLaunch && swarmSkill) {
+      try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }
       catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const told = agentLaunchArgs(engine, startedBy, { cwd, profile: codexHome, environment: native?.environment, ...(swarmInstructions ? { swarmInstructions } : {}) })
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...told])
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), beside the grid's and their own: read at each launch,
+    // as every relaunch reads them again (`buildLaunchOverrides`).
+    const machineMcp = machineMcpLaunchArgs(engine, cwd)
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt
@@ -399,7 +410,7 @@ export function createAgentCreator({
       // Windows: the workspace to start in and the shell the pane becomes after the engine (lib/windows/engineStart.ts).
       paneLaunch: windowsPaneLaunch(engine, { ...launchOptions, held: isWindowsHeldPane(argv) }),
       // Windows: the variables the argv's `/usr/bin/env` prefix carries elsewhere, last (engineLaunchEnv).
-      env: mergedLaunchEnv(freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
+      env: mergedLaunchEnv(freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? mergedLaunchEnv(codexHome ? profileEnvironment(engine, codexHome) : undefined, relay?.env), dshEnv),
         mergedLaunchEnv(mergedLaunchEnv(scmLaunchEnv(scmLaunchRecord), swarmGitHub?.env), native?.environment)), !!grid,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')), engineLaunchEnv(engine, native)),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,

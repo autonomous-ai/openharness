@@ -13,6 +13,7 @@
  * team work does not run as the owner instead.
  */
 import type { AuthSession } from '../lib/authSession.js'
+import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
 import type { RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
@@ -78,7 +79,13 @@ export interface TeamCommandDeps {
 
   session(): AuthSession | null
   writeSession(session: AuthSession): void
-  clearSession(): void
+  /** Rewrites the newest sign-in under the refresh lock, leaving a signed-out mark alone (lib/authSession.ts
+   *  `updateAuthSession`): [change] gives the new one, or null to leave it. */
+  updateSession(change: (latest: AuthSession) => AuthSession | null): Promise<AuthSession | null>
+  /** How a person asked for this computer's sign-in to go, or null when nothing says one did (lib/signOut.ts). */
+  signOutAsked(flags: readonly string[]): SignOutAsked | null
+  /** Takes the sign-in away, logged with who asked (lib/signOut.ts `removeSignIn`). */
+  removeSignIn(asked: SignOutAsked): void
   /** Bearer headers for this computer's sign-in, refreshed when stale (lib/controlPlane.ts). */
   auth(): Promise<{ session: AuthSession; headers: Record<string, string> }>
   post: Post
@@ -131,7 +138,7 @@ export async function teamCommand(argv: string[], deps: TeamCommandDeps): Promis
       case 'status': return await status(deps, json)
       case 'remove': return await remove(deps, json)
       case 'on': return await teamOn(deps, json, flags.includes('--yes'))
-      case 'off': return await teamOff(deps, json)
+      case 'off': return await teamOff(deps, json, flags)
       case '__handoff': return await handoff(deps)
       case '__start': return await jobStart(deps, words[1])
       default:
@@ -455,16 +462,22 @@ async function teamOn(deps: TeamCommandDeps, json: boolean, yes: boolean): Promi
   return 0
 }
 
-async function teamOff(deps: TeamCommandDeps, json: boolean): Promise<number> {
+async function teamOff(deps: TeamCommandDeps, json: boolean, flags: readonly string[]): Promise<number> {
   const session = deps.session()
   if (session?.kind !== 'team') {
     if (json) deps.out(JSON.stringify({ ok: true, changed: false }))
     else deps.out('This computer does not run team work only; nothing to change.')
     return 0
   }
+  // Before anything stops or is revoked. 10-27: a `harness logout` nobody asked for signed a whole Mac out.
+  const asked = deps.signOutAsked(flags)
+  if (!asked) {
+    return fail(deps, json, 'NOT_A_PERSON', '`harness team off` signs this computer out, and nothing says a person '
+      + `asked: it has no terminal, and no ${SIGN_OUT_BUTTON_FLAG}. Run it in a terminal.`)
+  }
   const wasRunning = await deps.stopDaemon()
   await revokeHarnessRefresh(deps.post, session.refreshToken)
-  deps.clearSession()
+  deps.removeSignIn(asked)
   if (json) {
     deps.out(JSON.stringify({ ok: true, changed: true, next: 'harness login' }))
     if (wasRunning) await deps.startDaemon()
@@ -506,9 +519,9 @@ async function recordTeamMachine(deps: TeamCommandDeps, label: string, log: (lin
     const machineId = answer?.machine?.machineId
     if (typeof machineId !== 'string' || !machineId) throw new Error('Harness answered without a machine id')
     // A refresh may have rewritten the session meanwhile: the machine id goes into the newest one.
-    const latest = deps.session()
-    if (latest?.kind !== 'team' || latest.computerId !== session.computerId) return
-    if (latest.machineId !== machineId) deps.writeSession({ ...latest, machineId, updatedAt: deps.now() })
+    const kept = await deps.updateSession((latest) => latest.kind !== 'team' || latest.computerId !== session.computerId
+      || latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: deps.now() })
+    if (kept?.kind !== 'team' || kept.computerId !== session.computerId) return
     log(`runs as machine ${machineId}`)
   } catch (error) {
     log(`could not look up this account's machine yet (${(error as Error).message}); the next start tries again`)

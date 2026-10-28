@@ -10,6 +10,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/web/parts/terminal_fonts.dart';
 import 'package:harness/web/parts/workspace_part.dart';
 import 'package:harness/web/web_entry.dart';
 
@@ -57,8 +58,9 @@ void main() {
     await tester.pump();
     expect(ring, findsNothing);
     // The frame's first frame started the workspace's download; a test build
-    // has no part to fetch, so it lands on the next timer.
-    await tester.pump(const Duration(milliseconds: 1));
+    // has no part to fetch, and a test browser never answers for the terminal
+    // font, so the part is in once the font's grace is over.
+    await tester.pump(terminalFontsGrace);
     expect(workspacePart.loaded, isTrue);
   });
 }

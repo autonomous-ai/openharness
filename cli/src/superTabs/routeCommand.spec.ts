@@ -101,10 +101,104 @@ describe('routeTask', () => {
     expect(offered.length).toBeGreaterThan(0)
     expect(offered.some(c => /^(Lead|Multiply) ·/.test(c))).toBe(false)
   })
-  it('does not offer a member that is already working on a task', async () => {
-    const s = scoped({ tab: tab({ id: 'x', agentId: 'a1', status: 'working' }) })
+  // A lost task's agent died, stalled or hit a limit: its work goes to someone else (v1 liveness), never back to it. The
+  // backend marks the agent in the same write that loses the task (backend superTabs/liveness.ts).
+  it.each(['working', 'lost'])('does not offer a member whose task is %s', async status => {
+    const state = tab({ id: 'x', agentId: 'a1', status })
+    if (status === 'lost') state.state.agents = agents.map(a => a.id === 'a1' ? { ...a, lostTask: { conversationId: 'g1', assignmentId: 'x', reason: 'stalled', at: 1 } } : a)
+    const s = scoped({ tab: state })
     await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1'] })))
     expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(false)
+  })
+  // v2: one Codex account answered 429 for 40 minutes and stalled reviews. A review whose Reviewer lost it to a failing model
+  // goes first to another account, never back to the one that failed.
+  describe('a review whose Reviewer lost it', () => {
+    const accountOn = (account: string) => ({ providers: [{ ...usage.providers[0]!, account }] })
+    /** `removed`: the Lead stopped the failed Reviewer and its host removed it, so only the group remembers where it failed. */
+    const route = async (failed: boolean, machines: string[] = ['m1', 'm2'], removed = false) => {
+      const state = tab()
+      const reviewer = { id: 'r1', name: 'Reviewer', role: 'reviewer', machineId: 'm1', harnessId: 'hr', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' },
+        ...(failed ? { lostTask: { conversationId: 'g1', assignmentId: 'x', reason: 'its model keeps failing', at: 1 } } : {}) }
+      Object.assign(state.state.conversations[1]!, { reviewOf: 'lead', ...(failed ? { assignment: { id: 'x', agentId: 'r1', status: 'lost', lost: { reason: 'its model keeps failing', at: 1 } },
+        lostAttempt: { id: 'x', agentId: 'r1', machineId: 'm1', engine: 'claude' } } : {}) })
+      state.state.agents = [...agents.filter(a => a.id !== 'a2' || machines.includes('m2')), ...removed ? [] : [reviewer]]
+      const s = scoped({ tab: state, context: { ok: true, value: { agentId: 'lead', tab: state, policy: { policy, warnings: [] },
+        machines: machines.map(id => ({ machineId: id, name: id === 'm1' ? 'remote-1' : 'mac' })) } } })
+      const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['hr'], usage: accountOn(id === 'm1' ? 'acct-1' : 'acct-2') })), () => 'op')
+      return { result, s }
+    }
+    it('goes to another account than the one whose model failed', async () => {
+      // Without the failure the first machine's account is first.
+      expect((await route(false)).result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      const { result, s } = await route(true)
+      expect(result).toMatchObject({ ok: true, pick: { kind: 'new', machineId: 'm2' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1'),
+        reason: expect.stringContaining('another account is free') })]))
+    })
+    it('still routes to that account when no other is offered, and says so', async () => {
+      const { result } = await route(true, ['m1'])
+      expect(result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the account that lost this task before')]))
+    })
+    it('remembers the failed account after the Lead stops and removes that Reviewer', async () => {
+      expect((await route(true, ['m1', 'm2'], true)).result).toMatchObject({ ok: true, pick: { kind: 'new', machineId: 'm2' } })
+      const { result } = await route(true, ['m1'], true)
+      expect(result).toMatchObject({ ok: true, pick: { machineId: 'm1' } })
+      expect(result.warnings).toEqual(expect.arrayContaining([expect.stringContaining('the account that lost this task before')]))
+    })
+  })
+
+  // Final review, Important 3: cancelling or reassigning lost work must not make its old worker routable again.
+  describe('a member whose last task was lost', () => {
+    const lostTask = { conversationId: 'g0', assignmentId: 'x', reason: 'no progress for 30 minutes', at: 1 }
+    const healthy = { id: 'a3', name: 'Healthy', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'sonnet', effort: 'medium' } }
+    const earlier = (assignment: Record<string, unknown>, more: Record<string, unknown> = {}) =>
+      ({ id: 'g0', title: 'Old', leadId: 'lead', agentIds: ['lead', 'a1'], archived: false, brief: 'Old work.', checks: [], assignment, ...more })
+    const lost = { id: 'x', agentId: 'a1', lost: { reason: lostTask.reason, at: 1 } }
+    const route = async (members: unknown[], groups: unknown[]) => {
+      const state = tab(); Object.assign(state.state, { agents: members, conversations: [...state.state.conversations, ...groups] })
+      const s = scoped({ tab: state })
+      const result = await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1', 'h3'] })), () => 'op')
+      const decision = recorded(s).command.decision
+      return { result, candidates: (decision.candidates as Array<{ title: string; agentId?: string }>), excluded: decision.excluded as Array<{ title: string; reason: string }> }
+    }
+    const marked = agents.map(a => a.id === 'a1' ? { ...a, lostTask } : a)
+    const reason = 'It lost its last task (no progress for 30 minutes). It takes work again once a person assigns it by hand or the Lead replaces it.'
+
+    it('stays out after the Lead cancels the lost task, and a healthy member is offered instead', async () => {
+      const { result, candidates, excluded } = await route([...marked, healthy], [earlier({ ...lost, status: 'cancelled' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(false)
+      expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+      expect(result).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a3' } })
+    })
+    it('stays out after the Lead hands the lost task to another agent', async () => {
+      const { result, candidates, excluded } = await route([...marked, healthy],
+        [earlier({ id: 'y', agentId: 'a3', status: 'working' }, { lostAttempt: { id: 'x', agentId: 'a1' } })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(false)
+      expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+      expect(result).toMatchObject({ ok: true, pick: { kind: 'new' } })
+    })
+    it('is offered again once it finished a new task, which clears its mark', async () => {
+      const { candidates } = await route([...agents, healthy],
+        [earlier({ ...lost, status: 'cancelled' }), earlier({ id: 'z', agentId: 'a1', status: 'done' }, { id: 'g2' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
+    it('stays out while its task is still lost', async () => {
+      const { excluded } = await route(marked, [earlier({ ...lost, status: 'lost' })])
+      expect(excluded).toContainEqual({ title: 'Multiply · Claude sonnet medium · remote-1', reason })
+    })
+    // Re-check of #1749: recovery clears the mark while the old task may still be lost; that task alone must not refuse it.
+    it('is offered again after its terminal was replaced, though its old task is still lost', async () => {
+      const replaced = agents.map(a => a.id === 'a1' ? { ...a, harnessId: 'h1b' } : a)
+      const state = tab(); Object.assign(state.state, { agents: replaced, conversations: [...state.state.conversations, earlier({ ...lost, status: 'lost' })] })
+      const s = scoped({ tab: state })
+      await routeTask(input, s, where as never, opener(id => daemon(id, { agents: ['h1b'] })), () => 'op')
+      expect((recorded(s).command.decision.candidates as Array<{ title: string }>).some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
+    it('is offered again after it finished a newer task, though its old task is still lost', async () => {
+      const { candidates } = await route(agents, [earlier({ ...lost, status: 'lost' }), earlier({ id: 'z', agentId: 'a1', status: 'done' }, { id: 'g2' })])
+      expect(candidates.some(c => c.title.startsWith('Multiply'))).toBe(true)
+    })
   })
   it('leaves out what breaks the owner\'s rules in the tab, and ignores a rule it cannot read', async () => {
     const ruled = tab(); (ruled.state as Record<string, unknown>).rules = [{ id: 'r1', rule: { kind: 'forbidModel', model: 'sonnet' }, text: 'No Sonnet.' }, { id: 'r2', text: 7 }]
@@ -211,6 +305,19 @@ describe('routeTask', () => {
     await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where as never, open, () => 'op')
     expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
     expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
+  })
+  it('starts nothing on an account machine that says it runs Windows, or whose last two starts started nothing', async () => {
+    const windows = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os: 'Windows' }, tools: { git: true }, devices: {} } }))
+    const s = scoped()
+    expect(await routeTask(input, s, where, windows)).toMatchObject({ ok: true, pick: { kind: 'member' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
+      reason: expect.stringContaining('Swarm agents do not run on Windows yet.') })]))
+    const failed = { id: 's', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'The engine did not start.' }
+    const t = tab(); Object.assign(t.state, { starts: [failed, { ...failed, id: 's2' }] })
+    const stuck = scoped({ tab: t })
+    await routeTask(input, stuck, where, opener())
+    expect(recorded(stuck).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1'),
+      reason: expect.stringContaining('last 2 starts') })]))
   })
   it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
     const needs = { cwd: '/repo/api' }
@@ -655,10 +762,13 @@ describe('routing contributed capacity', () => {
   const healthy = () => ({ machineId: 'm1', name: 'Contributed laptop', cwd: '/owner/project', engines: ['claude'], paused: false,
     observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 },
       tools: { git: true }, runningHarnessIds: ['h1'], quotas: [{ engine: 'claude', known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }] }] } })
-  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>) {
+  async function runPool(pool: Record<string, any>, members = false, needs: Record<string, unknown> = {}, project?: Record<string, unknown>,
+    more: { state?: Record<string, unknown>; tab?: Record<string, unknown>; review?: boolean } = {}) {
     const groups = conversations()
     if (project) Object.assign(groups[1]!, { projectId: project.id })
-    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}) } }, policy: { policy, warnings: [] }, machines: [] } } })
+    if (more.review) Object.assign(groups[1]!, { reviewOf: 'g0' })
+    const crew = members ? agents.map(a => more.review && a.id === 'a1' ? { ...a, role: 'reviewer' } : a) : [agents[1]]
+    const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { ...more.tab, state: { id: 'tab', agents: crew, conversations: groups, machines: [pool], ...(project ? { projects: [project] } : {}), ...more.state } }, policy: { policy, warnings: [] }, machines: [] } } })
     const open = opener()
     const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs } }, s, where, open)
     expect(open).not.toHaveBeenCalled()
@@ -736,6 +846,176 @@ describe('routing contributed capacity', () => {
     expect((await runPool(shared, false, {}, { id: 'project-two' })).answer.ok).not.toBe(true)
     expect((await runPool(shared)).answer.ok).not.toBe(true)
   })
+  // v1 routing (#229): the route sent work to a Windows machine that never started agents, to machines without the
+  // project and to machines that could not push. A machine that says it cannot do the work is left out, with why; one
+  // that says nothing is not.
+  describe('what a machine says it is ready for', () => {
+    const reasons = (answer: Record<string, unknown>) => (answer.excluded as Array<{ title: string; reason: string }>)
+    const project = { id: 'p2', ownerId: 'owner', repository: { machineId: 'other', cwd: '/elsewhere', repositoryUrl: 'https://github.com/Example/Two.git' } }
+    const swarm = (checkouts?: unknown[], engines?: unknown[]) => {
+      const pool: Record<string, any> = { ...healthy(), scope: 'swarm', cwd: '/swarm-root', contributorId: 'owner' }
+      pool.observation.readiness = { ...(checkouts ? { checkouts } : {}), ...(engines ? { engines } : {}) }
+      return pool
+    }
+    const checkout = (extra: Record<string, unknown> = {}) => ({ folder: 'p2', repository: 'github.com/example/two', git: true, push: true, ...extra })
+
+    it('never starts a Swarm agent on Windows, and keeps a member already there', async () => {
+      const windows = healthy(); Object.assign(windows.observation.resources, { os: 'Windows' })
+      const { answer } = await runPool(windows)
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Windows yet')
+      expect((await runPool(windows, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+    })
+
+    it('leaves out an engine the machine says is signed out or not installed, and keeps one whose sign-in is unknown', async () => {
+      const out = await runPool(swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }]), false, {}, project)
+      expect(out.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is not signed in to a subscription on this machine.')
+      const missing = await runPool(swarm(undefined, [{ engine: 'claude', installed: false, signedIn: null }]), false, {}, project)
+      expect(reasons(missing.answer)[0]!.reason).toContain('Claude Code is not installed on this machine.')
+      for (const engines of [[{ engine: 'claude', installed: true, signedIn: null }], [{ engine: 'claude', installed: null, signedIn: null }], [{ engine: 'codex', installed: true, signedIn: false }], [{ engine: 'cursor', installed: false, signedIn: null }], []]) {
+        expect((await runPool(swarm(undefined, engines), false, {}, project)).answer.ok).toBe(true)
+      }
+    })
+
+    it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
+      const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
+      pool.observation.localModels = [{ grid, model: 'qwen3' }]
+      const { answer, s } = await runPool(pool, false, {}, project, { state: { localModels: { grid, enabled: true } } })
+      expect(answer).toMatchObject({ ok: true, pick: { gridModel: 'qwen3' } })
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ reason: expect.stringContaining('not signed in') })]))
+    })
+
+    it('leaves out a project folder that is not a checkout of the project\'s repository', async () => {
+      const plain = await runPool(swarm([checkout({ git: false, repository: null, push: null })]), false, {}, project)
+      expect(plain.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(plain.answer)[0]!.reason).toContain('is not a git checkout')
+      const other = await runPool(swarm([checkout({ repository: 'github.com/example/other' })]), false, {}, project)
+      expect(reasons(other.answer)[0]!.reason).toContain('checkout of another repository')
+      // Its own repository under another address, no folder yet (it is cloned on start), or a remote it cannot name.
+      for (const checkouts of [[checkout()], [checkout({ folder: 'p9', git: false })], [checkout({ repository: null })]]) {
+        expect((await runPool(swarm(checkouts), false, {}, project)).answer.ok).toBe(true)
+      }
+      expect((await runPool(swarm([checkout({ repository: 'github.com/example/other' })]), false, {}, { ...project, repository: { ...project.repository, repositoryUrl: undefined, machineId: 'm1' } })).answer.ok).toBe(true)
+    })
+
+    it('leaves out a machine whose login cannot push when the work needs a push, members too', async () => {
+      const denied = swarm([checkout({ push: false })])
+      const work = await runPool(denied, true, {}, project)
+      expect(work.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(work.answer).map(r => r.reason)).toEqual(expect.arrayContaining([expect.stringContaining('cannot push to the project repository')]))
+      expect(reasons(work.answer).some(r => r.title.includes('Multiply'))).toBe(true)
+      // A review pushes nothing, and an unknown push is no refusal.
+      expect((await runPool(swarm([checkout({ push: false })]), true, {}, project, { review: true })).answer.ok).toBe(true)
+      expect((await runPool(swarm([checkout({ push: null })]), false, {}, project)).answer.ok).toBe(true)
+    })
+
+    it('ignores the machine\'s own login when a teammate\'s project pushes through the Harness GitHub App', async () => {
+      const mates = { ...project, ownerId: 'mate' }
+      expect((await runPool(swarm([checkout({ push: false })]), false, {}, mates, { tab: { githubApp: true } })).answer.ok).toBe(true)
+      // The owner's own project still pushes with the owner's login, and without the App so does a teammate's.
+      expect((await runPool(swarm([checkout({ push: false })]), false, {}, project, { tab: { githubApp: true } })).answer.ok).not.toBe(true)
+      expect((await runPool(swarm([checkout({ push: false })]), false, {}, mates)).answer.ok).not.toBe(true)
+    })
+
+    it('leaves out a machine whose last two starts started nothing, until one does', async () => {
+      const start = (extra: Record<string, unknown>) => ({ id: `s${Math.random()}`, request: { machineId: 'm1' }, harnessId: null, dispatched: false, error: null, ...extra })
+      const failed = start({ error: 'Claude Code is not signed in.' }), queued = start({}), started = start({ harnessId: 'h9', dispatched: true })
+      const stuck = await runPool(healthy(), true, {}, undefined, { state: { starts: [started, failed, queued] } })
+      expect(stuck.answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      expect(recorded(stuck.s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({
+        title: expect.stringContaining('New agent'), reason: expect.stringContaining('last 2 starts') })]))
+      for (const starts of [[failed, started], [failed], [failed, start({ dispatched: true })], [failed, queued].map(s => ({ ...s, request: { machineId: 'm9' } }))]) {
+        expect((await runPool(healthy(), false, {}, undefined, { state: { starts } })).answer.ok).toBe(true)
+      }
+    })
+  })
+
+  describe('a task that requires a machine', () => {
+    // 2026-10-27: a task to check a device plugged into one person's Mac went to another machine by policy order.
+    const two = (diego: (p: any) => void = () => {}) => {
+      const other = { ...healthy(), machineId: 'm3', name: 'Diego Mac', observation: { ...healthy().observation, runningHarnessIds: [] } }
+      diego(other)
+      return [healthy(), other]
+    }
+    const requiring = (requires: Record<string, unknown>) => {
+      const groups = conversations()
+      Object.assign(groups[1]!, { task: { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'], requires } })
+      return groups
+    }
+    async function route(machines: unknown[], requires: Record<string, unknown>, members = true) {
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: requiring(requires), machines } },
+        policy: { policy, warnings: [] }, machines: [] } } })
+      return { answer: await routeTask(input, s, where, opener()), s }
+    }
+    it('offers only the required machine and says why every other one is left out', async () => {
+      const { answer, s } = await route(two(), { machines: ['m3'] })
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm3' } })
+      expect(recorded(s).command.decision.candidates.every((c: { machineId: string }) => c.machineId === 'm3')).toBe(true)
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([
+        { title: 'Multiply · Claude sonnet medium · Contributed laptop', reason: 'This task runs only on the machine it requires.' },
+        { title: 'New agent · Claude opus high · Contributed laptop', reason: 'This task runs only on the machine it requires.' }]))
+    })
+    it('waits while the required machine has no free slot, then routes there', async () => {
+      const full = await route(two(p => { p.availableSlots = 0 }), { machines: ['m3'] })
+      expect(full.answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true,
+        detail: 'This task waits for the machine it requires; route it again once that machine can take it.' })
+      expect(full.s.mock.calls.some(c => c[0].action === 'command')).toBe(false)
+      const free = await route(two(p => { p.availableSlots = 1 }), { machines: ['m3'] })
+      expect(free.answer).toMatchObject({ ok: true, pick: { machineId: 'm3' } })
+    })
+    it('waits, offering nothing, for a required machine the Lead cannot see', async () => {
+      const { answer } = await route(two(), { machines: [], unseenMachines: 1 })
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true })
+      expect((answer.excluded as Array<{ reason: string }>).every(e => e.reason === 'This task runs only on the machine it requires.')).toBe(true)
+    })
+    it('counts a Mac\'s Harness Team account as that Mac', async () => {
+      const team = { ...healthy(), machineId: 't3', name: 'Diego Mac', hostMachineId: 'm3', contributorId: 'owner', observation: { ...healthy().observation, runningHarnessIds: [] } }
+      const { answer } = await route([healthy(), team], { machines: ['m3'] }, false)
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 't3' } })
+    })
+    it('keeps routing a task without a requirement as before', async () => {
+      const { answer } = await route(two(), undefined as never)
+      expect(answer).toMatchObject({ ok: true })
+    })
+  })
+  describe('a task that requires a device', () => {
+    const requiring = (starts: unknown[] = []) => {
+      const groups = conversations()
+      Object.assign(groups[1]!, { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })
+      return { revision: 3, state: { id: 'tab', agents, conversations: groups, starts } }
+    }
+    it('waits when no machine has the device connected', async () => {
+      const answer = await routeTask(input, scoped({ tab: requiring() }), where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })), () => 'op')
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true,
+        detail: 'This task waits for the machine it requires; route it again once that machine can take it.' })
+    })
+    it('offers a member only when its own start had its machine check the device, as the server requires', async () => {
+      const connected = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], devices: { '/dev/cu.usbmodem1': true } }))
+      const members = async (starts: unknown[]) => {
+        const s = scoped({ tab: requiring(starts) })
+        await routeTask(input, s, where as never, connected, () => 'op')
+        return recorded(s).command.decision
+      }
+      const unchecked = await members([])
+      expect(unchecked.candidates.some((c: { kind: string }) => c.kind === 'member')).toBe(false)
+      expect(unchecked.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+        reason: 'Its start did not have its machine check the device this task requires. Start a new agent for it.' }]))
+      const checked = await members([{ harnessId: 'h1', request: { machineId: 'm1', requirements: { devices: ['/dev/cu.usbmodem1'] } } }])
+      expect(checked.candidates.some((c: { kind: string }) => c.kind === 'member')).toBe(true)
+    })
+  })
+  it('asks the machine for the devices the group\'s task requires, beside those the Lead names', async () => {
+    const groups = conversations()
+    Object.assign(groups[1]!, { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })
+    const s = scoped({ tab: { revision: 3, state: { id: 'tab', agents, conversations: groups } } })
+    const make = opener(id => daemon(id, { devices: { '/dev/cu.usbmodem1': id === 'm2', '/dev/ttyUSB0': true } }))
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs: { devices: ['/dev/ttyUSB0'] } } }, s, where as never, make, () => 'op')
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm2' } })
+    const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(answer.next as string)![1]!)
+    expect(hint.requirements.devices).toEqual(['/dev/ttyUSB0', '/dev/cu.usbmodem1'])
+  })
+
   it.each([
     ['stale', (p: any) => { p.observation.receivedAt = 0 }],
     ['paused', (p: any) => { p.paused = true }],

@@ -160,8 +160,9 @@ export function writeSwarmGitHubTools(tools: SwarmGitHubTools): { helper: string
 }
 
 const GH_CONFIG = 'version: "1"\n'
-/** gh's own token format, and nothing that could break out of the YAML around it. */
-const TOKEN = /^[A-Za-z0-9_]{20,255}$/
+/** GitHub's token formats, the stateless installation token (ghs_APPID_JWT, about 520 characters, with dots and dashes)
+ *  among them, and nothing that could break out of the YAML around it or a shell. */
+const TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{19,4095}$/
 
 /** The session's gh login: [token] for github.com, or none. And, when given, the trailers its commits get. */
 export function writeSessionGitHub(dir: string, token: string | null, trailers?: readonly string[]): void {

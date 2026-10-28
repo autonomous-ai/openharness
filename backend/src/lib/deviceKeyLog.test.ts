@@ -18,8 +18,11 @@ const m = vi.hoisted(() => ({
 vi.mock('./prisma.js', () => ({
   prisma: {
     deviceKeyLogEntry: {
-      findMany: vi.fn(async ({ where }: { where: { userId: string; seq?: { gt: number } } }) =>
-        m.rows.filter(r => r.userId === where.userId && r.seq > (where.seq?.gt ?? 0)).sort((a, b) => a.seq - b.seq)),
+      findMany: vi.fn(async ({ where }: { where: { userId: string; seq?: { gt: number; lte?: number }; OR?: Array<{ userId: string; seq: { gte: number } }> } }) =>
+        where.OR
+          ? m.rows.filter(r => where.OR!.some(w => r.userId === w.userId && r.seq >= w.seq.gte))
+          : m.rows.filter(r => r.userId === where.userId && r.seq > (where.seq?.gt ?? 0) && r.seq <= (where.seq?.lte ?? Infinity))
+            .sort((a, b) => a.seq - b.seq)),
       findFirst: vi.fn(async ({ where }: { where: { userId: string } }) =>
         m.rows.filter(r => r.userId === where.userId).sort((a, b) => b.seq - a.seq)[0] ?? null),
       create: vi.fn(async ({ data }: { data: Row }) => {
@@ -29,6 +32,8 @@ vi.mock('./prisma.js', () => ({
     },
     deviceKeyLogState: {
       findUnique: vi.fn(async ({ where }: { where: { userId: string } }) => structuredClone(m.snaps.get(where.userId) ?? null)),
+      findMany: vi.fn(async ({ where }: { where: { userId: { in: string[] } } }) =>
+        where.userId.in.flatMap(id => m.snaps.has(id) ? [structuredClone(m.snaps.get(id)!)] : [])),
       updateMany: vi.fn(async ({ where, data }: { where: { userId: string; seq: number | { lt: number }; hash?: string }; data: Record<string, unknown> }) => {
         if (m.failSnapshot) throw m.failSnapshot
         const cur = m.snaps.get(where.userId)
@@ -75,7 +80,7 @@ vi.mock('./bus.js', () => ({
     hgetall: async (key: string) => m.seen[key] ?? {},
   },
 }))
-import { appendDeviceAck, appendDeviceKey, deviceKeysSeen, readDeviceAcks, readDeviceKeyLog, touchDeviceKey } from './deviceKeyLog.js'
+import { activeMachineKeysOf, appendDeviceAck, appendDeviceKey, deviceKeysSeen, readDeviceAcks, readDeviceKeyLog, touchDeviceKey } from './deviceKeyLog.js'
 import { signDevAck, type DevAck } from './deviceAckCore.js'
 import { emptyDevLogState, nextDevLogEntry, signDevLogEntry, applyDevLogEntries, DEVLOG_MAX_ACTIVE, type DevLogState } from './deviceLogCore.js'
 import { prisma } from './prisma.js'
@@ -314,6 +319,22 @@ describe('appendDeviceKey', () => {
     expect(page.entries).toHaveLength(1)
     expect((await readDeviceKeyLog('nobody', 0)).head.seq).toBe(0)
   })
+
+  it('never answers a head past the entries it carries, when an append lands between its reads', async () => {
+    await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })
+    const late = await addEntry(phone, 'viewer', '', 'phone')
+    const row = { userId: USER, seq: 2, hash: applyDevLogEntries(await state(), [late]).state.head.hash, entry: JSON.stringify(late), sessionId: null }
+    // Whichever of the two reads comes first, the append lands right after it.
+    let landed = false
+    const land = () => { if (!landed) { landed = true; m.rows.push(row) } }
+    const findMany = vi.mocked(prisma.deviceKeyLogEntry.findMany), findFirst = vi.mocked(prisma.deviceKeyLogEntry.findFirst)
+    const many = findMany.getMockImplementation()!, first = findFirst.getMockImplementation()!
+    findMany.mockImplementationOnce((args) => { const out = many(args); land(); return out })
+    findFirst.mockImplementationOnce((args) => { const out = first(args); land(); return out })
+    const page = await readDeviceKeyLog(USER, 0)
+    expect(landed).toBe(true)
+    expect(page.entries).toHaveLength(page.head.seq)
+  })
 })
 
 describe('when a key was last seen', () => {
@@ -414,5 +435,48 @@ describe('acknowledgements ("It\'s mine", once for the account)', () => {
     expect((await readDeviceAcks(USER, 1)).acks).toEqual([forPhone])
     expect((await readDeviceAcks(USER, 2)).acks).toEqual([])
     expect((await readDeviceAcks('someone-else', 0)).acks).toEqual([])
+  })
+})
+
+// Diego's issue file (2026-10-27): a machine shared with a 200-person domain replayed each member's log on every policy read
+// or save, 400+ parallel queries. Snapshots that match the head are read for everyone at once.
+describe('the machine keys of many accounts', () => {
+  beforeEach(() => {
+    m.rows.length = 0
+    m.snaps.clear()
+    m.failSnapshot = null
+    vi.clearAllMocks()
+    m.publishChanged.mockResolvedValue(1)
+    m.publishDown.mockResolvedValue(1)
+  })
+  const member = (id: string) => ({ pub: `pub-${id}`, kind: 'machine', machineId: `${id}-mac`, label: `${id}'s Mac`, seq: 1, addedAt: 1 })
+
+  it('reads current snapshots in one query, never one account at a time', async () => {
+    const ids = ['u1', 'u2', 'u3', 'u4', 'u5']
+    for (const id of ids) {
+      m.snaps.set(id, { userId: id, seq: 1, hash: `h-${id}`, active: { [`pub-${id}`]: member(id) }, removed: [], sessions: {} })
+      m.rows.push({ userId: id, seq: 1, hash: `h-${id}`, entry: '{}', sessionId: null })
+    }
+    const keys = await activeMachineKeysOf([...ids, 'no-keys'])
+    expect(ids.map(id => keys.get(id))).toEqual(ids.map(id => [member(id)]))
+    // An account with no log has no keys, and costs no query of its own either.
+    expect(keys.get('no-keys')).toEqual([])
+    expect(prisma.deviceKeyLogState.findMany).toHaveBeenCalledTimes(1)
+    expect(prisma.deviceKeyLogEntry.findMany).toHaveBeenCalledTimes(1)
+    expect(prisma.deviceKeyLogState.findUnique).not.toHaveBeenCalled()
+    expect(prisma.deviceKeyLogEntry.findFirst).not.toHaveBeenCalled()
+  })
+
+  it('verifies the log of an account whose snapshot is behind or missing, alone', async () => {
+    await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })
+    m.snaps.set('u1', { userId: 'u1', seq: 1, hash: 'h-u1', active: { 'pub-u1': member('u1') }, removed: [], sessions: {} })
+    m.rows.push({ userId: 'u1', seq: 1, hash: 'h-u1', entry: '{}', sessionId: null })
+    m.snaps.delete(USER)
+    vi.clearAllMocks()
+    const keys = await activeMachineKeysOf(['u1', USER])
+    expect(keys.get('u1')).toEqual([member('u1')])
+    expect(keys.get(USER)).toMatchObject([{ pub: box1.pub, machineId: MID1, label: 'box1' }])
+    expect(prisma.deviceKeyLogState.findUnique).toHaveBeenCalledTimes(1)
+    expect(prisma.deviceKeyLogState.findUnique).toHaveBeenCalledWith({ where: { userId: USER } })
   })
 })

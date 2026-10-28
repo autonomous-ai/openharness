@@ -12,6 +12,7 @@ import 'identity.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
+import 'reactions.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -22,15 +23,21 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.onReturnToComposer,
     required this.receipts,
     this.agent,
+    this.person,
     this.machineName,
     this.reply,
     this.replyAuthor,
+    this.replyGone = false,
     this.grouped = false,
     this.onReply,
     this.onOpenAgent,
+    this.onOpenReply,
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.readerId = '',
+    this.reactorName,
+    this.onReact,
   });
 
   final SuperTabMessage message;
@@ -41,13 +48,29 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<String>? onOpenGroup;
   final String author;
   final SuperTabAgent? agent;
+
+  /// The person who wrote it, while they are in the Swarm.
+  final SuperTabPerson? person;
   final String? machineName;
   final SuperTabMessage? reply;
   final String? replyAuthor;
+
+  /// The original [reply] would show is no longer in the conversation.
+  final bool replyGone;
   final bool grouped;
   final VoidCallback? onReply, onOpenAgent;
+
+  /// Follows the quote to the original, given this row so that the way back
+  /// can return it to the same place on screen.
+  final ValueChanged<BuildContext>? onOpenReply;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+
+  /// The reader, whose own reactions are marked; [reactorName] names the
+  /// others. Without [onReact] the counts only show.
+  final String readerId;
+  final SuperTabReactorName? reactorName;
+  final ValueChanged<SuperTabReactionEmoji>? onReact;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -139,6 +162,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ].join(' · ');
   }
 
+  Widget _avatar(SuperTabMessage message) {
+    const size = SuperTabMessageRow.avatarSize;
+    if (widget.agent case final agent?) {
+      return SuperTabAvatar.agent(
+        agent,
+        name: widget.author,
+        size: size,
+        engineBadge: false,
+      );
+    }
+    if (widget.person case final person? when !message.fromAgent) {
+      return SuperTabAvatar.person(person, size: size);
+    }
+    // Someone no longer in the Swarm keeps the face their recorded name gives.
+    return SuperTabAvatar(
+      identity: '${message.author['kind']}:${message.authorId}',
+      name: message.fromAgent
+          ? widget.author
+          : superTabPersonName(message.authorName),
+      size: size,
+      pattern: message.fromAgent,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -215,16 +262,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                               : ExcludeSemantics(
                                   child: Tooltip(
                                     message: _identityDetails,
-                                    child: SuperTabAvatar(
-                                      identity:
-                                          '${message.author['kind']}:${message.authorId}',
-                                      name: message.fromAgent
-                                          ? widget.author
-                                          : superTabPersonName(
-                                              message.authorName,
-                                            ),
-                                      size: SuperTabMessageRow.avatarSize,
-                                    ),
+                                    child: _avatar(message),
                                   ),
                                 ),
                         ),
@@ -292,7 +330,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                         'Earlier message',
                                     text:
                                         widget.reply?.text ??
-                                        'The original message isn’t loaded.',
+                                        (widget.replyGone
+                                            ? 'The original message is no longer in this conversation.'
+                                            : 'The original message isn’t loaded.'),
+                                    onTap: widget.onOpenReply == null
+                                        ? null
+                                        : () => widget.onOpenReply!(context),
                                   ),
                                 ),
                               if (message.terminalNote case final note?)
@@ -325,6 +368,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               SuperTabPullRequestLinks(message.text),
+                              SuperTabReactionBar(
+                                message: message,
+                                readerId: widget.readerId,
+                                nameOf: widget.reactorName ?? (_, id) => id,
+                                onReact: widget.onReact,
+                              ),
                               ...widget.receipts,
                             ],
                           ),
@@ -350,6 +399,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (widget.onReact case final react?)
+                              SuperTabReactionPicker(onReact: react),
                             if (widget.onReply != null)
                               fingerTarget(
                                 enabled: phone,
@@ -387,32 +438,66 @@ class SuperTabReplyPreview extends StatelessWidget {
     super.key,
     required this.author,
     required this.text,
+    this.onTap,
   });
   final String author, text;
 
+  /// Goes to the quoted message. Without it the quote is only read.
+  final VoidCallback? onTap;
+
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.only(left: 10),
-    decoration: BoxDecoration(
-      border: Border(left: BorderSide(color: DesktopChrome.muted, width: 2)),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          author,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: DesktopChrome.control(medium: true),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          text.replaceAll(RegExp(r'\s+'), ' '),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: DesktopChrome.metadata(),
-        ),
-      ],
-    ),
-  );
+  Widget build(BuildContext context) {
+    final quote = Container(
+      padding: const EdgeInsets.only(left: 10),
+      decoration: BoxDecoration(
+        border: Border(left: BorderSide(color: DesktopChrome.muted, width: 2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            author,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.control(medium: true),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            text.replaceAll(RegExp(r'\s+'), ' '),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
+          ),
+        ],
+      ),
+    );
+    if (onTap == null) return quote;
+    return Semantics(
+      container: true,
+      button: true,
+      hint: 'Go to original message',
+      child: InkWell(onTap: onTap, child: quote),
+    );
+  }
+}
+
+/// Lights a message briefly, as the one a quote was followed to.
+class SuperTabMessageHighlight extends StatelessWidget {
+  const SuperTabMessageHighlight({
+    super.key,
+    required this.on,
+    required this.child,
+  });
+  final bool on;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 400),
+      color: on ? DesktopChrome.selection : Colors.transparent,
+      child: child,
+    );
+  }
 }

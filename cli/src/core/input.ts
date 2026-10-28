@@ -29,6 +29,7 @@ import type { TerminalControl } from './terminals/control.js'
 import { launchBound } from './engines/sessionBinding.js'
 import { inputContextIn } from '../lib/nativeTurnObservations.js'
 import { teamHold } from '../engines/kit/screen.js'
+import type { ShortTurnGuard } from './turns/shortTurnGuard.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -63,6 +64,11 @@ export interface InputDeps {
   /** While an agent changes host, its messages wait here and go to the pane it ends on (hostMove/gate.ts): the one
    *  gate the terminal streams hold its keystrokes in too. */
   moveGate?: MoveGate
+  /** Whether a typed delivery's maker queues it in the engine's own input while the agent works (the Swarm's chat,
+   *  superTabs/inCore/deliveries.ts), where the engine takes that; absent, every typed delivery waits for idle. */
+  typesWhileBusy?: (deliveryId: string) => boolean
+  /** An agent whose turns keep ending at once has its automatic writes held a while (turns/shortTurnGuard.ts). */
+  shortTurns?: Pick<ShortTurnGuard, 'holding'>
 }
 
 /**
@@ -145,11 +151,11 @@ export function sessionInputDeps(
   const { resolve, terminal, deliveries, device, clients, agentIdFor, commandcode, emit } = deps
   const { captureTerminal, validateTerminal, keyTerminalAction } = terminal
   const writeMessage = messageWriter(deps)
-  // Swarm chat uses the native input queue, while Agent Messages still waits for idle.
+  // A maker's chat may use the native input queue (`typesWhileBusy`), while Agent Messages still waits for idle.
   // Both paths keep the same draft and dialog checks under the pane's writer lock.
   const deliveryHold = (session: RegisteredSession, screen: ScreenReading | null, capture: string | null, deliveryId?: string): string | null => {
     if (!screen) return 'team_waiting_unavailable'
-    return deliveryId?.startsWith('team:service:superTabs:') && deps.submission.policy(session.engine)?.typesWhileBusy
+    return deliveryId && deps.typesWhileBusy?.(deliveryId) && deps.submission.policy(session.engine)?.typesWhileBusy
       ? teamHold(session.engine, capture ?? '', screen.pane, screen.question, true) : screen.teamHold
   }
   return {
@@ -162,6 +168,8 @@ export function sessionInputDeps(
       deliveries.settled(event)
     },
     beforeTeamWrite: async (session, deliveryId) => {
+      // Before the pane is read: a held agent's Swarm deliveries are asked again every second.
+      if (deps.shortTurns?.holding(session.sessionId)) return 'team_waiting_control'
       const capture = await captureTerminal(session.agentId)
       const screen = await deps.readScreen(session, capture)
       return deliveryHold(session, screen, capture, deliveryId)

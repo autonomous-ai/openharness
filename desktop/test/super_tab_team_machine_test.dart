@@ -8,6 +8,7 @@ import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/machines.dart';
 
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show createApp;
 
 const _offlineAge = 10 * 60 * 1000;
 
@@ -105,7 +106,14 @@ void main() {
       expect(_row('mac'), findsOneWidget);
       expect(_row('mac-team'), findsNothing);
       expect(find.text('MacBook Pro · Team'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-mac')));
+      await tester.tap(find.byKey(const ValueKey('super-machine-mac')));
+      await tester.pumpAndSettle();
+      final count = find.byKey(const ValueKey('super-machine-agents-mac'));
+      expect(
+        find.descendant(of: count, matching: find.text('2 agents')),
+        findsOneWidget,
+      );
+      await tester.tap(count);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('super-machine-agent-mac-a1')),
@@ -144,7 +152,14 @@ void main() {
       expect(_row('mac-team-old'), findsNothing);
       expect(_state('mac', 'live'), findsOneWidget);
       expect(c.snapshot!.teamPoolOf('mac')!['machineId'], 'mac-team-new');
-      await tester.tap(find.byKey(const ValueKey('super-machine-toggle-mac')));
+      await tester.tap(find.byKey(const ValueKey('super-machine-mac')));
+      await tester.pumpAndSettle();
+      final count = find.byKey(const ValueKey('super-machine-agents-mac'));
+      expect(
+        find.descendant(of: count, matching: find.text('2 agents')),
+        findsOneWidget,
+      );
+      await tester.tap(count);
       await tester.pumpAndSettle();
       for (final agent in ['a1', 'a2']) {
         expect(
@@ -229,6 +244,57 @@ void main() {
     expect(_problemText(tester, 'mac'), "Teammates' agents paused: not set up");
     await _unmount(tester, c);
   });
+
+  testWidgets(
+    'on this Mac\'s own row, its person can set the Harness Team account up there; nobody else, nowhere else',
+    (tester) async {
+      final app = createApp(connected: true)..macOSForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      Future<bool> button({
+        String account = 'owner',
+        String id = 'm',
+        String code = 'TEAM_ACCOUNT_REQUIRED',
+      }) async {
+        final server = _swarm();
+        server.state['machines'] = [
+          _pool(
+            id,
+            contributor: account == 'peer' ? 'owner' : 'owner',
+            teamWork: _refused(code),
+          ),
+        ];
+        final c = server.controller(account: account);
+        await c.refresh();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SuperTabMachines(
+                controller: c,
+                app: app,
+                onAddAgent: (_) {},
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final shown = find
+            .byKey(ValueKey('super-machine-team-setup-$id'))
+            .evaluate()
+            .isNotEmpty;
+        await _unmount(tester, c);
+        return shown;
+      }
+
+      expect(await button(), isTrue);
+      // A teammate reads the Mac's line, never its button; another Mac's row has none; nor a privacy refusal.
+      expect(await button(account: 'peer'), isFalse);
+      expect(await button(id: 'other'), isFalse);
+      expect(await button(code: 'PRIVACY_CHECK_FAILED'), isFalse);
+      app.macOSForTest = false;
+      expect(await button(), isFalse);
+      app.dispose();
+    },
+  );
 
   testWidgets('the line stays away when it would say nothing new', (
     tester,

@@ -462,6 +462,28 @@ it('names the code of an `other` launch failure, so the codes add up to launch_f
   expect(JSON.stringify(sent)).not.toContain('PRIVATE_CANARY')
 })
 
+it('counts correct refusals and agents\' launches apart from people\'s failures', async () => {
+  await usage.sync()
+  usage.launch({ id: 'fixture-agent-refused', phase: 'start', agentStarted: true })
+  for (let poll = 0; poll < 2; poll++) usage.launch({ id: 'fixture-agent-refused', phase: 'refused', code: 'session_in_harness' })
+  usage.launch({ id: 'fixture-person-failed', phase: 'start' })
+  usage.launch({ id: 'fixture-person-failed', phase: 'failed', failure: 'setup', code: 'spawn_failed' })
+  usage.launch({ id: 'fixture-agent-created', phase: 'start', agentStarted: true })
+  usage.launch({ id: 'fixture-agent-created', phase: 'created' })
+  usage.launch({ id: 'fixture-agent-failed-1', phase: 'start', agentStarted: true })
+  usage.launch({ id: 'fixture-agent-failed-1', phase: 'failed', failure: 'other', code: 'internal' })
+  usage.launch({ id: 'fixture-person-refused', phase: 'start' })
+  usage.launch({ id: 'fixture-person-refused', phase: 'refused', code: 'PRIVATE_CANARY' as never })
+  await flush()
+  const t = totals()
+  expect(t).toMatchObject({ launch_started: 5, launch_agent_started: 3, launch_refused: 2, launch_agent_refused: 1,
+    launch_refused_code_session_in_harness: 1, launch_refused_code_unlisted: 1, launch_failed: 2, launch_agent_failed: 1,
+    launch_created: 1, launch_agent_created: 1 })
+  // A refusal is no failure of either kind, and the failure kinds still add up to launch_failed.
+  expect(t.launch_failed_setup + t.launch_failed_other).toBe(t.launch_failed)
+  expect(JSON.stringify(sent)).not.toContain('PRIVATE_CANARY')
+})
+
 it('counts a setup launch reason once across polls, separately from other failures and without retaining identifiers', async () => {
   await usage.sync()
   for (const [index, code] of ['tmux_unavailable', 'native_launch_held', 'PRIVATE_CANARY' as never].entries()) {
@@ -722,6 +744,27 @@ describe('when reports go', () => {
     expect(posts).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1)
     expect(posts).toEqual([at(10_000), at(640_000), at(2_440_000)])
+  })
+
+  it('holds a report the busy backend refused with Retry-After, then sends that same report, counting the cause', async () => {
+    start(() => 0)
+    await usage.sync(false); usage.counter('search_requests')
+    answers = [{ status: 429, body: { success: false, error: { code: 'USAGE_WRITE_CONFLICT' } }, retryAfterMs: 90_000 }]
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(posts).toEqual([at(10_000)])
+    // Ticks every 45 s here; the one at 55 s is inside the 90 s asked, the one at 100 s is not.
+    await vi.advanceTimersByTimeAsync(90_000 - 1)
+    expect(posts).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(posts).toEqual([at(10_000), at(100_000)])
+    // Not lost: the same receipt and counts again, which the backend's receipt makes count once.
+    expect(sent[1]).toEqual(sent[0])
+    expect(JSON.parse(readFileSync(file, 'utf8')).pending).toBeNull()
+    // The refusal's own counts go in the next report.
+    await vi.advanceTimersByTimeAsync(45_000)
+    expect(posts).toHaveLength(3)
+    expect(totals().health_cli_report_failure_write_conflict).toBe(1)
+    expect(totals().health_cli_report_failure_rate_limited).toBeUndefined()
   })
 
   it('stops ticking once stopped', async () => {

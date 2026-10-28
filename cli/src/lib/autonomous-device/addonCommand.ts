@@ -16,7 +16,7 @@ const VALUE_FLAGS = new Set(['--device', '--machine', '--act', '--holds-ms', '--
 export type MachineAsk = (machine: string, op: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>
 
 /** The owner's machine `--machine` names, by id or name (case-blind), as this daemon lists the account's machines. */
-async function machineIdOf(word: string, dataDir: string, port: number): Promise<string> {
+export async function machineIdOf(word: string, dataDir: string, port: number): Promise<string> {
   const response = await fetch(`http://127.0.0.1:${port}/api/machines`, {
     headers: { 'x-adapter-local': '1', ...localCredentialHeaders(dataDir) }, signal: AbortSignal.timeout(8000) })
   if (!response.ok) throw Object.assign(new Error('Could not read the account\'s machines. Sign in and try again.'), { code: 'MACHINES_UNAVAILABLE' })

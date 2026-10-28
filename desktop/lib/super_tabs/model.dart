@@ -1,3 +1,8 @@
+import 'identity.dart' show superTabPersonName;
+import 'profile_model.dart';
+
+export 'profile_model.dart';
+
 /// Backend records are independent of the desktop's visible panes and tab layout.
 Map<String, dynamic> superTabMap(Object? value) => value is Map
     ? Map<String, dynamic>.from(value)
@@ -26,8 +31,21 @@ class SuperTabPerson {
   SuperTabPerson.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       email = _text(row, 'email'),
-      role = _text(row, 'role');
+      role = _text(row, 'role'),
+      generation = row['generation'] as String?,
+      avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
+      status = SuperTabPersonStatus.fromJson(row['status']);
   final String id, email, role;
+  final SuperTabAvatarPicture? avatar;
+  final SuperTabPersonStatus? status;
+
+  /// Their status while it lasts.
+  SuperTabPersonStatus? statusAt(DateTime now) =>
+      status?.shownAt(now) == true ? status : null;
+
+  /// This membership: a new one each time the person joins the Swarm. Null
+  /// from a backend that does not send it.
+  final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
 }
 
@@ -46,15 +64,29 @@ class SuperTabAgent {
       role = row['role'] as String?,
       roleId = row['roleId'] as String?,
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
+      downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
+
+  /// Set by its contributor or its project's Lead; null draws its pattern.
+  final SuperTabAvatarPicture? avatar;
 
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
 
+  /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
+  /// while it runs.
+  final DateTime? downSince;
+
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;
+
+  /// Its session read private chats: a Product Manager, now or before, or an agent in a private chat. Only the person
+  /// whose computer runs it may watch it; its computer refuses every share (backend projects.ts `canWatchAgent`).
+  final bool confidential;
   // Keep the legacy default for callers while allowing group-based roster ownership.
   final bool hasProjectId;
   final String? displayName;
@@ -89,6 +121,15 @@ class SuperTabConversation {
       leadId = row['leadId'] as String?,
       agentIds = List.unmodifiable((row['agentIds'] as List).cast<String>()),
       archived = row['archived'] == true,
+      dormant = row['dormant'] == true,
+      audience = row['audience'] is Map
+          ? List.unmodifiable([
+              for (final person
+                  in superTabMap(row['audience'])['people'] as List? ??
+                      const [])
+                if (person is Map && person['id'] is String) person['id'],
+            ])
+          : null,
       checks = _list(
         row['checks'] ?? const [],
         (check) => Map<String, dynamic>.unmodifiable(check),
@@ -112,6 +153,17 @@ class SuperTabConversation {
   final String? leadId;
   final List<String> agentIds;
   final bool archived;
+
+  /// A private conversation's people, who read it with the project's Lead
+  /// and nobody else; null for a conversation the project shares.
+  final List<String>? audience;
+
+  /// Out of the Swarm's active groups: archived, or finished and quiet for a
+  /// day. Read on demand; a new message brings it back.
+  final bool dormant;
+
+  /// Listed with the project's closed groups, not its active ones.
+  bool get closed => archived || dormant;
   final List<Map<String, dynamic>> checks;
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
@@ -189,8 +241,19 @@ class SuperTabSnapshot {
         (row) => Map<String, dynamic>.unmodifiable(row),
       ),
       leadsConversationId = row['leadsConversationId'] as String?,
+      startEfforts = Map.unmodifiable({
+        for (final start
+            in row['starts'] is List ? row['starts'] as List : const [])
+          if (start case {
+            'harnessId': final String harness,
+            'request': {'effort': final String effort},
+          })
+            harness: effort,
+      }),
       localModels = SuperTabLocalModels.read(row['localModels']),
-      mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0 {
+      mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
+      decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
+      decisionsDigest = row['decisionsDigest'] as String? {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -221,6 +284,10 @@ class SuperTabSnapshot {
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;
 
+  /// The effort each started agent's start asked for, by harness id. Empty where the starts are not read (a view
+  /// kept on this device leaves them out).
+  final Map<String, String> startEfforts;
+
   /// Where the projects' Product Managers talk, Swarm-wide; null in a Swarm
   /// from before it (spec 2026-10-23-leads-see-and-talk.md).
   final String? leadsConversationId;
@@ -231,6 +298,14 @@ class SuperTabSnapshot {
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
   final int mentionsWaiting;
+
+  /// Decisions asked of the reader and not yet answered, Swarm-wide; 0 from a
+  /// backend before decisions (backend superTabs/decisions.ts).
+  final int decisionsWaiting;
+
+  /// Which decisions wait, as a digest that moves when they change though the
+  /// count may not; null from a backend before it (superTabs/decisions.ts).
+  final String? decisionsDigest;
   SuperTabConversation? conversation(String id) =>
       conversations.where((c) => c.id == id).firstOrNull;
   SuperTabAgent? agent(String id) =>
@@ -323,6 +398,20 @@ class SuperTabSnapshot {
     return best;
   }
 
+  /// The pool whose reading [accountId] sees for the machine row [machineId]: the Mac's Harness Team account for
+  /// everyone but the Mac's own contributor, since it runs their agents, also while the owner is away from the Mac; the
+  /// machine's own pool otherwise. The Machines view and Team at a glance read a machine by this one rule.
+  Map<String, dynamic>? readingPoolOf(String machineId, String? accountId) {
+    final own = pool(machineId), team = teamPoolOf(machineId);
+    final contributor =
+        own?['contributorId'] as String? ??
+        agents
+            .where((a) => placeOf(a.machineId) == machineId)
+            .firstOrNull
+            ?.contributorId;
+    return team != null && contributor != accountId ? team : own;
+  }
+
   /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
   /// while that Mac is in the Swarm too; [machineId] itself otherwise.
   String placeOf(String machineId) => _macOf(pool(machineId)) ?? machineId;
@@ -334,7 +423,7 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : message.authorName;
+      : superTabPersonName(message.authorName);
 }
 
 /// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the
@@ -551,6 +640,35 @@ SuperTabAttachment? _tryAttachment(Object? row) {
   }
 }
 
+/// Messages in the order a conversation shows them: by sequence, then id, as
+/// the backend pages them (messages from before the parts migration can share
+/// a sequence).
+int superTabMessageOrder(SuperTabMessage a, SuperTabMessage b) {
+  final bySequence = a.sequence.compareTo(b.sequence);
+  return bySequence != 0 ? bySequence : a.id.compareTo(b.id);
+}
+
+/// Where a conversation's older history continues: the message a page ended
+/// on (docs/design/2026-10-26-swarm-state-parts.md, section 4.6).
+class SuperTabPage {
+  const SuperTabPage(this.sequence, this.id);
+  SuperTabPage.of(SuperTabMessage message) : this(message.sequence, message.id);
+
+  /// The backend's `next`, or null at the start of the conversation.
+  static SuperTabPage? read(Object? next) => switch (next) {
+    {'sequence': final num sequence, 'id': final String id} => SuperTabPage(
+      sequence.toInt(),
+      id,
+    ),
+    null => null,
+    _ => throw const FormatException('Invalid Swarm page.'),
+  };
+
+  final int sequence;
+  final String id;
+  Map<String, dynamic> toJson() => {'sequence': sequence, 'id': id};
+}
+
 /// Optional timing/hold fields keep messages from older backends readable.
 class SuperTabDelivery {
   SuperTabDelivery.fromJson(Map<String, dynamic> row)
@@ -592,6 +710,9 @@ class SuperTabMessage {
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       attachments = _attachments(row['attachments']),
+      reactions = List.unmodifiable(
+        SuperTabReactionCount.listFromJson(row['reactions']),
+      ),
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
@@ -606,6 +727,7 @@ class SuperTabMessage {
   final Map<String, dynamic> source;
   final DateTime? createdAt;
   final List<SuperTabAttachment> attachments;
+  final List<SuperTabReactionCount> reactions;
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;

@@ -4,11 +4,13 @@ import { performance } from 'node:perf_hooks'
 import { HANDOFF_REQUESTS, type CoreApi, type CorePorts, type ServiceRequests } from '../core/api.js'
 import { prepareAgentHandoff, type HandoffDeps } from '../lib/agentHandoff.js'
 import { createHandoffRequest } from './handoffRequest.js'
-import { recordReplacement } from '../superTabs/replacements.js'
+import type { recordReplacement } from '../superTabs/replacements.js'
 
 export { HANDOFF_REQUESTS }
 
-export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff): ServiceRequests {
+/** `replacements`: a Super Tab member's replacement, recorded for its host (superTabs/replacements.ts, through
+ *  superTabs/inServices.ts). Absent while the Swarm is off (`HARNESS_SWARM`), when a completed change records nothing. */
+export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepareAgentHandoff, replacements?: typeof recordReplacement): ServiceRequests {
   const reads = core.conversations
   const deps: HandoffDeps = {
     resolve: (id) => reads.resolve(id),
@@ -32,7 +34,7 @@ export function startHandoff(core: CoreApi, _ports?: CorePorts, prepare = prepar
     if (!asker.owner) return { error: 'OWNER_REQUIRED' }
     try {
       if (closed?.aborted) return { error: 'HANDOFF_UNAVAILABLE' }
-      await recordReplacement(core, payload)
+      await replacements?.(core, payload)
       return { ok: true }
     } catch { return { error: 'HANDOFF_UNAVAILABLE' } }
   } }

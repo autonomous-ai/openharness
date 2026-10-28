@@ -72,7 +72,7 @@ class WorkspaceChrome {
     this.labelsPaneStatus = false,
     this.compactPaneHeader = false,
     this.superTabRecovers = false,
-    this.superTabReading = const SuperTabReading(),
+    this.superTabReading = SuperTabReading.desktop,
     this.subscriptionsNeedComputer = false,
   });
 

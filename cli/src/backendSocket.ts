@@ -35,6 +35,7 @@ import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
+import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
@@ -442,6 +443,8 @@ export class BackendSocket {
     },
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
+      // Only the Swarm host acts on it (superTabs/host.ts): the windows have nothing to re-read.
+      if (notice.type === 'super_tab_deliveries') return
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })
@@ -937,7 +940,8 @@ export class BackendSocket {
       logFrame('←', connId ? `conn:${sid(connId)}` : 'backend', frame)
     }
     const launchMeasured = productUsageLaunch(type, (frame.payload as { creationId?: unknown } | undefined)?.creationId,
-      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)), (frame.payload as { engine?: unknown } | undefined)?.engine)
+      signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)), (frame.payload as { engine?: unknown } | undefined)?.engine,
+      (frame.payload as { startedBy?: unknown } | undefined)?.startedBy === 'agent')
     const usageSource = productUsageSource(local, !!connId && this.toolClients.has(connId), role, frame.payload)
     const measured = productUsageRequest(type, (metric) => this.toGateway('usage', (gateway) => gateway.usageCounter?.(metric)), Date.now, usageSource,
       (frame.payload as { userAction?: unknown } | undefined)?.userAction === true)
@@ -946,7 +950,8 @@ export class BackendSocket {
       signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
       if (t === type) {
-        measured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, !!p.agent, p.ok)
+        const failure = p.failure as { code?: unknown; reason?: unknown } | undefined
+        measured(p.error ?? failure?.code, p.state, !!p.agent, p.ok, undefined, p.reason ?? failure?.reason)
         // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
         launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
       }
@@ -1124,6 +1129,10 @@ export class BackendSocket {
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
                 // than "no", per the desktop app's `EngineAvailability.fromJson`.
                 ...(entry.engine === 'codex' ? { supportsCodexHome: true } : {}),
+                // Static too, and this machine's own: whether `harness new` here can hand the engine a
+                // first prompt (engineLaunch.ts FIRST_PROMPT_ARGS), so a caller on another version reads
+                // it from the machine that will start the agent (#1788).
+                firstPrompt: supportsFirstPrompt(entry.engine),
                 // Static too: a pane whose engine is still downloading beside Desktop Harness's setup
                 // waits for that download (engineLaunch.ts `harness_wait_download`) rather than
                 // installing it again, so the desktop may open the pane before the download ends.

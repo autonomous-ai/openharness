@@ -1,0 +1,198 @@
+{
+ "format": 2,
+ "full": true,
+ "cursor": "eyJ2IjoyLCJ0IjoxNzkzMDEwMDc0Mzc1LCJlIjowfQ",
+ "tabs": [
+  {
+   "tabId": "f1a5c0de0000000000000001",
+   "lastChangedAt": 1793010101002,
+   "roster": [
+    {
+     "tabId": "f1a5c0de0000000000000001",
+     "tabName": "Fixture Swarm",
+     "lastChangedAt": 1793010101002,
+     "paused": false,
+     "active": true,
+     "attention": null,
+     "agent": {
+      "id": "a00000000000000000000001",
+      "projectId": "5000000000000000000000aa",
+      "machineId": "d00000000000000000000001",
+      "harnessId": "b00000000000000000000001",
+      "machineOwnerId": "6a0000000000000000000001",
+      "contributorId": "6a0000000000000000000001",
+      "membershipGeneration": "gen-owner",
+      "hostGrant": null,
+      "name": "Lead",
+      "displayName": "River",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "auto",
+       "contextWindow": null,
+       "engineVersion": null
+      },
+      "configurationVersion": "cv-lead",
+      "startedSession": {
+       "sessionId": "sess-lead",
+       "createdAt": "2026-10-26T09:00:00.000Z",
+       "creationId": "super-lead-start"
+      }
+     },
+     "joinSwarm": false,
+     "skillMode": "default",
+     "lead": true,
+     "leadsConversationId": "c00000000000000000000000",
+     "stopRequested": false,
+     "observers": [
+      {
+       "email": "dev@example.com",
+       "userId": "6a0000000000000000000002"
+      }
+     ]
+    },
+    {
+     "tabId": "f1a5c0de0000000000000001",
+     "tabName": "Fixture Swarm",
+     "lastChangedAt": 1793010101002,
+     "paused": false,
+     "active": true,
+     "attention": null,
+     "agent": {
+      "id": "a00000000000000000000002",
+      "projectId": "5000000000000000000000aa",
+      "machineId": "d00000000000000000000001",
+      "harnessId": "b00000000000000000000002",
+      "machineOwnerId": "6a0000000000000000000001",
+      "contributorId": "6a0000000000000000000001",
+      "membershipGeneration": "gen-owner",
+      "hostGrant": null,
+      "name": "Builder",
+      "displayName": "Hugo",
+      "configuration": {
+       "engine": "claude",
+       "model": "opus",
+       "effort": "high",
+       "contextWindow": null,
+       "engineVersion": null
+      },
+      "configurationVersion": "cv-builder",
+      "downSince": "2026-10-26T10:19:51.474Z",
+      "limitedUntil": null,
+      "workDecision": "awaiting"
+     },
+     "joinSwarm": false,
+     "skillMode": "default",
+     "lead": false,
+     "leadsConversationId": "c00000000000000000000000",
+     "stopRequested": false,
+     "observers": [
+      {
+       "email": "dev@example.com",
+       "userId": "6a0000000000000000000002"
+      }
+     ]
+    }
+   ],
+   "pool": {
+    "tabId": "f1a5c0de0000000000000001",
+    "paused": false,
+    "machine": {
+     "machineId": "d00000000000000000000001",
+     "name": "MacBookPro2021",
+     "contributorId": "6a0000000000000000000001",
+     "membershipGeneration": "gen-owner",
+     "generation": "pool-gen-1",
+     "scope": "swarm",
+     "engines": [
+      "claude",
+      "codex"
+     ],
+     "maxAgents": 4,
+     "paused": false,
+     "cwd": "/Users/owner/Harness/swarms/f1a5",
+     "observation": {
+      "generation": "pool-gen-1",
+      "receivedAt": 1793010099000,
+      "resources": {
+       "cpuPercent": 12,
+       "memoryUsedBytes": 8000000000,
+       "memoryTotalBytes": 32000000000
+      },
+      "quotas": [
+       {
+        "engine": "claude",
+        "known": true,
+        "windows": []
+       }
+      ],
+      "tools": {
+       "git": true
+      },
+      "runningHarnessIds": [
+       "b00000000000000000000001",
+       "b00000000000000000000002"
+      ],
+      "stoppedHarnessIds": []
+     }
+    },
+    "starts": [
+     {
+      "id": "e00000000000000000000002",
+      "request": {
+       "conversationId": "c00000000000000000000002",
+       "machineId": "d00000000000000000000001",
+       "engine": "claude",
+       "name": "Reviewer",
+       "cwd": "/Users/owner/Harness/swarms/f1a5",
+       "worktree": true
+      },
+      "contributorId": "6a0000000000000000000001",
+      "machineOwnerId": "6a0000000000000000000001",
+      "membershipGeneration": "gen-owner",
+      "poolGeneration": "pool-gen-1",
+      "dispatched": false,
+      "creationId": "super-e00000000000000000000002"
+     }
+    ],
+    "localGrid": "swarm-0123456789ab",
+    "reservations": [
+     {
+      "harnessId": "b00000000000000000000002",
+      "generation": "res-gen-1"
+     }
+    ],
+    "harnessIds": [
+     "b00000000000000000000001",
+     "b00000000000000000000002"
+    ],
+    "githubApp": true
+   },
+   "assignments": [
+    {
+     "tabId": "f1a5c0de0000000000000001",
+     "assignmentId": "w0000000000000000000001",
+     "harnessId": "b00000000000000000000002"
+    }
+   ],
+   "etag": "etag-tab1-a"
+  },
+  {
+   "tabId": "f1a5c0de0000000000000009",
+   "lastChangedAt": 1793000000000,
+   "roster": [
+    {
+     "tabId": "f1a5c0de0000000000000009",
+     "cleanup": {
+      "machineId": "d00000000000000000000001",
+      "removalId": "r0000000000000000000001"
+     }
+    }
+   ],
+   "pool": null,
+   "assignments": [],
+   "etag": "etag-tab9-a"
+  }
+ ],
+ "removedTabIds": []
+}

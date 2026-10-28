@@ -121,6 +121,9 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
   // `npm prefix -g` names it). Looking only here, a Codex in that folder was "missing": every launch dispatched
   // an installer that found it and exited 0 without a word, and the next launch dispatched another (2026-10-19).
   if (recipe?.executable.npmGlobal) candidates.push(...npmRuntimeBins().flatMap(bin => recipe.executable.names.map(name => join(bin, name))))
+  // A candidate this account may not reach. Looked past, for a later one it can run; with none, held as before rather
+  // than installing over what may be there.
+  let unreachable = false
   for (const path of [...new Set(candidates.flatMap(windowsPrograms))]) {
     try {
       const info = statSync(path)
@@ -150,12 +153,19 @@ export async function captureLaunchExecutable(engine: AgentEngine, shell?: strin
         } catch { return held('Waiting to confirm the engine search path and its aliases.') }
         continue
       }
+      // A folder on the search path that this account may not enter, or a file it may not run, hides nothing it could
+      // run: every account's PATH has Homebrew's bin (/etc/paths.d/homebrew), and a Harness Team account on a Mac whose
+      // Homebrew is its owner's alone (mode 770) held every Claude Code launch here for good, its own Claude Code in
+      // ~/.local/bin never reached (2026-10-27).
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'EACCES' || code === 'EPERM') { unreachable = true; continue }
       return held('Waiting to confirm access to the selected engine executable.')
     }
     const executable = executableSnapshot(nativeVersionProbe({ args: [], output: /^$/, timeoutMs: 5_000 }, () => path))
     if (!executable) return held('Waiting for the selected engine executable to stop changing.')
     return { state: 'ready', executable, environment: withNodeForScript(path, environment) }
   }
+  if (unreachable) return held('Waiting to confirm access to the selected engine executable.')
   return recipe ? { state: 'install', recipe, environment: environment as Record<string, string> } : held('Waiting for the configured engine executable to become available.')
 }
 

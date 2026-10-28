@@ -28,6 +28,7 @@ import { NativeFiles } from '../../engines/kit/nativeFiles.js'
 import { agentLaunchArgs } from '../../lib/agentAttribution.js'
 import { WindowsBatchLaunchRefused } from '../../lib/windows/launch.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
+import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 vi.mock('../../lib/projectFolder.js', async real => {
   const actual = await real<typeof import('../../lib/projectFolder.js')>()
@@ -153,6 +154,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
     privateGridName: vi.fn(async () => 'grid-me'),
     dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
+    swarmLaunch: SWARM_LAUNCH,
     ...over,
   }
   return { deps, create: createAgentCreator(deps) }
@@ -229,6 +231,21 @@ describe('creating an agent', () => {
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
   })
 
+  it('in the Harness Team account, points an engine it has not signed in at the owner\'s relay; never one on a grid', async () => {
+    const ownerRelay = vi.fn(async () => ({ env: { HARNESS_RELAY_TOKEN: 't' }, args: ['-c', 'model_provider="harness_owner"'] }))
+    expect(await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder() }))).toMatchObject({ ok: true })
+    expect(ownerRelay).toHaveBeenCalledWith('codex')
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env).toMatchObject({ HARNESS_RELAY_TOKEN: 't' })
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.extraArgs).toEqual(expect.arrayContaining(['model_provider="harness_owner"']))
+    // No relay there (signed in, or not a team account): the launch is as before.
+    const none = vi.fn(async () => null)
+    await setup({ ownerRelay: none }).create(request({ cwd: folder() }))
+    expect(vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0].env ?? {}).not.toHaveProperty('HARNESS_RELAY_TOKEN')
+    ownerRelay.mockClear()
+    await setup({ ownerRelay }).create(request({ cwd: folder(), grid: { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm' } }))
+    expect(ownerRelay).not.toHaveBeenCalled()
+  })
+
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {
     await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true }))
     const pane = vi.mocked(createAndRegisterPane).mock.calls.at(-1)![0]
@@ -244,6 +261,19 @@ describe('creating an agent', () => {
     expect(await setup().create(request({ cwd: folder(), swarmRole: 'dev', swarmGitHub: true })))
       .toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'Error: fixture disk full' })
     expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
+  // HARNESS_SWARM=off: the core holds none of the Swarm's launch code, so a start that asks for a Swarm role is
+  // refused before anything is written or launched, and every other start is as it was.
+  it('refuses a Swarm role while the Swarm is off, before opening a pane, and starts everything else as before', async () => {
+    acceptFullMode.mockClear()
+    const off = setup({ swarmLaunch: undefined })
+    expect(await off.create(request({ cwd: folder(), swarmRole: 'dev' })))
+      .toEqual({ ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    expect(acceptFullMode).not.toHaveBeenCalled()
+    expect(await off.create(request({ cwd: folder() }))).toMatchObject({ ok: true })
+    expect(vi.mocked(createAndRegisterPane).mock.calls[0]![0]).not.toHaveProperty('swarmSkill')
   })
 
   it('refuses an unsafe Swarm runtime before opening a pane', async () => {
@@ -800,6 +830,19 @@ describe('creating an agent', () => {
       expect(options.terminalHint).toEqual({ machineName: 'this-mac' })
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ agent: 'reviewer', defaultName: 'Reviewer' })
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, expect.anything(), ['claude'], undefined, undefined)
+    })
+
+    it('carries the person\'s machine MCP servers before what Harness tells the agent (#1872)', async () => {
+      const { writeMachineMcp } = await import('../../lib/machineMcp.js')
+      const { rmSync } = await import('node:fs')
+      const { env } = await import('../../config/env.js')
+      writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
+      try {
+        const { create } = setup()
+        await create(request({ agent: 'reviewer', startedBy: 'agent' }))
+        expect((vi.mocked(buildEngineLaunchArgv).mock.calls[0][1] as Record<string, unknown>).extraArgs).toEqual([
+          '--agent', 'reviewer', `--mcp-config=${JSON.stringify({ mcpServers: { lamp: { type: 'stdio', command: 'lamp-mcp', args: [] } } })}`, '--settings', '{"attribution":{}}'])
+      } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
     it('started by another agent: its pull request line after every other argument, and who started it on the row', async () => {

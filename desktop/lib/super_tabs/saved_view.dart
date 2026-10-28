@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../core/local_key_value_store.dart';
+import 'parts.dart';
 
 /// The last view of a Swarm tab as read: the state the tab draws and the open
 /// conversation's last page, kept on this device so the next open draws it at
@@ -15,26 +17,6 @@ class SuperTabSavedViews {
 
   /// How many Swarms an account keeps a view of, most recently used first.
   static const maxTabs = 3;
-
-  /// What `SuperTabSnapshot.fromJson` reads: everything else in a state is
-  /// never drawn, so it is never kept (agent starts carry their tasks).
-  static const _drawn = {
-    'version',
-    'id',
-    'name',
-    'ownerId',
-    'paused',
-    'project',
-    'people',
-    'agents',
-    'machines',
-    'conversations',
-    'invitations',
-    'leadsConversationId',
-    'localModels',
-    'mentionsWaiting',
-    'projects',
-  };
 
   String _key(String account, String tabId) => 'super_tab.view.$account.$tabId';
   String _index(String account) => 'super_tab.views.$account';
@@ -66,8 +48,7 @@ class SuperTabSavedViews {
     }
   }
 
-  /// Puts [tabId] first in the account's index. Best effort when reading: a
-  /// storage that refuses must not fail the open.
+  /// Puts [tabId] first in the account's index.
   Future<void> _use(String account, String tabId) async {
     final tabs = (await _tabs(account))..remove(tabId);
     tabs.insert(0, tabId);
@@ -81,26 +62,53 @@ class SuperTabSavedViews {
   }
 
   /// The view saved for [tabId], or null: none, unreadable, another shape,
-  /// or a storage that refuses (full, private mode). It never throws.
-  Future<Map<String, dynamic>?> read(String account, String tabId) =>
+  /// or a storage that refuses (full, private mode). It never throws, and
+  /// never waits for this browser's lock: another tab may hold it (one iOS
+  /// suspended), and a phone's busy boot grants it a second late. One value
+  /// reads whole; only the index update after it takes the lock, best effort.
+  Future<Map<String, dynamic>?> read(String account, String tabId) async {
+    final view = await _readView(account, tabId);
+    if (view == null) return null;
+    // Unless it was forgotten meanwhile (lost access, another account).
+    unawaited(
       _serial(() async {
-        try {
-          final raw = await storage.read(_key(account, tabId));
-          if (raw == null) return null;
-          final view = jsonDecode(raw);
-          if (view is! Map<String, dynamic> ||
-              view['state'] is! Map<String, dynamic> ||
-              view['revision'] is! int) {
-            return null;
-          }
-          try {
-            await _use(account, tabId);
-          } catch (_) {}
-          return view;
-        } catch (_) {
-          return null;
+        if (await storage.read(_key(account, tabId)) != null) {
+          await _use(account, tabId);
         }
+      }).catchError((Object _) {}),
+    );
+    return view;
+  }
+
+  /// [read] in turn, after the saved-view work already queued, with the
+  /// index update in that turn: Desktop's, as #1803 made it.
+  Future<Map<String, dynamic>?> readInTurn(String account, String tabId) =>
+      _serial(() async {
+        final view = await _readView(account, tabId);
+        if (view == null) return null;
+        try {
+          await _use(account, tabId);
+        } catch (_) {}
+        return view;
       });
+
+  Future<Map<String, dynamic>?> _readView(String account, String tabId) async {
+    try {
+      final raw = await storage.read(_key(account, tabId));
+      if (raw == null) return null;
+      final view = jsonDecode(raw);
+      // A view an older build kept (a whole state, not parts) is none.
+      if (view is! Map<String, dynamic> ||
+          view['format'] != superTabReadFormat ||
+          view['parts'] is! Map<String, dynamic> ||
+          view['lastChangedAt'] is! int) {
+        return null;
+      }
+      return view;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Keeps [view] for [tabId], and says whether it was kept; one over the
   /// cap is not kept, and the older one goes with it rather than staying
@@ -110,13 +118,11 @@ class SuperTabSavedViews {
         // Only for the account using this device: after a sign-out in
         // another tab, or another account's claim, a late write keeps nothing.
         if (await storage.read(_owner) != account) return false;
-        final state = view['state'] as Map<String, dynamic>;
         final text = jsonEncode({
           ...view,
-          'state': {
-            for (final entry in state.entries)
-              if (_drawn.contains(entry.key)) entry.key: entry.value,
-          },
+          'parts': SuperTabParts.drawnOnly(
+            view['parts'] as Map<String, dynamic>,
+          ),
         });
         if (_utf8Length(text) > maxBytes) {
           await _forget(account, tabId);
@@ -135,6 +141,15 @@ class SuperTabSavedViews {
     final tabs = (await _tabs(account))..remove(tabId);
     await storage.write(_index(account), jsonEncode(tabs));
   }
+
+  /// A complete discovery listed [tabIds]: the views of the account's other
+  /// Swarms go, one it lost while not open included.
+  Future<void> keepOnly(String account, Set<String> tabIds) =>
+      _serial(() async {
+        for (final tab in await _tabs(account)) {
+          if (!tabIds.contains(tab)) await _forget(account, tab);
+        }
+      });
 
   /// Signing out, or another account: nothing of this one stays behind.
   Future<void> forgetAccount(String account) =>
@@ -158,9 +173,14 @@ class SuperTabSavedViews {
   });
 
   /// [account] (null when signed out) is the one using this device now: the
-  /// views of any other account that used it, before a reload too, go.
-  Future<void> claim(String? account) => _serial(() async {
+  /// views of any other account that used it, before a reload too, go, and
+  /// those of [leaving]: another tab may have kept one after it cleared
+  /// whose device this is.
+  Future<void> claim(String? account, {String? leaving}) => _serial(() async {
     final owner = await storage.read(_owner);
+    if (leaving != null && leaving != account && leaving != owner) {
+      await _forgetAccount(leaving);
+    }
     if (owner == account) return;
     if (owner != null) await _forgetAccount(owner);
     if (account == null) {

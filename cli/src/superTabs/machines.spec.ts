@@ -6,12 +6,15 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { apisOn, ContributedMachines, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
+import { apisOn, ContributedMachines, createQuietGit, liveOn, localModelsStamp, offered, refusedOn, servedOn, sharedWith, swarmWorktreesFile } from './machines.js'
 import { SuperTabHostError } from './host.js'
 import { startAgent } from './start.js'
+import { hostForm, swarmReply } from './fixtures/read/index.js'
+import { HostFeed } from './hostFeed.js'
+import { SwarmReads } from './swarmReads.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
-function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null) {
+function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
   let now = 1000, stamp = 's0'
   const core = fakeCore({ dataDir: '/isolated-pool-fixture', agents: {
     byAgent: vi.fn(id => id === 'running' ? { agentId: id } as never : undefined),
@@ -19,7 +22,7 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   } })
   const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
     harnessIds: ['running', 'stopped'], starts: [{ id: 'start', dispatched: false }], paused: false }
-  const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.endsWith('/pools') ? [pool] : { revision: 1 })
+  const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
   const request = vi.fn(async (_type: string): Promise<Record<string, unknown>> => ({ providers: [{ provider: 'codex', outcome: 'answered', httpStatus: 200,
     body: { account_email: 'private@example.com', secret: 'private-token', rate_limit: { primary_window: { used_percent: 25, reset_at: 1234567890 } } } }] }))
   const close = vi.fn(), open = vi.fn(async () => ({ machineId: 'host', request, close }))
@@ -28,10 +31,34 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
   const prepare = vi.fn(async () => {})
   const log = vi.fn()
   const modelsStamp = vi.fn(async () => stamp)
-  const machine = new ContributedMachines(core, 'host', { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, now: () => now } as never)
-  return { machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
+  const deps = { backend, open, capabilities, start, prepare, log, env, privacy, modelsStamp, relayed, now: () => now }
+  const machine = new ContributedMachines(core, 'host', deps as never)
+  return { deps, machine, pool, core, backend, open, request, close, capabilities, start, prepare, log, modelsStamp, advance: () => { now += 16000 }, step: (ms: number) => { now += ms },
     stamp: (next: string) => { stamp = next } }
 }
+
+// #1726: the pass read GET /hosts/:m/pools, up to 100 whole Swarms, every 5 s. Its pools now come with the host form.
+describe('the pools of a contributed machine', () => {
+  it('come from the host form, never the old pools roster', async () => {
+    const f = fixture()
+    await f.machine.tick()
+    const reads = f.backend.mock.calls.filter(c => c[1] === 'GET').map(c => c[2])
+    expect(reads).toEqual(['/api/super-tabs/hosts/host/changes?full=1'])
+    expect(f.start).toHaveBeenCalledWith(expect.objectContaining({ tabId: 'tab', startId: 'start' }), expect.any(Function), expect.anything(), f.open)
+  })
+  it('come from the host\'s own fresh read when it shares one, without reading again', async () => {
+    const f = fixture()
+    let now = 1000
+    const feed = new HostFeed(f.core, 'host', { now: () => now, backend: f.backend })
+    await feed.refresh()
+    const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start, prepare: f.prepare,
+      log: f.log, now: () => now, sources: { feed, reads: new SwarmReads(f.core, { backend: f.backend }) } } as never)
+    now += 1_999
+    await machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'GET')).toHaveLength(1)
+    expect(f.start).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('contributed machine executor', () => {
   it('reports only installed supported engines for a legacy OpenCode contribution', async () => {
@@ -100,7 +127,7 @@ describe('contributed machine executor', () => {
       const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start,
         log: f.log, env: {}, privacy: () => null, team: () => team, now: () => 1000 } as never)
       Object.assign(f.pool, { githubApp: true })
-      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.endsWith('/pools') ? [f.pool]
+      f.backend.mockImplementation(async (_core: unknown, _method: string, path: string): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
         : path.endsWith('/github-token') ? { github: false } : { revision: 1 })
       await machine.tick()
       const asked = f.backend.mock.calls.find(c => String(c[2]).endsWith('/github-token'))!
@@ -141,8 +168,8 @@ describe('contributed machine executor', () => {
   it('reuses tool readings across tabs and heartbeat passes without another shell probe', async () => {
     const f = fixture()
     const original = f.backend.getMockImplementation()!
-    f.backend.mockImplementation(async (core, method, path, body) => path.endsWith('/pools')
-      ? [f.pool, { ...f.pool, tabId: 'second-tab' }]
+    f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes')
+      ? hostForm([], { pools: [f.pool, { ...f.pool, tabId: 'second-tab' }] })
       : original(core, method, path, body))
     await f.machine.tick()
     expect(f.capabilities.mock.calls.map(([input]) => input.tools)).toEqual([
@@ -169,6 +196,240 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['flutter'] })
   })
+  // v1 routing (#229): the route left out nothing it could not see, and picked machines signed out, without the project or
+  // unable to push. The reading now says what the machine is ready for.
+  describe('readiness', () => {
+    const readings = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+      .map(c => c[3] as Record<string, unknown> & { readiness?: { engines?: unknown[]; checkouts?: Array<Record<string, unknown>> } })
+    const withEngines = (f: ReturnType<typeof fixture>) => {
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true }, { engine: 'cursor', installed: true }] }
+        : usage(type, ...rest as []))
+    }
+    const probes = (f: ReturnType<typeof fixture>) => f.request.mock.calls.filter(c => c[0] === 'engines_probe')
+
+    it('says whether each engine is installed and signed in, probing again only after ten minutes', async () => {
+      const f = fixture()
+      withEngines(f)
+      await f.machine.tick()
+      expect(f.request).toHaveBeenCalledWith('engines_probe', { engines: ['claude', 'codex'], accounts: true }, 20_000)
+      // An engine that says nothing about its sign-in is unknown, never signed out.
+      expect(readings(f)[0]!.readiness).toEqual({ engines: [{ engine: 'claude', installed: true, signedIn: false }, { engine: 'codex', installed: true, signedIn: null }] })
+      f.advance(); await f.machine.tick()
+      expect(readings(f)).toHaveLength(2)
+      expect(readings(f)[1]!.readiness?.engines).toHaveLength(2)
+      expect(probes(f)).toHaveLength(1)
+      f.step(10 * 60_000); await f.machine.tick()
+      expect(probes(f)).toHaveLength(2)
+    })
+
+    it('reads a Harness Team account\'s engine it has not signed in as ready when its owner\'s relay is there', async () => {
+      const f = fixture({}, () => null, () => true)
+      withEngines(f)
+      await f.machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: null }])
+    })
+
+    it('reads an engine the probe calls not installed as unknown, since a timed-out shell probe says the same (review of #1743)', async () => {
+      const f = fixture()
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe'
+        ? { engines: [{ engine: 'claude', installed: false }, { engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
+      await f.machine.tick()
+      expect(readings(f)[0]!.readiness?.engines).toEqual([{ engine: 'claude', installed: null, signedIn: null }, { engine: 'codex', installed: true, signedIn: true }])
+    })
+
+    it('sends no engine readiness when the probe fails, and asks again a minute later', async () => {
+      const f = fixture()
+      const usage = f.request.getMockImplementation()!
+      f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? Promise.reject(new Error('timed out')) : usage(type, ...rest as []))
+      await f.machine.tick()
+      expect(readings(f)[0]).not.toHaveProperty('readiness')
+      f.advance(); await f.machine.tick()
+      expect(probes(f)).toHaveLength(1)
+      f.step(60_000); await f.machine.tick()
+      expect(probes(f)).toHaveLength(2)
+    })
+
+    describe('of its Swarm folder', () => {
+      const roots: string[] = []
+      afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+      const run = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } })
+      /** A Swarm folder: p1 a checkout of a GitHub repository this login may not push to, p2 a plain folder, p3 a checkout
+       *  of a repository on disk it can push to. */
+      function swarmFolder() {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const remote = join(root, 'remote.git'), swarm = join(root, 'swarm')
+        mkdirSync(remote); run(remote, 'init', '-q', '--bare')
+        for (const name of ['p1', 'p3']) {
+          mkdirSync(join(swarm, name), { recursive: true }); const dir = join(swarm, name)
+          run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+        }
+        run(join(swarm, 'p1'), 'remote', 'add', 'origin', 'https://someone:secret-token@github.com/Acme/App.git?access_token=query-secret')
+        run(join(swarm, 'p3'), 'remote', 'add', 'origin', remote)
+        mkdirSync(join(swarm, 'p2')); mkdirSync(join(swarm, '.hidden')); writeFileSync(join(swarm, 'notes.txt'), '')
+        return swarm
+      }
+      /** git as it is, except that a push to GitHub answers as GitHub does to a login without write access. */
+      function gitFor(denied: string) {
+        const calls: string[][] = []
+        const git = vi.fn(async (cwd: string, args: string[]) => {
+          calls.push(args)
+          if (args[0] === 'push' && cwd.endsWith('p1')) return { ok: false, stdout: '', stderr: denied }
+          try { return { ok: true, stdout: execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' } }
+          catch (error) { return { ok: false, stdout: '', stderr: String((error as { stderr?: unknown }).stderr ?? '') } }
+        })
+        return { git, calls }
+      }
+      function swarmFixture(git: ReturnType<typeof gitFor>['git']) {
+        const f = fixture()
+        Object.assign(f.pool.machine, { scope: 'swarm', cwd: swarmFolder() })
+        const machine = new ContributedMachines(f.core, 'host', { backend: f.backend, open: f.open, capabilities: f.capabilities, start: f.start, prepare: f.prepare,
+          log: f.log, now: () => now, git } as never)
+        let now = 1000
+        return { ...f, machine, step: (ms: number) => { now += ms } }
+      }
+
+      it('lists each project folder\'s repository, whether it is a checkout, and whether this login can push, never a credential', async () => {
+        const { git, calls } = gitFor("remote: Permission to Acme/App.git denied to someone.\nfatal: unable to access 'https://github.com/Acme/App.git/': The requested URL returned error: 403")
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        // The folder is read beside the pass, never holding it up.
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(2))
+        f.step(16_000); await f.machine.tick()
+        const checkouts = readings(f).at(-1)!.readiness!.checkouts!
+        expect(checkouts).toEqual([
+          { folder: 'p1', repository: 'github.com/acme/app', git: true, push: false },
+          { folder: 'p2', repository: null, git: false, push: null },
+          { folder: 'p3', repository: null, git: true, push: true },
+        ])
+        expect(JSON.stringify(readings(f))).not.toMatch(/secret-token|query-secret/)
+        // A dry run that runs no hooks, so nothing is pushed and nothing of the repository's runs.
+        expect(calls.find(a => a[0] === 'push')).toEqual(['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        f.step(16_000); await f.machine.tick()
+        expect(calls.filter(a => a[0] === 'push')).toHaveLength(2)
+        f.step(10 * 60_000); await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(4))
+      })
+
+      it('reads a checkout with git itself, which can push to a remote it may write to', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const remote = join(root, 'remote.git'), dir = join(root, 'swarm', 'p1')
+        mkdirSync(remote); run(remote, 'init', '-q', '--bare'); mkdirSync(dir, { recursive: true })
+        run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'); run(dir, 'remote', 'add', 'origin', remote)
+        const f = fixture()
+        Object.assign(f.pool.machine, { scope: 'swarm', cwd: join(root, 'swarm') })
+        await f.machine.tick()
+        await vi.waitFor(async () => {
+          f.advance(); await f.machine.tick()
+          expect(readings(f).at(-1)!.readiness?.checkouts).toEqual([{ folder: 'p1', repository: null, git: true, push: true }])
+        })
+        // A dry run: the remote has nothing.
+        expect(execFileSync('git', ['-C', remote, 'for-each-ref'], { encoding: 'utf8' })).toBe('')
+      })
+
+      it('says nothing of a Swarm folder it cannot read, and tries again a minute later, not every pass', async () => {
+        const { git } = gitFor('')
+        const f = swarmFixture(git)
+        Object.assign(f.pool.machine, { cwd: join(tmpdir(), 'readiness-missing-folder') })
+        await f.machine.tick()
+        await vi.waitFor(() => expect(f.log).toHaveBeenCalledWith(expect.stringContaining('Could not read the Swarm folder')))
+        // Proving it is not read again needs the time a read would take: each pass is followed by more than a folder read.
+        for (let i = 0; i < 3; i++) { f.step(16_000); await f.machine.tick(); await new Promise(done => setTimeout(done, 50)) }
+        expect(readings(f)).toHaveLength(4)
+        expect(readings(f).at(-1)!.readiness?.checkouts).toBeUndefined()
+        expect(f.log.mock.calls.filter(c => String(c[0]).includes('Swarm folder'))).toHaveLength(1)
+        f.step(60_000); await f.machine.tick()
+        await vi.waitFor(() => expect(f.log.mock.calls.filter(c => String(c[0]).includes('Swarm folder'))).toHaveLength(2))
+      })
+
+      it('leaves out a folder whose probe failed rather than calling it no checkout, and reads it again a minute later (review of #1743)', async () => {
+        const { git: real, calls } = gitFor('denied')
+        let failing = true
+        const git = vi.fn(async (cwd: string, args: string[]) => failing && args[0] === 'rev-parse' && cwd.endsWith('p3')
+          ? { ok: false, stdout: '', stderr: '', timedOut: true } : real(cwd, args))
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(1))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts!.map(c => [c.folder, c.git])).toEqual([['p1', true], ['p2', false]])
+        failing = false
+        f.step(60_000); await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(3))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts!.map(c => c.folder)).toEqual(['p1', 'p2', 'p3'])
+      })
+
+      it('ends a git whose helper hangs at its deadline, with everything it started, and settles at once', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const dir = join(root, 'p1'), pidFile = join(root, 'helper.pid'), ssh = join(root, 'ssh.sh')
+        // An ssh that leaves a helper behind holding git's output, as a stuck credential helper or ssh agent can.
+        writeFileSync(ssh, `#!/bin/sh\nsleep 60 &\necho $! > ${pidFile}\nsleep 60\n`, { mode: 0o755 })
+        mkdirSync(dir); run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+        run(dir, 'remote', 'add', 'origin', 'ssh://git@example.invalid/acme/app.git'); run(dir, 'config', 'core.sshCommand', ssh)
+        const began = Date.now()
+        const answer = await createQuietGit(1_000)(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        expect(answer).toMatchObject({ ok: false, timedOut: true })
+        expect(Date.now() - began).toBeLessThan(5_000)
+        const helper = Number(readFileSync(pidFile, 'utf8'))
+        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow())
+      })
+
+      it('ends a helper that outlives git and keeps its output open, before the deadline (re-check of #1743)', async () => {
+        const root = mkdtempSync(join(tmpdir(), 'readiness-')); roots.push(root)
+        const dir = join(root, 'p1'), pidFile = join(root, 'helper.pid'), ssh = join(root, 'ssh.sh')
+        // An ssh that fails at once, so git exits, but leaves a helper behind holding the error output git handed down.
+        writeFileSync(ssh, `#!/bin/sh\nsleep 60 </dev/null >/dev/null &\necho $! > ${pidFile}\nexit 1\n`, { mode: 0o755 })
+        mkdirSync(dir); run(dir, 'init', '-q'); run(dir, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init')
+        run(dir, 'remote', 'add', 'origin', 'ssh://git@example.invalid/acme/app.git'); run(dir, 'config', 'core.sshCommand', ssh)
+        const began = Date.now()
+        const answer = await createQuietGit(30_000)(dir, ['push', '--dry-run', '--no-verify', '--porcelain', 'origin', 'HEAD:refs/heads/harness-push-check'])
+        expect(answer).toMatchObject({ ok: false })
+        expect(Date.now() - began).toBeLessThan(10_000)
+        const helper = Number(readFileSync(pidFile, 'utf8'))
+        await vi.waitFor(() => expect(() => process.kill(helper, 0)).toThrow())
+      })
+
+      it('says a push is unknown, not refused, when the remote could not be reached', async () => {
+        const { git, calls } = gitFor("fatal: unable to access 'https://github.com/Acme/App.git/': Could not resolve host: github.com")
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(2))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts![0]).toEqual({ folder: 'p1', repository: 'github.com/acme/app', git: true, push: null })
+      })
+
+      it('reads a credential prompt git could not show as no push access', async () => {
+        const { git, calls } = gitFor("fatal: could not read Username for 'https://github.com': terminal prompts disabled")
+        const f = swarmFixture(git)
+        await f.machine.tick()
+        await vi.waitFor(() => expect(calls.filter(a => a[0] === 'push')).toHaveLength(2))
+        f.step(16_000); await f.machine.tick()
+        expect(readings(f).at(-1)!.readiness!.checkouts![0]).toMatchObject({ folder: 'p1', push: false })
+      })
+    })
+
+    it('drops only the readiness field for a backend from before it, for ten minutes, keeping privacy', async () => {
+      const f = fixture({}, () => ({ mode: 'dedicated' }))
+      withEngines(f)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.readiness) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: readiness', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      expect(readings(f)).toHaveLength(2)
+      expect(readings(f)[1]).not.toHaveProperty('readiness')
+      expect(readings(f)[1]).toMatchObject({ privacy: { mode: 'dedicated' } })
+      f.advance(); await f.machine.tick()
+      expect(readings(f)).toHaveLength(3)
+      f.step(10 * 60_000); await f.machine.tick()
+      expect(readings(f).at(-2)).toHaveProperty('readiness')
+      expect(readings(f).at(-1)).not.toHaveProperty('readiness')
+    })
+  })
+
   it('retries a probe-failure observation without its new field for an older backend', async () => {
     const f = fixture()
     f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
@@ -183,6 +444,158 @@ describe('contributed machine executor', () => {
     expect(posts).toHaveLength(2)
     expect(posts[0]![3]).toHaveProperty('toolProbeErrors')
     expect(posts[1]![3]).not.toHaveProperty('toolProbeErrors')
+  })
+
+  it('sends when each running harness last showed progress, and only for those running', async () => {
+    const f = fixture()
+    const progress = vi.fn((ids: readonly string[]) => ({ running: 900, stopped: 800, elsewhere: 700 }) as Record<string, number>)
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress } as never)
+    await machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    expect(body.harnessProgress).toEqual({ running: 900 })
+    // Nothing read yet for any running harness: the field is left out.
+    progress.mockReturnValue({})
+    f.advance(); await machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('harnessProgress')
+  })
+
+  it('says whether each running session\'s folder has uncommitted changes, leaving out any git could not read', async () => {
+    const f = fixture()
+    const folders: Record<string, string> = { running: '/work/running', clean: '/work/clean', broken: '/work/broken' }
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => folders[id] ? { agentId: id, cwd: folders[id] } as never : undefined)
+    f.pool.harnessIds = ['running', 'clean', 'broken', 'stopped']
+    const git = vi.fn(async (cwd: string, args: string[]) => cwd === '/work/broken' ? { ok: false, stdout: '', stderr: 'fatal' }
+      : { ok: args.join(' ') === 'status --porcelain', stdout: cwd === '/work/running' ? ' M src/a.ts\n' : '', stderr: '' })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+    await machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    expect(body.harnessUncommitted).toEqual({ running: true, clean: false })
+    expect(git.mock.calls.map(c => c[0]).sort()).toEqual(['/work/broken', '/work/clean', '/work/running'])
+  })
+
+  it('reads each session\'s folder at most once a minute', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+    const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+    await machine.tick()
+    f.advance(); await machine.tick()
+    expect(git).toHaveBeenCalledTimes(1)
+    f.step(60_000); await machine.tick()
+    expect(git).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops uncommitted changes alone for a backend that refuses them, and offers them again ten minutes later', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessUncommitted) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessUncommitted', 400)
+      return original(core, method, path, body)
+    })
+    const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const fields = (post: Record<string, unknown>) => ['harnessUncommitted', 'harnessProgress'].filter(key => key in post)
+    await machine.tick()
+    expect(posts().map(fields)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
+    f.advance(); await machine.tick()
+    expect(posts().map(fields).at(-1)).toEqual(['harnessProgress'])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(fields).slice(-2)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
+  })
+
+  it('drops progress for a backend that refuses it, and offers it again ten minutes later', async () => {
+    const f = fixture()
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessProgress) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessProgress', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false])
+    f.advance(); await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(c => 'harnessProgress' in (c[3] as object))).toEqual([true, false, false, true, false])
+  })
+
+  describe('a start this machine launched and is still preparing', () => {
+    const machinePosts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls
+      .filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const pendingCreation = { error: 'START_PENDING', startId: 'start', creationId: 'creation', state: 'pending',
+      detail: 'Keep this start ID. Run resume with it to check the same native creation; do not make another start request.' }
+
+    it('is reported as preparing on every report while its creation is under way, and no longer once it runs', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue(pendingCreation as never)
+      // The pass that launches it reports first and launches after; the next pass says so at once.
+      await f.machine.tick()
+      expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+      f.step(5_000); await f.machine.tick()
+      expect(machinePosts(f).at(-1)!.preparingStartIds).toEqual(['start'])
+      // Unchanged, it is sent again with each beat, so the backend sees it fresh.
+      f.advance(); await f.machine.tick()
+      expect(machinePosts(f)).toHaveLength(3)
+      expect(machinePosts(f).at(-1)!.preparingStartIds).toEqual(['start'])
+      f.start.mockResolvedValue({ ok: true, harnessId: 'harness' } as never)
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+    })
+
+    it('is not a start whose launch is uncertain, refused or failed', async () => {
+      for (const result of [{ ...pendingCreation, state: 'unconfirmed' }, { error: 'START_UNCERTAIN', startId: 'start', detail: 'Inspect the machine.' },
+        { error: 'CAPACITY_UNAVAILABLE', startId: 'start', reasons: ['Busy.'] }, { error: 'START_FAILED', startId: 'start', detail: 'Failed.' }]) {
+        const f = fixture()
+        f.start.mockResolvedValue(result as never)
+        await f.machine.tick()
+        f.advance(); await f.machine.tick()
+        expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
+      }
+    })
+
+    it('is left out for a backend that refuses it, which then fails it at 3 minutes as before, and offered again ten minutes later', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue(pendingCreation as never)
+      const original = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => {
+        if (method === 'POST' && (body as Record<string, unknown>)?.preparingStartIds) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: preparingStartIds', 400)
+        return original(core, method, path, body)
+      })
+      await f.machine.tick()
+      f.step(5_000); await f.machine.tick()
+      const sent = () => machinePosts(f).map(post => 'preparingStartIds' in post)
+      expect(sent()).toEqual([false, true, false])
+      f.advance(); await f.machine.tick()
+      expect(sent()).toEqual([false, true, false, false])
+      f.step(600_000); await f.machine.tick()
+      expect(sent()).toEqual([false, true, false, false, true, false])
+    })
+  })
+
+  it('drops readiness alone for a backend that takes progress, and both, keeping privacy, for one that takes neither', async () => {
+    const f = fixture({}, () => ({ mode: 'dedicated' }))
+    const usage = f.request.getMockImplementation()!
+    f.request.mockImplementation(async (type, ...rest) => type === 'engines_probe' ? { engines: [{ engine: 'codex', installed: true, signedIn: true }] } : usage(type, ...rest as []))
+    let refuses = ['readiness']
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      const sent = body as Record<string, unknown>
+      if (method === 'POST' && refuses.some(key => sent?.[key])) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    const fields = (post: Record<string, unknown>) => ['readiness', 'harnessProgress', 'privacy'].filter(key => key in post)
+    await machine.tick()
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy']])
+    refuses = ['readiness', 'harnessProgress']
+    const older = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    f.backend.mockClear(); await older.tick()
+    expect(posts().map(fields)).toEqual([['readiness', 'harnessProgress', 'privacy'], ['harnessProgress', 'privacy'], ['privacy']])
   })
 
   it('lists the models it serves on the Swarm\'s grid only while the add-on is on, and drops them for an older backend', async () => {
@@ -483,7 +896,7 @@ describe('contributed machine executor', () => {
 
   it('does not connect to a daemon without an explicit contribution', async () => {
     const f = fixture()
-    f.backend.mockResolvedValue([{ tabId: 'tab', agent: { id: 'existing-agent' } }])
+    f.backend.mockResolvedValue(hostForm([{ tabId: 'tab', agent: { id: 'existing-agent' } }]))
     await f.machine.tick()
     expect(f.open).not.toHaveBeenCalled()
   })
@@ -516,6 +929,43 @@ describe('contributed machine executor', () => {
       ['Swarm start start is waiting: Waiting for the launched engine.']])
   })
 
+  describe('a start this machine cannot run', () => {
+    const failures = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
+      .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')
+
+    it('is failed with the machine\'s own reason once it has refused it for a minute', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue({ error: 'CAPACITY_UNAVAILABLE', startId: 'start', reasons: ['The selected agent engine is not installed on this machine.', 'CPU use is 97%; the requested maximum is 85%.'] } as never)
+      await f.machine.tick()
+      // A busy minute passes: CPU or memory may free up, and routing saw this machine able a moment ago.
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([{ operationId: 'refused-start', command: { type: 'agent.startFailed', startId: 'start',
+        error: 'The selected agent engine is not installed on this machine. CPU use is 97%; the requested maximum is 85%.' } }])
+    })
+
+    it('starts its minute again after a pass that did not refuse it, and never fails one whose launch is uncertain or pending', async () => {
+      const f = fixture()
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      await f.machine.tick()
+      f.start.mockRejectedValue(new Error('Could not reach the Harness backend.'))
+      f.step(30_000); await f.machine.tick()
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      f.step(30_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+      for (const error of ['START_UNCERTAIN', 'START_PENDING', 'START_REFUSED']) {
+        f.start.mockResolvedValue({ error, startId: 'start', detail: 'The machine did not confirm.' } as never)
+        f.step(60_000); await f.machine.tick()
+        f.step(60_000); await f.machine.tick()
+      }
+      // Refused again: its minute starts now, not at the passes before.
+      f.start.mockResolvedValue({ error: 'CONTRIBUTION_REQUIRED', startId: 'start', detail: 'Ask the machine owner to use Add machine in this Swarm.' } as never)
+      f.step(60_000); await f.machine.tick()
+      expect(failures(f)).toEqual([])
+    })
+  })
+
   it('a lead queues a contributed start without connecting to that computer', async () => {
     const open = vi.fn()
     const scoped = vi.fn(async () => ({ ok: true, value: { creationId: 'creation', poolGeneration: 'grant', request: { machineId: 'host', engine: 'claude' } } }))
@@ -526,7 +976,7 @@ describe('contributed machine executor', () => {
 
   describe('how soon a change is seen', () => {
     const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
-    const reads = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'GET' && String(c[2]).endsWith('/pools'))
+    const reads = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'GET' && String(c[2]).includes('/hosts/host/changes'))
     const lastBody = (f: ReturnType<typeof fixture>) => posts(f).at(-1)![3] as { runningHarnessIds: string[]; stoppedHarnessIds: string[] }
     /** The next host tick, `ms` later. */
     const after = async (f: ReturnType<typeof fixture>, ms: number) => { f.step(ms); await f.machine.tick() }
@@ -550,6 +1000,18 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(posts(f)).toHaveLength(3)
       expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['newcomer'], stoppedHarnessIds: ['running', 'stopped'] })
+    })
+
+    it('reports a session closed by hand, which leaves no stopped record, as stopped on the next look', async () => {
+      const f = fixture(); quiet(f)
+      await f.machine.tick()
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: ['running'], stoppedHarnessIds: ['stopped'] })
+      // Closed or crashed: gone from the registry, and kept nowhere as a stopped agent.
+      vi.mocked(f.core.agents.byAgent).mockImplementation(() => undefined)
+      Object.assign(f.core.agents, { gone: vi.fn(async (id: string) => id === 'running') })
+      await after(f, 5_000)
+      expect(posts(f)).toHaveLength(2)
+      expect(lastBody(f)).toMatchObject({ runningHarnessIds: [], stoppedHarnessIds: ['running', 'stopped'] })
     })
 
     it('publishes at once when new work is paused or allowed again', async () => {
@@ -626,7 +1088,7 @@ describe('contributed machine executor', () => {
       for (const ms of [1_000, 5_000, 10_000, 20_000]) { f.step(ms); void f.machine.tick() }
       await Promise.resolve()
       expect(reads(f)).toHaveLength(1)
-      release([f.pool])
+      release(hostForm([], { pools: [f.pool] }))
       await first
       expect(reads(f)).toHaveLength(1)
       expect(posts(f)).toHaveLength(1)
@@ -643,7 +1105,7 @@ describe('contributed machine executor', () => {
       await after(f, 5_000)
       expect(reads(f)).toHaveLength(2)
 
-      f.backend.mockImplementation(async (_core, method, path) => path.endsWith('/pools') ? [f.pool] : method === 'POST' ? Promise.reject(new Error('refused')) : { revision: 1 })
+      f.backend.mockImplementation(async (_core, method, path) => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] }) : method === 'POST' ? Promise.reject(new Error('refused')) : { revision: 1 })
       await after(f, 15_000)
       expect(posts(f)).toHaveLength(2)
       await after(f, 5_000); await after(f, 5_000)
@@ -665,7 +1127,7 @@ describe('contributed machine executor', () => {
       const f = fixture(); quiet(f)
       await f.machine.tick()
       const pools = f.backend.getMockImplementation()!
-      f.backend.mockImplementation(async (core, method, path, body) => path.endsWith('/pools') ? [] : pools(core, method, path, body))
+      f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes') ? hostForm([], { tabs: ['tab'] }) : pools(core, method, path, body))
       await after(f, 5_000)
       f.backend.mockImplementation(pools)
       await after(f, 5_000)
@@ -717,7 +1179,7 @@ describe('removed machine cleanup', () => {
       closeStarted: vi.fn(async (agentId: string) => { live = live.filter(s => s.agentId !== agentId); return { closed: true } as never }),
     } })
     const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> =>
-      method === 'GET' && path === '/api/super-tabs/tab' ? { state: { starts } } : { revision: 1 })
+      method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
     const log = vi.fn()
     let now = 0
     const open = () => new ContributedMachines(core, 'host', { backend, log, now: () => now } as never)
@@ -725,6 +1187,43 @@ describe('removed machine cleanup', () => {
     return { core, backend, log, open, acks, home, data, clone, newRoot, otherTab, own, ownWorktree, recorded, earlier, unproven, starts,
       setLive: (sessions: RegisteredSession[]) => { live = sessions }, step: (ms: number) => { now += ms } }
   }
+
+  it('removes a stopped worker\'s worktree once nothing runs there and nothing is uncommitted, and its branch once merged', async () => {
+    const m = machine()
+    const host = m.open()
+    const recorded = () => JSON.parse(readFileSync(swarmWorktreesFile(m.data, 'host'), 'utf8')).worktrees.map((w: { startId: string }) => w.startId)
+    // Its session still runs there: kept.
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(true)
+    m.setLive([])
+    // A file not committed: kept, with its work.
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(readFileSync(join(m.recorded, 'unpushed.txt'), 'utf8')).toBe('work')
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(git(m.clone, 'worktree', 'list', '--porcelain')).not.toContain('/recorded\n')
+    // Its branch had no commit of its own, so it went too.
+    expect(git(m.clone, 'branch', '--list', 'super-tab/recorded')).toBe('')
+    expect(recorded()).toEqual(['kept'])
+  })
+
+  it('keeps a stopped worker\'s branch with a commit only it has, and leaves alone a worktree it has no record of', async () => {
+    const m = machine()
+    m.setLive([])
+    rmSync(join(m.recorded, 'unpushed.txt'))
+    git(m.recorded, 'commit', '-q', '--allow-empty', '-m', 'only here')
+    git(m.clone, 'config', 'branch.super-tab/recorded.harness', 'placeholder')
+    const host = m.open()
+    await host.removeStoppedWorktree('tab', 'h-recorded')
+    expect(existsSync(m.recorded)).toBe(false)
+    expect(git(m.clone, 'log', '-1', '--format=%s', 'super-tab/recorded').trim()).toBe('only here')
+    rmSync(join(m.earlier, 'unpushed.txt'))
+    await host.removeStoppedWorktree('tab', 'h-earlier')
+    await host.removeStoppedWorktree('other-tab', 'h-recorded')
+    expect(existsSync(m.earlier)).toBe(true)
+  })
 
   it('deletes only the tab\'s Swarm folders and Swarm-made worktrees, then acknowledges once', async () => {
     const m = machine()
@@ -768,7 +1267,7 @@ describe('removed machine cleanup', () => {
   it('waits longer after each failed acknowledgement instead of cleaning again every pass', async () => {
     const m = machine()
     const host = m.open()
-    m.backend.mockImplementationOnce(async () => ({ state: { starts: [] } })).mockRejectedValueOnce(new Error('Backend offline'))
+    m.backend.mockImplementationOnce(async (_core, _method, path) => swarmReply(path, { starts: [] })).mockRejectedValueOnce(new Error('Backend offline'))
     await expect(host.clean('tab', 'removal')).rejects.toThrow('Backend offline')
     const calls = m.backend.mock.calls.length
     await host.clean('tab', 'removal')
@@ -801,7 +1300,7 @@ describe('removed machine cleanup', () => {
 
   it('finishes a cleanup after a restart that interrupted its acknowledgement', async () => {
     const m = machine()
-    m.backend.mockImplementationOnce(async () => ({ state: { starts: [] } })).mockRejectedValueOnce(new Error('Backend offline'))
+    m.backend.mockImplementationOnce(async (_core, _method, path) => swarmReply(path, { starts: [] })).mockRejectedValueOnce(new Error('Backend offline'))
     await expect(m.open().clean('tab', 'removal')).rejects.toThrow('Backend offline')
     expect(existsSync(m.recorded)).toBe(false)
     await m.open().clean('tab', 'removal')
@@ -823,7 +1322,7 @@ describe('removed machine cleanup', () => {
     const core = fakeCore({ dataDir: root, agents: { byAgent: vi.fn(id => id === 'h-new' ? session('h-new', '/worktrees/project/new', 'agent') : undefined) } })
     const pool = { tabId: 'tab', machine: { machineId: 'host', generation: 'grant', cwd: '/repo', engines: ['codex'], paused: false },
       harnessIds: [], starts: [{ id: 'new', dispatched: true, request: { worktree: true, cwd: '/clone' } }], paused: false }
-    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.endsWith('/pools') ? [pool] : { revision: 1 })
+    const backend = vi.fn(async (_core: unknown, _method: string, path: string, _body?: unknown): Promise<unknown> => path.includes('/hosts/host/changes') ? hostForm([], { pools: [pool] }) : { revision: 1 })
     const open = vi.fn(async () => ({ machineId: 'host', request: vi.fn(async () => ({})), close: vi.fn() }))
     const start = vi.fn(async () => ({ ok: true, harnessId: 'h-new' }))
     await new ContributedMachines(core, 'host', { backend, open, start, now: () => 0,

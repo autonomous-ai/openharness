@@ -53,7 +53,7 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
       final client = widget.notifier.superTabs;
       final answers = await Future.wait([
         client.request('GET', '/api/super-tabs/invitations'),
-        client.request('GET', '/api/super-tabs'),
+        client.request('GET', '/api/super-tabs/list'),
       ]);
       if (!mounted || read != _read) return;
       setState(() {

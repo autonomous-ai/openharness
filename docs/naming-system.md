@@ -50,10 +50,11 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Agent** | The agent software chosen, or the AI doing the work. | Choose Codex; the agent is running tests. |
 | **Model** | The model an agent uses. | Change the model while keeping the agent and project. |
 | **Harness** in product copy | The software product. | Open Harness. |
-| **A harness** in the workspace | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
+| **A harness** in a tab | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
-| **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
+| **Tab** | A group of harnesses in the window. | Frontend and Backend tabs. |
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
+| **Workspace** | The level above Swarms: several Swarms on one account and the people who may be in them, each with a role (owner, admin, member or guest). A person can belong to several Workspaces. Not the Harness **Team account**, a Mac's privacy-checked account for teammates' work. System name: workspace. | Create the Swarm in your company Workspace. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
 | **Instructions** | The visible name for a project's skill set and each role's text. System name: skill. | Open Instructions; edit Product Manager instructions. |
 | **Product Manager** | The agent coordinating a Swarm project. Use **PM** in a compact role badge. System name: lead. | Message Product Manager. |
@@ -87,7 +88,7 @@ answers, lookups and work under 15 minutes itself, and routes the rest.
 
 Use lowercase *harness* and *tab* in ordinary sentences. The action and context
 distinguish the two uses of *harness*: install or update a package in the Store;
-start, pause, or stop a running harness in the workspace. Keep **agent** for choosing
+start, pause, or stop a running harness in a tab. Keep **agent** for choosing
 the agent software and describing the AI's actions. Preserve **New Harness** as the
 existing action name.
 
@@ -98,14 +99,26 @@ no CLI keeps its maker's name (Fo).
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
-Its sidebar starts with **New project** and **Your devices**. Projects and Machines have
-section headings with disclosure after the label and an add action at the right. Project rows
-show their project icon at the left, then their name, status and a right-hand disclosure.
-Project names open their product manager chats; disclosure reveals workgroups whose names
-align with the project name. An expanded project without workgroups says **No workgroups yet**.
+Its sidebar reads like a chat app's. It starts with **New project**, **Your devices** and
+**Your models** (and **Notifications** where no menu-bar list carries it: on a Mac, what needs
+the person is in the menu bar's Harness menu and on the Dock's badge), then three sections in this
+order: **Projects**,
+**Direct messages** and **Machines**. Projects and Machines have section headings with disclosure
+after the label and an add action at the right. Project rows read as channels, from A to Z:
+**#** at the left, then their name and status, with no chevron. The Product Managers'
+conversation is one of them, **# product-managers**, with no workgroups. A click on a project row
+opens its product manager chat and reveals its workgroups; a second click on the open project
+hides them. Workgroups are shown by their number in grey with no **#**
+and then their title (`12  Offline editing`), aligned with the project name. An expanded project
+without workgroups says **No workgroups yet**. An open channel's heading reads as its row
+(`# openharness`). **Direct messages** holds the person's **Chat with PM** for each project,
+listed by the product manager's name and avatar; opening one highlights only that row and leaves
+the projects as they were. The project's name is in grey brackets when
+the Swarm has several (`Finn (web-2)`) and a count of new messages. Hovering says
+**Chat with PM**, and ⇧⌘K opens the current project's.
 **Your devices** opens the Devices dashboard and its existing agent conversation inside the
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
-their standalone Devices workspace. The navigation, conversation and people panes have
+their standalone Devices view. The navigation, conversation and people panes have
 draggable dividers; their default side widths are 300 and 280 pixels, respecting saved resizes.
 The right pane is a stable directory of all humans and agents in the current Swarm that the
 viewer can access. Selecting a project, workgroup or Devices does not filter that directory;
@@ -117,12 +130,14 @@ tags retain their full text on hover. Reuse observed status and assignment data;
 activity summaries or infer a work timer from the session's age. Engine names belong in details.
 Chat headings and quoted replies use the same current agent identity as the roster, including
 older messages. When an agent has left, its recorded author name remains available in history.
-Machine rows show a computer icon, name, owner avatar, status and right-hand disclosure.
+Machine rows show **~** at the left, then the name the person gave the machine (else the
+Swarm's name for it), owner avatar and status, with no chevron.
 In the Swarm's views, a Mac and its Harness Team account are one row, and agents in that account
 read as on the Mac. App-wide machine lists still show the team account as its own machine.
 When teammates' agents cannot run on a machine, its row adds one line, such as
 **Teammates' agents paused: privacy check failed**. There is no badge.
-Clicking the name opens labeled details; disclosure shows agents with their names, role badges
+A click on the row expands it, and its labeled details are in the right-click menu (a long press
+on a touch screen). Expanded, it shows agents with their names, role badges
 and status, followed by known resources and model allowances. Offline machines stay in the
 same list and omit stale readings. Rows share the projects' alignment and full-width highlight.
 The stored `lead` and `builder` routing roles and native harness names remain compatible.
@@ -135,7 +150,7 @@ Cmd-S opens the existing lead creation form for a new Swarm and its first projec
 reuses that form inside the current Swarm. Store uses Cmd-Control-S. Existing ordinary tabs keep
 their behavior. The internal `superTab` identifiers, `harness super-tab` protocol and stored account
 settings remain compatible; the older internal `Swarm` layout class still represents an ordinary
-workspace tab. The word *tab* can also name the keyboard key or a browser tab; context
+tab. The word *tab* can also name the keyboard key or a browser tab; context
 distinguishes them.
 
 A project belongs to a computer; identical paths on different computers do not
@@ -148,9 +163,9 @@ task form.
 | Intent | Label |
 | --- | --- |
 | Start a running harness | **New Harness** |
-| Create a workspace group | **New Tab** |
+| Create a group of harnesses | **New Tab** |
 | Open a shell | **New terminal** |
-| Manage a workspace group | **Rename Tab**, **Close Tab**, **Next Tab**, **Previous Tab** |
+| Manage a group of harnesses | **Rename Tab**, **Close Tab**, **Next Tab**, **Previous Tab** |
 | Manage a running harness | **Rename Harness**, **Pause Harness**, **Resume Harness**, **Restart Harness**, **Stop Harness** |
 | Author a reusable Store package | **Create Harness** |
 | Start the bundled agent from the installed OS home | **Start OpenCode** |
@@ -169,7 +184,7 @@ configuration where it affects a decision.
 | Disk unlock prompt | **Enter your password** |
 | USB install action | **Install Harness** |
 | USB startup | Open **Install Harness** directly; no trial choice or network step. |
-| First installed boot | **Connect to Wi-Fi** when disconnected, then the agent workspace. |
+| First installed boot | **Connect to Wi-Fi** when disconnected, then the agent window. |
 | USB session label | Omit from the single installation footer. |
 | Connect another execution machine | **Connect a computer** |
 | Installer title | Omit the redundant heading; label the action. |
@@ -222,7 +237,7 @@ technical meanings. Use those terms where they help explain or diagnose behavior
 | programmer or programmer-live as a default identity | **me**, **harness**, or **me@harness**, according to the field |
 | hn or hn TUI as a product name | **Harness**; retain `hn` in command examples |
 | New Swarm or Untitled Tab as an automatic group name | **New Tab** |
-| Swarm as a workspace group | **Tab** |
+| Swarm as a group of harnesses | **Tab** |
 | TUI as the square device's mode label | **Harness** |
 | DSH as a user-facing package name | The harness's actual name |
 

@@ -2,10 +2,12 @@
  * The host's side of a Lead reading and typing into a worker's terminal (spec/2026-10-23-lead-sees-agent-terminal.md).
  * Workers got stuck on what only their terminal showed (a permission prompt, a usage-limit screen, a model picker) and
  * only a person at that machine could see and clear it. The backend relays the Lead's request to the host of the agent's
- * machine; the host reads or types with the core's own capture and input (core/superTabTerminal.ts) and answers as that
+ * machine; the host reads or types with the core's own capture and input (superTabs/inCore/terminal.ts) and answers as that
  * agent. It also tells the Lead, once per episode, when a worker has sat on a prompt for 3 minutes or its screen shows
- * a usage limit.
+ * a usage limit. The same reads tell the machine report when each agent's screen last changed: the backend renews the
+ * agent's lease on its task from that (docs: swarm-never-stops, v1 liveness).
  */
+import { createHash } from 'node:crypto'
 import type { CoreApi } from '../core/api.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
@@ -22,8 +24,8 @@ const PROMPT_WAIT_MS = 3 * 60_000
 /** The spec's cap on what a screen read returns. */
 const MAX_SCREEN_BYTES = 64 * 1024
 /** What the screen reader says a prompt or a question is waiting on; a popup or a hidden prompt is not one. */
-const WAITING: ReadonlySet<MessageHold> = new Set(['permission_open', 'question_open', 'menu_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
-/** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (core/superTabTerminal.ts).
+export const WAITING: ReadonlySet<MessageHold> = new Set(['permission_open', 'question_open', 'menu_open', 'trust_open', 'update_prompt_open', 'model_prompt_open', 'sign_in_open'])
+/** The spec's named keys, in any case: the name the Lead's request carries, and the terminal's own (superTabs/inCore/terminal.ts).
  *  Ctrl-D and the like are left out: one closes an engine. */
 const KEYS: Record<string, [string, string]> = { enter: ['Enter', 'Enter'], esc: ['Esc', 'Escape'], escape: ['Esc', 'Escape'], tab: ['Tab', 'Tab'],
   up: ['Up', 'Up'], down: ['Down', 'Down'], left: ['Left', 'Left'], right: ['Right', 'Right'], 'ctrl-c': ['Ctrl-C', 'C-c'],
@@ -55,9 +57,12 @@ export function typedKeys(keys: unknown[]): string[] | string {
 
 /** The engines' own limit lines, at the start of a line: Claude Code's "5-hour limit reached ∙ resets 3pm", "Claude usage
  *  limit reached. Your limit will reset at 3pm", "You've hit your limit · resets 3pm" and "API Error: Usage limit
- *  reached", and Codex's "You've hit your usage limit. … try again in 2 hours". Only near the prompt, so an agent writing
- *  about limits in its own words, or an old banner far up the screen, is not one. */
-const LIMIT_LINE = /^[^A-Za-z]*(?:api error:\s*)?(?:claude\s+)?(?:(?:usage|5-hour|weekly|session|opus|sonnet)\s+limit reached|you['’]ve hit your (?:usage )?limit|you['’]ve reached your usage limit)/i
+ *  reached", and Codex's "You've hit your usage limit. … try again in 2 hours". Claude Code 2.1 names the limit it hit
+ *  ("You've hit your session limit", "… weekly limit", "… Opus limit", "You've reached your Fable limit"), and Codex 0.154
+ *  one for a model or a workspace ("You've hit your usage limit for gpt-5.5-codex", "You've reached your workspace credit
+ *  limit"): none of those alerted until 2026-10-26. Only near the prompt, so an agent writing about limits in its own
+ *  words, or an old banner far up the screen, is not one. */
+const LIMIT_LINE = /^[^A-Za-z]*(?:api error:\s*)?(?:claude\s+)?(?:(?:usage|5-hour|weekly|session|opus|sonnet|fable)\s+limit reached|you['’]ve (?:hit|reached) your (?:[\w-]+ ){0,2}limit)/i
 const LIMIT_NEAR_LINES = 15
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
@@ -98,18 +103,31 @@ function resetOf(said: string, now: number): number | null {
     }
     if (ms) return now + ms
   }
-  // The engines say a local time ("3pm", "4:05 PM"), with a date when it is not today ("Oct 25, 9am").
-  const time = /(?:resets?(?: at)?|try again at)\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(said)
+  // The engines say a local time ("3pm", "4:05 PM"), with a date when it is not today ("Oct 25, 9am"; Codex's
+  // "Oct 27th, 2026 3:05 PM").
+  const time = /(?:resets?(?: at)?|try again at)\s+(?:([a-z]{3})[a-z]*\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:(\d{4})\s+)?(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(said)
   if (!time) return null
-  const [, month, day, hour, minute, half] = time
+  const [, month, day, year, hour, minute, half] = time
   // "3pm" and "12am" are 12-hour; "15:00" and "0:30", with no am or pm, are 24-hour.
   const h = half ? Number(hour) % 12 + (half.toLowerCase() === 'pm' ? 12 : 0) : Number(hour)
   const date = new Date(now)
-  if (month && MONTHS.includes(month.toLowerCase())) date.setMonth(MONTHS.indexOf(month.toLowerCase()), Number(day))
+  if (month && MONTHS.includes(month.toLowerCase())) date.setFullYear(year ? Number(year) : date.getFullYear(), MONTHS.indexOf(month.toLowerCase()), Number(day))
   date.setHours(h, Number(minute ?? 0), 0, 0)
-  // A time already past today is tomorrow's; a date already past is next year's.
-  if (date.getTime() <= now) month ? date.setFullYear(date.getFullYear() + 1) : date.setDate(date.getDate() + 1)
+  // A time already past today is tomorrow's; a date already past is next year's, unless the engine named the year.
+  if (date.getTime() <= now && !year) month ? date.setFullYear(date.getFullYear() + 1) : date.setDate(date.getDate() + 1)
   return date.getTime()
+}
+
+/** What Claude Code and Codex redraw every second while they work, whether or not the work moves: the spinner line with
+ *  its elapsed time and token counter ("✻ Pondering… (2m 14s · ↓ 3.1k tokens · esc to interrupt)", "• Working (1m 05s •
+ *  esc to interrupt)"), Claude Code's rotating tip under it, and a retry's countdown. A stuck agent's screen changes all
+ *  the time through them (Lead, 2026-10-26), so they are left out of what counts as progress. */
+const STATUS_LINE = /esc to (?:interrupt|cancel)|^\W*[A-Za-z][\w ]*…\s*\(|^\s*⎿\s+tip:|will retry in/i
+
+/** A short digest of the screen without its status lines: two screens with the same one show the same work. */
+function screenDigest(text: string): string {
+  const lines = text.split('\n').filter(line => !STATUS_LINE.test(line)).map(line => line.trimEnd())
+  return createHash('sha256').update(lines.join('\n')).digest('base64url')
 }
 
 type Episode = { since: number; alerted: boolean } | null
@@ -121,6 +139,8 @@ export class TerminalHost {
   private serving: Promise<void> | null = null
   private watching: Promise<void> | null = null
   private readonly watched = new Map<string, Watched>()
+  /** Per running harness here, its last screen's digest and when that last changed. */
+  private readonly progress = new Map<string, { digest: string; at: number }>()
   private readonly now: () => number
   private readonly log: (message: string) => void
 
@@ -133,7 +153,7 @@ export class TerminalHost {
    *  the host never waits on it, so a slow screen read never delays deliveries. */
   tick(rows: unknown[]): Promise<void> {
     const here = this.here(rows)
-    if (!here.length) { this.watched.clear(); return Promise.resolve() }
+    if (!here.length) { this.watched.clear(); this.progress.clear(); return Promise.resolve() }
     const own = here.filter(agent => agent.running)
     const now = this.now()
     if (!this.serving && now >= this.nextServeAt) {
@@ -145,6 +165,15 @@ export class TerminalHost {
       this.watching = this.watch(own).catch(error => this.log(error instanceof Error ? error.message : String(error))).finally(() => { this.watching = null })
     }
     return Promise.all([this.serving, this.watching]).then(() => {})
+  }
+
+  /** When each of these harnesses' screens last changed, epoch ms, for those running here that the watch has read. An
+   *  agent's first read counts as a change: the host cannot know what its screen showed before. */
+  progressOf(harnessIds: readonly string[]): Record<string, number> {
+    return Object.fromEntries(harnessIds.flatMap(id => {
+      const seen = this.progress.get(id)
+      return seen ? [[id, seen.at]] : []
+    }))
   }
 
   /** This machine's Swarm agents, as the roster names them, and whether each runs here: a stopping one, or one whose
@@ -203,6 +232,8 @@ export class TerminalHost {
   private async watch(own: Own[]): Promise<void> {
     const keys = new Set(own.map(a => `${a.tabId}:${a.agentId}`))
     for (const key of this.watched.keys()) if (!keys.has(key)) this.watched.delete(key)
+    const harnesses = new Set(own.map(a => a.harnessId))
+    for (const id of this.progress.keys()) if (!harnesses.has(id)) this.progress.delete(id)
     for (const agent of own) {
       const key = `${agent.tabId}:${agent.agentId}`
       const state = this.watched.get(key) ?? { prompt: null, limit: null, model: null }
@@ -211,12 +242,17 @@ export class TerminalHost {
       const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
       if (!read?.ok) continue
       const now = this.now()
+      const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
+      // A model being retried is not the agent's work moving, whatever else the screen shows meanwhile.
+      if (!seen || (seen.digest !== digest && !modelFailing(read.text))) this.progress.set(agent.harnessId, { digest, at: now })
       state.prompt = await this.episode(agent, 'prompt', state.prompt, read.hold !== null && WAITING.has(read.hold), now, since => now - since >= PROMPT_WAIT_MS, {})
       const limit = limitOf(read.text, now)
       state.limit = await this.episode(agent, 'limit', state.limit, limit !== null, now, () => true, limit ?? {})
       if (modelFailing(read.text)) state.retried = now
       const retrying = state.retried !== undefined && now - state.retried < MODEL_CLEAR_MS
-      state.model = await this.episode(agent, 'model', state.model, retrying, now, since => now - since >= MODEL_WAIT_MS, {})
+      // Ten minutes up to the last retry seen, not up to now: the quiet minutes that confirm answers came again are not
+      // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
+      state.model = await this.episode(agent, 'model', state.model, retrying, now, since => state.retried! - since >= MODEL_WAIT_MS, {})
     }
   }
 

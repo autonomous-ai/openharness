@@ -22,6 +22,11 @@ const envSchema = z.object({
   // manager socket may land on different backend instances; Redis pub/sub bridges them
   // (channels up:{machineId} / down:{machineId}) plus an agent→manager presence key. See lib/bus.ts.
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
+  // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
+  SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // Its size per process, counted as the JSON size of what it holds.
+  SWARM_CACHE_MB: z.string().default('64').transform(Number),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
@@ -38,6 +43,11 @@ const envSchema = z.object({
   MESH_HOST: z.string().default('127.0.0.1'),
   // Base internal port; each worker binds MESH_PORT_BASE + NODE_APP_INSTANCE (distinct per worker).
   MESH_PORT_BASE: z.string().default('8095').transform(Number),
+
+  // On SIGTERM the API answers /api/ready with 503 at once, then keeps serving this long before it closes its
+  // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
+  // Kubernetes sets it, with probes and grace period, as backend/README.md describes.
+  DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
 
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.
@@ -235,6 +245,8 @@ const envSchema = z.object({
   SUPER_TAB_ATTACHMENTS_PREFIX: z.string().default('super-tabs'),
   // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
   SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
+  // A private bucket (no public read) for Swarm avatars, served only through signed links. Unset: avatar uploads are off.
+  SUPER_TAB_AVATARS_BUCKET: z.string().default(''),
 
   // The Harness GitHub App (github/app.ts, docs/swarm-github-app.md): a Swarm agent doing a task pushes and opens pull
   // requests with a one-hour token for its project's repository alone. Both empty: off, and POST
@@ -245,6 +257,10 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(''),
   // The app's name in github.com/apps/NAME, for the install link a refusal gives. Optional.
   GITHUB_APP_SLUG: z.string().default(''),
+  // The app's own GitHub sign-in (its Client ID and a client secret), with which a person who can push to a repository
+  // approves it for a Swarm (github/approvals.ts). Unset, no repository can be approved and the app gives no token.
+  GITHUB_APP_CLIENT_ID: z.string().default(''),
+  GITHUB_APP_CLIENT_SECRET: z.string().default(''),
 
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.

@@ -111,7 +111,7 @@ void main() {
   final projects = find.text('Projects');
 
   testWidgets(
-    'lists the Product Managers conversation above Projects, and opens and posts in it',
+    'lists the Product Managers conversation as # product-managers among Projects, and opens and posts in it',
     (tester) async {
       final server = swarm();
       server.append(
@@ -135,26 +135,29 @@ void main() {
       };
       server.messages.last['source'] = {'kind': 'overlap'};
       final controller = await show(tester, server);
+      // An open project's heading and composer read as its row too.
+      expect(find.text('# openharness'), findsOneWidget);
+      expect(find.text('Message #openharness'), findsOneWidget);
 
       expect(leadsRow, findsOneWidget);
       expect(
-        find.descendant(of: leadsRow, matching: find.text('Product Managers')),
+        find.descendant(of: leadsRow, matching: find.text('product-managers')),
         findsOneWidget,
       );
       expect(
-        tester.getTopLeft(leadsRow).dy,
-        lessThan(tester.getTopLeft(projects).dy),
+        tester.getTopLeft(projects).dy,
+        lessThan(tester.getTopLeft(leadsRow).dy),
       );
       // It belongs to no project: never listed again as a workgroup of the first one.
-      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-group-lead')));
       await tester.pumpAndSettle();
       expect(find.text('Leads'), findsNothing);
       expect(leadsRow, findsOneWidget);
 
       await tester.tap(leadsRow);
       await tester.pumpAndSettle();
-      // Its heading names it as people know it, and it has no rename or archive.
-      expect(find.text('Product Managers'), findsNWidgets(2));
+      // Its heading reads as its row, and it has no rename or archive.
+      expect(find.text('# product-managers'), findsOneWidget);
       expect(find.byKey(const ValueKey('super-group-options')), findsNothing);
       expect(
         find.text('I will take the roster file after #12 lands.'),
@@ -200,7 +203,7 @@ void main() {
       expect(
         find.descendant(
           of: composer,
-          matching: find.text('Message Product Managers'),
+          matching: find.text('Message #product-managers'),
         ),
         findsOneWidget,
       );
@@ -232,7 +235,7 @@ void main() {
       });
       final controller = await show(tester, server, account: 'viewer');
       // "This project" chosen in a workgroup does not follow into it.
-      await tester.tap(find.byKey(const ValueKey('super-project-expand-lead')));
+      await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('super-group-offline')));
       await tester.pumpAndSettle();
@@ -263,7 +266,7 @@ void main() {
     (tester) async {
       final controller = await show(tester, swarm(leads: false));
       expect(leadsRow, findsNothing);
-      expect(find.text('Product Managers'), findsNothing);
+      expect(find.text('product-managers'), findsNothing);
       expect(projects, findsOneWidget);
       await close(tester, controller);
     },

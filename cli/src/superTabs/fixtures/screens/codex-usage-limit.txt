@@ -1,0 +1,12 @@
+• Ran npx vitest run src/superTabs/terminal.spec.ts
+  └  Test Files  1 passed (1)
+          Tests  33 passed (33)
+
+■ You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit
+https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct
+27th, 2026 3:05 PM.
+
+
+› Ask Codex to do anything
+
+  100% context left · ? for shortcuts

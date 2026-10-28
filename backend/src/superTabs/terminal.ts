@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
-import { agentProjectId, projectOf, readAgent } from './projects.js'
+import { agentProjectId, isConfidential, ownSession, projectOf, readAgent } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -11,6 +11,8 @@ export const TERMINAL_KEYS = ['Enter', 'Esc', 'Tab', 'Up', 'Down', 'Left', 'Righ
 /** The host has this long to pick a request up, then this long to answer it; after either, the request fails with a plain reason. */
 export const TERMINAL_PICKUP_MS = 10_000
 export const TERMINAL_ANSWER_MS = 30_000
+/** A sender's wait reads its request again this often even unwoken, in case the notice of its answer was lost. */
+export const TERMINAL_RECHECK_MS = 5_000
 /** An unread answer, which can hold a screen's secrets, is gone after this long: refused on read, and removed by a TTL index. */
 export const TERMINAL_EXPIRY_MS = 120_000
 /** Run by the singleton worker at startup, like the product-usage expiry indexes. */
@@ -30,12 +32,20 @@ export type TerminalEffect =
 export interface TerminalRequest { id: string; agentId: string; harnessId: string; kind: TerminalKind; status: 'pending' | 'claimed' | 'done' }
 
 /** Only the Lead of the agent's project, or a person with write access who can see the agent, reads or types in its terminal. */
-export function mayDrive(state: SuperTabState, actor: Actor, target: Agent): void {
+/** `elsewhere`: the agent's session is confidential in another Swarm (confidential.ts). */
+export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): void {
+  // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
+  const closed = () => {
+    if (isConfidential(state, target, elsewhere) && !ownSession(actor, target)) {
+      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
+    }
+  }
   if (actor.kind === 'person') {
     author(state, actor, true)
     readAgent(state, actor, target.id)
-    return
+    return closed()
   }
+  closed()
   if (conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId !== actor.agentId) {
     fail('LEAD_REQUIRED', 'Only the Lead of this agent’s project, or a person with write access, can read or type in its terminal.', 403)
   }
@@ -45,16 +55,16 @@ export function mayDrive(state: SuperTabState, actor: Actor, target: Agent): voi
  *  Swarm-wide Leads conversation), else its project's Lead chat. */
 export function currentGroup(state: SuperTabState, target: Agent): Conversation {
   return state.conversations.find(c => activeWork(c) && c.assignment!.agentId === target.id)
-    ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && c.agentIds.includes(target.id) && c.leadId !== target.id)
+    ?? state.conversations.findLast(c => !c.archived && !isLeads(c) && !c.audience && c.agentIds.includes(target.id) && c.leadId !== target.id)
     ?? conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
 }
 
 const nameOf = (target: Agent) => target.displayName ?? target.name
 
 export function terminalRequest(state: SuperTabState, actor: Actor, sender: Author, id: string, now: number,
-  command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }) {
+  command: { type: 'agent.screen' | 'agent.input'; agentId: string; scrollback?: number; text?: string; keys?: string[] }, elsewhere = false) {
   const target = agent(state, command.agentId)
-  mayDrive(state, actor, target)
+  mayDrive(state, actor, target, elsewhere)
   if (downSince(state, target, now)) fail('HOST_OFFLINE', `${nameOf(target)}’s terminal is not running or its machine is offline.`)
   const { type: _type, agentId: _agentId, ...detail } = command
   const effect: TerminalEffect = { op: 'request', id, kind: command.type === 'agent.screen' ? 'screen' : 'input', agentId: target.id,
@@ -98,8 +108,6 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   if (alerting.includes(command.alert)) return []
   target.alerting = [...alerting, command.alert]
   const group = currentGroup(state, target)
-  const chat = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
-  const lead = chat.leadId && chat.leadId !== target.id ? chat.leadId : null
   let text = `${nameOf(target)} is waiting at a prompt in its terminal.`
   const source: Record<string, unknown> = { kind: 'terminal-alert', agentId: target.id, alert: command.alert }
   if (command.alert === 'limit') {
@@ -110,7 +118,21 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
   if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
-  const here = !!lead && group.agentIds.includes(lead)
-  const row = { id, conversationId: group.id, author: sender, replyTo: null, recipients: here ? [lead] : [], text, source }
-  return here || !lead || !chat.agentIds.includes(lead) ? [row] : [row, { ...row, id: stableId(id, 'lead'), conversationId: chat.id, recipients: [lead] }]
+  return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
+}
+
+/** The project Lead of an agent, unless the agent is that Lead. */
+export function leadOf(state: SuperTabState, target: Agent): Agent | undefined {
+  const lead = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId).leadId
+  return lead && lead !== target.id ? state.agents.find(a => a.id === lead) : undefined
+}
+
+/** A row about an agent, delivered to its project Lead: in the row's group when the Lead is there, else by a second row in
+ *  the Lead's chat. */
+export function toLead(state: SuperTabState, target: Agent, row: MessageDraft): MessageDraft[] {
+  const chat = conversation(state, projectOf(state, agentProjectId(state, target)).leadConversationId)
+  const lead = leadOf(state, target)?.id
+  const here = !!lead && conversation(state, row.conversationId).agentIds.includes(lead)
+  const first = { ...row, recipients: here ? [lead] : [] }
+  return here || !lead || !chat.agentIds.includes(lead) ? [first] : [first, { ...first, id: stableId(row.id, 'lead'), conversationId: chat.id, recipients: [lead] }]
 }

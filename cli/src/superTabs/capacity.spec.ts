@@ -55,3 +55,9 @@ it('distinguishes a missing tool from a failed probe and keeps the failure detai
   expect(admission(unverified, { installed: true }, quotaOf({}, 'codex', false), { ...requirements, devices: [] }).reasons)
     .toEqual(expect.arrayContaining([expect.stringMatching(/Required tool not verified: git.*interactive shell timed out/)]))
 })
+it('says how much memory is free and how much a start needs, in GiB', () => {
+  const GiB = 1024 ** 3
+  const capacity = { resources: { cpuPercent: 10, memoryTotalBytes: 32 * GiB, memoryUsedBytes: 32 * GiB - 1.85 * GiB, projectDiskFreeBytes: 500 }, tools: { git: true }, devices: {} }
+  expect(admission(capacity, { installed: true }, quotaOf({}, 'codex', false), { ...requirements, memoryBytes: 2 * GiB, devices: [] }).reasons)
+    .toEqual(['Not enough free memory: 1.8 GiB free, 2 GiB needed.'])
+})

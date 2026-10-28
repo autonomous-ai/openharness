@@ -112,8 +112,8 @@ Future<SuperTabController> projectSidebar(ConversationServer server) async {
 
 void main() {
   for (final scale in [1.0, 2.0]) {
-    testWidgets('flat navigation shares text and selection bounds; disclosure does not '
-        'switch chats at ${scale}x', (tester) async {
+    testWidgets('flat navigation shares text and selection bounds; a project row '
+        'opens its chat and shows its workgroups at ${scale}x', (tester) async {
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final app = createApp(connected: true);
       addTearDown(app.dispose);
@@ -129,8 +129,8 @@ void main() {
         onNewProject: () => created++,
         onYourDevices: () => openedDevices++,
       );
-      final expand = find.byKey(const ValueKey('super-project-expand-lead'));
-      final empty = find.byKey(const ValueKey('super-project-expand-empty'));
+      final project = find.byKey(const ValueKey('super-group-lead'));
+      final empty = find.byKey(const ValueKey('super-group-empty-lead'));
       final devices = find.byKey(const ValueKey('super-your-devices'));
       final newProject = find.byKey(const ValueKey('super-new-project'));
       expect(find.byType(OutlinedButton), findsNothing);
@@ -142,47 +142,51 @@ void main() {
         tester.getBottomLeft(newProject).dy,
         lessThan(tester.getTopLeft(devices).dy),
       );
-      expect(
-        inRow('super-group-lead', find.byIcon(AppIcons.folder)),
-        findsOneWidget,
-      );
+      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
 
-      await tester.tap(find.text('sample-project'));
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
-      await tester.tap(expand);
-      await tester.pumpAndSettle();
-      expect(controller.selectedId, 'empty-lead');
-      expect(
-        inRow('super-group-lead', find.byIcon(AppIcons.folderOpen)),
-        findsOneWidget,
+      // Its name in the Projects list, not its direct message's grey tag.
+      final sample = inRow(
+        'super-group-empty-lead',
+        find.text('sample-project'),
       );
+      await tester.tap(sample);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, 'empty-lead');
+      await tester.tap(project);
+      await tester.pumpAndSettle();
+      expect(controller.selectedId, 'lead');
+      expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+      final toggle = find.byKey(const ValueKey('super-project-toggle-lead'));
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
       final work = find.byKey(const ValueKey('super-group-offline'));
       expect(work, findsOneWidget);
-      final textX = tester.getTopLeft(find.text('web-project')).dx;
+      final textX = tester
+          .getTopLeft(inRow('super-group-lead', find.text('web-project')))
+          .dx;
       for (final label in [
-        'New project',
-        'Your devices',
-        'sample-project',
-        '#12 Offline editing',
+        find.text('New project'),
+        find.text('Your devices'),
+        sample,
+        // A workgroup's number is grey, with no #: it is no channel.
+        inRow('super-group-offline', find.text('12  Offline editing')),
       ]) {
-        expect(tester.getTopLeft(find.text(label)).dx, textX, reason: label);
+        expect(tester.getTopLeft(label).dx, textX, reason: '$label');
       }
+      // A workgroup's dot is in the rows' right status column; a project's
+      // chevron takes that column and its dot sits just left of it.
       expect(
         tester.getCenter(unreadDot('offline')).dx,
-        tester.getCenter(unreadDot('lead')).dx,
+        tester.getCenter(toggle).dx,
       );
       expect(
         tester.getCenter(unreadDot('lead')).dx,
-        lessThan(tester.getTopLeft(expand).dx),
+        tester.getCenter(toggle).dx - tester.getSize(toggle).width,
       );
       for (final row in [newProject, devices, work]) {
         final bounds = tester.getRect(row);
-        final projectBounds = tester.getRect(
-          find.byKey(const ValueKey('super-group-lead')),
-        );
-        expect(bounds.left, projectBounds.left);
-        expect(bounds.right, projectBounds.right);
+        expect(bounds.left, tester.getRect(project).left);
+        expect(bounds.right, tester.getRect(toggle).right);
       }
 
       await tester.tap(work);
@@ -190,12 +194,19 @@ void main() {
       expect(controller.selectedId, 'offline');
       await tester.tap(empty);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'empty-lead');
+      expect(find.text('No workgroups yet'), findsNothing);
+      final emptyToggle = find.byKey(
+        const ValueKey('super-project-toggle-empty'),
+      );
+      await tester.tap(emptyToggle);
+      await tester.pumpAndSettle();
       expect(find.text('No workgroups yet'), findsOneWidget);
       expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
-      expect(find.byTooltip('Collapse sample-project'), findsOneWidget);
-      await tester.tap(empty);
+      // A second click on its chevron hides them again.
+      await tester.tap(emptyToggle);
       await tester.pumpAndSettle();
+      expect(controller.selectedId, 'empty-lead');
       expect(find.text('No workgroups yet'), findsNothing);
 
       // The plain top actions retain keyboard operation and do not create tabs.
@@ -214,7 +225,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(openedDevices, 1);
       expect(controller.devicesSelected, isTrue);
-      expect(controller.selectedId, 'offline');
+      expect(controller.selectedId, 'empty-lead');
       expect(app.swarms, hasLength(tabsBefore));
       expect(
         rowMaterial(tester, 'super-your-devices').color,
@@ -243,8 +254,70 @@ void main() {
     });
   }
 
+  testWidgets('reads like a chat app: utilities, Projects A to Z with their '
+      'workgroups and # product-managers, Direct messages, then Machines', (
+    tester,
+  ) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final server = ConversationServer();
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('leads', 'Leads'),
+      'kind': 'leads',
+    });
+    server.state['leadsConversationId'] = 'leads';
+    final controller = await projectSidebar(server);
+    controller
+      ..toggleProject('lead')
+      ..toggleProject('empty');
+    await pumpSidebar(tester, controller, app);
+
+    final order = [
+      find.byKey(const ValueKey('super-new-project')),
+      find.byKey(const ValueKey('super-your-devices')),
+      find.byKey(const ValueKey('super-local-models')),
+      find.text('Projects'),
+      find.byKey(const ValueKey('super-group-leads')),
+      find.byKey(const ValueKey('super-group-empty-lead')),
+      find.text('No workgroups yet'),
+      find.byKey(const ValueKey('super-group-lead')),
+      find.byKey(const ValueKey('super-group-offline')),
+      find.text('Direct messages'),
+      find.byKey(const ValueKey('super-pm-chat-lead')),
+      find.byKey(const ValueKey('super-pm-chat-empty')),
+      find.text('Machines'),
+    ];
+    for (var i = 1; i < order.length; i++) {
+      expect(
+        tester.getTopLeft(order[i - 1]).dy,
+        lessThan(tester.getTopLeft(order[i]).dy),
+        reason: '${order[i - 1]} above ${order[i]}',
+      );
+    }
+    for (final (key, name) in [
+      ('leads', 'product-managers'),
+      ('empty-lead', 'sample-project'),
+      ('lead', 'web-project'),
+    ]) {
+      expect(inRow('super-group-$key', find.text('#')), findsOneWidget);
+      expect(inRow('super-group-$key', find.text(name)), findsOneWidget);
+    }
+    // The product managers' channel has no workgroups to disclose.
+    expect(
+      inRow('super-group-leads', find.byIcon(AppIcons.chevronRight)),
+      findsNothing,
+    );
+    expect(
+      inRow('super-pm-chat-lead', find.text('(web-project)')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+    await disposeSidebar(tester, controller);
+  });
+
   testWidgets('section disclosure follows its label and + aligns with the '
-      'right disclosure column', (tester) async {
+      'rows\' right status column', (tester) async {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final app = createApp(connected: true);
     addTearDown(app.dispose);
@@ -272,7 +345,7 @@ void main() {
       expect(
         tester.getCenter(find.byTooltip('New project')).dx,
         tester
-            .getCenter(find.byKey(const ValueKey('super-project-expand-lead')))
+            .getCenter(find.byKey(const ValueKey('super-project-toggle-lead')))
             .dx,
       );
       expect(tester.takeException(), isNull);
@@ -397,12 +470,12 @@ void main() {
     final controller = await projectSidebar(server);
     await pumpSidebar(tester, controller, app);
     const machinesBody = 'Add a machine for the product manager to use.';
-    expect(find.text('web-project'), findsOneWidget);
+    expect(inRow('super-group-lead', find.text('web-project')), findsOneWidget);
     expect(find.text(machinesBody), findsOneWidget);
 
     await tester.tap(find.byTooltip('Collapse Projects'));
     await tester.pumpAndSettle();
-    expect(find.text('web-project'), findsNothing);
+    expect(inRow('super-group-lead', find.text('web-project')), findsNothing);
     expect(controller.projectsGroupOpen, isFalse);
     await tester.tap(find.byTooltip('Collapse Machines'));
     await tester.pumpAndSettle();
@@ -424,7 +497,7 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
-    expect(find.text('web-project'), findsOneWidget);
+    expect(inRow('super-group-lead', find.text('web-project')), findsOneWidget);
     await disposeSidebar(tester, controller);
     await reopened.flush();
     reopened.dispose();
@@ -469,16 +542,18 @@ void main() {
     final setUp = find.byKey(const ValueKey('super-local-models-setup'));
 
     testWidgets(
-      'the owner sets models up from Manage models; there is no switch',
+      'the owner sets models up from Your models; there is no switch',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [machine()];
         final c = server.controller();
         await c.refresh();
         await mount(tester, c);
-        expect(find.text('Manage models'), findsOneWidget);
+        expect(find.text('Your models'), findsOneWidget);
         await tester.tap(open);
         await tester.pumpAndSettle();
+        // The page is titled as the row that opens it.
+        expect(find.text('Your models'), findsNWidgets(2));
         expect(find.byType(Switch), findsNothing);
         expect(
           find.textContaining('Set up connects this computer to the Swarm'),
@@ -504,7 +579,7 @@ void main() {
     );
 
     testWidgets(
-      'everyone sees Manage models; before it is set up a member is told the owner sets it up',
+      'everyone sees Your models; before it is set up a member is told the owner sets it up',
       (tester) async {
         final server = ConversationServer();
         (server.state['people'] as List).add({

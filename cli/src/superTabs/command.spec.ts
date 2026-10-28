@@ -59,6 +59,23 @@ it('routes through the caller and prints the decision, or the parse failure as a
   expect(await superTabCommand(['--tab', 'tab', 'route', 'g1', '{nope'], deps)).toBe(1)
   expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toMatch(/JSON/)
 })
+it('parses plan, with or without the Lead\'s assessments, and refuses anything more', () => {
+  expect(parseSuperTabArgs([...prefix, 'plan'], where).payload).toMatchObject({ action: 'plan' })
+  expect(parseSuperTabArgs([...prefix, 'plan', '{"groups":{}}'], where).payload).toMatchObject({ action: 'plan', request: { groups: {} } })
+  expect(() => parseSuperTabArgs([...prefix, 'plan', '{}', 'extra'], where)).toThrow('harness super-tab')
+})
+it('plans through the caller with its data folder, and prints the plan or why there is none', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
+    if (type === 'agents_list') return { agents: [{ id: 'native', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
+    if (payload.action === 'routeContext') return { error: 'LEAD_REQUIRED', detail: 'x' }
+    return { ok: true }
+  })
+  const deps = { where: () => where, pane: '%42', open: async () => ({ request, close, machineId: 'machine' }), print }
+  expect(await superTabCommand(['--tab', 'tab', 'plan'], deps)).toBe(1)
+  expect(request).toHaveBeenCalledWith('super_tabs', expect.objectContaining({ action: 'routeContext', tabId: 'tab', harnessId: 'native' }), 30_000)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ error: 'LEAD_REQUIRED' })
+})
 it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'msg-1'], where).payload.command)
     .toMatchObject({ type: 'message.send', conversationId: 'lead', text: 'Ready', replyTo: 'msg-1' })
@@ -212,6 +229,36 @@ it('refuses to remove a machine for an agent: a Swarm agent\'s pane, an outside 
   }
   expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
 })
+it('lets a machine owner set how many agents it offers, as the person, from their own terminal', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string, _payload?: Record<string, unknown>) => (type === 'agents_list' ? { agents: [] }
+    : { ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 }) as Record<string, unknown>)
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print, pane: '%99', env: {} }
+  expect(await superTabCommand(['--tab', 'tab', 'set-agents', 'studio', '96'], deps)).toBe(0)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ action: 'setMachineAgents', tabId: 'tab', machineId: 'studio', maxAgents: 96 }), 30_000)
+  expect(JSON.parse(print.mock.calls.at(-1)![0])).toMatchObject({ ok: true, maxAgents: 96 })
+  request.mockResolvedValue({ error: 'ABOVE_MACHINE_MAXIMUM', detail: 'Mac Studio can offer at most 96 agents: one for every 2 GB of its memory, and at least 4.' })
+  expect(await superTabCommand(['--tab', 'tab', 'set-agents', 'studio', '97'], deps)).toBe(1)
+  expect(print.mock.calls.at(-1)![0]).toContain('at most 96 agents')
+  for (const argv of [['--tab', 'tab', 'set-agents', 'studio'], ['--tab', 'tab', 'set-agents', 'studio', '0'], ['--tab', 'tab', 'set-agents', 'studio', '2.5'],
+    ['--tab', 'tab', 'set-agents', 'studio', 'many'], ['--tab', 'tab', 'set-agents', '../x', '8'], ['--tab', 'tab', 'set-agents', 'studio', '8', '--yes']]) {
+    expect(() => parseSuperTabArgs(argv, where)).toThrow('set-agents MACHINE_ID COUNT')
+  }
+})
+it('refuses to set a machine\'s agents for an agent: a Swarm agent\'s pane, an outside agent\'s shell, or --agent', async () => {
+  const print = vi.fn(), close = vi.fn()
+  const request = vi.fn(async (type: string) => type === 'agents_list' ? { agents: [{ id: 'worker', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
+  const deps = { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), print }
+  for (const [argv, extra] of [
+    [['--tab', 'tab', 'set-agents', 'studio', '96'], { pane: '%7', env: {} }],
+    [['--tab', 'tab', 'set-agents', 'studio', '96'], { pane: '%99', env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'session' } }],
+    [['--tab', 'tab', '--agent', 'agent', 'set-agents', 'studio', '96'], { pane: '%99', env: {} }],
+  ] as const) {
+    expect(await superTabCommand(argv, { ...deps, ...extra })).toBe(1)
+    expect(print.mock.calls.at(-1)![0]).toContain('Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
+  }
+  expect(request.mock.calls.some(c => c[0] === 'super_tabs')).toBe(false)
+})
 // Lead mentions (spec 2026-10-24-lead-mentions): each --mention names a person by id or email; the service maps them.
 it('passes each --mention as written, and leaves a post without one unchanged', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Please confirm', 'op-1', '--mention', 'ken@example.com', '--reply-to', 'm1', '--mention', 'person-2'], where).payload.command)
@@ -248,4 +295,11 @@ it('keeps the mentioned people on a post that sends files', async () => {
     expect(await superTabCommand([...prefix, 'post', 'lead', 'Please check', 'op', '--attach', join(dir, 'shot.png'), '--mention', 'person-ken'], deps)).toBe(0)
     expect(request.mock.calls.at(-1)![1]).toMatchObject({ action: 'command', command: { type: 'message.send', attachmentIds: ['f1'], mentions: ['person-ken'] } })
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+// Decisions (v2): the Lead, or a worker, reads the decisions it asked and their answers.
+it('reads the caller\'s open decisions, or with --answered the answered ones', () => {
+  expect(parseSuperTabArgs([...prefix, 'decisions'], where).payload).toMatchObject({ action: 'decisions', state: 'open' })
+  expect(parseSuperTabArgs([...prefix, 'decisions', '--answered'], where).payload).toMatchObject({ action: 'decisions', state: 'answered' })
+  for (const argv of [[...prefix, 'decisions', 'extra'], [...prefix, 'decisions', '--answered', 'extra']]) expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
 })

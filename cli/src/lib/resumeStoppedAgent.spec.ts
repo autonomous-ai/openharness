@@ -255,6 +255,13 @@ describe('resume refusal and readiness edge cases', () => {
     const deps = fixture(); deps.saved.mockReturnValue(null as any)
     expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_NOT_FOUND' })
   })
+  // 4 on Oct 26: an app resumed from a list that still showed a deleted harness, or one whose conversation another
+  // harness had taken over (stoppedAgents `supersede`). The conversation is still found by search.
+  it('says where to find the conversation when the saved harness is gone', async () => {
+    const deps = fixture(); deps.saved.mockReturnValue(null as any)
+    expect(await resumeStoppedAgent(deps)).toMatchObject({ error: 'AGENT_NOT_FOUND', detail: 'This harness is no longer on this '
+      + 'machine: it was deleted, or another harness now has its conversation. Search for the conversation to open it where it is now.' })
+  })
   it('opens a shell without a conversation id', async () => {
     const deps = fixture(); const shell = { ...saved, engine: 'terminal' as const, sessionId: '' }; deps.saved.mockReturnValue(shell)
     expect(await resumeStoppedAgent(deps)).toMatchObject({ ok: true }); expect(deps.launch).toHaveBeenCalledWith(shell, undefined)

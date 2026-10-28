@@ -162,10 +162,10 @@ void main() {
       final server = ConversationServer()..append('Hello');
       final client = SuperTabClient(
         transport: (method, path, {body}) async =>
-            Uri.parse(path).path == '/api/super-tabs'
+            Uri.parse(path).path == '/api/super-tabs/list'
             ? {
                 'tabs': [
-                  {'id': 'tab', 'name': 'Pilot'},
+                  {'id': 'tab', 'name': 'Pilot', 'lastChangedAt': 1},
                 ],
                 'next': null,
               }

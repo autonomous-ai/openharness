@@ -786,6 +786,11 @@ SIGN_OUT_UNIT = 'harness-sign-out'
 INITIAL_ACCOUNT = STATE / 'initial-account.json'
 CMDLINE = Path('/proc/cmdline')
 SSHD = 'sshd.service'
+# The GitHub CLI and its package (packages.x86_64), put back by install-gh: a download of some 15 MB, each
+# of its two tries bounded so both fit the daemon's wait (cli services/osDevice.ts GH_INSTALL_TIMEOUT_MS).
+GH = Path('/usr/bin/gh')
+GH_PACKAGE = 'github-cli'
+GH_INSTALL_TIMEOUT = 120
 # A phone sets this computer up next (network.py UNLOCKED_BY_PHONE): the screen's Wi-Fi page keeps
 # off the radio the hotspot needs, until a key there.
 PHONE_SETS_UP = Path('/run/harness-os/unlocked-by-phone')
@@ -1023,6 +1028,26 @@ def ssh(action='status'):
             'user': USER, 'addresses': addresses}
 
 
+def install_gh():
+    """The GitHub CLI put back where it is gone: the package the image installs (packages.x86_64), from this
+    computer's own pinned repositories, for the phone's Sign in to GitHub (cli services/osDevice.ts).
+    Nothing else: no package named by the caller, no upgrade of anything installed."""
+    if GH.exists():
+        return {'installed': True}
+    log('installing the GitHub CLI')
+    # Its package databases first as they are, then refreshed: the repositories are one dated snapshot
+    # (/etc/pacman.conf), so a refresh reads the same packages the computer was installed from.
+    for refresh in ([], ['-y']):
+        done = subprocess.run(['pacman', '-S', *refresh, '--needed', '--noconfirm', GH_PACKAGE],
+                              capture_output=True, text=True, timeout=GH_INSTALL_TIMEOUT)
+        if done.returncode == 0 and GH.exists():
+            log('installed the GitHub CLI')
+            return {'installed': True}
+    reason = (done.stderr.strip() or done.stdout.strip()).splitlines()[-1:] or ['pacman failed']
+    log(f'the GitHub CLI did not install: {reason[0]}')
+    return {'installed': False, 'message': 'The GitHub CLI could not be installed: ' + reason[0][:200]}
+
+
 def factory_reset(keep_wifi=False, keep_ssh=False):
     """This computer as just installed: off its account and a new computer to it (a new computer id and
     device key), everything of the person gone — /home/me as the installer made it, so its projects,
@@ -1065,7 +1090,7 @@ def factory_reset(keep_wifi=False, keep_ssh=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('command', nargs='?', choices=['watch', 'now', 'name', 'join', 'reset', 'sign-out',
-                                                       'password', 'ssh'], default='watch')
+                                                       'password', 'ssh', 'install-gh'], default='watch')
     parser.add_argument('action', nargs='?', choices=['status', 'on', 'off'], help='ssh: status, on or off')
     parser.add_argument('--keep-wifi', action='store_true', help='reset, sign-out: keep the saved Wi-Fi')
     parser.add_argument('--keep-ssh', action='store_true', help='reset: leave SSH as it is')
@@ -1113,6 +1138,13 @@ def main():
         return
     if arguments.command == 'ssh':
         print(json.dumps(ssh(arguments.action or 'status')))
+        return
+    if arguments.command == 'install-gh':
+        try:
+            print(json.dumps(install_gh()))
+        except (OSError, subprocess.SubprocessError) as error:
+            log(f'the GitHub CLI did not install: {error}')
+            print(json.dumps({'installed': False, 'message': 'The GitHub CLI could not be installed. Try again.'}))
         return
     if arguments.command == 'join':
         # From the daemon, through sudo: the Wi-Fi as JSON on stdin, never in argv.

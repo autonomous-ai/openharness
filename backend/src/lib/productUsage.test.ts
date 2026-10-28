@@ -92,6 +92,12 @@ it('keeps the client and server vocabulary identical', () => {
     .toBe(readFileSync(new URL('../types/productUsage.ts', import.meta.url), 'utf8'))
 })
 
+it('names launch refusals and agent-started launches', () => {
+  const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
+  for (const m of ['launch_refused', 'launch_agent_started', 'launch_agent_created', 'launch_agent_failed', 'launch_agent_refused',
+    'launch_refused_code_session_in_harness', 'launch_refused_code_invalid_request']) expect(metrics.has(m), m).toBe(true)
+})
+
 it('names every launch code in each of its families, once, as a fixed word that can carry no message', () => {
   const metrics = new Set<string>(PRODUCT_USAGE_METRICS)
   expect(metrics.size).toBe(PRODUCT_USAGE_METRICS.length)
@@ -151,17 +157,18 @@ describe('aggregate ingestion', () => {
   it('rechecks permission after waiting for another report without caching an enabled choice', async () => {
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
-    db.$transaction.mockImplementationOnce(async fn => { await gate; return fn(db) })
-    const first = ingestProductUsage('first-account', report, now)
+    // Four reports fill this process's write slots; the fifth waits for one.
+    for (let i = 0; i < 4; i++) db.$transaction.mockImplementationOnce(async fn => { await gate; return fn(db) })
+    const first = [0, 1, 2, 3].map(i => ingestProductUsage(`account-${i}`, { ...report, id: `receipt-${i}` }, now))
     const queued = ingestProductUsage('opted-out-while-queued', { ...report, id: 'another-receipt' }, now)
     await Promise.resolve()
-    expect(db.$transaction).toHaveBeenCalledOnce()
-    db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: true, revision: 0 })
-      .mockResolvedValueOnce({ enabled: false, revision: 1 })
+    expect(db.$transaction).toHaveBeenCalledTimes(4)
+    for (let i = 0; i < 4; i++) db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: true, revision: 0 })
+    db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: false, revision: 1 })
     release()
-    expect(await first).toEqual({ accepted: true })
+    expect(await Promise.all(first)).toEqual(Array(4).fill({ accepted: true }))
     expect(await queued).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
-    expect(db.productUsageReceipt.create).toHaveBeenCalledOnce()
+    expect(db.productUsageReceipt.create).toHaveBeenCalledTimes(4)
   })
   it('stores only totals and an unlinked receipt, in one transaction', async () => {
     expect(await ingestProductUsage('private-account', report, now)).toEqual({ accepted: true })
@@ -210,6 +217,13 @@ describe('aggregate ingestion', () => {
     expect(delay).toHaveBeenCalledExactlyOnceWith(expect.any(Number))
     expect(vi.mocked(delay).mock.calls[0][0]).toBeGreaterThanOrEqual(25)
     expect(vi.mocked(delay).mock.calls[0][0]).toBeLessThan(75)
+  })
+  it('retries a Mongo lock wait like a conflict, with the same receipt', async () => {
+    db.$runCommandRaw.mockRejectedValueOnce(new Error('Error code 24 (LockTimeout): Unable to acquire IX lock, labels: {"TransientTransactionError"}'))
+    expect(await ingestProductUsage('a', report, now)).toEqual({ accepted: true })
+    expect(db.$transaction).toHaveBeenCalledTimes(2)
+    expect(db.productUsageReceipt.create.mock.calls[0]).toEqual(db.productUsageReceipt.create.mock.calls[1])
+    expect(delay).toHaveBeenCalledOnce()
   })
   it('rechecks a sharing-off choice before retrying the transaction', async () => {
     db.$runCommandRaw.mockRejectedValueOnce({ code: 'P2034' })

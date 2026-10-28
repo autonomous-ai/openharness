@@ -101,6 +101,16 @@ export const PRODUCT_USAGE_FLOW_MEASURES = ['started', 'ok', 'failed', 'cancelle
   'under_1s', '1s_to_10s', '10s_to_1m', 'over_1m'] as const
 export const PRODUCT_USAGE_UI_METRICS = PRODUCT_USAGE_UI_SURFACES.flatMap(surface =>
   PRODUCT_USAGE_FLOWS.flatMap(flow => PRODUCT_USAGE_FLOW_MEASURES.map(measure => `ui_${surface}_${flow}_${measure}` as const)))
+/** Why a Desktop sign-in that did not go through ended, once per sign-in beside its outcome
+ * (desktop/lib/measurement/product_measurement.dart `SignInEndReason`): the CLI's own result code from
+ * `harness login --json`, lower-cased, or what the app saw instead. `cancelled` is the person (Cancel, the other
+ * button, the app closing); `timeout` is a browser page nobody came back from in five minutes, which the person
+ * may have left or finished with a callback that never arrived, so the outcome is `unknown`, not `cancelled`;
+ * `no_result` is a CLI that ended without a result line; `cli_unavailable` one that could not be started.
+ * Until 2026-10-28 Desktop counted every one of these as `failed` (compare releases separately). */
+export const PRODUCT_USAGE_SIGN_IN_END_REASONS = ['cancelled', 'timeout', 'expired', 'denied', 'cli_unavailable',
+  'cli_too_old', 'no_result', 'callback_error', 'exchange_failed', 'backend_error', 'auth_error', 'daemon_busy',
+  'daemon_did_not_stop', 'ticket_invalid', 'unavailable', 'other'] as const
 export const PRODUCT_USAGE_SETUP_DOWNLOADS = ['opencode', 'codex', 'claude'] as const
 export const PRODUCT_USAGE_SETUP_DOWNLOAD_MEASURES = ['started', 'ok', 'failed', 'under_1m', '1m_to_5m', 'over_5m'] as const
 // A signed-out report is explicitly enabled on this app. It cannot carry account/work metrics.
@@ -113,6 +123,8 @@ export const PRODUCT_USAGE_SETUP_METRICS = [...PRODUCT_USAGE_SURFACES.flatMap(su
   // A step's tool was not installed yet when Desktop checked, so setup installed it: once per step per
   // setup, beside the step's own outcome. Signed-out only (a signed-in report passes an older CLI).
   ...(['setup_harness', 'setup_tmux', 'setup_clipboard'] as const).map(flow => `setup_desktop_${flow}_missing` as const),
+  // Why a Desktop sign-in did not go through. Signed-out only, like `_missing`: a signed-in report passes an older CLI.
+  ...PRODUCT_USAGE_SIGN_IN_END_REASONS.map(reason => `setup_desktop_sign_in_reason_${reason}` as const),
   // The agents a new computer downloads beside setup (desktop/lib/bootstrap/agent_prefetch.dart): whether each
   // download put its agent in place, and how long it took. Engine names only, never a path or log line.
   ...PRODUCT_USAGE_SETUP_DOWNLOADS.flatMap(engine => PRODUCT_USAGE_SETUP_DOWNLOAD_MEASURES
@@ -171,10 +183,11 @@ export type LaunchErrorCode = typeof LAUNCH_ERROR_CODES[number]
  * and resume requests' `other` refusals, and every delete and restart refusal — from any client, and again,
  * apart, those the phone asked for (`phone_`), which a daemon's report otherwise carries mixed with the
  * Desktop's, the TUI's and tools'. Setup reasons have their own families, adding up to `launch_failed_setup`,
- * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning. */
+ * `create_error_setup` and `request_phone_create_error_setup`; existing `other` families keep their meaning.
+ * `launch_refused_code` names which correct refusal a `launch_refused` was (cli/src/lib/productUsageSignals.ts). */
 export const LAUNCH_ERROR_FAMILIES = ['launch_failed_code', 'launch_late_failed_code', 'create_error_code', 'resume_error_code',
   'delete_error_code', 'restart_error_code', 'phone_delete_error_code', 'phone_restart_error_code',
-  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code'] as const
+  'launch_failed_setup_code', 'create_error_setup_code', 'phone_create_error_setup_code', 'launch_refused_code'] as const
 /** The engine an installation's first launch asked for; any other engine is `other`. */
 export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'other'] as const
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]
@@ -200,6 +213,11 @@ export const PRODUCT_USAGE_METRICS = [
   'launch_started', 'launch_created', 'launch_failed', 'launch_cancelled', 'launch_unconfirmed', 'launch_unobserved',
   // A created launch whose engine then did not start: one of the launch_created, never also a launch_failed.
   'launch_late_failed',
+  // A create turned down because the request was wrong, not because Harness failed (the Oct 26 report counted
+  // opening a conversation that is already a harness, and a cloud agent with no task, as failures): never also
+  // a launch_failed. The agent twins count the launches an agent or a Swarm started (the create's `startedBy`),
+  // so a person's own launches are the total less those.
+  'launch_refused', 'launch_agent_started', 'launch_agent_created', 'launch_agent_failed', 'launch_agent_refused',
   'launch_wait_install', 'launch_wait_model', 'launch_wait_native', 'launch_wait_other',
   'launch_failed_setup', 'launch_failed_auth', 'launch_failed_unavailable', 'launch_failed_invalid', 'launch_failed_other',
   'launch_under_10s', 'launch_10s_to_1m', 'launch_1m_to_5m', 'launch_over_5m',

@@ -1,14 +1,17 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../notify/system_notifications.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
+import 'pm_chat.dart';
 import 'section_heading.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
@@ -20,17 +23,27 @@ class SuperTabMention {
       conversationId = row['conversationId'] as String,
       conversationTitle = row['conversationTitle'] as String? ?? '',
       messageId = row['messageId'] as String,
+      leadId = row['leadId'] as String?,
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       resolvedBy = row['resolvedBy'] as String?;
   final String id, projectId, projectName, conversationId, conversationTitle;
   final String messageId, leadName, text;
+
+  /// The Lead who tagged; null from a backend that does not send it.
+  final String? leadId;
   final DateTime? createdAt;
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
   final String? resolvedBy;
 }
+
+/// Whether the menu bar's Harness menu lists the reader's tags and decisions,
+/// with their count on the Dock: the Mac app's. Elsewhere the Swarm's sidebar
+/// keeps its Notifications row.
+bool get superTabNoticesInMenuBar =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
 /// What tells the person about a new tag outside the window: the operating
 /// system, on Desktop only. The web shows only the badge and the list (spec
@@ -69,7 +82,8 @@ class SuperTabMentions extends ChangeNotifier {
   List<SuperTabMention> waiting = const [], earlier = const [];
   String? error;
   int? _count;
-  int _revision = -1;
+  int _lastChangedAt = -1;
+  int? _epoch;
   // Null until the first read: tags waiting then are not news.
   Set<String>? _seen;
   Future<void>? _loading;
@@ -90,11 +104,28 @@ class SuperTabMentions extends ChangeNotifier {
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
+    final epoch = controller.visibilityEpoch;
+    if (epoch != null && epoch != _epoch) {
+      final moved = _epoch != null;
+      _epoch = epoch;
+      if (moved) {
+        // Who may read what changed: no tag read before shows until read
+        // again, even while the count stays, as the decisions do.
+        if (waiting.isNotEmpty || earlier.isNotEmpty) {
+          waiting = earlier = const [];
+          notifyListeners();
+        }
+        _lastChangedAt = controller.lastChangedAt;
+        _count = snapshot.mentionsWaiting;
+        unawaited(load());
+        return;
+      }
+    }
     // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
     final moved = count != _count;
-    if (!moved && controller.revision == _revision) return;
-    _revision = controller.revision;
+    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
+    _lastChangedAt = controller.lastChangedAt;
     _count = count;
     if (count == 0 && (!moved || _seen == null)) {
       _seen ??= {};
@@ -133,11 +164,15 @@ class SuperTabMentions extends ChangeNotifier {
   }
 
   Future<void> _read() async {
+    final epoch = _epoch;
     try {
       final [nextWaiting, nextEarlier] = await Future.wait([
         _list('waiting'),
         _list('earlier'),
       ]);
+      // Read before who may read what changed: the read asked again since
+      // replaces it.
+      if (epoch != _epoch) return;
       waiting = nextWaiting;
       earlier = nextEarlier;
       error = null;
@@ -149,6 +184,7 @@ class SuperTabMentions extends ChangeNotifier {
         }
       }
     } catch (_) {
+      if (epoch != _epoch) return;
       error = 'Could not load notifications. Try again.';
     }
     notifyListeners();
@@ -185,10 +221,14 @@ class SuperTabNotifications extends StatefulWidget {
     required this.mentions,
     required this.onOpen,
     this.now = DateTime.now,
+    this.leading,
   });
   final SuperTabMentions mentions;
   final ValueChanged<SuperTabMention> onOpen;
   final DateTime Function() now;
+
+  /// Shown first in the same list: the reader's decisions (decisions_view.dart).
+  final Widget? leading;
 
   @override
   State<SuperTabNotifications> createState() => _SuperTabNotificationsState();
@@ -221,6 +261,13 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
 
   Widget _row(SuperTabMention mention, {required bool waiting}) {
     final time = mention.createdAt;
+    // The reader's own chat with the Product Manager is named as the sidebar
+    // names it, not by the reader's own name.
+    final place =
+        widget.mentions.controller.pmChat(mention.projectId)?.id ==
+            mention.conversationId
+        ? kChatWithPm
+        : mention.conversationTitle;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -235,7 +282,20 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (widget.mentions.controller.snapshot?.agent(
+                      mention.leadId ?? '',
+                    )
+                    case final lead?)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10, top: 2),
+                    child: SuperTabAvatar.agent(
+                      lead,
+                      name: mention.leadName,
+                      size: 24,
+                    ),
+                  ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -260,7 +320,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                         ],
                       ),
                       Text(
-                        '${mention.projectName} · ${mention.conversationTitle}',
+                        '${mention.projectName} · $place',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: DesktopChrome.metadata(),
@@ -317,6 +377,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                 ],
               ),
             ),
+          ?widget.leading,
           _heading('Waiting'),
           if (m.waiting.isEmpty) _empty('Nothing waiting for you.'),
           for (final mention in m.waiting) _row(mention, waiting: true),

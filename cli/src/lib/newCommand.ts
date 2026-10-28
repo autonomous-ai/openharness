@@ -7,7 +7,7 @@ import { formatNext, type NextStep } from '../agentClient/next.js'
 import { folderTrust } from '../engines/launchPrep.js'
 import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineName } from '../messages/model.js'
-import { isCloudAgent } from './cloudAgents.js'
+import { cloudRequestRefusal, isCloudAgent } from './cloudAgents.js'
 import { projectFolderSlug } from './agentNames.js'
 import { permissionModeFlags } from './engineLaunch.js'
 import { projectsRoot } from './projectFolder.js'
@@ -171,6 +171,9 @@ export function parseNewArgs(argv: string[], env: { cwd: string; home: string; p
   if ((repo !== null || acuLimit !== null) && !isCloudAgent(words[0])) {
     throw new NewUsageError(`${repo !== null ? '--repo' : '--acu-limit'} is for a cloud agent: harness new devin-cloud ${repo !== null ? '--repo owner/name' : '--acu-limit 10'} -- <task>`)
   }
+  // What the cloud service would refuse, refused before anything is sent, in its words.
+  const cloudRefusal = isCloudAgent(words[0]) ? cloudRequestRefusal(words[0], prompt ?? '', [repo]) : null
+  if (cloudRefusal) throw new NewUsageError(cloudRefusal)
   if (!MODES.has(mode)) throw new NewUsageError(`--mode is one of ${[...MODES].join(', ')}.`)
   if (words.length > 2) throw new NewUsageError(`Too many words: ${words.slice(2).join(' ')}.`)
   if (words[1] !== undefined) {
@@ -383,7 +386,7 @@ const ERRORS: Record<string, string> = {
   INVALID_ENGINE: 'That agent is not one this machine knows.',
   INVALID_DSH: 'That harness is not in the machine\'s catalog, or does not run on that engine.',
   PROJECT_EXISTS: 'A project with that name already exists. Choose another name, or name its folder to start in it.',
-  PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message.',
+  PROMPT_UNSUPPORTED: 'That agent cannot be started with a first message. Run it again without --task.',
   PROMPT_TOO_LONG: 'A first message holds at most 2,000 characters. Put the rest in a file and name the file in it.',
   SPAWN_FAILED: 'The agent could not be started.',
   // Recorded as a refusal only where a launch cannot be held (a new project's folder): its detail says what it waited for.

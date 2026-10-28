@@ -1,0 +1,174 @@
+/**
+ * The host form (design 4.10): for one machine, the rows of every Swarm it serves (full), or of the Swarms with a change
+ * that concerns it since the cursor (incremental). Grants and billing live outside the parts, so the host asks for a full
+ * read at start and at least every 60 s.
+ */
+import { createHash } from 'node:crypto'
+import type { Prisma, PrismaClient } from '@prisma/client'
+import type { AuthUser } from '../../lib/ssoAuth.js'
+import { machineAlive } from '../../lib/prisma.js'
+import { isTeamSession } from '../../lib/teamSession.js'
+import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
+import { fail, type AgentStart, type SuperTabState } from '../model.js'
+import type { SuperTabStore } from '../store.js'
+import type { CacheView } from '../cache.js'
+import { readMachines } from '../cachedReads.js'
+import * as parts from '../parts/index.js'
+import type { MachineData, Part } from '../parts/index.js'
+import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
+import { cursorFor, readCursor } from './cursor.js'
+import { hostTab, type HostLookups } from './hostRows.js'
+import { confidentialSessions } from '../confidential.js'
+
+type Transaction = Prisma.TransactionClient
+/** The row hash's length at the front of an etag (read/hostEtag.ts); the input signature follows it. */
+const ROW_HASH = 22
+/** A full read covers this many of the machine's Swarms, most recently changed first (was 100 full Swarms each second). */
+const FULL_TABS = 500
+
+/** A change any host of the Swarm cares about from the part alone: names, pause, observers, its agents and starts. */
+function plainlyRelevant(part: Part, machineId: string): boolean {
+  switch (part.kind) {
+    case 'head': case 'member': return true
+    case 'agent': return (part.data as { machineId?: string } | null)?.machineId === machineId
+    case 'start': return (part.data as AgentStart | null)?.request.machineId === machineId
+    default: return false
+  }
+}
+const PLAIN_KINDS = ['head', 'member', 'agent', 'start'] as const
+
+export class HostReads {
+  private readonly db: PrismaClient
+  private readonly now: () => number
+  /** Reads the store's own database, on its clock unless given one (tests). */
+  constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean; teamAccountsIdle?: boolean } = {}) {
+    this.db = store.db
+    this.now = options.now ?? store.now
+  }
+
+  async changes(user: AuthUser, machineId: string, request: HostChangesRequest): Promise<HostChanges> {
+    const t0 = this.now()
+    const from = request.cursor && !request.full ? readCursor(request.cursor, 0, t0) : { reload: true as const }
+    // Outside any transaction: each Swarm's signature and state come through the read cache (cache.ts), at stamps read once.
+    const tx = this.db
+    await this.store.hostFor(tx, user, machineId)
+    const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
+    // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
+    const ids = (await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, format: 2,
+      OR: [{ machineIds: { has: machineId } }, { cleanupMachineIds: { has: machineId } }] },
+      orderBy: { updatedAt: 'desc' }, take: FULL_TABS, select: { id: true } })).map(r => r.id)
+    const teams = isTeamSession(user) || this.options.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub,
+      hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
+    const full = 'reload' in from
+    const woken = full ? null : await this.woken(tx, ids, machineId, from.since)
+    // Only for the Swarms answered for: this runs every second on every host, and seven groupBy over all of a Swarm's parts
+    // are no use for one that has nothing to say (a production backend at 5 pods, 2026-10-27).
+    const newest = await parts.lastChangedAt(tx, woken ? ids.filter(id => woken.has(id)) : ids)
+    const tabs = []
+    const cached = await this.store.view(woken ? ids.filter(id => woken.has(id)) : ids)
+    for (const tabId of ids) {
+      if (woken && !woken.has(tabId)) continue
+      const lastChangedAt = newest.get(tabId) ?? null, held = request.held?.[tabId]
+      // The etag is the rows' hash and then the signature of what they were built from. A matching signature answers
+      // 'unchanged' from version columns alone. Never on a full read: grants and billing live outside the parts.
+      const inputs = await cached.get(tabId, 'host:inputs', 'main', () => this.inputs(tx, tabId))
+      if (!full && held && inputs && held.slice(ROW_HASH) === inputs) { tabs.push({ tabId, lastChangedAt, etag: held, unchanged: true as const }); continue }
+      const state = await this.tabState(tx, cached, tabId, machineId)
+      const rows = await hostTab(tabId, state, machineId, user, lastChangedAt, await this.lookups(tx, state, teams))
+      const etag = rows.etag + (inputs ?? '')
+      // The host already holds these rows: say so instead of sending them again.
+      tabs.push(held?.slice(0, ROW_HASH) === rows.etag ? { tabId, lastChangedAt, etag, unchanged: true as const } : { ...rows, etag })
+    }
+    return { format: READ_FORMAT, full, cursor: cursorFor(t0, 0), tabs,
+      removedTabIds: full ? [] : await this.removed(tx, user.autonomousEnv, machineId, from.since, new Set(ids)) }
+  }
+
+  /**
+   * The Swarms with a change for this machine's host since the cursor. Groups and machine parts go by the markers their
+   * writes left (parts/commit.ts), since their new data alone cannot say it: a group concerns the host when its agents or
+   * its work were on this machine before or after the write (an agent leaving its last group, review round 1); a machine
+   * part when its settings or ledger changed, never when only its reading did (every 15 s; group 5's run, 2026-10-26).
+   */
+  private async woken(tx: Transaction, ids: string[], machineId: string, since: number): Promise<Set<string>> {
+    const after = new Date(since)
+    const [changed, groups, machines] = await Promise.all([
+      parts.loadChanged(tx, ids, after, PLAIN_KINDS),
+      tx.swarmGroup.findMany({ where: { tabId: { in: ids }, changedAt: { gt: after }, hostMachineIds: { has: machineId } }, select: { tabId: true } }),
+      tx.swarmMachine.findMany({ where: { tabId: { in: ids }, hostChangedAt: { gt: after } }, select: { tabId: true, key: true, data: true } }),
+    ])
+    const woken = new Set([...ids.filter(id => changed.get(id)?.some(p => plainlyRelevant(p, machineId))), ...groups.map(g => g.tabId)])
+    // This machine's own settings, a team account's pool on this Mac, or the Mac this team account follows.
+    const follows = new Map((await tx.swarmMachine.findMany({ where: { tabId: { in: [...new Set(machines.map(m => m.tabId))] }, key: machineId },
+      select: { tabId: true, data: true } })).map(m => [m.tabId, (m.data as MachineData | null)?.contribution?.hostMachineId]))
+    for (const m of machines) {
+      if (m.key === machineId || (m.data as MachineData | null)?.contribution?.hostMachineId === machineId || follows.get(m.tabId) === m.key) woken.add(m.tabId)
+    }
+    return woken
+  }
+
+  /** The Swarm's active parts plus, dormant ones included, every group its agents on this machine are in (a finished
+   *  group that is not archived still keeps its agent from automatic cleanup) and every group of a start it holds (the
+   *  host still settles a queued start whose group went quiet). */
+  private async tabState(tx: Transaction, cached: CacheView, tabId: string, machineId: string): Promise<SuperTabState> {
+    const [light, machines] = await Promise.all([cached.get(tabId, `host:state:${machineId}`, 'main',
+      // On a miss, one snapshot of what the host's rows are built from.
+      () => this.db.$transaction(t => this.hostParts(t, tabId, machineId))),
+      readMachines(tx, cached, tabId)])
+    return parts.reassemble({ ...light, machines }, { share: true })
+  }
+
+  private async hostParts(tx: Transaction, tabId: string, machineId: string) {
+    const [agents, starts] = await Promise.all([
+      tx.swarmAgent.findMany({ where: { tabId, machineId, deleted: false }, select: { key: true } }),
+      tx.swarmStart.findMany({ where: { tabId, machineId, deleted: false, finishedAt: null }, select: { conversationId: true } }),
+    ])
+    const groupIds = [...new Set(starts.map(s => s.conversationId))]
+    // A pool lists every conversation of a project it has a start in.
+    const projectIds = groupIds.length ? [...new Set((await tx.swarmGroup.findMany({ where: { tabId, key: { in: groupIds } }, select: { projectId: true } }))
+      .map(g => g.projectId ?? 'lead'))] : []
+    // Light conversations (parts/light.ts), and only those host rows read: its agents' (dormant ones too, for `active`),
+    // the Lead conversations, running work (assignments, attention, stop requests), and its starts' and their projects'.
+    return parts.loadLight(tx, tabId, { groups: 'working', agentIds: agents.map(a => a.key), groupIds, projectIds, machines: false })
+  }
+
+  /**
+   * The signature of everything host rows are built from, read from version columns only (no part data): the head,
+   * members, agents and starts by their data stamps, machines by their settings marker (not their readings), and
+   * conversations by their host-fields digest and dormancy (a post leaves both). Null while a conversation has no digest
+   * yet: a missing digest counts as changed.
+   */
+  private async inputs(tx: Transaction, tabId: string): Promise<string | null> {
+    const live = { tabId, deleted: false }, stamp = { key: true, changedAt: true } as const
+    const [head, members, agents, starts, machines, digests] = await Promise.all([
+      tx.swarmHead.findUnique({ where: { id: `${tabId}:head` }, select: { changedAt: true } }),
+      tx.swarmMember.findMany({ where: live, select: stamp }), tx.swarmAgent.findMany({ where: live, select: stamp }),
+      tx.swarmStart.findMany({ where: live, select: stamp }),
+      tx.swarmMachine.findMany({ where: live, select: { key: true, hostChangedAt: true } }),
+      // Every conversation's digest (which carries its id) and dormancy, in key order, as one string: about 23 bytes each.
+      tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false } }, { $sort: { key: 1 } },
+        { $group: { _id: null, missing: { $sum: { $cond: [{ $ifNull: ['$hostDigest', false] }, 0, 1] } },
+          all: { $push: { $concat: [{ $ifNull: ['$hostDigest', ''] }, { $cond: ['$dormant', '1', '0'] }] } } } },
+        { $project: { _id: 0, missing: 1, all: { $reduce: { input: '$all', initialValue: '', in: { $concat: ['$$value', '$$this'] } } } } }] }),
+    ])
+    const groups = (digests as unknown as Array<{ missing: number; all: string }>)[0] ?? { missing: 0, all: '' }
+    if (!head || groups.missing) return null
+    const keyed = <T extends { key: string }>(rows: T[]) => rows.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+    return createHash('sha256').update(JSON.stringify([head.changedAt, keyed(members), keyed(agents), keyed(starts), keyed(machines), groups.all]))
+      .digest('base64url').slice(0, ROW_HASH)
+  }
+
+  private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>): Promise<HostLookups> {
+    const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
+    const confidential = await confidentialSessions(tx, state.agents.map(a => a.id))
+    return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target) }
+  }
+
+  /** Swarms whose record of this machine changed since the cursor and that no longer list it. */
+  private async removed(tx: Transaction, autonomousEnv: string, machineId: string, since: number, listed: Set<string>): Promise<string[]> {
+    const rows = await tx.swarmMachine.findMany({ where: { machineId, hostChangedAt: { gt: new Date(since) } }, select: { tabId: true } })
+    const gone = [...new Set(rows.map(r => r.tabId))].filter(id => !listed.has(id))
+    if (!gone.length) return []
+    return (await tx.superTab.findMany({ where: { id: { in: gone }, autonomousEnv }, select: { id: true } })).map(r => r.id)
+  }
+}

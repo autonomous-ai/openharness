@@ -14,6 +14,7 @@ import '../widgets/engine_identity.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'profile_sheet.dart';
 import 'pull_requests.dart';
 
 /// Facts already observed by the Swarm or the agent's machine. Unknown facts
@@ -40,7 +41,7 @@ class SuperTabAgentInfo {
          controller.snapshot?.conversations
              .where(
                (g) =>
-                   !g.archived &&
+                   !g.closed &&
                    g.assignment?['agentId'] == agent.id &&
                    !const {
                      'done',
@@ -141,6 +142,8 @@ class SuperTabAgentInfo {
         'blocked' => 'Stuck on "${group.title}"',
         'review' => 'Waiting for review on "${group.title}"',
         'reconciling' => 'Checking "${group.title}"',
+        // Its machine died, it stalled or hit a limit, and the Lead hands it on (backend liveness.ts).
+        'lost' => 'Lost "${group.title}"',
         'working' when activity == HarnessActivity.working =>
           'Working on "${group.title}"',
         // An assignment can outlive a native turn or connection. Keep the
@@ -246,8 +249,18 @@ Future<void> showSuperTabAgentDetails(
         final group = info.taskGroup;
         final pr = info.latestGroupPr;
         final name = controller.snapshot?.agentName(agent.id) ?? agent.name;
+        // Its contributor dresses it; its Lead may too, from the CLI.
+        final dresses =
+            controller.canWrite &&
+            current.contributorId == controller.accountId;
         return AlertDialog(
-          title: Text(name),
+          title: Row(
+            children: [
+              SuperTabAvatar.agent(current, name: name, size: 32),
+              const SizedBox(width: 12),
+              Expanded(child: Text(name)),
+            ],
+          ),
           content: SizedBox(
             width: 440,
             child: SingleChildScrollView(
@@ -302,6 +315,13 @@ Future<void> showSuperTabAgentDetails(
             ),
           ),
           actions: [
+            if (dresses)
+              TextButton(
+                onPressed: () => unawaited(
+                  showSuperTabProfile(context, controller, agentId: agent.id),
+                ),
+                child: const Text('Change avatar'),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),

@@ -150,7 +150,7 @@ class SuperTabFixtureConnection extends WsConn {
     if (type == 'super_tabs') {
       if (changeAccountOnProjectRead &&
           payload['method'] == 'GET' &&
-          payload['path'] == '/api/super-tabs/$tabId') {
+          payload['path'] == '/api/super-tabs/$tabId/parts') {
         app.currentUser = const CurrentUserProfile(
           id: 'different',
           email: 'different@example.com',

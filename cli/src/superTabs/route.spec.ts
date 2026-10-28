@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -403,6 +403,22 @@ describe('candidate labels', () => {
   })
 })
 
+describe('repositoryKey', () => {
+  it('names a repository the same way over HTTPS and SSH, without credentials or case', () => {
+    for (const url of ['https://github.com/Acme/App.git', 'https://someone:secret@github.com/acme/app/', 'git@github.com:Acme/App.git',
+      'ssh://git@github.com:22/acme/app.git', ' HTTPS://GitHub.com/acme/app ']) expect(repositoryKey(url)).toBe('github.com/acme/app')
+  })
+  it('keeps nothing of a query or fragment, where a credential can be too', () => {
+    for (const url of ['https://example.test/Acme/Repo.git?access_token=SYNTHETIC_SECRET', 'https://example.test/acme/repo#token=SYNTHETIC_SECRET',
+      'git@example.test:acme/repo.git?access_token=SYNTHETIC_SECRET', 'ssh://git@example.test/acme/repo.git#SYNTHETIC_SECRET']) {
+      expect(repositoryKey(url)).toBe('example.test/acme/repo')
+    }
+  })
+  it('names nothing for a folder on disk or an address it cannot read', () => {
+    for (const url of ['/srv/remote.git', 'file:///srv/remote.git', '', 'https://github.com', 'not a url']) expect(repositoryKey(url)).toBeNull()
+  })
+})
+
 describe('repoMatch', () => {
   it('marks a member as in the task\'s repository by remote, then root, then folder', () => {
     expect(repoMatch(null, frame(), true)).toBeUndefined()
@@ -541,7 +557,7 @@ describe('local models on the Swarm\'s grid', () => {
     expect(ok(choose([opus, api], policy, a({ model: 'Claude Opus' }), NOW)).shown.map(s => s.model)).toEqual(['opus'])
     expect(ok(choose([older], policy, a({ difficulty: 'low' }), NOW)).shown[0]!.title).toContain('(shared)')
     expect(choose([opus], policy, a({ model: 'gpt 9' }), NOW)).toEqual({ error: 'NO_CANDIDATE',
-      excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Manage models), or check its name.' }] })
+      excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Your models), or check its name.' }] })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: ' deepseek 4.1 flash ' })).toMatchObject({ model: 'deepseek 4.1 flash' })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: '...' })).toContain('model')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: 7 })).toContain('model')
@@ -570,13 +586,39 @@ describe('local models on the Swarm\'s grid', () => {
     expect(choose([probe()], policy, a({ model: 'gpt 9' }), NOW, [], [], [qwen])).toMatchObject({ excluded: [{ reason: expect.stringContaining('No candidate runs "gpt 9"') }] })
     expect(choose([probe()], policy, a({ local: true }), NOW, [], [], [qwen])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models',
       reason: '"Qwen 3 4B" is shared with the Swarm, but Builder Faye is on it: a local model serves one Builder at a time. Assign the work to that Builder once it is free, or stop it to free the model.' }] })
-    expect(LOCAL_NONE).toContain('Manage models')
+    expect(LOCAL_NONE).toContain('Your models')
+  })
+
+  describe('first for simple work (roadmap, Dec: about 30% of work on cheaper models)', () => {
+    const simple = a({ difficulty: 'low', risk: 'low', size: 'small' })
+    // Opus on an account whose 5-hour window resets in 20 minutes costs nothing in effect, so it ranked above a free model.
+    const expiring = probe({ machineName: 'mac', model: 'opus', effort: 'high', quality: 3, cost: 3, quota: windows([60, 20 * M], [60, 2 * D]) })
+    const haiku = probe({ machineName: 'mac', model: 'haiku', effort: 'auto', quality: 1, cost: 1, quota: windows([90, 4 * H], [80, 5 * D]) })
+    const idle = probe({ kind: 'member', agentId: 'a1', name: 'Idle', model: 'sonnet', quota: windows([90, 4 * H], [80, 5 * D]) })
+    const grid = local({ machineName: 'mac' })
+    const firstOf = (r: ReturnType<typeof choose>) => ok(r).shown[0]!.gridModel ?? ok(r).shown[0]!.model
+    it('ranks a model on the Swarm\'s grid first for low-difficulty, low-risk work', () => {
+      expect(firstOf(choose([expiring, haiku, grid], policy, simple, NOW))).toBe('qwen3')
+      expect(firstOf(choose([idle, grid], policy, simple, NOW, [], [{ rule: { kind: 'preferIdle' }, text: 'Idle first.' }]))).toBe('qwen3')
+    })
+    it('keeps the policy order for anything harder, riskier or a review', () => {
+      expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, difficulty: 'medium' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, kind: 'review' }, NOW))).toBe('opus')
+    })
+    it('still puts the owner\'s preferred engine first, and stops when the owner opts out', () => {
+      const codex = probe({ machineName: 'mac', engine: 'codex', model: 'default', effort: 'default', quality: 3, cost: 2, quota: windows([90, 4 * H], [80, 5 * D]) })
+      const prefer = [{ rule: { kind: 'preferEngine', taskKind: null, engine: 'codex' }, text: 'Codex.' } as SwarmRule]
+      expect(firstOf(choose([codex, grid], policy, simple, NOW, [], prefer))).toBe('default')
+      expect(firstOf(choose([codex, local({ machineName: 'mac', engine: 'codex' })], policy, simple, NOW, [], prefer))).toBe('qwen3')
+      expect(firstOf(choose([expiring, grid], policy, simple, NOW, [], [{ rule: { kind: 'noGridFirst' }, text: 'Subscriptions first.' }]))).toBe('opus')
+    })
   })
 
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {
     const llama = { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local' as const, holders: [],
       refused: 'llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more).' }
-    const reason = '"llama3.2:3b" is shared with the Swarm, but Builders are not offered it: llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more). Ask a member to run a larger model, or share an API (Manage models).'
+    const reason = '"llama3.2:3b" is shared with the Swarm, but Builders are not offered it: llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more). Ask a member to run a larger model, or share an API (Your models).'
     expect(choose([probe()], policy, a({ model: 'llama 3.2 3b' }), NOW, [], [], [llama])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Named model', reason }] })
     expect(choose([probe()], policy, a({ local: true }), NOW, [], [], [llama])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models', reason }] })
   })

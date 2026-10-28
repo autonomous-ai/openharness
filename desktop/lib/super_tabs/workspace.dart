@@ -221,12 +221,20 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       final tab = app.swarms.where((s) => s.id == swarmId).firstOrNull;
       if (tab == null) return;
       var machine = app.stateOf(agent.machineId);
-      if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
+      final snapshot = controller.snapshot;
+      // Another person's private session never arrives as an invitation: re-reading the machine list for one is wasted.
+      final private =
+          snapshot != null &&
+          agent.machineOwnerId != controller.accountId &&
+          superTabTerminalPrivate(snapshot, agent);
+      if (!private &&
+          machine?.agents.any((a) => a.id == agent.harnessId) != true) {
         await app.refreshMachines();
         if (!current() || !app.swarms.any((s) => s.id == swarmId)) return;
         machine = app.stateOf(agent.machineId);
       }
-      if (machine?.agents.any((a) => a.id == agent.harnessId) != true) {
+      if (private ||
+          machine?.agents.any((a) => a.id == agent.harnessId) != true) {
         throw SuperTabFailure(
           'TERMINAL_UNAVAILABLE',
           superTabTerminalUnavailable(
@@ -397,7 +405,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
   ) async {
     final groups =
         controller.snapshot?.conversations
-            .where((g) => !g.archived && g.agentIds.contains(agent.id))
+            .where((g) => !g.closed && g.agentIds.contains(agent.id))
             .toList() ??
         <SuperTabConversation>[];
     if (groups.isEmpty) return;
@@ -433,6 +441,19 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
       _terminalRequest = null;
       return canvas;
     }
+    Widget waiting(Object? error) => Stack(
+      children: [
+        Offstage(child: canvas),
+        Center(
+          child: error != null
+              ? Text(error.toString())
+              : const CircularProgressIndicator(),
+        ),
+      ],
+    );
+    // A restored Swarm draws before the signed-in account's profile answers:
+    // it waits for the account rather than opening as nobody's.
+    if (app.currentUser == null) return waiting(null);
     return FutureBuilder<SuperTabController>(
       future: app.superTabs.open(id),
       builder: (context, state) {
@@ -440,16 +461,7 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
         if (controller == null ||
             controller.tabId != id ||
             controller.accountId != app.currentUser?.id) {
-          return Stack(
-            children: [
-              Offstage(child: canvas),
-              Center(
-                child: state.hasError
-                    ? Text(state.error.toString())
-                    : const CircularProgressIndicator(),
-              ),
-            ],
-          );
+          return waiting(state.hasError ? state.error : null);
         }
         return ListenableBuilder(
           listenable: controller,
@@ -537,6 +549,8 @@ class _SuperTabWorkspaceState extends State<SuperTabWorkspace> {
                   machineName: (machine) =>
                       app.stateOf(machine)?.machine.displayName ??
                       'Offline machine',
+                  isThisComputer: (machine) =>
+                      app.stateOf(machine)?.isLocalMachine == true,
                   terminal: showTerminal
                       ? terminal
                       : devices || agents.isNotEmpty

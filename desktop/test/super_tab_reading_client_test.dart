@@ -38,7 +38,7 @@ class _Backend {
         'Connect one of your machines to open Swarm.',
       );
     }
-    if (path.startsWith('/api/super-tabs?') || path == '/api/super-tabs') {
+    if (Uri.parse(path).path == '/api/super-tabs/list') {
       return {
         'tabs': [
           {'id': 'tab', 'name': 'Pilot'},
@@ -51,10 +51,16 @@ class _Backend {
     return servers[id]!.request(method, path, body: body);
   }
 
-  int states(String id) =>
-      paths.where((p) => p == '/api/super-tabs/$id').length;
+  /// Reads of the Swarm itself: first loads and change reads.
+  int states(String id) => paths
+      .where(
+        (p) =>
+            p == '/api/super-tabs/$id/parts' ||
+            p.startsWith('/api/super-tabs/$id/changes?'),
+      )
+      .length;
   int get discoveries =>
-      paths.where((p) => Uri.parse(p).path == '/api/super-tabs').length;
+      paths.where((p) => Uri.parse(p).path == '/api/super-tabs/list').length;
 }
 
 SuperTabClient _client(

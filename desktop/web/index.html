@@ -13,6 +13,13 @@
   <link rel="icon" href="favicon.ico?v=5" sizes="16x16 32x32 48x48">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=5">
   <title>Harness</title>
+  <!-- The app's script, first and at high priority: the loader in flutter_bootstrap.js waits for
+       it, so it runs while the engine downloads instead of after. The website moves the href into
+       the release's folder, where the loader asks for it (website/scripts/harness-web-assets.mjs).
+       It marks itself done: from the cache it can finish before the loader's script is parsed,
+       and a load event fired before anyone listened would leave the loader waiting forever. -->
+  <link rel="preload" href="main.dart.js" as="script" fetchpriority="high" id="harness-main-preload"
+        onload="this.dataset.done = 'loaded'" onerror="this.dataset.done = 'failed'">
   <!-- The page the visitor sees until Flutter's first frame: the app is megabytes of script
        and WebAssembly, so on a phone this is all there is for seconds. Plain HTML and CSS,
        nothing to fetch. It follows the palette the app will open in (Graphite, or the light

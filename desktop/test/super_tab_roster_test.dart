@@ -93,6 +93,7 @@ class RosterFixture {
               app: nativeState ? app : null,
               onInvite: () {},
               onAddAgent: (group) => added = group,
+              onAnswer: (_) {},
               onOpenAgent: (agent) => opened = agent,
             ),
           ),
@@ -105,6 +106,11 @@ class RosterFixture {
   Finder row(int i) => find.byKey(ValueKey('super-member-agent-$i'));
   Finder inRow(int i, Finder child) =>
       find.descendant(of: row(i), matching: child);
+
+  /// The row's one line: state, machine, model and effort (team glance, 2026-10-27).
+  Finder line(int i) => find.byKey(ValueKey('super-member-line-agent-$i'));
+  String lineText(WidgetTester tester, int i) =>
+      tester.widget<Text>(line(i)).data!;
   HarnessActivity activity(WidgetTester tester, int i) =>
       tester.widget<ActivityMark>(inRow(i, find.byType(ActivityMark))).activity;
 
@@ -187,7 +193,7 @@ void main() {
       ).toUtc().toIso8601String();
       await f.controller.refresh();
       await f.show(tester);
-      expect(f.inRow(1, find.text('Limited until 09:05')), findsOneWidget);
+      expect(f.lineText(tester, 1), 'Limited until 09:05 · Test host');
       expect(rowTooltip(tester, f, 1), contains('Limited until 09:05'));
       await captureBoundary(
         tester,
@@ -205,9 +211,10 @@ void main() {
         await f.controller.refresh();
         await tester.pumpAndSettle();
         expect(find.textContaining('Limited until'), findsNothing);
+        expect(f.lineText(tester, 1), 'Assigned · Test host');
         expect(
-          f.inRow(1, find.text('Assigned to "Offline editing"')),
-          findsOneWidget,
+          rowTooltip(tester, f, 1),
+          contains('Assigned to "Offline editing"'),
         );
       }
       await f.close(tester);
@@ -248,10 +255,7 @@ void main() {
         rowTooltip(tester, f, 1),
         contains('Sage · Engineer · openharness'),
       );
-      expect(
-        f.inRow(1, find.text('Working on "Offline editing"')),
-        findsOneWidget,
-      );
+      expect(f.lineText(tester, 1), 'Working · Test host · opus unknown');
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(tester.getCenter(f.row(1)));
@@ -272,7 +276,9 @@ void main() {
       contains('Atlas · Product Manager · openharness'),
     );
     expect(rowTooltip(tester, f, 0), contains('Codex'));
-    expect(f.inRow(0, find.text('Status unavailable')), findsOneWidget);
+    // No native state and no task: idle as far as the Swarm's work goes; the tooltip says what is not known.
+    expect(f.lineText(tester, 0), 'Idle');
+    expect(rowTooltip(tester, f, 0), contains('Status unavailable'));
     expect(rowTooltip(tester, f, 0), isNot(contains('Last active')));
     await tester.tap(f.row(0));
     await tester.pumpAndSettle();
@@ -311,7 +317,7 @@ void main() {
     await f.controller.refresh();
     await f.show(tester);
     expect(f.activity(tester, 1), HarnessActivity.needsInput);
-    expect(f.inRow(1, find.text('Needs input')), findsOneWidget);
+    expect(f.lineText(tester, 1), 'Waiting · Test host');
     expect(rowTooltip(tester, f, 1), contains('Needs input'));
     expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     await f.close(tester);
@@ -331,9 +337,8 @@ void main() {
       await f.show(tester);
       final tooltip = rowTooltip(tester, f, 1);
       expect(tooltip, contains(title));
-      final activity = f.inRow(1, find.text('Working on "$title"'));
-      expect(activity, findsOneWidget);
-      expect(tester.getSize(activity).height, lessThan(30));
+      expect(f.lineText(tester, 1), 'Working · Test host');
+      expect(tester.getSize(f.line(1)).height, lessThan(30));
       final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
       await mouse.addPointer(location: Offset.zero);
       await mouse.moveTo(tester.getCenter(f.row(1)));
@@ -939,28 +944,12 @@ void main() {
     await f.close(tester);
   });
 
-  testWidgets('eight people show five, then expand and collapse', (
-    tester,
-  ) async {
+  testWidgets('eight people all show, with no More row', (tester) async {
     final f = await fixtureWithPeople(tester, 8);
-    for (var i = 0; i < 8; i++) {
-      expect(person(i), i < 5 ? findsOneWidget : findsNothing);
-    }
-    expect(find.text('Show 3 more'), findsOneWidget);
-
-    await tester.tap(find.text('Show 3 more'));
-    await tester.pumpAndSettle();
     for (var i = 0; i < 8; i++) {
       expect(person(i), findsOneWidget);
     }
-    expect(find.text('Show less'), findsOneWidget);
-
-    await tester.tap(find.text('Show less'));
-    await tester.pumpAndSettle();
-    for (var i = 0; i < 8; i++) {
-      expect(person(i), i < 5 ? findsOneWidget : findsNothing);
-    }
-    expect(find.text('Show 3 more'), findsOneWidget);
+    expect(find.textContaining('Show '), findsNothing);
     await f.close(tester);
   });
 
@@ -1026,7 +1015,7 @@ void main() {
       final nameX = tester.getTopLeft(f.inRow(0, find.text('Atlas'))).dx;
       final engine = tester.getRect(f.inRow(0, find.byType(EngineMark)));
       final name = tester.getRect(f.inRow(0, find.text('Atlas')));
-      final status = tester.getRect(f.inRow(0, find.text('Idle')));
+      final status = tester.getRect(f.line(0));
       final mark = tester.getRect(f.inRow(0, find.byType(ActivityMark)));
       expect(engine.left, greaterThan(name.right));
       expect(engine.center.dy, closeTo(name.center.dy, 2));
@@ -1158,11 +1147,12 @@ void main() {
       ..['assignment'] = {'agentId': 'agent-1', 'status': 'planned'};
     await f.controller.refresh();
     await f.show(tester, nativeState: false);
+    expect(f.lineText(tester, 1), 'Assigned');
     expect(
-      f.inRow(1, find.text('Assigned to "Polish navigation"')),
-      findsOneWidget,
+      rowTooltip(tester, f, 1),
+      contains('Assigned to "Polish navigation"'),
     );
-    expect(f.inRow(0, find.text('Status unavailable')), findsOneWidget);
+    expect(f.lineText(tester, 0), 'Idle');
     expect(f.activity(tester, 1), HarnessActivity.unknown);
     final copy = tester
         .widgetList<Text>(
@@ -1211,7 +1201,12 @@ void main() {
             ? 'Working on "Polish navigation"'
             : 'Assigned to "Polish navigation"';
         expect(f.activity(tester, 1), activity);
-        expect(f.inRow(1, find.text(status)), findsOneWidget);
+        expect(
+          f.lineText(tester, 1),
+          activity == HarnessActivity.working
+              ? 'Working · Test host'
+              : 'Assigned · Test host',
+        );
         expect(rowTooltip(tester, f, 1), contains(status));
         if (activity != HarnessActivity.working) {
           expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
@@ -1219,10 +1214,7 @@ void main() {
       }
       await f.show(tester, nativeState: false);
       expect(f.activity(tester, 1), HarnessActivity.unknown);
-      expect(
-        f.inRow(1, find.text('Assigned to "Polish navigation"')),
-        findsOneWidget,
-      );
+      expect(f.lineText(tester, 1), 'Assigned');
       await f.close(tester);
     },
   );
@@ -1241,16 +1233,17 @@ void main() {
     (f.server.state['conversations'] as List).add(currentTask);
     await f.controller.refresh();
     await f.show(tester, nativeState: false);
+    expect(f.lineText(tester, 1), 'Assigned');
     expect(
-      f.inRow(1, find.text('Assigned to "Polish navigation"')),
-      findsOneWidget,
+      rowTooltip(tester, f, 1),
+      contains('Assigned to "Polish navigation"'),
     );
     expect(rowTooltip(tester, f, 1), isNot(contains('Cancelled task')));
 
     (currentTask['assignment'] as Map)['status'] = 'cancelled';
     await f.controller.refresh();
     await tester.pumpAndSettle();
-    expect(f.inRow(1, find.text('Status unavailable')), findsOneWidget);
+    expect(f.lineText(tester, 1), 'Idle');
     expect(rowTooltip(tester, f, 1), isNot(contains('Polish navigation')));
     expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     await f.close(tester);
@@ -1260,14 +1253,25 @@ void main() {
     tester,
   ) async {
     final f = await fixture(tester);
-    for (final (status, activity, label) in [
-      ('blocked', HarnessActivity.needsInput, 'Needs input'),
+    for (final (status, activity, label, line) in [
+      (
+        'blocked',
+        HarnessActivity.needsInput,
+        'Needs input',
+        'Stuck · Test host',
+      ),
       (
         'review',
         HarnessActivity.idle,
         'Waiting for review on "Polish navigation"',
+        'In review · Test host',
       ),
-      ('reconciling', HarnessActivity.idle, 'Checking "Polish navigation"'),
+      (
+        'reconciling',
+        HarnessActivity.idle,
+        'Checking "Polish navigation"',
+        'Checking · Test host',
+      ),
     ]) {
       (f.server.state['conversations'] as List)[1]
         ..['title'] = 'Polish navigation'
@@ -1275,7 +1279,8 @@ void main() {
       await f.controller.refresh();
       await f.show(tester);
       expect(f.activity(tester, 1), activity);
-      expect(f.inRow(1, find.text(label)), findsOneWidget);
+      expect(f.lineText(tester, 1), line);
+      expect(rowTooltip(tester, f, 1), contains(label));
       expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
     }
     await f.close(tester);
@@ -1314,14 +1319,20 @@ void main() {
       };
       await f.controller.refresh();
       final machine = f.app.stateOf('m')!;
-      for (final (activity, status, data) in [
-        (HarnessActivity.offline, 'Offline', <String, dynamic>{}),
-        (HarnessActivity.paused, 'Stopped', {'status': 'stopped'}),
-        (HarnessActivity.starting, 'Starting', {'launchState': 'starting'}),
-        (HarnessActivity.failed, 'Failed', {'launchState': 'failed'}),
+      for (final (activity, status, line, data) in [
+        (HarnessActivity.offline, 'Offline', 'Down', <String, dynamic>{}),
+        (HarnessActivity.paused, 'Stopped', 'Stopped', {'status': 'stopped'}),
+        (
+          HarnessActivity.starting,
+          'Starting',
+          'Starting',
+          {'launchState': 'starting'},
+        ),
+        (HarnessActivity.failed, 'Failed', 'Down', {'launchState': 'failed'}),
         (
           HarnessActivity.needsInput,
           'Needs input',
+          'Waiting',
           {'launchState': 'failed', 'launchError': 'RESUME_UNCONFIRMED'},
         ),
       ]) {
@@ -1341,8 +1352,9 @@ void main() {
           ];
         await f.show(tester);
         expect(f.activity(tester, 1), activity);
-        expect(f.inRow(1, find.text(status)), findsOneWidget);
-        expect(f.inRow(1, find.textContaining('Working on')), findsNothing);
+        expect(f.lineText(tester, 1), '$line · Test host');
+        expect(rowTooltip(tester, f, 1), contains(status));
+        expect(f.inRow(1, find.textContaining('Working')), findsNothing);
         expect(rowTooltip(tester, f, 1), isNot(contains('Working on')));
       }
       await f.close(tester);
@@ -1366,9 +1378,7 @@ void main() {
         final name = tester.getRect(f.inRow(0, find.text(longName)));
         final badgeFinder = f.inRow(0, find.text('PM'));
         final badge = tester.getRect(badgeFinder);
-        final status = tester.getRect(
-          f.inRow(0, find.text('Status unavailable')),
-        );
+        final status = tester.getRect(f.line(0));
         final mark = tester.getRect(f.inRow(0, find.byType(ActivityMark)));
         expect(name.left, tester.getTopLeft(find.text('owner')).dx);
         expect(mark.left, name.left);

@@ -533,6 +533,36 @@ double swarmSearchResultsHeight(
     (search.selected != null && !search.canAccept ? 48 : 0);
 
 /// Shared harness search results, also used for commands and History.
+/// Whether choosing [row] only selects it, so that its preview's actions can be
+/// used: a machine or a signed-in phone or app in the Open Harness picker, and
+/// Add machine in any '@' scope. The one rule for the workspace's choose path
+/// and a phone's pages.
+///
+/// On a phone (the web below [WorkspaceChrome.compactBelow]) the search's list
+/// and a row's preview are two pages, as an iPhone app's list and its detail.
+/// What a tap on a row does there:
+/// - A row that only selects drills in to its preview.
+/// - Every other row keeps doing what its tap does: a harness opens, a project
+///   lists its harnesses, an agent or a model is used, a store entry or a
+///   command runs. When it has a preview, a chevron at its end drills in.
+bool swarmSearchRowSelectsOnly(
+  SwarmSearchController search,
+  SwarmDestination row,
+) =>
+    (search.setupLayout && (row.isMachine || row.isAccountDevice)) ||
+    (row.isCreate && search.isMachineMode);
+
+/// Whether [row], once selected, has a preview a phone can drill in to. Not
+/// whether one shows now: an empty search selects nothing until a row is
+/// chosen, and choosing one is what the chevron does.
+bool swarmSearchRowHasDetails(
+  SwarmSearchController search,
+  SwarmDestination row,
+) =>
+    search.supportsPreview &&
+    search.previewVisible &&
+    (!row.isCreate || swarmSearchRowSelectsOnly(search, row));
+
 class SwarmSearchResults extends StatefulWidget {
   const SwarmSearchResults({
     super.key,
@@ -546,6 +576,7 @@ class SwarmSearchResults extends StatefulWidget {
     this.header,
     this.previewBuilder,
     this.showPreview = true,
+    this.onShowDetails,
     this.now = DateTime.now,
   });
   final SwarmSearchController search;
@@ -561,6 +592,12 @@ class SwarmSearchResults extends StatefulWidget {
   final Widget? header;
   final Widget Function()? previewBuilder;
   final bool showPreview;
+
+  /// On a phone, where a row's preview is a page of its own: opens [row]'s
+  /// ([swarmSearchRowSelectsOnly]). Its rows end in a chevron, which on a row
+  /// that acts when tapped is the way to its details. Null — a wider window,
+  /// Desktop — draws the rows as they always were.
+  final ValueChanged<SwarmDestination>? onShowDetails;
   final DateTime Function() now;
   @override
   State<SwarmSearchResults> createState() => _SwarmSearchResultsState();
@@ -891,6 +928,45 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
     }
   }
 
+  /// A phone row's way to its details. A row that drills in when tapped draws
+  /// the chevron only as a sign of it; any other row gets a finger-sized
+  /// button, so that its tap can keep doing what it does.
+  Widget _detailsChevron(
+    SwarmDestination row, {
+    required bool drills,
+    required bool highlighted,
+  }) {
+    final glyph = Icon(
+      AppIcons.chevronRight,
+      size: 18,
+      color: highlighted ? DesktopChrome.selectionDetail : DesktopChrome.muted,
+    );
+    if (drills) {
+      return ExcludeSemantics(
+        child: SizedBox(
+          width: kFingerTarget - 14,
+          child: Center(child: glyph),
+        ),
+      );
+    }
+    return IconButton(
+      key: ValueKey('swarm-row-details:${row.id}'),
+      tooltip: 'Details for ${row.title}',
+      constraints: const BoxConstraints.tightFor(
+        width: kFingerTarget,
+        height: kFingerTarget,
+      ),
+      padding: EdgeInsets.zero,
+      // The list's compact density would take 4 px off a finger's target.
+      visualDensity: VisualDensity.standard,
+      onPressed: () {
+        _focusResult(row.id);
+        widget.onShowDetails?.call(row);
+      },
+      icon: glyph,
+    );
+  }
+
   @override
   void dispose() {
     _activityClock?.cancel();
@@ -971,7 +1047,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
               ? oneLine.clamp(48, double.infinity)
               : _twoLineRowHeight;
         }
-        // A Swarm's Manage models: two lines a row (its name, then what it is), under headings that read as headings.
+        // A Swarm's Your models: two lines a row (its name, then what it is), under headings that read as headings.
         final swarmRows = desktop && search.isSwarmModels;
         if (swarmRows) {
           _rowHeight = math.max(
@@ -1020,6 +1096,20 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
           // Live display metadata is independent of the ranking snapshot.
           final activity = _activity.read(row);
           final activityAge = sessionActivityLabel(activity, widget.now());
+          // A phone's row ends in a chevron to its details, when it has any.
+          final details = widget.onShowDetails == null
+              ? null
+              : (
+                  drills: swarmSearchRowSelectsOnly(search, row),
+                  has: swarmSearchRowHasDetails(search, row),
+                );
+          // A row that acts when tapped has its details behind a button of
+          // its own, beside the tile: a dense tile's trailing slot is 40 px,
+          // short of a finger.
+          final detailsButton =
+              desktop && details != null && details.has && !details.drills
+              ? _detailsChevron(row, drills: false, highlighted: highlighted)
+              : null;
           final presentation = (
             row,
             shortcut,
@@ -1055,6 +1145,7 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     search.wordsQuery,
                   )
                 : null,
+            details,
           );
           final previous = _rowWidgets.remove(row.id);
           if (previous?.presentation == presentation) {
@@ -1253,7 +1344,17 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                     activityAge: activityAge,
                     activity: activity,
                   ),
-                  trailing: desktop
+                  // On a phone the chevron takes the shortcut's place: keys
+                  // are not advertised there.
+                  trailing: details != null && details.has && details.drills
+                      ? _detailsChevron(
+                          row,
+                          drills: true,
+                          highlighted: highlighted,
+                        )
+                      : detailsButton != null
+                      ? null
+                      : desktop
                       ? shortcut == null
                             ? null
                             : ConstrainedBox(
@@ -1368,7 +1469,15 @@ class _SwarmSearchResultsState extends State<SwarmSearchResults> {
                             ? grid.AppSurface.selectedFill
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(10),
-                        child: tile,
+                        child: detailsButton == null
+                            ? tile
+                            : Row(
+                                children: [
+                                  Expanded(child: tile),
+                                  detailsButton,
+                                  const SizedBox(width: 4),
+                                ],
+                              ),
                       ),
                     )
                   : widget.bios
@@ -2643,7 +2752,7 @@ class SwarmSearchCount extends StatelessWidget {
   }
 }
 
-/// A section heading of a Swarm's Manage models: its title, how many it holds, a rule, and a note at the right.
+/// A section heading of a Swarm's Your models: its title, how many it holds, a rule, and a note at the right.
 class _SwarmModelHeading extends StatelessWidget {
   const _SwarmModelHeading({
     super.key,
@@ -2729,7 +2838,7 @@ class _SwarmModelHeading extends StatelessWidget {
   }
 }
 
-/// A row of a Swarm's Manage models: its mark, its name over what it is, and what it is to the Swarm.
+/// A row of a Swarm's Your models: its mark, its name over what it is, and what it is to the Swarm.
 class _SwarmModelRow extends StatelessWidget {
   const _SwarmModelRow({
     required this.search,

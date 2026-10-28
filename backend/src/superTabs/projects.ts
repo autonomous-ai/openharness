@@ -23,14 +23,10 @@ export interface SwarmProject {
   visibility: ProjectVisibility
   members: Array<{ id: string; generation: string }>
   updateMinutes: 1 | 5 | 15 | 30
-  progress?: {
-    dirtyRevision: number
-    summarizedRevision: number
-    since: number
-    requestedRevision: number
-    requestedAt?: number
-    requestMessageId?: string
-  }
+  /** The morning digest (digest.ts): its local time ("08:00") and zone, and the local date and time of the last one sent. */
+  digest?: { time: string; timeZone: string; lastOn?: string; lastAt?: number }
+  /** Report watermark per conversation (projectUpdates.ts); kept in its own part (store by parts). */
+  progress?: import('./parts/types.js').ProgressData
   repository?: { machineId: string; cwd: string; repositoryUrl: string | null }
   /** Absent on projects from before skill modes, which keep the texts their agents already run. */
   skillMode?: SkillMode
@@ -112,12 +108,113 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
     return group
   }
   readProject(state, actor, groupProject(state, group).id)
+  if (!canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This conversation is unavailable.', 404)
   return group
+}
+
+/** Whether a project's owner and the Swarm's owner also read its private conversations. The owner decided they do not
+ *  (2026-10-26); this is the one place that decides it (design section 4.8). */
+export const PRIVATE_VISIBLE_TO_OWNERS = false
+
+/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a private
+ *  conversation's listed people (at the generation they were listed with) and the project's Lead, nobody else. */
+export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  if (isLeads(group)) return actor.kind === 'person' ? state.people.some(p => p.id === actor.userId) : !!ledProject(state, actor.agentId)
+  const project = groupProject(state, group)
+  if (!canReadProject(state, actor, project)) return false
+  if (!group.audience) return true
+  if (actor.kind === 'agent') return ledProject(state, actor.agentId)?.id === project.id
+  const member = state.people.find(p => p.id === actor.userId)
+  return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
+    || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))
+}
+
+/** A private conversation's audience: each person a member who reads its project, captured at their generation. */
+export function audienceOf(state: SuperTabState, project: SwarmProject, personIds: string[]): NonNullable<Conversation['audience']> {
+  return { people: [...new Set(personIds)].map(id => {
+    const member = state.people.find(p => p.id === id) ?? fail('INVALID_AUDIENCE', 'List people in this Swarm.', 400)
+    if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
+      fail('INVALID_AUDIENCE', `${member.email} cannot read this project.`, 400)
+    }
+    return { id: member.id, generation: member.generation }
+  }) }
 }
 
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
   return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
 }
+
+/** A session that reads people's private messages: its project's Lead (the Product Manager each person chats with privately),
+ *  or any agent in a private conversation, so a replaced Lead's earlier screen stays closed too. */
+export const confidentialSession = (state: SuperTabState, target: Agent): boolean =>
+  !!ledProject(state, target.id) || privateMember(state, target.id)
+const privateMember = (state: SuperTabState, agentId: string) => state.conversations.some(c => !!c.audience && c.agentIds.includes(agentId))
+
+/** Whether an agent's session is confidential: marked, or a Lead or private member now, here or (`elsewhere`) in another Swarm. */
+export const isConfidential = (state: SuperTabState, target: Agent, elsewhere = false): boolean =>
+  !!target.confidential || elsewhere || confidentialSession(state, target)
+
+/** A native session's identity across Swarms: its machine and harness. */
+export const sessionKey = (machineId: string, harnessId: string) => `${machineId}\n${harnessId}`
+/** The other Swarms' registrations a command is checked against (confidential.ts otherRegistrations), by sessionKey. */
+export interface OtherRegistrations { registered: Set<string>; confidential: Set<string> }
+
+/** A confidential session is registered in one Swarm only (Lead ruling, final review Critical 1), so its mark lives exactly as
+ *  long as that registration: a command may not register again (add, start, rebind) a session confidential elsewhere, nor make
+ *  a session registered elsewhere a Lead or a private conversation's member. Registrations from before the rule stay. */
+export function requireSingleRegistration(before: SuperTabState, after: SuperTabState, elsewhere: OtherRegistrations): void {
+  const prior = new Map(before.agents.map(a => [a.id, a]))
+  for (const target of after.agents) {
+    const was = prior.get(target.id), key = sessionKey(target.machineId, target.harnessId)
+    if ((!was || was.harnessId !== target.harnessId) && elsewhere.confidential.has(key)) {
+      fail('SESSION_CONFIDENTIAL', 'This terminal reads private chats in another Swarm. Start a new agent here.')
+    }
+    const lead = !!ledProject(after, target.id) && !(was && ledProject(before, target.id))
+    const member = privateMember(after, target.id) && !(was && privateMember(before, target.id))
+    if ((lead || member) && elsewhere.registered.has(key)) {
+      fail('SESSION_CONFIDENTIAL', 'This terminal also works in another Swarm, so it cannot lead or read private chats. Start a new agent for this.')
+    }
+  }
+}
+
+/** A session becomes confidential the moment it is a Lead or in a private conversation, and stays so until it leaves the
+ *  Swarm (its session closes), even once that membership ends (Lead ruling, final review Critical 1). */
+export function markConfidential(state: SuperTabState): void {
+  for (const target of state.agents) if (!target.confidential && confidentialSession(state, target)) target.confidential = true
+}
+
+/** Who may watch an agent's terminal: observe it, hold a share of it, read or type in it. A confidential session's screen and
+ *  scrollback hold people's private chats, so only the person whose machine runs it may, owners included. `elsewhere`: the
+ *  same session is confidential in another Swarm (confidential.ts). Any other agent: every reader of its project, as before. */
+export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): boolean {
+  return canReadAgent(state, actor, target) && (!isConfidential(state, target, elsewhere) || ownSession(actor, target))
+}
+
+/** Whether someone who could watch an agent's terminal before a commit cannot after it (canWatchAgent, by the session the
+ *  observer relay watches: machine, harness and machine owner): a person left, the agent left, its project stopped being
+ *  shared with them, or the session turned confidential, by whatever command. Its observer sockets then check again. */
+export function watchingNarrowed(before: SuperTabState, after: SuperTabState): boolean {
+  const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
+  const now = new Map(after.agents.map(a => [session(a), a]))
+  // canWatchAgent per person, with the agent's confidentiality read once per state.
+  const watchers = (state: SuperTabState, target: Agent) => {
+    const confidential = isConfidential(state, target)
+    return state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
+      .filter(actor => canReadAgent(state, actor, target) && (!confidential || ownSession(actor, target)))
+  }
+  return before.agents.some(target => {
+    const was = watchers(before, target)
+    if (!was.length) return false
+    const still = now.get(session(target))
+    if (!still) return true
+    const is = new Set(watchers(after, still).map(actor => actor.userId))
+    return was.some(actor => !is.has(actor.userId))
+  })
+}
+
+/** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
+export const ownSession = (actor: Actor, target: Agent): boolean =>
+  actor.kind === 'person' ? actor.userId === target.machineOwnerId : actor.agentId === target.id
 
 export function readAgent(state: SuperTabState, actor: Actor, agentId: string): Agent {
   const target = agent(state, agentId)

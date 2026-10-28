@@ -1,7 +1,9 @@
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +15,7 @@ import 'package:harness/shortcuts/app_keymap.dart';
 import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
+import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
@@ -126,8 +129,24 @@ void main() {
       await tester.tap(find.byTooltip('Conversations'));
       await tester.pumpAndSettle();
     }
-    // The teammate's machine is not online here, so it sits under the closed "Offline" disclosure.
+    // The sidebar builds only the rows near its view: at a large text size the
+    // Machines group starts below it.
+    final sidebar = find
+        .descendant(
+          of: find.byType(ProjectSidebar),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    // The teammate's machine is not online here, so it may sit under the closed "Offline" disclosure.
     final offline = find.byKey(const ValueKey('super-machines-offline'));
+    for (
+      var i = 0;
+      i < 50 && machine.evaluate().isEmpty && offline.evaluate().isEmpty;
+      i++
+    ) {
+      await tester.drag(sidebar, const Offset(0, -100));
+      await tester.pumpAndSettle();
+    }
     if (machine.evaluate().isEmpty && offline.evaluate().isNotEmpty) {
       await tester.ensureVisible(offline);
       await tester.tap(offline);
@@ -135,7 +154,10 @@ void main() {
     }
     await tester.ensureVisible(machine);
     await tester.pumpAndSettle();
-    await tester.tap(machine);
+    // A machine's details are in its right-click menu; a click expands it.
+    await tester.tap(machine, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Details').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Attach running agent'));
     await tester.pumpAndSettle();

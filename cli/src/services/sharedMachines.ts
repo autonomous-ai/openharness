@@ -214,11 +214,15 @@ export function startSharedMachines(core: CoreApi, overrides: Partial<SharedMach
     }
     let remote = await port.policy()
     // The backend is told again what this machine holds, whenever it says otherwise (a write that failed,
-    // a backend that lost it, the owner's domain now public).
+    // a backend that lost it, the owner's domain now public). What it then holds is kept here, as `set` keeps it:
+    // it drops an address it never shares with (the owner's own), and a policy still naming one read back as
+    // different at every read, so it was written again every two minutes and each write had every member's
+    // apps re-read their machines (Diego's, every 1 to 3 minutes, 2026-10-28).
     if (!failed(remote) && !samePolicy(local, remote)) {
-      const sameDomain = local.sameDomain && !!remote.domain
-      remote = await port.publish(local.emails, sameDomain)
-      if (!failed(remote) && sameDomain !== local.sameDomain) writePolicy(deps.file, { ...local, sameDomain })
+      remote = await port.publish(local.emails, local.sameDomain && !!remote.domain)
+      if (!failed(remote) && !samePolicy(local, remote)) {
+        writePolicy(deps.file, { ...local, emails: remote.emails, sameDomain: remote.sameDomain })
+      }
     }
     if (!failed(remote)) desired.keys = shares(local) ? trustedKeys(local, remote) : []
     if (desired.pins || desired.keys) {

@@ -16,6 +16,14 @@ const _web = SuperTabReading(
   messagesWithState: true,
 );
 
+/// A read of the Swarm itself: its first load, or its changes since a cursor.
+bool _isStateRead(String path) =>
+    path == '/api/super-tabs/tab/parts' ||
+    path.startsWith('/api/super-tabs/tab/changes?');
+
+/// A poll's read of what changed since the last one.
+final _changesRead = startsWith('/api/super-tabs/tab/changes?cursor=');
+
 /// Every read the controller made, in order.
 class _Reads {
   _Reads(this.server);
@@ -43,7 +51,7 @@ class _Reads {
         ),
       );
     }
-    if (holdState case final held? when path == '/api/super-tabs/tab') {
+    if (holdState case final held? when _isStateRead(path)) {
       final wait = Completer<void>();
       held.add(wait);
       return wait.future.then((_) => server.request(method, path, body: body));
@@ -57,7 +65,7 @@ class _Reads {
     return server.request(method, path, body: body);
   }
 
-  int get states => paths.where((p) => p == '/api/super-tabs/tab').length;
+  int get states => paths.where(_isStateRead).length;
   int get pages => paths.where((p) => p.contains('messages?before=')).length;
   int get tails => paths.where((p) => p.contains('messages?after=')).length;
   int get receipts => paths.where((p) => p.contains('messageId=')).length;
@@ -116,7 +124,7 @@ void main() {
         server.holdReads = Completer<void>();
         reads.clear();
         async.elapse(const Duration(seconds: 3));
-        expect(reads.paths, ['/api/super-tabs/tab']);
+        expect(reads.paths, [_changesRead]);
         server.holdReads!.complete();
         server.holdReads = null;
         async.flushMicrotasks();
@@ -153,7 +161,7 @@ void main() {
           },
         )..start();
         async.flushMicrotasks();
-        expect(reads.paths, ['/api/super-tabs/tab']);
+        expect(reads.paths, ['/api/super-tabs/tab/parts']);
         server.holdReads!.complete();
         server.holdReads = null;
         async.flushMicrotasks();
@@ -286,7 +294,7 @@ void main() {
         async.elapse(const Duration(seconds: 3));
         expect(reads.paths, [
           '/api/super-tabs/tab/conversations/lead/messages?after=1',
-          '/api/super-tabs/tab',
+          _changesRead,
         ]);
         _reply(server, 'Done.');
         server.holdReads!.complete();
@@ -428,7 +436,7 @@ void main() {
         async.flushMicrotasks();
         expect(reads.paths, [
           '/api/super-tabs/tab/conversations/offline/messages',
-          '/api/super-tabs/tab',
+          '/api/super-tabs/tab/parts',
         ]);
         server.holdReads!.complete();
         server.holdReads = null;

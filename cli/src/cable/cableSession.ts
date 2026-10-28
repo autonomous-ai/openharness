@@ -287,7 +287,7 @@ export interface AppSwarms {
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
 export type CableMachineSource = 'backend' | 'local' | 'signed-out'
 /**
- * What a Super Tab member's wait adds to its `question` (core/superTabAttention.ts): the tab's name and whether it needs a
+ * What a Super Tab member's wait adds to its `question` (superTabs/inCore/attention.ts): the tab's name and whether it needs a
  * decision or is stuck. The Harness Pro makes it an alert whose toast stays; firmware without it, and the round dial,
  * read the words alone. Nobody answers it on a device.
  */
@@ -335,7 +335,7 @@ export interface CableHost {
   listSwarms(): { selected: string; swarms: CableSwarm[]; tiles: CableTile[] }
   /** The dial picked a swarm. Relayed to the window, which switches and re-describes its desk. */
   selectSwarm(swarmId: string): void
-  /** The Swarm cards the core last told the devices (core/superTabCards.ts); empty until it has. */
+  /** The Swarm cards the core last told the devices (superTabs/inCore/cards.ts); empty until it has. */
   swarmCards?(): SwarmCard[]
   /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
   swarmCardsWanted?(on: boolean): void
@@ -347,7 +347,7 @@ export interface CableHost {
   swarmSay?(harnessId: string, text: string): Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
-  /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
+  /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
   activeSwarmProject?(): { superTabId: string; projectId: string; fromDevice: boolean } | null
   appName(): string
   voiceLang(): string
@@ -2597,6 +2597,8 @@ export class CableSession {
   private openLead: { tabId: string; leadId: string } | null = null
   /** The Swarm project the Pro was last pointed at (or picked itself), so a repeat announce sends nothing. */
   private focusedKey = ''
+  /** The last focus decision logged, so a burst of the same answer is one line. */
+  private focusLogged = ''
   /** This cable session's name for the service, so one Pro closing its recap does not close another's. */
   private readonly cardSession = `c${++nextCardSession}`
   /** The project this Pro itself picked last and when: the desktop's announce of it is no news, and a stale one of another is held off. */
@@ -2617,6 +2619,7 @@ export class CableSession {
     this.cardKeys.clear()
     this.cardIdsKey = ''
     this.focusedKey = ''
+    this.focusLogged = ''
     this.picked = null
     this.lastRecapGet = null
     if (this.openLead) this.host.swarmCardOpen?.(this.cardSession, this.openLead.tabId, null)
@@ -2670,21 +2673,41 @@ export class CableSession {
     await this.pushSwarmFocus()
   }
 
-  /** Point the Pro at the Lead of the project the window has open, once per change and never at its own pick. */
+  /**
+   * Point the Pro at the Lead of the project the window has open, once per change and never at its own pick. A Swarm tab
+   * with no project open (its Chat with PM, a DM) still takes the device into that Swarm: `lead: ''` lets it open on the
+   * Lead it last showed there, else its first. A device from before that ignores an empty Lead, as it always has.
+   *
+   * Every decision is logged, once per change. This used to log nothing, and "the dial stayed on an empty tab" could
+   * not be told apart from "no project", "no Lead" or "already sent" from the logs (Diego's dial, 2026-10-28).
+   */
   private async pushSwarmFocus(): Promise<void> {
     const open = this.host.activeSwarmProject?.()
-    if (!open) { this.focusedKey = ''; return }
+    if (!open) { this.focusedKey = ''; this.logFocus('cable: swarm focus · not a Swarm tab'); return }
     const key = `${open.superTabId}/${open.projectId}`
-    if (key === this.focusedKey) return
+    const named = open.projectId ? key : `${open.superTabId} (no project)`
+    if (key === this.focusedKey) { this.logFocus(`cable: swarm focus ${named} · already sent`); return }
     // Only the Pro that picked has nothing to follow; every other Pro still goes where the window went.
-    if (open.fromDevice && this.picked?.key === key) { this.focusedKey = key; return }
+    if (open.fromDevice && this.picked?.key === key) { this.focusedKey = key; this.logFocus(`cable: swarm focus ${named} · the device's own pick`); return }
     // The desktop's announce from before it heard the pick: not where the window is going.
-    if (!open.fromDevice && this.picked && this.picked.key !== key && Date.now() - this.picked.at < PICK_ECHO_MS) return
-    const lead = this.host.swarmCards?.().find((c) => c.id === open.superTabId)?.leads.find((l) => l.projectId === open.projectId)
+    if (!open.fromDevice && this.picked && this.picked.key !== key && Date.now() - this.picked.at < PICK_ECHO_MS) {
+      this.logFocus(`cable: swarm focus ${named} · held: the device just picked another`)
+      return
+    }
     // Not in the list yet: asked again when it arrives.
-    if (!lead) return
+    const card = this.host.swarmCards?.().find((c) => c.id === open.superTabId)
+    if (!card) { this.logFocus(`cable: swarm focus ${named} · held: no such Swarm in the list`); return }
+    const lead = open.projectId ? card.leads.find((l) => l.projectId === open.projectId) : undefined
+    if (open.projectId && !lead) { this.logFocus(`cable: swarm focus ${named} · held: no Lead for that project`); return }
     this.focusedKey = key
-    await this.send({ t: 'supertab.focus', tab: open.superTabId, lead: lead.id })
+    this.logFocus(`cable: swarm focus ${named} → ${lead ? lead.id : 'its Leads'}`)
+    await this.send({ t: 'supertab.focus', tab: open.superTabId, lead: lead?.id ?? '' })
+  }
+
+  private logFocus(line: string): void {
+    if (line === this.focusLogged) return
+    this.focusLogged = line
+    this.log(line)
   }
 
   /** A Lead's changed text, for the Pro that has that Lead's recap open. */
