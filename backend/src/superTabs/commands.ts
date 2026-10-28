@@ -1,4 +1,4 @@
-import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -25,7 +25,7 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { isBuddy } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy } from './buddies.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -126,6 +126,8 @@ export const commandSchema = z.discriminatedUnion('type', [
     mergedAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
+  // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
+  z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -1289,6 +1291,42 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose)
       break
     }
+    case 'buddy.create': {
+      if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
+      if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
+      const chatId = buddyChatId(project.id, me)
+      if (state.agents.some(a => a.buddyOf?.personId === me.id && agentProjectId(state, a) === project.id)
+        || state.starts?.some(s => s.request.conversationId === chatId && !s.harnessId && !s.error)) {
+        fail('BUDDY_EXISTS', 'You already have a Buddy in this project. Remove it to add another.')
+      }
+      // A Buddy runs where the Swarm's agents run, under that machine's own rules: its Machines list.
+      const pool = machineContribution(state, command.machineId) ?? fail('BUDDY_MACHINE', 'Add this machine to the Swarm first: a Buddy runs on one of its machines.', 403)
+      const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
+      const contributor = person(state, grant.contributorId)
+      let chat = state.conversations.find(c => c.id === chatId)
+      if (!chat) {
+        const number = nextConversationNumber(state)
+        state.groupCounter = number
+        chat = { id: chatId, kind: 'buddy', ...(state.projects ? { projectId: project.id } : {}), number, title: `${who}'s Buddy`, leadId: null, agentIds: [],
+          archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: audienceOf(state, project, [me.id]) }
+        state.conversations.push(chat)
+      }
+      chat.archived = false
+      const request = teamStartRequest(state, { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
+        ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
+        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }, project, context.teamAccountsIdle, context.teamMachines)
+      const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
+      state.starts ??= []
+      if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
+      state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
+        contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
+        hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      result.startId = operationId
+      result.conversationId = chatId
+      break
+    }
     case 'agent.startDispatch':
     case 'agent.started':
     case 'agent.startSettled':
@@ -1349,11 +1387,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
         ...(start.request.gridModel ? { gridModel: start.request.gridModel } : {}),
+        ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
-      message(group.id, start.poolGeneration
+      if (start.request.buddyOf) message(group.id, buddyReady(start.request.name), [], null, SYSTEM_ROW)
+      else message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
         : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
       break

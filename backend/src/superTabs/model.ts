@@ -97,6 +97,8 @@ export interface AgentStartRequest {
   gridModel?: string
   gridName?: string
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
+  /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
+  buddyOf?: { personId: string; generation: string }
 }
 export interface AgentStart {
   poolGeneration?: string
@@ -115,6 +117,8 @@ export interface AgentStart {
   /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
    *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
+  /** When a person asked for it: only a Buddy's start keeps it, which fails if its machine never takes it (liveness.ts). */
+  requestedAt?: number
   /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
   preparing?: true
   error: string | null

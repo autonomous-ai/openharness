@@ -220,6 +220,8 @@ export interface HostPool {
   paused: boolean
   machine: ContributedMachine
   starts: AgentStart[]
+  /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
+  buddyStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
