@@ -533,8 +533,17 @@ export class ContributedMachines {
     // very agent the registry lists as agent-started in it. A start receipt read is required; a tab gone or no longer
     // readable by this owner leaves only the record.
     let starts: Record<string, unknown>[] = []
-    try { starts = list((await this.sources.reads.read(tabId)).state.starts) }
+    let state: Record<string, unknown> = {}
+    try { state = (await this.sources.reads.read(tabId)).state; starts = list(state.starts) }
     catch (error) { if (!(error instanceof SuperTabHostError) || ![403, 404].includes(error.status)) throw error }
+    // A cleanup that waited past the backend's fallback gives way to its owner adding this machine again (backend machines.ts
+    // cleanupOverdue, 2026-10-28). The Swarm listing this machine other than under this very removal means a newer add owns
+    // the folders now: delete nothing, and confirm nothing, since the backend dropped this cleanup with that add.
+    const listed = list(state.machines).find(m => m.machineId === this.machineId)
+    if (listed && object(listed.removal).id !== removalId) {
+      this.log(`Kept the Swarm folders of ${tabId}: this machine was added to that Swarm again.`)
+      return
+    }
     const swarm = new Set(recorded.map(w => w.harnessId))
     const candidates = recorded.map(w => ({ source: w.source, path: w.path, startId: w.startId, proven: true }))
     for (const start of starts) {
