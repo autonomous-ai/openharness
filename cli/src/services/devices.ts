@@ -393,10 +393,12 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       void cable.turnError(event.agentId, event.text)
     }
   }
-  /** A Builder or Reviewer the Swarm started here (its record's Swarm role), or any agent on a Harness Team account.
-   *  A Lead is the person's own agent leading the Swarm: its failures reach the dial as before. */
+  /** A Builder or Reviewer the Swarm started here (its record's Swarm role, and an agent started it, as every Swarm start
+   *  is), or any agent on a Harness Team account. A Lead is the person's own agent leading the Swarm, and one the person
+   *  started by hand is theirs whatever its role: their failures reach the dial as before. */
   const swarmWorker = (event: DialEvent): boolean => {
-    const role = event.machineId ? undefined : core.agents.byAgent(event.agentId)?.swarmSkill?.role
+    const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
+    const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
     return role === 'dev' || role === 'review' || (!!event.machineId && teamMachines.has(event.machineId))
   }
   /** On any of the window's tabs, or the desk the dial walks: the person put it there, so its failure is theirs to see. */
