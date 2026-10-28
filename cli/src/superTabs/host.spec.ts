@@ -14,6 +14,7 @@ import { SwarmReads } from './swarmReads.js'
 import { retainedHarnesses, retentionFile } from './retention.js'
 import { observerSource } from './observers.js'
 import { ContributedMachines } from './machines.js'
+import { createAccountHttp } from '../gateway/accountHttp.js'
 
 const roots: string[] = []
 const hosts: SuperTabHost[] = []
@@ -158,6 +159,23 @@ describe('the host tick on the host form', () => {
     await host.tick()
     expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
     expect(t.log).toHaveBeenCalledTimes(1)
+  })
+  // Diego 10-29: a host form whose body timed out after the headers read as '200 OK, {}', so the host paused this machine's
+  // Swarm work for a minute behind 'Update Harness'. Through the gateway's real backend helper, it is a timeout that is logged and retried.
+  it('logs a feed read that times out after the headers as unreachable and reads again the next second', async () => {
+    const t = setup(), host = t.open()
+    const stalled = () => new Response(new ReadableStream({ start(controller) { controller.error(new DOMException('late', 'TimeoutError')) } }), { status: 200 })
+    const gateway = createAccountHttp({ tokens: { accessToken: async () => 'token' }, account: () => ({ machineId: 'account', signIn: null }),
+      computer: { id: 'computer', name: 'Mac', hostname: 'mac' }, environment: 'test', base: () => 'https://backend.invalid',
+      request: vi.fn<typeof fetch>(async () => stalled()), log: vi.fn() })
+    vi.mocked(t.call).mockImplementation((method, path, body) => gateway.backend(method, path, body))
+    await host.tick()
+    t.wait(1_000)
+    await host.tick()
+    expect(t.log.mock.calls.map(([line]) => line)).toEqual([
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.',
+      'The Harness backend did not answer GET /api/super-tabs/hosts/machine-1/changes?full=1 within 20s. Try again in a moment.'])
+    expect(vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/'))).toHaveLength(2)
   })
 })
 
