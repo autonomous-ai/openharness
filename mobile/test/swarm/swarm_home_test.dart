@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:flutter/cupertino.dart' show CupertinoPageRoute;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -209,7 +210,9 @@ void main() {
   }
 
   /// Swarm Home as the root of its own stack, Swarm on, on an iPhone's
-  /// screen.
+  /// screen. Its route is the shell's kind, the kind of every page pushed
+  /// over it: a push or pop builds nothing of Home again, as on the phone.
+  /// [overPage] opens it over another page instead ([openSwarmHome]).
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
@@ -217,6 +220,7 @@ void main() {
     void Function(BuildContext context)? onSettings,
     SwarmComputers? computers,
     bool settle = true,
+    bool overPage = false,
   }) async {
     tester.view.physicalSize = const Size(1170, 2532);
     tester.view.devicePixelRatio = 3;
@@ -236,9 +240,16 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
-        home: SwarmPage(onHarness: onHarness, onSettings: onSettings),
+        onGenerateRoute: (_) => CupertinoPageRoute<void>(
+          builder: (_) => overPage
+              ? const SizedBox(key: ValueKey('page-under'))
+              : SwarmPage(onHarness: onHarness, onSettings: onSettings),
+        ),
       ),
     );
+    if (overPage) {
+      openSwarmHome(tester.element(find.byKey(const ValueKey('page-under'))));
+    }
     // A skeleton breathes for as long as it shows: nothing settles under it.
     settle ? await tester.pumpAndSettle() : await frames(tester);
     return host;
@@ -717,6 +728,52 @@ void main() {
         find.byType(SwarmConversationPage),
       );
       expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+    });
+
+    testWidgets('back from Chat with PM, Home still has its menu, and it '
+        'opens the drawer', (tester) async {
+      await pump(tester, backend());
+
+      await tester.tap(key('swarm-home-pm-$tab-$project'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmConversationPage), findsOneWidget);
+
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmConversationPage), findsNothing);
+      expect(key('swarm-menu'), findsOneWidget);
+      expect(key('tty-back'), findsNothing, reason: 'Home is the root');
+
+      await openDrawer(tester);
+      expect(find.byType(SwarmDrawer), findsOneWidget);
+    });
+
+    testWidgets('opened over another page, it has back instead of the menu, '
+        'and back goes to that page', (tester) async {
+      await pump(tester, backend(), overPage: true);
+      expect(find.byType(SwarmPage), findsOneWidget);
+      expect(key('swarm-menu'), findsNothing);
+
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmPage), findsNothing);
+      expect(key('page-under'), findsOneWidget);
+    });
+
+    testWidgets("back from the drawer's Chat with PM, Home still has its "
+        'menu', (tester) async {
+      await pump(tester, backend());
+      await openDrawer(tester);
+      await tester.tap(key('swarm-drawer-chats-$tab-$project'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-drawer-pm-$tab-$project'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmConversationPage), findsOneWidget);
+
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-menu'), findsOneWidget);
+      expect(key('tty-back'), findsNothing, reason: 'Home is the root');
     });
 
     testWidgets('a project opens its page', (tester) async {

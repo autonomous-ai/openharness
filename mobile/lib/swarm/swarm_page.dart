@@ -126,7 +126,11 @@ class _SwarmPageState extends State<SwarmPage> {
     AppTheme.watch(context);
     final tty = Tty.of(context);
     final session = _session;
-    final pushed = Navigator.of(context).canPop();
+    // Pushed over another page: a page under Home's own route, never one over
+    // it. Home builds while a page slides in over it (Chat with PM opening),
+    // and is not built again once that page goes, so the navigator's canPop
+    // would leave the back button for good.
+    final pushed = ModalRoute.isFirstOf(context) == false;
     return Scaffold(
       backgroundColor: tty.ground,
       // Home's drawer; a Swarm page pushed over another page has its back
