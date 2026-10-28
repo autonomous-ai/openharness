@@ -12,6 +12,7 @@ import 'identity.dart';
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
+import 'reactions.dart';
 
 /// Presentation only. Message identity and reply routing use backend IDs.
 class SuperTabMessageRow extends StatefulWidget {
@@ -22,6 +23,7 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.onReturnToComposer,
     required this.receipts,
     this.agent,
+    this.person,
     this.machineName,
     this.reply,
     this.replyAuthor,
@@ -33,6 +35,9 @@ class SuperTabMessageRow extends StatefulWidget {
     this.references = const {},
     this.onOpenGroup,
     this.mentions = const [],
+    this.readerId = '',
+    this.reactorName,
+    this.onReact,
   });
 
   final SuperTabMessage message;
@@ -43,6 +48,9 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<String>? onOpenGroup;
   final String author;
   final SuperTabAgent? agent;
+
+  /// The person who wrote it, while they are in the Swarm.
+  final SuperTabPerson? person;
   final String? machineName;
   final SuperTabMessage? reply;
   final String? replyAuthor;
@@ -57,6 +65,12 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<BuildContext>? onOpenReply;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+
+  /// The reader, whose own reactions are marked; [reactorName] names the
+  /// others. Without [onReact] the counts only show.
+  final String readerId;
+  final SuperTabReactorName? reactorName;
+  final ValueChanged<SuperTabReactionEmoji>? onReact;
 
   // Routing notes share the message body column, including grouped messages.
   static const horizontalInset = 24.0;
@@ -148,6 +162,30 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
     ].join(' · ');
   }
 
+  Widget _avatar(SuperTabMessage message) {
+    const size = SuperTabMessageRow.avatarSize;
+    if (widget.agent case final agent?) {
+      return SuperTabAvatar.agent(
+        agent,
+        name: widget.author,
+        size: size,
+        engineBadge: false,
+      );
+    }
+    if (widget.person case final person? when !message.fromAgent) {
+      return SuperTabAvatar.person(person, size: size);
+    }
+    // Someone no longer in the Swarm keeps the face their recorded name gives.
+    return SuperTabAvatar(
+      identity: '${message.author['kind']}:${message.authorId}',
+      name: message.fromAgent
+          ? widget.author
+          : superTabPersonName(message.authorName),
+      size: size,
+      pattern: message.fromAgent,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
@@ -224,16 +262,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                               : ExcludeSemantics(
                                   child: Tooltip(
                                     message: _identityDetails,
-                                    child: SuperTabAvatar(
-                                      identity:
-                                          '${message.author['kind']}:${message.authorId}',
-                                      name: message.fromAgent
-                                          ? widget.author
-                                          : superTabPersonName(
-                                              message.authorName,
-                                            ),
-                                      size: SuperTabMessageRow.avatarSize,
-                                    ),
+                                    child: _avatar(message),
                                   ),
                                 ),
                         ),
@@ -339,6 +368,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               SuperTabPullRequestLinks(message.text),
+                              SuperTabReactionBar(
+                                message: message,
+                                readerId: widget.readerId,
+                                nameOf: widget.reactorName ?? (_, id) => id,
+                                onReact: widget.onReact,
+                              ),
                               ...widget.receipts,
                             ],
                           ),
@@ -364,6 +399,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            if (widget.onReact case final react?)
+                              SuperTabReactionPicker(onReact: react),
                             if (widget.onReply != null)
                               fingerTarget(
                                 enabled: phone,

@@ -7,6 +7,7 @@ import '../notify/system_notifications.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
 import 'pm_chat.dart';
@@ -21,12 +22,16 @@ class SuperTabMention {
       conversationId = row['conversationId'] as String,
       conversationTitle = row['conversationTitle'] as String? ?? '',
       messageId = row['messageId'] as String,
+      leadId = row['leadId'] as String?,
       leadName = row['leadName'] as String? ?? 'Lead',
       text = row['text'] as String? ?? '',
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? ''),
       resolvedBy = row['resolvedBy'] as String?;
   final String id, projectId, projectName, conversationId, conversationTitle;
   final String messageId, leadName, text;
+
+  /// The Lead who tagged; null from a backend that does not send it.
+  final String? leadId;
   final DateTime? createdAt;
 
   /// `reply` or `done` once it moved to Earlier; null while it waits.
@@ -247,7 +252,20 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (widget.mentions.controller.snapshot?.agent(
+                      mention.leadId ?? '',
+                    )
+                    case final lead?)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10, top: 2),
+                    child: SuperTabAvatar.agent(
+                      lead,
+                      name: mention.leadName,
+                      size: 24,
+                    ),
+                  ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
