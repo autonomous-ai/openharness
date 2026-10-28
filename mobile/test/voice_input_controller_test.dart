@@ -556,4 +556,232 @@ void main() {
       expect(voice.transcript, 'add a test');
     });
   });
+
+  group('a take heard phrase by phrase', () {
+    late FakePhraseRecorder mic;
+    late List<Completer<String>> answers;
+    late List<String> words;
+    late VoiceInputController phrased;
+
+    setUp(() {
+      mic = FakePhraseRecorder();
+      answers = [];
+      words = [];
+      phrased = VoiceInputController(
+        transcriber: (wav, lang) {
+          final answer = Completer<String>();
+          answers.add(answer);
+          return answer.future;
+        },
+        recorder: mic,
+        language: language,
+      )..onWords = words.add;
+    });
+
+    tearDown(() => phrased.dispose());
+
+    test('each phrase is transcribed while the take records on, and its '
+        'words come back in the order said', () async {
+      mic.phrases.addAll([
+        FakePhraseRecorder.said(),
+        FakePhraseRecorder.said(),
+      ]);
+      await phrased.startListening();
+
+      unawaited(phrased.cutPhrase());
+      unawaited(phrased.cutPhrase());
+      await pumpEventQueue();
+      expect(answers, hasLength(2), reason: 'both on their way at once');
+      expect(phrased.status, VoiceInputStatus.listening);
+      expect(mic.stops, 0);
+
+      answers[1].complete('the tests');
+      await pumpEventQueue();
+      expect(words, isEmpty, reason: 'the second waits for the first');
+
+      answers[0].complete('ship it after');
+      await pumpEventQueue();
+      expect(words, ['ship it after', 'the tests']);
+      expect(phrased.transcript, isEmpty, reason: 'handed over, not kept');
+    });
+
+    test('the rest of the take lands after its phrases as it ends', () async {
+      mic.phrases.add(FakePhraseRecorder.said());
+      await phrased.startListening();
+      unawaited(phrased.cutPhrase());
+      await pumpEventQueue();
+
+      final ending = phrased.stopListening();
+      await pumpEventQueue();
+      expect(answers, hasLength(2));
+      answers[1].complete('then merge');
+      await pumpEventQueue();
+      expect(words, isEmpty, reason: 'after the phrase said before it');
+
+      answers[0].complete('review first');
+      expect(await ending, isTrue);
+      expect(words, ['review first', 'then merge']);
+      expect(phrased.status, VoiceInputStatus.idle);
+      expect(phrased.notice, isNull);
+    });
+
+    test('a quiet end after heard phrases is no failure, and is not sent to be '
+        'transcribed', () async {
+      mic.phrases.add(FakePhraseRecorder.said());
+      mic.captured = FakePhraseRecorder.said(peak: 0);
+      await phrased.startListening();
+      unawaited(phrased.cutPhrase());
+      await pumpEventQueue();
+      answers.single.complete('looks good');
+
+      expect(await phrased.stopListening(), isTrue);
+      expect(words, ['looks good']);
+      expect(answers, hasLength(1));
+      expect(phrased.notice, isNull);
+    });
+
+    test('a take whose last phrase was cut just before the end has no rest, '
+        'and is heard', () async {
+      mic.phrases.add(FakePhraseRecorder.said());
+      mic.captured = null;
+      await phrased.startListening();
+      unawaited(phrased.cutPhrase());
+      await pumpEventQueue();
+      answers.single.complete('done');
+
+      expect(await phrased.stopListening(), isTrue);
+      expect(words, ['done']);
+      expect(phrased.notice, isNull);
+    });
+
+    test('a silent phrase is not sent to be transcribed', () async {
+      mic.phrases.add(FakePhraseRecorder.said(peak: 10));
+      await phrased.startListening();
+
+      await phrased.cutPhrase();
+
+      expect(mic.cuts, 1);
+      expect(answers, isEmpty);
+    });
+
+    test('a phrase that cannot be transcribed says so, and the take ends as '
+        'lost with the rest of its words in place', () async {
+      final failing = VoiceInputController(
+        transcriber: (wav, lang) async =>
+            wav.first == 5 ? throw Exception('HTTP 502') : 'and the rest',
+        recorder: mic,
+        language: language,
+      )..onWords = words.add;
+      addTearDown(failing.dispose);
+      mic.phrases.add(FakePhraseRecorder.said());
+      await failing.startListening();
+
+      await failing.cutPhrase();
+      expect(failing.notice, VoiceNotice.notTranscribed);
+      expect(failing.status, VoiceInputStatus.listening);
+
+      expect(await failing.stopListening(), isFalse);
+      expect(words, ['and the rest']);
+      expect(failing.notice, VoiceNotice.notTranscribed);
+    });
+
+    test(
+      'a take with nothing heard in its phrases or its end says so',
+      () async {
+        mic.phrases.add(FakePhraseRecorder.said());
+        mic.captured = FakePhraseRecorder.said(peak: 0);
+        await phrased.startListening();
+        unawaited(phrased.cutPhrase());
+        await pumpEventQueue();
+        answers.single.complete('');
+
+        expect(await phrased.stopListening(), isFalse);
+        expect(words, isEmpty);
+        expect(phrased.notice, VoiceNotice.nothingHeard);
+      },
+    );
+
+    test('clearing drops the phrases still on their way', () async {
+      mic.phrases.add(FakePhraseRecorder.said());
+      await phrased.startListening();
+      unawaited(phrased.cutPhrase());
+      await pumpEventQueue();
+
+      phrased.clear();
+      answers.single.complete('never mind');
+      await pumpEventQueue();
+
+      expect(words, isEmpty);
+      expect(phrased.notice, isNull);
+      expect(phrased.isIdle, isTrue);
+    });
+
+    test(
+      'a phrase waits for its owner to let it go, as a whole take does',
+      () async {
+        final gate = Completer<bool>();
+        phrased.mayTranscribe = () => gate.future;
+        mic.phrases.add(FakePhraseRecorder.said());
+        await phrased.startListening();
+        unawaited(phrased.cutPhrase());
+        await pumpEventQueue();
+        expect(answers, isEmpty);
+
+        gate.complete(true);
+        await pumpEventQueue();
+        expect(answers, hasLength(1));
+        answers.single.complete('once seen');
+        await pumpEventQueue();
+        expect(words, ['once seen']);
+      },
+    );
+
+    test('a phrase its owner will not let go is never transcribed, and the '
+        'take is not heard whole', () async {
+      final lets = [true, false];
+      phrased.mayTranscribe = () async => lets.removeAt(0);
+      mic.phrases.addAll([
+        FakePhraseRecorder.said(),
+        FakePhraseRecorder.said(),
+      ]);
+      await phrased.startListening();
+      unawaited(phrased.cutPhrase());
+      await pumpEventQueue();
+      answers.single.complete('the first');
+
+      await phrased.cutPhrase();
+      expect(mic.cuts, 2);
+      expect(answers, hasLength(1), reason: 'the second never sent');
+      expect(words, ['the first']);
+
+      phrased.mayTranscribe = () async => true;
+      final ending = phrased.stopListening();
+      await pumpEventQueue();
+      answers.last.complete('');
+      expect(await ending, isFalse, reason: 'a piece of it never went');
+      expect(phrased.notice, isNull, reason: 'nothing went wrong');
+    });
+
+    test('nothing is cut from a recorder that cannot, nor with nobody taking '
+        'the words', () async {
+      voice.onWords = words.add;
+      await voice.startListening();
+      await voice.cutPhrase();
+      expect(backend.calls, isEmpty);
+      expect(voice.status, VoiceInputStatus.listening);
+
+      final unowned = VoiceInputController(
+        transcriber: backend.call,
+        recorder: mic,
+        language: language,
+      );
+      addTearDown(unowned.dispose);
+      mic.phrases.add(FakePhraseRecorder.said());
+      await unowned.startListening();
+      await unowned.cutPhrase();
+      expect(mic.cuts, 0);
+      expect(backend.calls, isEmpty);
+      voice.clear();
+    });
+  });
 }
