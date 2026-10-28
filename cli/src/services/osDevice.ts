@@ -31,6 +31,12 @@ export const HARNESS = '/usr/bin/harness'
 export const NMCLI = 'nmcli'
 /** How long an update counts as started: a second one inside it is refused BUSY. */
 export const UPDATE_BUSY_MS = 10 * 60_000
+/** A check asked from the phone: the feeds read, a new hn and CLI downloaded and verified (as the
+ *  harness-update.service timer's own check, bounded at 6 minutes there too). */
+export const CHECK_TIMEOUT_MS = 6 * 60_000
+/** The timer's check, with the OS release asked now instead of from its day-old answer (live_update.py
+ *  check_system): every Harness OS since 0.1.7 has check(force_system=). */
+export const CHECK_NOW = `import sys; sys.path.insert(0, '/usr/lib/harness-os'); import live_update; live_update.check(force_system=True)`
 export const STATUS_TIMEOUT_MS = 15_000
 export const NMCLI_TIMEOUT_MS = 10_000
 export const SCAN_TIMEOUT_MS = 20_000
@@ -43,7 +49,7 @@ export const GH_TIMEOUT_MS = 15_000
 export const GH_INSTALL_TIMEOUT_MS = 300_000
 /** How long a GitHub sign-in waits for its code to be entered: GitHub's device codes last 15 minutes. */
 export const GITHUB_SIGN_IN_MS = 15 * 60_000
-const ACTIONS = ['update', 'wifi_scan', 'wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh', 'github']
+const ACTIONS = ['update', 'check_update', 'wifi_scan','wifi_join', 'wifi_result', 'sign_out', 'password', 'ssh', 'github']
 /** The most output a command run here may print before it is stopped. */
 export const MAX_OUTPUT = 1024 * 1024
 
@@ -241,6 +247,9 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
   let starting: Promise<void> | null = null
   /** The GitHub CLI being put back, for a sign-in. */
   let installing: Promise<void> | null = null
+  /** A check for updates asked from the phone, and why the last one did not finish. */
+  let checking: Promise<void> | null = null
+  let checkError: string | null = null
 
   const harnessOs = (): boolean => env.HARNESS_OS === '1' || exists(LIVE_UPDATE)
 
@@ -254,15 +263,34 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
         const parsed: unknown = JSON.parse(out)
         if (!record(parsed)) throw new Error('live_update.py status did not answer an object')
         return updateOf(parsed)
-      }).catch((error: unknown) => ({ available: false, error: short(error) })),
+      }).catch((error: unknown): Payload => ({ available: false, error: short(error) })),
       currentSsid(),
       // The open Wi-Fi it hosts while locked or not set up: where a phone finds it after a restart.
       exec(PYTHON, [SETUP, 'name'], { timeout: NMCLI_TIMEOUT_MS }).then((out) => out.trim() || null).catch(() => null),
       read(CMDLINE).catch(() => ''),
     ])
+    if (checking) update.checking = true
+    else if (checkError !== null) update.checkError = checkError
     // Encrypted, it waits for its password at every start (installer.py: rd.luks.name=).
     // features: what this daemon does for a phone beyond the update and the Wi-Fi.
-    return { harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline), features: ['sign_out', 'password', 'ssh', 'github'] }
+    return {
+      harnessOs: true, update, wifi: { ssid }, hotspot, encrypted: /(^|\s)rd\.luks\.name=/.test(cmdline),
+      features: ['sign_out', 'password', 'ssh', 'github', 'check_update'],
+    }
+  }
+
+  /** Check for updates now, as the timer does every 15 minutes, the OS release too: answered at once,
+   *  `update.checking` in the status until it is done, for the phone to follow. One at a time. */
+  const checkUpdate = (): Payload => {
+    checkError = null
+    checking ??= exec(PYTHON, ['-c', CHECK_NOW], { timeout: CHECK_TIMEOUT_MS })
+      .then(() => { console.log('[os-device] checked for updates') })
+      .catch((error: unknown) => {
+        console.error('[os-device] check for updates failed:', short(error))
+        checkError = 'Could not check for updates. Check its internet, then try again.'
+      })
+      .finally(() => { checking = null })
+    return { started: true }
   }
 
   const update = (payload: Payload): Payload => {
@@ -420,6 +448,7 @@ export function startOsDevice(_core: CoreApi, deps: OsDeviceDeps = {}): ServiceR
       if (!harnessOs()) return { error: 'UNSUPPORTED_OS' }
       try {
         if (action === 'update') return update(payload)
+        if (action === 'check_update') return checkUpdate()
         if (action === 'wifi_scan') return await scan()
         if (action === 'wifi_join') return join(payload)
         if (action === 'sign_out') return signOut()

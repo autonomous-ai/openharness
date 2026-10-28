@@ -523,6 +523,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       ...people.where((p) => !scores.containsKey(p.id)),
     ];
     final current = leaderboardWeekOf(widget.now());
+    // One set of numeric columns for every row.
+    final columns = board == null || board.people.isEmpty
+        ? null
+        : LeaderboardColumns.of(context, board.people);
     return [
       SuperTabSectionHeading(
         'Humans',
@@ -557,13 +561,20 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         ),
       if (_board.error case final error?)
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          padding: const EdgeInsets.fromLTRB(
+            DesktopChrome.groupGap,
+            0,
+            DesktopChrome.groupGap,
+            DesktopChrome.controlGap / 2,
+          ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
       for (final person in ranked)
         LeaderboardPersonRow(
           person: person,
           score: scores[person.id],
+          columns: columns,
+          own: person.id == c.accountId,
           onTap: () => _person(person, scores[person.id]),
         ),
       if (board != null && board.waiting.total > 0)
@@ -578,7 +589,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           },
           onAnswer: widget.onAnswer,
         ),
-      const SizedBox(height: 16),
+      const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
         // An agent joins the Product Managers' conversation by leading a project,

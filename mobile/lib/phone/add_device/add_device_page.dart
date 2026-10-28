@@ -15,7 +15,7 @@ import '../tty.dart';
 import '../tty_controls.dart';
 import 'setup_hotspot.dart';
 
-/// Settings ▸ Set up a device: a Harness with no screen (a box, a mini PC) put on the person's
+/// Settings ▸ Set up Intern 3: a Harness with no screen (a box, a mini PC) put on the person's
 /// Wi-Fi and signed in to this phone's account, through the device's own setup hotspot.
 ///
 ///   ticket (while this phone still has the Internet) → pick `Harness-XXXX` from the Wi-Fi list
@@ -820,7 +820,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
                 ),
                 children: [
                   const TtyText(
-                    'Set up a device',
+                    'Set up Intern 3',
                     size: TtySize.display,
                     weight: FontWeight.w600,
                   ),
