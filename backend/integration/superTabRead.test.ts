@@ -330,7 +330,7 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
   it('lists the caller\'s Swarms with their newest change', async () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
-    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, paused: false, lastChangedAt: MIGRATED })
+    expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
   })
 
   it.each(['/api/super-tabs', '/api/super-tabs/TAB', '/api/super-tabs/hosts/host', '/api/super-tabs/hosts/host/pools', '/api/super-tabs/hosts/host/assignments'])(
@@ -819,6 +819,66 @@ describe('decisions asked of one person (v2)', () => {
     const [first] = await ask()
     expect(await ask()).toEqual([first])
     expect(await decisions(s.tabId, peer)).toEqual([expect.objectContaining({ id: first })])
+  })
+
+  it('refuses a 21st open decision from one asker to one person, still taking a repeat, and takes it once one is answered', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = (texts: string[]) => post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: texts.map(question) }, owner, s.lead)
+    const batch = (from: number) => Array.from({ length: 10 }, (_, i) => `Question ${from + i}?`)
+    const ids = [...(await ask(batch(1))).body.data.result.decisionIds as string[], ...(await ask(batch(11))).body.data.result.decisionIds as string[]]
+    expect(ids).toHaveLength(20)
+    const refused = await ask(['Question 21?'])
+    expect(refused).toMatchObject({ status: 409, body: { error: { code: 'DECISIONS_FULL' } } })
+    expect(await decisions(s.tabId, peer)).toHaveLength(20)
+    // A repeat of an open one is that decision again, not a new one.
+    expect((await ask(['Question 1?'])).body.data.result.decisionIds).toEqual([ids[0]])
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: ids[0], choice: 0 }, peer)).status).toBe(200)
+    expect((await ask(['Question 21?'])).status).toBe(200)
+  })
+
+  it('at the cap, a worker\'s needs-human update still records its status, tells the Lead and renews its lease, asking nothing new', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const assignment = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment
+    const assignmentId = (await assignment()).id as string
+    await db.superTabDecision.createMany({ data: Array.from({ length: 20 }, (_, i) => ({ id: `full-${s.tabId}-${i}`, tabId: s.tabId, batchId: 'full',
+      projectId: 'lead', conversationId: s.web, assignmentId, personId: peer.sub, askerAgentId: s.worker, question: `Question ${i + 1}?`,
+      options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', createdAt: new Date() })) })
+    const before = (await assignment()).leaseUntil as number
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
+    expect(needs.status, JSON.stringify(needs.body)).toBe(200)
+    const notAsked = `Not asked ${peer.email}: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
+    expect(needs.body.data.result.notAsked).toBe(notAsked)
+    const after = await assignment()
+    expect(after).toMatchObject({ status: 'needs_human', result: 'Ship how?' })
+    expect(after.leaseUntil).toBeGreaterThan(before)
+    const notice = await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } })
+    expect(notice).toMatchObject({ text: `Needs a human\n\nShip how?\n\n${notAsked}`, recipientIds: [s.lead] })
+    expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
+    // A repeat of one still open is that decision again, so it is asked as before.
+    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Question 1?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
+    expect(repeat.body.data.result.notAsked).toBeUndefined()
+    expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
+      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked ${peer.email}.`)
+    expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
+  })
+
+  it('removes answered decisions older than the leaderboard\'s 5 weeks when it writes new ones, keeping newer and open ones', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const now = Date.now(), weeks = (n: number) => new Date(now - n * 7 * DAY)
+    const row = (id: string, createdAt: Date, answeredAt?: Date) => ({ id, tabId: s.tabId, batchId: 'old', projectId: 'lead', conversationId: s.web,
+      assignmentId: null, personId: peer.sub, askerAgentId: s.lead, question: `${id}?`, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release',
+      createdAt, ...answeredAt ? { choice: 0, answeredAt } : {} })
+    await db.superTabDecision.createMany({ data: [row('expired', weeks(8), new Date(weeks(5).getTime() - DAY)),
+      row('recent', weeks(8), new Date(weeks(5).getTime() + DAY)), row('waiting', weeks(8))] })
+    expect((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead)).status).toBe(200)
+    const left = await db.superTabDecision.findMany({ where: { tabId: s.tabId }, select: { id: true } })
+    expect(left.map(d => d.id)).not.toContain('expired')
+    expect(left.map(d => d.id)).toEqual(expect.arrayContaining(['recent', 'waiting']))
   })
 
   it('keeps a decision of its own for another asker, another task, or other options with the same question text', async () => {

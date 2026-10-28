@@ -115,9 +115,41 @@ async function currentState(userId: string): Promise<{ state: DevLogState; sessi
  * shared with it. The newest key wins when one machine has two.
  */
 export async function activeMachineKeys(userId: string): Promise<DevLogMember[]> {
-  const { state } = await currentState(userId)
+  return machineKeys((await currentState(userId)).state.active)
+}
+
+/**
+ * [activeMachineKeys] of many accounts, by account: every member of a machine shared with a domain, on each read or save
+ * of its policy. One log replay each made a 200-person domain 400+ parallel queries (Diego's issue file, 2026-10-27), so the
+ * snapshots and the entries from each one on are read for all of them at once. A snapshot fits its head when the only
+ * entry from its sequence on is its own; an account with neither has no keys. Any other account is verified alone, as
+ * [currentState] does.
+ */
+export async function activeMachineKeysOf(userIds: string[]): Promise<Map<string, DevLogMember[]>> {
+  if (!userIds.length) return new Map()
+  const snaps = new Map((await prisma.deviceKeyLogState.findMany({ where: { userId: { in: userIds } } })).map(s => [s.userId, s]))
+  const rows = await prisma.deviceKeyLogEntry.findMany({ where: { OR: userIds.map(userId => ({ userId, seq: { gte: snaps.get(userId)?.seq ?? 0 } })) },
+    select: { userId: true, seq: true, hash: true } })
+  const since = new Map<string, Array<{ seq: number; hash: string }>>()
+  for (const row of rows) {
+    const list = since.get(row.userId)
+    if (list) list.push(row)
+    else since.set(row.userId, [row])
+  }
+  return new Map(await Promise.all(userIds.map(async (userId): Promise<[string, DevLogMember[]]> => {
+    const snap = snaps.get(userId), after = since.get(userId) ?? []
+    if (!snap && !after.length) return [userId, []]
+    if (snap && after.length === 1 && after[0]!.seq === snap.seq && after[0]!.hash === snap.hash) {
+      return [userId, machineKeys(snap.active as unknown as DevLogState['active'])]
+    }
+    return [userId, await activeMachineKeys(userId)]
+  })))
+}
+
+/** The active machine keys by machine; the newest key wins when one machine has two. */
+function machineKeys(active: DevLogState['active']): DevLogMember[] {
   const byMachine = new Map<string, DevLogMember>()
-  for (const member of Object.values(state.active)) {
+  for (const member of Object.values(active)) {
     if (member.kind !== 'machine' || !member.machineId) continue
     const held = byMachine.get(member.machineId)
     if (!held || held.seq < member.seq) byMachine.set(member.machineId, member)

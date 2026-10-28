@@ -525,7 +525,7 @@ final harnessCommands = <HarnessCommand>[
   ),
   const HarnessCommand(
     'models.manage',
-    'Manage models',
+    'Your models',
     ShortcutGroup.actions,
     keywords: ['download', 'start', 'stop', 'local', 'API'],
   ),

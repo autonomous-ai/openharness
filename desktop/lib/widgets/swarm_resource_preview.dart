@@ -698,7 +698,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
 
   List<_ResourceAction> _visibleActions() => [
     ..._actions(),
-    // A Swarm's Manage models has no Actions menu: an API's other actions, Edit and Delete, are beside its button.
+    // A Swarm's Your models has no Actions menu: an API's other actions, Edit and Delete, are beside its button.
     // Delete asks first, as ⌘I's does; the CLI takes the API off every Swarm it is shared with before removing it.
     if (_swarmCards) ...[
       if (model?.api case final api? when model?.apiModel == null) ...[
@@ -1375,7 +1375,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ];
   }
 
-  /// The preview is a Swarm's Manage models, drawn as a card of its own rather than ⌘I's lines.
+  /// The preview is a Swarm's Your models, drawn as a card of its own rather than ⌘I's lines.
   bool get _swarmCards =>
       widget.search.isSwarmModels && DesktopChrome.of(context);
 

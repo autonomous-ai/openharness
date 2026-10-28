@@ -83,11 +83,14 @@ export async function putRoster(input: { ownerUserId: string; tabId: string; mac
 }
 
 export async function invite(input: { ownerUserId: string; ownerEmail: string; sharedTabId: string; email: string;
-  expiresAt: Date; autonomousEnv: string }): Promise<{ id: string } | { error: 'FORBIDDEN' | 'SELF_INVITE' | 'TAB_FULL' }> {
+  expiresAt: Date; autonomousEnv: string }): Promise<{ id: string } | { error: 'FORBIDDEN' | 'SELF_INVITE' | 'TAB_FULL' | 'ALREADY_MEMBER' }> {
   const email = input.email.trim().toLowerCase()
   if (email === input.ownerEmail.trim().toLowerCase()) return { error: 'SELF_INVITE' as const }
   const share = await prisma.agentMessageShare.findFirst({ where: { id: input.sharedTabId, ownerUserId: input.ownerUserId, stoppedAt: null } })
   if (!share) return { error: 'FORBIDDEN' as const }
+  // Inviting a member again would reset their accepted invitation to waiting, which outlived their removal and counted
+  // toward the 8 twice (#1376).
+  if (await prisma.agentMessageMember.findFirst({ where: { shareId: share.id, email, removedAt: null }, select: { id: true } })) return { error: 'ALREADY_MEMBER' as const }
   const [members, pending] = await Promise.all([
     prisma.agentMessageMember.count({ where: { shareId: share.id, removedAt: null } }),
     prisma.agentMessageInvite.count({ where: { shareId: share.id, acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } }),
@@ -153,9 +156,12 @@ export async function accept(user: { sub: string; email: string; autonomousEnv: 
 export async function removeMember(actorUserId: string, shareId: string, userId: string): Promise<boolean> {
   const share = await prisma.agentMessageShare.findUnique({ where: { id: shareId }, select: { ownerUserId: true } })
   if (!share || (actorUserId !== share.ownerUserId && actorUserId !== userId)) return false
+  const member = await prisma.agentMessageMember.findFirst({ where: { shareId, userId, removedAt: null }, select: { email: true } })
   const { count } = await prisma.agentMessageMember.updateMany({ where: { shareId, userId, removedAt: null }, data: { removedAt: new Date() } })
-  // The accepted invitation goes with the member; only the owner's re-invite brings them back.
-  await prisma.agentMessageInvite.updateMany({ where: { shareId, acceptedBy: userId, revokedAt: null }, data: { revokedAt: new Date() } })
+  // The accepted invitation goes with the member, and so does one still waiting for their address (#1376): only the
+  // owner's next invitation brings them back.
+  await prisma.agentMessageInvite.updateMany({ where: { shareId, revokedAt: null,
+    OR: [{ acceptedBy: userId }, ...member ? [{ email: member.email, acceptedAt: null }] : []] }, data: { revokedAt: new Date() } })
   return count > 0
 }
 

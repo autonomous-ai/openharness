@@ -711,7 +711,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(connections['m']!.modelReads, greaterThan(beforeRefresh));
         await tester.scrollUntilVisible(
-          find.text('Manage Models…'),
+          find.text('Your models…'),
           60,
           scrollable: find.descendant(
             of: find.byKey(const ValueKey('new-harness-choices')),
@@ -722,7 +722,7 @@ void main() {
             ),
           ),
         );
-        await tester.tap(find.text('Manage Models…'));
+        await tester.tap(find.text('Your models…'));
         await tester.pumpAndSettle();
         expect(managed, 1);
         await startHarness(tester);

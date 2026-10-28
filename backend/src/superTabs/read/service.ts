@@ -13,6 +13,7 @@ import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { SwarmParts } from '../parts/index.js'
 import { canReadGroup, readProject } from '../projects.js'
+import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
 import { readableWeek, recentDormantGroups } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
@@ -127,8 +128,12 @@ export class SwarmReads {
   async list(user: AuthUser, after?: string): Promise<SwarmList> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, memberIds: { has: user.sub },
-      ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101, select: { id: true, ownerId: true, format: true } })
-    const page = rows.slice(0, 100)
+      ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101, select: { id: true, ownerId: true, format: true, workspaceId: true } })
+    // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
+    const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
+    const current = new Set((await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
+      select: { workspaceId: true } })).map(m => m.workspaceId))
+    const page = rows.slice(0, 100).filter(r => r.workspaceId ? current.has(r.workspaceId) : !workspacesRequired())
     // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
     const legacy = await this.db.superTab.findMany({ where: { id: { in: page.filter(r => r.format !== 2).map(r => r.id) } }, select: { id: true, state: true } })
     const ids = page.filter(r => r.format === 2).map(r => r.id)
@@ -136,8 +141,8 @@ export class SwarmReads {
     const [heads, newest] = await transaction(this.db, tx => Promise.all([parts.loadChanged(tx, ids, new Date(0), ['head']), parts.lastChangedAt(tx, ids)]))
     return { tabs: page.map(row => {
       const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
-      return { id: row.id, name: head.name, ownerId: row.ownerId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null }
-    }), next: rows.length > 100 ? page.at(-1)!.id : null }
+      return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null }
+    }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 
   /** Runs a read; a Swarm still in one row is migrated first, as a safety net for one the job did not see (design 6.1),
@@ -155,13 +160,14 @@ export class SwarmReads {
     const loaded = await loader(tx, tabId, opts)
     const state = parts.reassemble(loaded)
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [teamMachines, counts, newest] = await Promise.all([
+    const [teamMachines, otherWorkspaceMachines, counts, newest] = await Promise.all([
       state.machines?.length ? this.store.teamMachines(tx, state) : [],
+      state.machines?.length ? this.store.otherWorkspaceMachines(tx, state) : [],
       actor.kind === 'person' ? Promise.all([mentionsWaiting(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines,
+      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines,
         ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }) }
   }
 }
