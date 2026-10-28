@@ -61,6 +61,13 @@ describe('dshShellArgv on Windows', () => {
       .toThrow('This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
   })
 
+  it('names what could not start when it is a viewer or a workspace init, which are not setup or check scripts', () => {
+    expect(() => dshShellArgv('./viewer.sh', { platform: 'win32', gitBash: () => null }, 'viewer'))
+      .toThrow("This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows")
+    expect(() => dshShellArgv('./init.sh', { platform: 'win32', gitBash: () => null }, 'workspace init'))
+      .toThrow("This harness's workspace init needs Git Bash on Windows, and it was not found. Install Git for Windows")
+  })
+
   describe('the script it runs, in a real bash', () => {
     let dir: string
     beforeEach(() => { dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-gitbash-'))) })

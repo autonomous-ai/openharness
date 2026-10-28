@@ -267,6 +267,7 @@ export class DshViewerManager {
         HARNESS_WORKSPACE: state.workspace,
         HARNESS_VIEWER_PORT: String(port),
       },
+      purpose: 'viewer',
     })
     state.child = child
     if (child.pid) this.deps.ledger?.add({ pid: child.pid, agentId: state.agentId, dshId: state.dsh.id, viewerDir: viewer.dir })

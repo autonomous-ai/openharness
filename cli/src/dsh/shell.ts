@@ -19,7 +19,12 @@ export interface DshCommandOptions {
   timeoutMs?: number
   /** The platform and Git Bash to run under, when not this computer's: a test runs Windows' path on any computer. */
   host?: DshShellHost
+  /** What the command is, as said when it cannot start: a setup or check script unless said otherwise. */
+  purpose?: DshCommandPurpose
 }
+
+/** What a DSH's command is to a person: a setup or a doctor, the viewer, or the workspace's init. */
+export type DshCommandPurpose = 'setup or check script' | 'viewer' | 'workspace init'
 
 export interface DshCommandResult {
   code: number | null
@@ -70,8 +75,12 @@ export function isKilledJobReport(line: string): boolean {
  * is sourced from `.bash_profile`. A setup or a doctor is one process, so the reason bash panes avoid
  * `-l` (a PATH built in .bashrc compounding across subshells) does not apply here.
  */
-export function dshShellArgv(script: string, host: DshShellHost = {}): { path: string; args: string[]; env?: Record<string, string> } {
-  if ((host.platform ?? process.platform) === 'win32') return gitBashArgv(script, (host.gitBash ?? findGitBash)())
+export function dshShellArgv(
+  script: string,
+  host: DshShellHost = {},
+  purpose: DshCommandPurpose = 'setup or check script',
+): { path: string; args: string[]; env?: Record<string, string> } {
+  if ((host.platform ?? process.platform) === 'win32') return gitBashArgv(script, (host.gitBash ?? findGitBash)(), purpose)
   const shell = interactiveEngineShell()
   const body = `${dshNodeFallback()}\n${script}`
   if (shell) {
@@ -91,6 +100,14 @@ export interface DshShellHost {
  *  install's refusal (before the download, or once fetched) or as a command's one line. */
 export const DSH_SHELL_UNAVAILABLE = `This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. ${INSTALL_GIT_FOR_WINDOWS}`
 
+/** The same, said of the command that could not start. A viewer or a workspace init is not a setup or check script, and
+ *  was called one (review of #2025). */
+export function dshShellUnavailable(purpose: DshCommandPurpose): string {
+  return purpose === 'setup or check script'
+    ? DSH_SHELL_UNAVAILABLE
+    : `This harness's ${purpose} needs Git Bash on Windows, and it was not found. ${INSTALL_GIT_FOR_WINDOWS}`
+}
+
 /**
  * Windows: Git Bash, as a login shell like the user's shell elsewhere, so its profile builds PATH (and puts cygpath
  * on it). Thrown when there is none, and runDshCommand reports that as the command's one line: the doctor or setup
@@ -104,8 +121,8 @@ export const DSH_SHELL_UNAVAILABLE = `This harness runs a setup or check script,
  * CHERE_INVOKING: Git for Windows' /etc/profile changes a login shell to $HOME unless it is set, and a setup or doctor
  * runs in the harness's folder (review of #2025).
  */
-function gitBashArgv(script: string, bash: string | null): { path: string; args: string[]; env: Record<string, string> } {
-  if (!bash) throw new Error(DSH_SHELL_UNAVAILABLE)
+function gitBashArgv(script: string, bash: string | null, purpose: DshCommandPurpose): { path: string; args: string[]; env: Record<string, string> } {
+  if (!bash) throw new Error(dshShellUnavailable(purpose))
   const runtimeDir = shellSingleQuote(win32.dirname(managedNodePath()))
   const body = [
     'unalias node 2>/dev/null || true',
@@ -137,8 +154,11 @@ export function dshNodeFallback(): string {
   return harnessNodePrelude(managedNodePath()).trimEnd()
 }
 
-export function spawnDshCommand(script: string, opts: { cwd: string; env?: Record<string, string>; host?: DshShellHost }): ChildProcess {
-  const { path, args, env } = dshShellArgv(script, opts.host)
+export function spawnDshCommand(
+  script: string,
+  opts: { cwd: string; env?: Record<string, string>; host?: DshShellHost; purpose?: DshCommandPurpose },
+): ChildProcess {
+  const { path, args, env } = dshShellArgv(script, opts.host, opts.purpose)
   return spawn(path, args, {
     cwd: opts.cwd,
     env: { ...process.env, ...env, ...(opts.env ?? {}) },
@@ -156,7 +176,7 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
     let settled = false
     let child: ChildProcess
     try {
-      child = spawnDshCommand(script, { cwd: opts.cwd, env: opts.env, host: opts.host })
+      child = spawnDshCommand(script, { cwd: opts.cwd, env: opts.env, host: opts.host, purpose: opts.purpose })
     } catch (error) {
       // spawn throws only Errors (an invalid argument: a NUL in the cwd, say).
       const line = `could not start: ${(error as Error).message}`
