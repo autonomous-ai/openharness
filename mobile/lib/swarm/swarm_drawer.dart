@@ -12,6 +12,7 @@ import 'model.dart';
 import 'swarm_conversation.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_models_page.dart';
@@ -257,6 +258,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
               detail: SwarmTeamLine(
                 swarmTeamGlance(snapshot, projectId: project.id),
                 size: 13,
+                kept: swarmHomeKept(session.inbox.reader(swarmId)),
               ),
               onTap: () => then(() => widget.onProject(swarmId, project.id)),
             ),

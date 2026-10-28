@@ -3,6 +3,12 @@ import 'dart:async';
 import 'swarm_home_cache.dart';
 import 'swarm_reader.dart';
 
+/// [reader] holds only the view kept ([SwarmHomeCache]), no read of its
+/// own: a first load moves its generation. What it shows is the last
+/// update's, not now — a first read that failed changes none of it.
+bool swarmHomeKept(SwarmReader? reader) =>
+    reader != null && reader.generation == 0 && reader.snapshot != null;
+
 /// What keeps an inbox's Home in its [SwarmHomeCache]: at once when a Swarm
 /// was read again from nothing, left the list, or its access ended — what was
 /// kept may hold what the person can no longer read. Any other change is kept

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../phone/phone_sheet.dart';
-import '../phone/settings_row.dart';
 import '../phone/tty.dart';
 import '../phone/tty_controls.dart';
 import '../settings/experimental_features.dart';
@@ -23,9 +22,6 @@ enum SwarmStart {
   /// The account has no computer at all: Connect a computer.
   noComputer,
 
-  /// None of its computers is online, and no Swarm was read yet: Try again.
-  offline,
-
   /// The Swarms were read, and there is none: Show me how.
   none,
 
@@ -41,18 +37,17 @@ enum SwarmStart {
 /// as the account's list says (null until it has answered) and what [inbox]
 /// read. Null when there is a Swarm to show, or nothing is known yet.
 ///
-/// A computer going away after the Swarms were read shows no start screen:
-/// what was read stays, and the reads retry quietly (`swarmRequest`). It once
-/// flashed "Connect one of your computers" for 10 to 25 seconds at a time
-/// with the computer connected all along (owner's iPhone, 2026-10-27).
+/// No computer answering shows no start screen: Home draws what it has —
+/// what was read or kept, or rows on their way — with a card about the
+/// computers (`SwarmConnectionNotice`), and the reads retry quietly
+/// (`swarmRequest`). A screen in Home's place once flashed "Connect one of
+/// your computers" for 10 to 25 seconds at a time with the computer connected
+/// all along (owner's iPhone, 2026-10-27), and "No computer online" stayed
+/// after a force-quit while the Mac was connecting (2026-10-28).
 SwarmStart? swarmStart(SwarmInbox inbox, List<SwarmComputer>? computers) {
   if (computers == null) return null;
   if (computers.isEmpty) return SwarmStart.noComputer;
-  if (!inbox.loaded) {
-    final away = computers.every((computer) => computer.away);
-    return away || inbox.noComputer ? SwarmStart.offline : null;
-  }
-  if (inbox.swarms.isNotEmpty) return null;
+  if (!inbox.loaded || inbox.swarms.isNotEmpty) return null;
   if (inbox.invitations.isNotEmpty) return SwarmStart.invited;
   return inbox.invitationsFailed ? SwarmStart.invitesFailed : SwarmStart.none;
 }
@@ -130,40 +125,6 @@ class _SwarmStartViewState extends State<SwarmStartView> {
       AppTheme.watch(context);
       final tty = Tty.of(context);
       return switch (widget.start) {
-        SwarmStart.offline => _StartScreen(
-          key: const ValueKey('swarm-start-offline'),
-          mark: const _Mark(icon: LucideIcons.monitorOff300),
-          title: 'No computer online',
-          line:
-              'Swarm reaches your team through your computers. Turn one on '
-              'and open Harness.',
-          more: [
-            SettingsGroup(
-              children: [
-                for (final computer in widget.computers.computers ?? const [])
-                  SettingsRow(
-                    title: computer.name,
-                    detail: computer.away ? 'Offline' : 'Connecting…',
-                    leading: Icon(
-                      LucideIcons.monitor300,
-                      size: 18,
-                      color: tty.dim,
-                    ),
-                  ),
-              ],
-            ),
-          ],
-          primary: TtyPrimaryButton(
-            label: 'Try again',
-            busy: _looking || widget.computers.rechecking,
-            busyLabel: 'Looking for your computers…',
-            onPressed: () => unawaited(_tryAgain()),
-          ),
-          quiet: TtyTextButton(
-            label: 'Add a computer',
-            onPressed: () => widget.computers.add(context),
-          ),
-        ),
         SwarmStart.noComputer => _StartScreen(
           key: const ValueKey('swarm-start-no-computer'),
           mark: const _Mark(icon: LucideIcons.monitor300),
