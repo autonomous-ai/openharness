@@ -62,6 +62,30 @@ export function loadActive(tx: Transaction, tabId: string,
   })
 }
 
+/**
+ * What a machine's report works on (store.ts observeMachine, #876): `loadActive`'s parts with only the conversations its
+ * checks read, whole, since it may write them: running work, the Lead conversations, the unfinished starts' conversations,
+ * the conversations of agents stored with no project (projects.ts agentProjectId), and the private chats of this machine's
+ * working agents (leaderboard/lent.ts accrueLent). A busy Swarm's finished conversations, briefs and checks were ~1.1 MB
+ * read every 15 s per machine; the commit compares only what was loaded, so the others stay as they are.
+ */
+export async function loadObserved(tx: Transaction, tabId: string, machineId: string): Promise<SwarmParts> {
+  const live = { deleted: false }
+  const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: live, start: { ...live, finishedAt: null }, group: [] })
+  const { projects, leadsConversationId } = loaded.head.data!
+  const leads = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], ...leadsConversationId ? [leadsConversationId] : []]
+  // One read per index (parts/indexed.ts); none of them reads a quiet conversation.
+  const groups = await liveGroups(tx, tabId, [['running', { executionMachineId: { $ne: null }, dormant: false }],
+    ['key', { key: { $in: [...new Set([...leads, ...loaded.starts.map(s => s.data!.request.conversationId)])] }, dormant: false }]])
+  const working = new Set(groups.flatMap(row => (row.data as GroupData).assignment?.status === 'working' ? [(row.data as GroupData).assignment!.agentId] : []))
+  const legacy = loaded.agents.filter(a => !a.data!.projectId).map(a => a.key)
+  const lending = loaded.agents.filter(a => a.data!.machineId === machineId && working.has(a.key)).map(a => a.key)
+  const more = await liveGroups(tx, tabId, [...legacy.length ? [['agents', { agentIds: { $in: legacy }, dormant: false }] as const] : [],
+    ...lending.length ? [['agents', { agentIds: { $in: lending }, dormant: false, 'data.audience': { $ne: null } }] as const] : []])
+  const rows = [...new Map([...groups, ...more].map(row => [row.key, row])).values()]
+  return { ...loaded, groups: rows.map(row => toPart<GroupData>('group', row)) }
+}
+
 /** What the read cache keeps of a Swarm at its main stamp (cache.ts): `loadActive`'s parts with every live start, and no
  *  machines, which it keeps at their own stamp (`loadMachines`). Dormant groups and their like come by name (`loadGroups`). */
 export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts> {

@@ -173,6 +173,15 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     expect(docs, JSON.stringify(reads)).toBeLessThanOrEqual(groups.length + 1)
   })
 
+  it('a machine\'s report loads the Lead conversations and running work, never the open or quiet ones (#876)', async () => {
+    let groups: string[] = []
+    const reads = await profiled(async () => { groups = (await db.$transaction(tx => parts.loadObserved(tx, s.tabId, s.machineId))).groups.map(g => g.key) })
+    expect(groups.sort()).toEqual([...s.leadConversations, s.web].sort())
+    expectIndexed(reads)
+    // Its working worker's private chats are read through that worker's conversations: here only its running one.
+    expect(reads.reduce((n, r) => n + r.docsExamined, 0), JSON.stringify(reads)).toBeLessThanOrEqual(groups.length + 1)
+  })
+
   it('a command loads the Swarm\'s open conversations and those it names, each read through its index', async () => {
     const quiet = s.quietLead[5]!.key
     for (const [named, expected] of [
