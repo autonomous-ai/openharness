@@ -4,13 +4,14 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { env } from '../config/env.js'
-import { clearAuthSession, readAuthSession, writeAuthSession } from '../lib/authSession.js'
+import { readAuthSession, writeAuthSession } from '../lib/authSession.js'
 import { controlPlaneAuth, postJson, requestJson } from '../lib/controlPlane.js'
 import { computerId } from '../lib/daemonState.js'
 import { peekIdentity } from '../lib/e2ee/store.js'
 import { runGuestCommand, type GuestRunner } from '../lib/guestAccounts.js'
 import { managedNodeRuntimeDir } from '../lib/guestHelperInstall.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
+import { ancestorsOnce, removeSignIn, signOutAsked } from '../lib/signOut.js'
 import { managedTmuxPath } from '../lib/tmuxOnPath.js'
 import { adminRunner } from './admin.js'
 import type { JobState, TeamCommandDeps } from './command.js'
@@ -35,6 +36,8 @@ export function teamCommandDeps(options: {
   runner?: GuestRunner
 }): TeamCommandDeps {
   const runner = options.runner ?? runGuestCommand
+  // Read once: the same processes decide whether a person asked and are named in the log.
+  const chain = ancestorsOnce()
   return {
     platform: process.platform,
     out: (line) => console.log(line),
@@ -53,7 +56,8 @@ export function teamCommandDeps(options: {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     session: readAuthSession,
     writeSession: writeAuthSession,
-    clearSession: clearAuthSession,
+    signOutAsked: (flags) => signOutAsked({ interactive: process.stdin.isTTY === true, flags, ancestors: chain }),
+    removeSignIn: (asked) => removeSignIn('team off', asked, chain),
     auth: controlPlaneAuth,
     post: (path, body, headers) => postJson(path, body, headers ?? {}),
     get: (path, headers) => requestJson('GET', path, undefined, headers ?? {}),

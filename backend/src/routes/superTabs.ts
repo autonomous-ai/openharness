@@ -22,12 +22,27 @@ import { logger } from '../utils/logger.js'
 import { SwarmReads } from '../superTabs/read/service.js'
 import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
+import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
+import type { AuthUser } from '../lib/ssoAuth.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
 const agentQuery = z.object({ asAgentId: id.optional() }).strict()
-const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional() }).strict()
+const create = z.object({ operationId: id, name: z.string().trim().min(1).max(160), projectVisibility: z.enum(['public', 'private']).optional(),
+  workspaceId: id.optional() }).strict()
 const operation = operationSchema.extend({ asAgentId: id.optional() })
+// Workspaces (superTabs/workspaceStore.ts). A Team session (lib/teamSession.ts) never acts on a Workspace: only the signed-in person does.
+const workspaceParams = z.object({ workspaceId: id })
+const workspaceMemberParams = z.object({ workspaceId: id, userId: id })
+const workspaceName = z.string().trim().min(1).max(160)
+const workspaceCreate = z.object({ operationId: id, name: workspaceName }).strict()
+const workspaceRename = z.object({ name: workspaceName }).strict()
+const workspaceInvite = z.object({ email: z.email().max(320), role: z.enum(['admin', 'member', 'guest']) }).strict()
+const workspaceRole = z.object({ role: z.enum(['admin', 'member', 'guest']) }).strict()
+const workspaceTransfer = z.object({ userId: id }).strict()
+const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
+const workspaceJoin = z.object({ operationId: id }).strict()
+const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
@@ -150,7 +165,37 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
     (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
-    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility)))
+    (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.workspaceId)))
+  // Workspaces (docs/plans/2026-10-27-swarm-workspaces.md): the person's Workspaces and the Swarms they may see in each.
+  app.get('/api/super-tabs/workspaces', (req, reply) => respond(reply, () => store.workspaceList(req.user!)))
+  app.post<{ Body: z.infer<typeof workspaceCreate> }>('/api/super-tabs/workspaces', { preHandler: validateBody(workspaceCreate) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.create(req.user!, req.body.operationId, req.body.name) }))
+  app.get('/api/super-tabs/workspace-invitations', (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invitationsFor(req.user!) }))
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceRename> }>('/api/super-tabs/workspaces/:workspaceId',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceRename)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.rename(req.user!, req.params.workspaceId, req.body.name) }))
+  app.get<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/members', { preHandler: validateParams(workspaceParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.members(req.user!, req.params.workspaceId) }))
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceInvite> }>('/api/super-tabs/workspaces/:workspaceId/invitations',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceInvite)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.invite(req.user!, req.params.workspaceId, req.body.email, req.body.role) }))
+  app.post<{ Params: z.infer<typeof workspaceParams> }>('/api/super-tabs/workspaces/:workspaceId/accept', { preHandler: validateParams(workspaceParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.accept(req.user!, req.params.workspaceId) }))
+  app.post<{ Params: z.infer<typeof workspaceMemberParams>; Body: z.infer<typeof workspaceRole> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId',
+    { preHandler: [validateParams(workspaceMemberParams), validateBody(workspaceRole)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.setRole(req.user!, req.params.workspaceId, req.params.userId, req.body.role) }))
+  // A POST, not a DELETE: Desktop reaches the backend through the daemon, which forwards only GET and POST (cli superTabs/service.ts).
+  app.post<{ Params: z.infer<typeof workspaceMemberParams> }>('/api/super-tabs/workspaces/:workspaceId/members/:userId/remove', { preHandler: validateParams(workspaceMemberParams) },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.remove(req.user!, req.params.workspaceId, req.params.userId) }))
+  app.post<{ Params: z.infer<typeof workspaceParams>; Body: z.infer<typeof workspaceTransfer> }>('/api/super-tabs/workspaces/:workspaceId/transfer',
+    { preHandler: [validateParams(workspaceParams), validateBody(workspaceTransfer)] },
+    (req, reply) => respond(reply, () => { personOnly(req.user!); return store.workspaces.transfer(req.user!, req.params.workspaceId, req.body.userId) }))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof workspaceVisibility> }>('/api/super-tabs/:tabId/workspace-visibility',
+    { preHandler: [validateParams(tabParams), validateBody(workspaceVisibility)] },
+    (req, reply) => respond(reply, () => store.setWorkspaceVisibility(req.user!, req.params.tabId, req.body.visibility)))
+  app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof workspaceJoin> }>('/api/super-tabs/:tabId/workspace-join',
+    { preHandler: [validateParams(tabParams), validateBody(workspaceJoin)] },
+    (req, reply) => respond(reply, () => store.workspaceJoin(req.user!, req.params.tabId, req.body.operationId)))
   app.get('/api/super-tabs/invitations', (req, reply) => respond(reply, () => store.invitations(req.user!)))
   app.get<{ Params: z.infer<typeof tabParams> }>('/api/super-tabs/:tabId/sharing',
     { preHandler: validateParams(tabParams) },
