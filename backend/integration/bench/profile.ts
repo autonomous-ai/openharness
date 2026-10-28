@@ -114,25 +114,27 @@ export function profileEntry(row: ProfileEntry & { match?: unknown }): ProfileEn
 }
 
 /** Profiles every operation on the bench's database from now on (level 2: all, whatever their time). The default
- *  `system.profile` keeps 1 MB, a few seconds of the load; this one keeps 1 GB. */
+ *  `system.profile` keeps 1 MB, a few seconds of the load; this one keeps 256 MB. */
 export async function startProfiling(db: PrismaClient): Promise<void> {
   await db.$runCommandRaw({ profile: 0 })
   await db.$runCommandRaw({ drop: 'system.profile' }).catch(() => {})
-  await db.$runCommandRaw({ create: 'system.profile', capped: true, size: 1024 * 1024 * 1024 })
+  await db.$runCommandRaw({ create: 'system.profile', capped: true, size: 256 * 1024 * 1024 })
   await db.$runCommandRaw({ profile: 2, slowms: 0 })
 }
 
 /** Stops profiling and summarizes what it recorded. */
 export async function readProfile(db: PrismaClient): Promise<ProfileSummary> {
   await db.$runCommandRaw({ profile: 0 })
+  // Pages that each fit one batch: a cursor id goes past 2^53 and comes back from Prisma's raw reply rounded.
   const entries: ProfileEntry[] = []
-  let reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: PROFILE_STAGES, cursor: { batchSize: 10000 } }) as unknown as Cursor
-  entries.push(...reply.cursor.firstBatch ?? [])
-  while (reply.cursor.id && Number((reply.cursor.id as { $numberLong?: string }).$numberLong ?? reply.cursor.id)) {
-    reply = await db.$runCommandRaw({ getMore: reply.cursor.id as never, collection: 'system.profile', batchSize: 10000 }) as unknown as Cursor
-    entries.push(...reply.cursor.nextBatch ?? [])
+  for (;;) {
+    const page = (await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: [{ $skip: entries.length }, { $limit: PAGE }, ...PROFILE_STAGES],
+      cursor: { batchSize: PAGE } }) as unknown as Cursor).cursor.firstBatch ?? []
+    entries.push(...page)
+    if (page.length < PAGE) break
   }
   return summarizeProfile(entries.map(profileEntry))
 }
 
-interface Cursor { cursor: { id: unknown; firstBatch?: ProfileEntry[]; nextBatch?: ProfileEntry[] } }
+const PAGE = 5000
+interface Cursor { cursor: { firstBatch?: ProfileEntry[] } }
