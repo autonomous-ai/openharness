@@ -545,8 +545,10 @@ class ProjectSidebar extends StatelessWidget {
   }) {
     final snapshot = controller.snapshot!;
     final agent = controller.buddy(project.id);
+    // A removed Buddy's chat stays; it reads as plain "Buddy" until one is
+    // added again (its title names the owner, which the reader is).
     final name = agent == null
-        ? chat.title
+        ? 'Buddy'
         : snapshot.agentName(agent.id, fallback: agent.name);
     return SuperTabPmChatRow(
       key: ValueKey('super-buddy-${project.id}'),

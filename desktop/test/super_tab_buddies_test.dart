@@ -340,6 +340,30 @@ void main() {
       await close(tester, c);
     });
 
+    testWidgets('a removed Buddy keeps its chat, plainly named', (
+      tester,
+    ) async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      (server.state['agents'] as List).removeWhere(
+        (a) => (a as Map)['id'] == 'wren',
+      );
+      final c = await show(tester, server);
+      expect(
+        find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: buddyEntry, matching: find.text('removed')),
+        findsOneWidget,
+      );
+      await tester.tap(buddyEntry);
+      await tester.pumpAndSettle();
+      expect(find.text('Your Buddy'), findsOneWidget);
+      expect(find.textContaining("peer's Buddy"), findsNothing);
+      await close(tester, c);
+    });
+
     testWidgets('a Buddy whose session is down says offline', (tester) async {
       final server = buddySwarm();
       giveBuddy(server);
@@ -429,6 +453,64 @@ void main() {
             findsOneWidget,
           );
 
+          await tester.tap(submit);
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
+            'projectId': 'lead',
+            'machineId': 'studio',
+            'engine': 'claude',
+          });
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'Codex is only for the reader\'s own machines: on someone else\'s it is off and says why',
+        (tester) async {
+          final server = buddySwarm();
+          final c = await show(tester, server);
+          await open(tester);
+          const hint = 'Codex Buddies run only on your own machines';
+          expect(find.text(hint), findsNothing);
+          // Codex on the reader's own machine, then someone else's machine.
+          await tester.tap(find.text('Codex'));
+          await tester.pumpAndSettle();
+          await tester.tap(machine);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Studio').last);
+          await tester.pumpAndSettle();
+
+          expect(find.text(hint), findsOneWidget);
+          await tester.tap(find.text('Codex'));
+          await tester.pumpAndSettle();
+          await tester.tap(submit);
+          await tester.pumpAndSettle();
+          // The choice fell back to Claude, which runs there.
+          expect(commands(server, 'buddy.create').single['engine'], 'claude');
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'back on the reader\'s own machine, Codex can be picked again',
+        (tester) async {
+          final server = buddySwarm();
+          final c = await show(tester, server);
+          await open(tester);
+          await tester.tap(machine);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Studio').last);
+          await tester.pumpAndSettle();
+          await tester.tap(machine);
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Kens-MacBook').last);
+          await tester.pumpAndSettle();
+
+          expect(
+            find.text('Codex Buddies run only on your own machines'),
+            findsNothing,
+          );
           await tester.tap(find.text('Codex'));
           await tester.pumpAndSettle();
           await tester.tap(submit);
@@ -436,7 +518,7 @@ void main() {
           expect(commands(server, 'buddy.create').single, {
             'type': 'buddy.create',
             'projectId': 'lead',
-            'machineId': 'studio',
+            'machineId': 'ken-mac',
             'engine': 'codex',
           });
           await close(tester, c);
@@ -742,7 +824,7 @@ void main() {
         );
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
-        expect(find.text('Starting Codex on Studio…'), findsOneWidget);
+        expect(find.text('Starting Claude on Studio…'), findsOneWidget);
         expect(find.widgetWithText(TextButton, 'Start again'), findsNothing);
         await close(tester, c);
       });
@@ -774,7 +856,7 @@ void main() {
             'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'studio',
-            'engine': 'codex',
+            'engine': 'claude',
           });
           await close(tester, c);
         },

@@ -104,6 +104,15 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
   bool _busy = false;
   String? _error;
 
+  /// Whether the chosen machine is the reader's own. A Codex Buddy runs only
+  /// there; a Claude Buddy runs restricted on any machine they may use
+  /// (backend Buddy review, 10-28). The backend refuses otherwise.
+  bool get _ownMachine =>
+      buddyMachines(c).where((m) => m.id == _machine).firstOrNull?.ownerId ==
+      c.accountId;
+
+  bool _engineAllowed(String engine) => engine != 'codex' || _ownMachine;
+
   @override
   void initState() {
     super.initState();
@@ -210,7 +219,12 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                           ),
                       ],
                       onChanged: (value) {
-                        if (!_busy) setState(() => _machine = value);
+                        if (_busy) return;
+                        setState(() {
+                          _machine = value;
+                          // Codex runs only on the reader's own machines.
+                          if (!_ownMachine) _engine = 'claude';
+                        });
                       },
                     ),
                   ),
@@ -241,7 +255,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                     child: RadioGroup<String>(
                       groupValue: _engine,
                       onChanged: (value) {
-                        if (!_busy && value != null) {
+                        if (!_busy && value != null && _engineAllowed(value)) {
                           setState(() => _engine = value);
                         }
                       },
@@ -252,7 +266,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                             Flexible(
                               child: RadioListTile<String>(
                                 value: key,
-                                enabled: !_busy,
+                                enabled: !_busy && _engineAllowed(key),
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(value),
@@ -264,6 +278,21 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
+              if (!_ownMachine) ...[
+                const SizedBox(height: 4),
+                Row(
+                  key: const ValueKey('super-buddy-codex-hint'),
+                  children: [
+                    const SizedBox(width: _labelWidth),
+                    Expanded(
+                      child: Text(
+                        'Codex Buddies run only on your own machines',
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
                 Text(error, style: DesktopChrome.control()),

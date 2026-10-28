@@ -88,7 +88,8 @@ void startBuddy(
   String person = 'peer',
   String projectId = 'lead',
   String machineId = 'studio',
-  String engine = 'codex',
+  // Only Claude Buddies run on someone else's machine (backend review).
+  String engine = 'claude',
   String? error,
 }) {
   (server.state['conversations'] as List).add({
