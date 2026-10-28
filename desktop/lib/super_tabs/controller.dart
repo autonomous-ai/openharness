@@ -1420,6 +1420,7 @@ class SuperTabController extends ChangeNotifier {
           ? known.last.sequence
           : null;
       final query = _query(id, older: older);
+      final from = _before[id];
       final first = early != null && early.query == query ? early.page : null;
       var answer = first != null
           ? await first.catchError(
@@ -1441,6 +1442,14 @@ class SuperTabController extends ChangeNotifier {
       }
       if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
         return;
+      }
+      // A read replacing the saved page moved where earlier continues while
+      // this page was on its way: under the new page it would leave a gap.
+      // Read on from where earlier continues now.
+      if (older &&
+          (_before[id]?.sequence != from?.sequence ||
+              _before[id]?.id != from?.id)) {
+        return await _loadMessages(id, older: true);
       }
       final incoming = (answer['messages'] as List)
           .map((m) => SuperTabMessage.fromJson(superTabMap(m)))
