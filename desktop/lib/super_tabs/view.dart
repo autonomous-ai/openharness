@@ -126,11 +126,13 @@ class _SuperTabViewState extends State<SuperTabView>
   // Each list's dividing row: see [_splitAt].
   final _split = <String, SuperTabMessage>{};
   final _newerRows = UniqueKey();
-  int _mentionIndex = 0;
+  // The composer's completions are drawn by builders of their own, so typing
+  // and choosing among them never rebuild the transcript.
+  final _mentionIndex = ValueNotifier(0);
   late final _tagBackspace = _TagBackspace(
     () => c.mentions(c.selectedId).values,
   );
-  String? _dismissedMention;
+  final _dismissedMention = ValueNotifier<String?>(null);
   String? _completionPrefix;
 
   /// The folders whose paths were dropped into each chat's message: what
@@ -404,6 +406,8 @@ class _SuperTabViewState extends State<SuperTabView>
     _dial.cancel();
     _litTimer?.cancel();
     _composer.dispose();
+    _mentionIndex.dispose();
+    _dismissedMention.dispose();
     _focus.dispose();
     _pullRequestsFocus.dispose();
     for (final scroll in _scroll.values) {
@@ -417,7 +421,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _send() async {
     final choices = _completionChoices;
     if (choices.isNotEmpty) {
-      choices[_mentionIndex.clamp(0, choices.length - 1)].choose();
+      choices[_mentionIndex.value.clamp(0, choices.length - 1)].choose();
       return;
     }
     if (!c.canWrite ||
@@ -572,10 +576,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final prefix = value.selection.isValid
         ? value.text.substring(0, value.selection.baseOffset)
         : null;
-    setState(() {
-      if (_completionPrefix != prefix) _mentionIndex = 0;
-      _completionPrefix = prefix;
-    });
+    if (_completionPrefix != prefix) _mentionIndex.value = 0;
+    _completionPrefix = prefix;
   }
 
   ({int start, int end, String query})? get _workgroupAtCursor {
@@ -587,7 +589,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final end = value.selection.baseOffset;
     final prefix = value.text.substring(0, end);
-    if (prefix == _dismissedMention) return null;
+    if (prefix == _dismissedMention.value) return null;
     final match = RegExp(r'(?:^|[\s(])#([^\s#`()]*)$').firstMatch(prefix);
     if (match == null) return null;
     // A reference picker must not interrupt Markdown code or URL fragments.
@@ -680,7 +682,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final text = _composer.text.replaceRange(at.start, at.end, token);
     final caret = at.start + token.length;
     c.setDraft(c.selectedId, text);
-    setState(() => _dismissedMention = text.substring(0, caret));
+    _dismissedMention.value = text.substring(0, caret);
     _composer.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: caret),
@@ -689,7 +691,7 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   void _moveCompletion(int index) {
-    setState(() => _mentionIndex = index);
+    _mentionIndex.value = index;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final context = _completionKeys[index].currentContext;
       if (mounted && context != null) {
@@ -726,7 +728,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final end = value.selection.baseOffset;
     final prefix = value.text.substring(0, end);
     final match = RegExp(r'(?:^|\s)@([^@\n]*)$').firstMatch(prefix);
-    if (match == null || prefix == _dismissedMention) return null;
+    if (match == null || prefix == _dismissedMention.value) return null;
     final start = prefix.lastIndexOf('@');
     final query = match.group(1)!;
     if (c.mentions(c.selectedId).values.contains('@${query.trimRight()}')) {
@@ -762,7 +764,7 @@ class _SuperTabViewState extends State<SuperTabView>
       text: text,
       selection: TextSelection.collapsed(offset: at.start + token.length + 1),
     );
-    setState(() => _mentionIndex = 0);
+    _mentionIndex.value = 0;
     _focus.requestFocus();
   }
 
@@ -1874,12 +1876,32 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
+  // What every row reads from the Swarm, built once per snapshot read rather
+  // than over every group and person for each row.
+  SuperTabSnapshot? _indexed;
+  Map<int, String> _references = const {};
+  Map<String, SuperTabPerson> _people = const {};
+  void _index() {
+    final snapshot = c.snapshot;
+    if (identical(snapshot, _indexed)) return;
+    _indexed = snapshot;
+    _references = {
+      for (final g in snapshot?.conversations ?? <SuperTabConversation>[])
+        if (g.number != null) g.number!: g.id,
+    };
+    _people = {};
+    for (final person in snapshot?.people ?? <SuperTabPerson>[]) {
+      _people.putIfAbsent(person.id, () => person);
+    }
+  }
+
   Widget _message(
     SuperTabMessage message,
     bool grouped,
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
   }) {
+    _index();
     if (message.terminalEvent || message.source['kind'] == 'overlap') {
       return SuperTabTerminalRow(
         key: ValueKey('super-message-${message.id}'),
@@ -1921,25 +1943,16 @@ class _SuperTabViewState extends State<SuperTabView>
       // A person is named by their address's first part, as people say it.
       mentions: [
         for (final id in message.mentions)
-          if (c.snapshot?.people.where((p) => p.id == id).firstOrNull
-              case final person?)
-            person.email.split('@').first,
+          if (_people[id] case final person?) person.email.split('@').first,
       ],
-      references: {
-        for (final g in c.snapshot?.conversations ?? <SuperTabConversation>[])
-          if (g.number != null) g.number!: g.id,
-      },
+      references: _references,
       onOpenGroup: (id) {
         setState(() => _showPullRequests = false);
         c.select(id);
         c.selectTerminal(id, null);
       },
       agent: agent,
-      person: message.fromAgent
-          ? null
-          : c.snapshot?.people
-                .where((p) => p.id == message.authorId)
-                .firstOrNull,
+      person: message.fromAgent ? null : _people[message.authorId],
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
       grouped: grouped,
@@ -1957,11 +1970,10 @@ class _SuperTabViewState extends State<SuperTabView>
       readerId: c.accountId,
       reactorName: (kind, id) => kind == 'agent'
           ? c.snapshot?.agentName(id) ?? 'Agent'
-          : c.snapshot?.people
-                    .where((p) => p.id == id)
-                    .map((p) => superTabPersonName(p.email))
-                    .firstOrNull ??
-                'Someone',
+          : switch (_people[id]) {
+              final person? => superTabPersonName(person.email),
+              null => 'Someone',
+            },
       onReact: c.canWrite && c.selected?.archived == false
           ? (emoji) => unawaited(_react(message, emoji))
           : null,
@@ -2250,11 +2262,16 @@ class _SuperTabViewState extends State<SuperTabView>
     );
     final finding = _finding?.conversationId == c.selectedId ? _finding : null;
     final back = finding == null && _back?.conversationId == c.selectedId;
-    final choices = _completionChoices;
     final chatId = c.selectedId;
-    final pastedFolders = group != null && _agentsElsewhere(group)
+    // Read as the message changes, by the composer's own builders.
+    List<String> pastedFolders() => group != null && _agentsElsewhere(group)
         ? _foldersInMessage(chatId)
         : const <String>[];
+    final completing = Listenable.merge([
+      _composer,
+      _mentionIndex,
+      _dismissedMention,
+    ]);
     // No conversation read yet: its error is the page itself, not a line over "Loading".
     final unread = _readsFirst && c.snapshot == null;
     return Column(
@@ -2577,59 +2594,66 @@ class _SuperTabViewState extends State<SuperTabView>
                 onTap: () => _openAgent(agent),
               ),
             ),
-        if (choices.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-            child: Material(
-              color: DesktopChrome.surface,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(
-                  DesktopChrome.controlRadius,
+        ListenableBuilder(
+          listenable: completing,
+          builder: (context, _) {
+            final choices = _completionChoices;
+            if (choices.isEmpty) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
+              child: Material(
+                color: DesktopChrome.surface,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                  side: BorderSide(color: DesktopChrome.rim),
                 ),
-                side: BorderSide(color: DesktopChrome.rim),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.sizeOf(context).height * .3,
-                ),
-                child: ListView(
-                  key: const ValueKey('super-composer-completions'),
-                  shrinkWrap: true,
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  children: [
-                    for (var i = 0; i < choices.length; i++)
-                      ListTile(
-                        key: _completionKeys[i],
-                        dense: true,
-                        selected:
-                            i == _mentionIndex.clamp(0, choices.length - 1),
-                        selectedTileColor: grid.AppSurface.selectedFill,
-                        selectedColor: DesktopChrome.foreground,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
+                clipBehavior: Clip.antiAlias,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(context).height * .3,
+                  ),
+                  child: ListView(
+                    key: const ValueKey('super-composer-completions'),
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    children: [
+                      for (var i = 0; i < choices.length; i++)
+                        ListTile(
+                          key: _completionKeys[i],
+                          dense: true,
+                          selected:
+                              i ==
+                              _mentionIndex.value.clamp(0, choices.length - 1),
+                          selectedTileColor: grid.AppSurface.selectedFill,
+                          selectedColor: DesktopChrome.foreground,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                          ),
+                          title: Text(
+                            choices[i].label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.control(),
+                          ),
+                          subtitle: choices[i].detail == null
+                              ? null
+                              : Text(
+                                  choices[i].detail!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: DesktopChrome.metadata(),
+                                ),
+                          onTap: choices[i].choose,
                         ),
-                        title: Text(
-                          choices[i].label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.control(),
-                        ),
-                        subtitle: choices[i].detail == null
-                            ? null
-                            : Text(
-                                choices[i].detail!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.metadata(),
-                              ),
-                        onTap: choices[i].choose,
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
+        ),
         if (group != null && group.archived)
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
@@ -2653,36 +2677,43 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           )
         else
-          Padding(
+          ListenableBuilder(
             // Keyed: the lines that come and go above it (a reply, mention
-            // choices, an error) are Paddings too, and would otherwise take
-            // over this element and remount the field. A remounted field
-            // keeps focus but loses its text input connection, so typing,
-            // Backspace included, would go nowhere.
+            // choices, an error) would otherwise take over this element and
+            // remount the field. A remounted field keeps focus but loses its
+            // text input connection, so typing, Backspace included, would go
+            // nowhere.
             key: const ValueKey('super-message-composer-row'),
-            padding: EdgeInsets.fromLTRB(
-              24,
-              12,
-              24,
-              pastedFolders.isEmpty ? 16 : 6,
+            listenable: _composer,
+            builder: (context, field) => Padding(
+              padding: EdgeInsets.fromLTRB(
+                24,
+                12,
+                24,
+                pastedFolders().isEmpty ? 16 : 6,
+              ),
+              child: field,
             ),
             child: Focus(
               onKeyEvent: (node, event) {
                 final keys = HardwareKeyboard.instance;
                 final composing = _composer.value.composing;
-                if (_focus.hasFocus &&
-                    event is KeyDownEvent &&
-                    choices.isNotEmpty &&
-                    !keys.isControlPressed &&
-                    !keys.isMetaPressed &&
-                    !keys.isAltPressed &&
-                    !keys.isShiftPressed &&
-                    !(composing.isValid && !composing.isCollapsed)) {
+                final choices =
+                    _focus.hasFocus &&
+                        event is KeyDownEvent &&
+                        !keys.isControlPressed &&
+                        !keys.isMetaPressed &&
+                        !keys.isAltPressed &&
+                        !keys.isShiftPressed &&
+                        !(composing.isValid && !composing.isCollapsed)
+                    ? _completionChoices
+                    : const <_ComposerChoice>[];
+                if (choices.isNotEmpty) {
                   final key = event.logicalKey;
                   if (key == LogicalKeyboardKey.arrowDown ||
                       key == LogicalKeyboardKey.arrowUp) {
                     _moveCompletion(
-                      (_mentionIndex +
+                      (_mentionIndex.value +
                               (key == LogicalKeyboardKey.arrowDown ? 1 : -1)) %
                           choices.length,
                     );
@@ -2690,16 +2721,14 @@ class _SuperTabViewState extends State<SuperTabView>
                   }
                   if (key == LogicalKeyboardKey.tab ||
                       key == LogicalKeyboardKey.enter) {
-                    choices[_mentionIndex.clamp(0, choices.length - 1)]
+                    choices[_mentionIndex.value.clamp(0, choices.length - 1)]
                         .choose();
                     return KeyEventResult.handled;
                   }
                   if (key == LogicalKeyboardKey.escape) {
-                    setState(
-                      () => _dismissedMention = _composer.text.substring(
-                        0,
-                        _composer.selection.baseOffset,
-                      ),
+                    _dismissedMention.value = _composer.text.substring(
+                      0,
+                      _composer.selection.baseOffset,
                     );
                     return KeyEventResult.handled;
                   }
@@ -2819,10 +2848,8 @@ class _SuperTabViewState extends State<SuperTabView>
                                       ),
                                       onChanged: (text) {
                                         c.setDraft(c.selectedId, text);
-                                        setState(() {
-                                          _mentionIndex = 0;
-                                          _dismissedMention = null;
-                                        });
+                                        _mentionIndex.value = 0;
+                                        _dismissedMention.value = null;
                                       },
                                     ),
                                   ),
@@ -2869,34 +2896,42 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-        if (pastedFolders.isNotEmpty && !(group?.archived ?? true))
-          Padding(
-            key: const ValueKey('super-folder-path-hint'),
-            padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    pastedFolders.length == 1
-                        ? "This path is on this computer. Agents on other "
-                              "computers can't open it."
-                        : "These paths are on this computer. Agents on "
-                              "other computers can't open them.",
-                    style: DesktopChrome.metadata(),
-                  ),
+        if (!(group?.archived ?? true))
+          ListenableBuilder(
+            listenable: _composer,
+            builder: (context, _) {
+              final pasted = pastedFolders();
+              if (pasted.isEmpty) return const SizedBox.shrink();
+              return Padding(
+                key: const ValueKey('super-folder-path-hint'),
+                padding: const EdgeInsets.fromLTRB(28, 0, 24, 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        pasted.length == 1
+                            ? "This path is on this computer. Agents on other "
+                                  "computers can't open it."
+                            : "These paths are on this computer. Agents on "
+                                  "other computers can't open them.",
+                        style: DesktopChrome.metadata(),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _zipping.contains(chatId) || !writable || busy
+                          ? null
+                          : () =>
+                                unawaited(_attachFoldersAsZip(chatId, pasted)),
+                      child: Text(
+                        _zipping.contains(chatId)
+                            ? 'Zipping…'
+                            : 'Attach as zip',
+                      ),
+                    ),
+                  ],
                 ),
-                TextButton(
-                  onPressed: _zipping.contains(chatId) || !writable || busy
-                      ? null
-                      : () => unawaited(
-                          _attachFoldersAsZip(chatId, pastedFolders),
-                        ),
-                  child: Text(
-                    _zipping.contains(chatId) ? 'Zipping…' : 'Attach as zip',
-                  ),
-                ),
-              ],
-            ),
+              );
+            },
           ),
       ],
     );
