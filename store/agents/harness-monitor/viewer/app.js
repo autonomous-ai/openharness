@@ -1,4 +1,5 @@
 import { ACTIVITY, SPINNER, COLUMNS, PRESETS, isLive, visibleRows, number, memory, bytes, age, formatValue, sumReading, storageTotal } from './table.js'
+import { hostHidden, liveConnection } from './live.js'
 const el = id => document.getElementById(id)
 const dom = {
   search: el('search'), filter: el('filter'), machine: el('machine'), columns: el('columns'), columnOptions: el('column-options'),
@@ -26,7 +27,7 @@ const state = {
   preset: Object.hasOwn(PRESETS, saved.preset) ? saved.preset : 'overview',
   visible: new Set(Array.isArray(saved.visible) ? saved.visible : PRESETS.overview), widths: {},
   selected: null, inspecting: null, busy: new Set(), nodes: new Map(), shown: [],
-  frozen: false, pending: null, connected: false, receivedAt: 0, review: null, workspaceInspection: null,
+  frozen: false, connected: false, receivedAt: 0, review: null, workspaceInspection: null,
 }
 for (const col of COLUMNS) state.widths[col.key] = Math.max(64, Math.min(600, Number(saved.widths?.[col.key]) || col.width))
 const text = (node, value) => { if (node.textContent !== String(value)) node.textContent = value }
@@ -447,8 +448,7 @@ dom.refresh.onclick = async () => {
 }
 dom.freeze.onclick = () => {
   state.frozen = !state.frozen; text(dom.freeze, state.frozen ? 'Live updates' : 'Freeze updates'); dom.freeze.setAttribute('aria-pressed', String(state.frozen))
-  if (!state.frozen && state.pending) { applySnapshot(state.pending); state.pending = null }
-  render()
+  syncLive(); render()
 }
 function applySnapshot(snapshot) {
   state.snapshot = snapshot; state.rows = (snapshot.rows ?? []).filter(row => row.online !== false); state.receivedAt = Date.now()
@@ -465,32 +465,36 @@ function applySnapshot(snapshot) {
   text(dom.problems, (snapshot.problems ?? []).map(p => p.machine + ': ' + String(p.error ?? 'Unavailable').replace('Offline — showing the last known sessions.', 'Offline — reconnect to view open harnesses.')).join(' · '))
   render()
 }
-let stream
-function connect() {
-  if (stream || document.hidden) return
-  stream = new EventSource('/events')
+// Out of sight (a hidden page, or Harness marking its tab hidden) or frozen: no connection, so the server
+// reads no machine for this page. Back again: one connection, which brings the readings up to date.
+const paused = () => document.hidden || hostHidden(document.documentElement) || state.frozen
+const live = liveConnection({ paused, open: () => {
+  const stream = new EventSource('/events')
   stream.addEventListener('snapshot', event => {
     try {
       const snapshot = JSON.parse(event.data); state.connected = true
       if (dom.message.textContent.startsWith('Readings are stale.')) message('')
-      if (state.frozen) state.pending = snapshot; else applySnapshot(snapshot)
+      applySnapshot(snapshot)
     } catch { message('Could not read the monitor update. Refresh and try again.') }
   })
   stream.onerror = () => { state.connected = false; message('Connection interrupted. Showing last readings; reconnecting…'); render() }
   stream.onopen = () => { if (dom.message.textContent.startsWith('Connection interrupted.')) message('') }
-}
-document.addEventListener('visibilitychange', () => { if (document.hidden) { stream?.close(); stream = null; state.connected = false } else connect() })
+  return stream
+} })
+function syncLive() { if (!live.sync()) state.connected = false }
+document.addEventListener('visibilitychange', syncLive)
+document.addEventListener('harness-host-visibility', syncLive)
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
 setInterval(() => {
-  if (document.hidden || reducedMotion.matches || state.frozen || !state.connected) return
+  if (paused() || reducedMotion.matches || !state.connected) return
   const mark = SPINNER[Math.floor(Date.now() / 100) % SPINNER.length]
   for (const node of dom.body.querySelectorAll('.working .mark')) text(node, mark)
 }, 100)
 setInterval(() => {
-  if (document.hidden || state.frozen || !state.receivedAt) return
+  if (paused() || !state.receivedAt) return
   if (state.connected && Date.now() - state.receivedAt > 45_000) {
     state.connected = false; message('Readings are stale. Showing the last update; refresh to reconnect.')
   }
   render()
 }, 10_000)
-columnMenu(); buildColumns(); connect()
+columnMenu(); buildColumns(); syncLive()
