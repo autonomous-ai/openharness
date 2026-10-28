@@ -39,7 +39,7 @@ import {
 import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
 import { agentDisplayName } from './agentNames.js'
-import { endedHolds, HOLDING, type WorkHold } from '../github/holds.js'
+import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
@@ -223,6 +223,9 @@ export interface SuperTabStoreHooks {
   /** Tasks that stopped being in an agent's hands with this write (github/holds.ts): done, cancelled, stopped, given to
    *  another attempt, or their agent removed. Called after the write commits; it must not throw. */
   workEnded?: (tabId: string, ended: WorkHold[]) => void
+  /** Tasks newly in progress, or in progress again under the same id (resumed after a usage limit): GitHub tokens forget
+   *  that such a task ended (github/tokens.ts resume). */
+  workStarted?: (tabId: string, started: WorkHold[]) => void
   /** No Harness GitHub App on this server: a Mac's Harness Team account joins no Swarm and takes no teammates' work, since
    *  it has no git login to fetch or push with (commands.ts `teamAccountsIdle`). */
   teamAccountsIdle?: boolean
@@ -827,10 +830,11 @@ export class SuperTabStore {
   private async executeOnce(user: AuthUser, tabId: string, input: { operationId: string; command: Command }, asAgentId?: string, hostMachineId?: string,
     workspaceLeave = false) {
     const { operationId, command } = operationSchema.parse(input)
-    let ended: WorkHold[] = []
+    let ended: WorkHold[] = [], started: WorkHold[] = []
     const done = await transaction(this.db, async tx => {
-      // A retried attempt starts again: only the attempt that commits says which tasks ended.
+      // A retried attempt starts again: only the attempt that commits says which tasks ended or started.
       ended = []
+      started = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command))
       const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command))
@@ -1136,6 +1140,7 @@ export class SuperTabStore {
         }
       }
       ended = endedHolds(original, effects.state)
+      started = startedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
       if (command.type === 'agent.startFailed') {
         const start = original.starts?.find(s => s.id === command.startId)
@@ -1224,7 +1229,15 @@ export class SuperTabStore {
       return { result: effects.result, parts: committed.written, lastChangedAt: stamp }
     })
     this.endWork(tabId, ended)
+    this.startWork(tabId, started)
     return done
+  }
+
+  private startWork(tabId: string, started: WorkHold[]): void {
+    if (!started.length || !this.hooks.workStarted) return
+    try { this.hooks.workStarted(tabId, started) } catch (error) {
+      logger.warn('[super-tab] work-started hook failed', { tabId, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   private endWork(tabId: string, ended: WorkHold[]): void {
@@ -1611,23 +1624,27 @@ export class SuperTabStore {
 
   /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
+    const rows: Prisma.SuperTabMessageCreateManyInput[] = []
+    const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     for (const message of messages) {
-      await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
+      rows.push({ id: message.id, tabId, conversationId: message.conversationId,
         sequence: sequences.get(message.id)!, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
-        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] } })
+        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
-        await tx.superTabDelivery.create({ data: { id: stableId(message.id, recipient), tabId,
+        deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
-          authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
-        this.announce(tx, { machineId: target.machineId, tabId, agentId: recipient })
+          authorId: message.author.id, authorGeneration: message.author.membershipGeneration })
       }
     }
+    if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
+    for (const delivery of deliveries) this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
   }
 
   /** Once `tx` commits, never for an attempt that failed or was retried: told earlier, a host could read before the delivery
@@ -1766,14 +1783,27 @@ export class SuperTabStore {
    *  a private project's members only. Null when it has none yet. [approvalRequired]: whether this Swarm's projects need a
    *  repository approved before the app gives them tokens, rolled out with the team account (machines.ts
    *  `teamAccountRequired`). */
-  async projectRepository(user: AuthUser, tabId: string, projectId: string): Promise<{ repositoryUrl: string | null; approvalRequired: boolean }> {
+  /** `name`: the project's own, for the page after approving its repository (routes/superTabs.ts). `others`: the reader's
+   *  other projects in the Swarm, those they may open, to name the ones its repository is approved for. */
+  async projectRepository(user: AuthUser, tabId: string, projectId: string):
+    Promise<{ repositoryUrl: string | null; approvalRequired: boolean; name: string; others: Array<{ id: string; name: string }> }> {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state)
-      const project = visibleState(state, actor, this.now()).projects?.find(p => p.id === projectId)
-        ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
-      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state) }
+      const projects = visibleState(state, actor, this.now()).projects ?? []
+      const project = projects.find(p => p.id === projectId) ?? fail('NOT_FOUND', 'This project is unavailable.', 404)
+      return { repositoryUrl: project.repository?.repositoryUrl ?? null, approvalRequired: teamAccountRequired(state), name: project.name,
+        others: projects.filter(p => p.id !== projectId).map(p => ({ id: p.id, name: p.name })) }
     })
+  }
+
+  /** A project's name as [userId] may see it now, for the page GitHub sends them back to after approving its repository
+   *  (routes/superTabs.ts). Read here, not carried in the sign-in's state, which GitHub's addresses expose (privacy review of
+   *  #1980). Null when they may not see it any more, or it is gone. */
+  async projectNameFor(userId: string, autonomousEnv: AuthUser['autonomousEnv'], tabId: string, projectId: string): Promise<string | null> {
+    const person = await this.db.user.findUnique({ where: { id: userId }, select: { email: true } })
+    if (!person) return null
+    try { return (await this.projectRepository({ sub: userId, email: person.email, role: 'user', autonomousEnv }, tabId, projectId)).name } catch { return null }
   }
 
   async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
