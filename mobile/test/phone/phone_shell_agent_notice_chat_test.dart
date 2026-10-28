@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -6,6 +8,8 @@ import 'package:harness_mobile/notify/agent_notice.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/agent_home.dart';
 import 'package:harness_mobile/phone/phone_shell.dart';
+import 'package:harness_mobile/phone/phone_shell_scope.dart';
+import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 
@@ -41,6 +45,74 @@ void main() {
     experimentalFeaturesStore.value = const {};
     app.dispose();
   });
+
+  for (final destination in ['terminal', 'home', 'page', 'back']) {
+    testWidgets(
+      'explicit $destination navigation wins over a pending agent notice',
+      (tester) async {
+        final read = Completer<Object?>();
+        app.fake.routes['/api/super-tabs/list'] = (_) => read.future;
+        app.fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+          groups: [
+            groupData('g1', status: 'working', agentIds: ['agent-builder']),
+          ],
+        );
+        experimentalFeaturesStore.value = {PhoneExperiment.swarm};
+        await tester.pumpWidget(MaterialApp(home: PhoneShell(notifier: app)));
+        await tester.pump();
+        if (destination == 'back') {
+          PhoneShellScope.maybeOf(tester.element(find.byType(SwarmPage)))!
+              .onOpenAgent('mac-1', 'harness-agent-builder');
+          await tester.pump();
+        }
+        app.agentNotices.system.opened.value = (
+          machineId: 'mac-1',
+          agentId: 'harness-agent-builder',
+        );
+        await tester.pump();
+        final context = tester.element(
+          find.byType(SwarmPage, skipOffstage: false),
+        );
+        final shell = PhoneShellScope.maybeOf(context)!;
+        if (destination == 'terminal') {
+          shell.onOpenAgent('mac-1', 'harness-agent-builder');
+        } else if (destination == 'home') {
+          shell.onShowSwarm!();
+        } else if (destination == 'back') {
+          await tester.binding.handlePopRoute();
+        } else {
+          unawaited(
+            Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const Text('Explicit page'),
+              ),
+            ),
+          );
+        }
+        await tester.pump();
+        read.complete({
+          'tabs': [
+            {'id': tab, 'name': 'Phone Swarm'},
+          ],
+          'next': null,
+        });
+        for (var i = 0; i < 10; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(find.byType(SwarmConversationPage), findsNothing);
+        if (destination == 'terminal') {
+          expect(find.byType(AgentHome), findsOneWidget);
+        }
+        if (destination == 'home' || destination == 'back') {
+          expect(find.byType(SwarmPage), findsOneWidget);
+        }
+        if (destination == 'page') {
+          expect(find.text('Explicit page'), findsOneWidget);
+        }
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
 
   testWidgets(
     'cold start reads the OS tap without posting or asking permission',
