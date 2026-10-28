@@ -16,7 +16,7 @@
  *
  * The variable `GIT_CONFIG_KEY_n` is not used: Codex leaves out of its commands every variable whose name contains KEY.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { daemonCommand } from './daemonCommand.js'
@@ -205,6 +205,10 @@ export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = default
   if (platform === 'win32' || !dir) return null
   const { helper, hooks } = writeSwarmGitHubTools(tools)
   if (!existsSync(join(dir, 'gh', 'hosts.yml'))) writeSessionGitHub(dir, null)
+  // Marked as just used: a start held before its session is registered must not look like a folder left behind
+  // (superTabs/github.ts removes those once untouched for 15 minutes; review of #1998).
+  const now = new Date()
+  utimesSync(dir, now, now)
   return {
     env: {
       GIT_CONFIG_PARAMETERS: gitConfigParameters(helper, hooks, join(dir, 'gitconfig')),

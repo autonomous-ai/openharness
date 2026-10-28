@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -237,5 +237,22 @@ describe('a Swarm session\'s launch', () => {
     expect(swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'win32')).toBeNull()
     expect(swarmGitHubLaunch('../escape', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'darwin')).toBeNull()
     expect(existsSync(join(dataDir, 'swarm-github'))).toBe(false)
+  })
+})
+
+// Review of #1998: a start held between its launch preparation and its session's registration could look untouched for 15
+// minutes and lose its folder (superTabs/github.ts emptyStopped). Each launch preparation marks the folder as just used.
+describe('a session\'s GitHub folder at launch', () => {
+  it('is marked as just used every time a launch is prepared', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'swarm-github-launch-'))
+    try {
+      const tools = { dataDir, command: 'harness', port: 18473, machineId: 'm1' }
+      expect(swarmGitHubLaunch('harness-codex-held', tools, 'darwin')).not.toBeNull()
+      const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-held')!
+      const old = new Date(Date.now() - 20 * 60_000)
+      utimesSync(dir, old, old)
+      swarmGitHubLaunch('harness-codex-held', tools, 'darwin')
+      expect(Date.now() - statSync(dir).mtimeMs).toBeLessThan(60_000)
+    } finally { rmSync(dataDir, { recursive: true, force: true }) }
   })
 })
