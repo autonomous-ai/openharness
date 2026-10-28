@@ -372,7 +372,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         ),
       );
     }
-    unawaited(c.send());
+    unawaited(_post(c));
+  }
+
+  /// Sends [c]'s draft, or its post not confirmed again. Once the backend
+  /// took it the keyboard goes down, unless the next message is already being
+  /// typed; a post refused or not confirmed keeps it up, to send again.
+  Future<void> _post(SwarmConversation c) async {
+    final sent = await c.send();
+    if (sent && mounted && _conversation == c && c.draft.isEmpty) {
+      _focus.unfocus();
+    }
   }
 
   void _reply(SwarmConversation c, SuperTabMessage message) {
@@ -953,7 +963,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                     author: reply == null ? null : _quoted(c, reply),
                     text: reply?.text,
                   ),
-            onSendAgain: () => unawaited(c.send()),
+            onSendAgain: () => unawaited(_post(c)),
           );
         }
         if (index - lead < entries.length) {

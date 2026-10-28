@@ -246,6 +246,18 @@ void main() {
     return rect.top >= list.top - 1 && rect.bottom <= list.bottom + 1;
   }
 
+  /// Whether the composer holds the keyboard: its field focused, and the
+  /// keyboard shown.
+  ({bool focused, bool keyboard}) composer(WidgetTester tester) => (
+    focused: tester
+        .widget<TextField>(find.byType(TextField))
+        .focusNode!
+        .hasFocus,
+    keyboard: tester.testTextInput.isVisible,
+  );
+  const up = (focused: true, keyboard: true);
+  const down = (focused: false, keyboard: false);
+
   testWidgets('each message says who wrote it, in what role and when; '
       'follow-ups are grouped under one name', (tester) async {
     await pump(
@@ -631,6 +643,103 @@ void main() {
       tester.widget<TextField>(find.byType(TextField)).controller!.text,
       'On it',
     );
+  });
+
+  group('the keyboard', () {
+    testWidgets('stays up while a post is on its way and goes down once it '
+        'is taken', (tester) async {
+      final fake = backend([message('m1', 1)]);
+      final taken = Completer<Object?>();
+      fake.routes[commands] = (_) => taken.future;
+      await pump(tester, fake);
+
+      await tester.enterText(find.byType(TextField), 'On it');
+      await tester.pump();
+      expect(composer(tester), up);
+
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+      expect(composer(tester), up);
+
+      fake.routes['$messages?after=1'] = (_) => {
+        'messages': [message('m2', 2, author: me, text: 'On it', minute: 5)],
+        'next': null,
+      };
+      taken.complete({'result': <String, dynamic>{}});
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-message-m2'), findsOneWidget);
+      expect(composer(tester), down);
+    });
+
+    testWidgets('stays up for a refused post, to correct it and send again', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)]);
+      fake.routes[commands] = (_) => throw const SuperTabFailure(
+        'TOO_LONG',
+        'This message is too long.',
+        statusCode: 400,
+      );
+      await pump(tester, fake);
+
+      await tester.enterText(find.byType(TextField), 'On it');
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('This message is too long.'), findsOneWidget);
+      expect(composer(tester), up);
+    });
+
+    testWidgets('stays up for a post not confirmed, and goes down once Send '
+        'again is taken', (tester) async {
+      final fake = backend([message('m1', 1)]);
+      var lost = true;
+      fake.routes[commands] = (_) => lost
+          ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
+          : {'result': <String, dynamic>{}};
+      await pump(tester, fake);
+
+      await tester.enterText(find.byType(TextField), 'On it');
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Not confirmed'), findsOneWidget);
+      expect(composer(tester), up);
+
+      lost = false;
+      await tester.tap(key('swarm-resend-post'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Not confirmed'), findsNothing);
+      expect(composer(tester), down);
+    });
+
+    testWidgets('stays up when the next message is typed before the post is '
+        'taken', (tester) async {
+      final fake = backend([message('m1', 1)]);
+      final taken = Completer<Object?>();
+      fake.routes[commands] = (_) => taken.future;
+      await pump(tester, fake);
+
+      await tester.enterText(find.byType(TextField), 'On it');
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+      await tester.enterText(find.byType(TextField), 'And the');
+      await tester.pump();
+
+      taken.complete({'result': <String, dynamic>{}});
+      await tester.pumpAndSettle();
+
+      expect(composer(tester), up);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        'And the',
+      );
+    });
   });
 
   testWidgets('the header names the chat, Chat with PM for the person\'s own, '
@@ -1782,6 +1891,55 @@ void main() {
 
       expect(fake.commands.single['attachmentIds'], ['f1']);
       expect(key('swarm-outgoing-crash.log'), findsNothing);
+    });
+
+    testWidgets('the keyboard stays up while the files go up and goes down '
+        'once they are posted', (tester) async {
+      pickSwarmFiles = () async => [picked('crash.log', 12)];
+      final fake = backend([message('m1', 1)]);
+      await pump(tester, fake, upload: held);
+
+      await attach(tester, 'swarm-attach-files');
+      await tester.enterText(find.byType(TextField), 'The log');
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+
+      expect(uploads.single.name, 'crash.log');
+      expect(composer(tester), up);
+
+      uploads.single.answer.complete(attachment('f1'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single['attachmentIds'], ['f1']);
+      expect(composer(tester), down);
+    });
+
+    testWidgets('the keyboard stays up when the files could not go up', (
+      tester,
+    ) async {
+      pickSwarmFiles = () async => [picked('crash.log', 12)];
+      final fake = backend([message('m1', 1)]);
+      await pump(tester, fake, upload: held);
+
+      await attach(tester, 'swarm-attach-files');
+      await tester.enterText(find.byType(TextField), 'The log');
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pump();
+      uploads.single.answer.completeError(
+        const SuperTabFailure(
+          'UPLOAD_FAILED',
+          'Could not upload the file. Try again.',
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Could not upload the file. Try again.'),
+        findsOneWidget,
+      );
+      expect(composer(tester), up);
     });
 
     testWidgets('a post of files alone shows them while it is sent', (
