@@ -717,7 +717,9 @@ describe('Linux', () => {
     it('starts the same command the LaunchDaemon does, with systemd\'s $ doubled', () => {
       const unit = teamSystemdUnit(unitInput)
       const exec = unit.split('\n').find((line) => line.startsWith('ExecStart='))
-      expect(exec).toBe(`ExecStart=/bin/sh -c '${TEAM_JOB_WRAPPER.replaceAll('$', '$$')}' harness-team`
+      // Written out, not built: String.replaceAll reads `$$` in its replacement as one `$` (the first gridtest VM run).
+      expect(TEAM_JOB_WRAPPER).toBe('"$1" "$2" team __start "$3" >>"$4" 2>&1; exec "$1" "$2" __harnessd >>"$4" 2>&1')
+      expect(exec).toBe('ExecStart=/bin/sh -c \'"$$1" "$$2" team __start "$$3" >>"$$4" 2>&1; exec "$$1" "$$2" __harnessd >>"$$4" 2>&1\' harness-team'
         + ` '${unitInput.node}' '${unitInput.cli}' '/home/harnessteam/.harness/team-handoff' '/home/harnessteam/.harness/cli/data/harness.log'`)
     })
 

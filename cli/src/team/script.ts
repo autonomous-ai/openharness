@@ -597,8 +597,9 @@ export function teamSystemdUnit(input: TeamPlistInput): string {
     ...checkEnv(input.env),
   }
   const vars = Object.entries(environment).map(([name, value]) => `Environment="${name}=${unitWord(value)}"`).join('\n')
-  // systemd expands `$NAME` in ExecStart itself, even inside quotes: `$$` is a plain `$` for the shell.
-  const wrapper = TEAM_JOB_WRAPPER.replaceAll('$', '$$')
+  // systemd expands `$NAME` in ExecStart itself, even inside quotes: `$$` is a plain `$` for the shell. Not replaceAll,
+  // whose replacement reads `$$` as one `$`.
+  const wrapper = TEAM_JOB_WRAPPER.split('$').join('$$')
   const args = [node, cli, paths.handoff, paths.log].map((arg) => `'${unitWord(arg)}'`).join(' ')
   return `# The Harness Team account's daemon: Swarm work on this computer runs as the separate user "${user}", which cannot
 # read the owner's files. Written by "harness team setup"; "harness team status" shows it, "harness team remove"
