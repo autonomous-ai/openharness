@@ -39,7 +39,7 @@ test('the page loads only files the server is willing to serve', async () => {
     assert.match(server, new RegExp(`'/${file.replace('.', '\\.')}'`), `viewer.mjs does not serve ${file}`)
   }
   for (const file of await readdir(join(PACKAGE, 'viewer'))) {
-    assert.ok(['index.html', 'app.js', 'app.css', 'scale.js', 'table.js', 'icons'].includes(file), `unexpected file in viewer/: ${file}`)
+    assert.ok(['index.html', 'app.js', 'app.css', 'scale.js', 'table.js', 'live.js', 'icons'].includes(file), `unexpected file in viewer/: ${file}`)
   }
 })
 
