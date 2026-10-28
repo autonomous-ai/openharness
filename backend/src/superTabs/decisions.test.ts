@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
-import type { DecisionTarget } from './decisions.js'
+import { waitingInProject, type DecisionTarget } from './decisions.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -179,5 +180,23 @@ describe('hands-on requests (collaboration protocol)', () => {
     // A decision is not a hands-on request, nor the other way round.
     expect(() => answer(s, { answer: 'done' }, peer, open(s, { kind: undefined, options: ['A', 'B'] }))).toThrow('unavailable')
     expect(() => s.run({ type: 'decision.answer', decisionId: 'request-1', choice: 0 }, peer, { decision: open(s) })).toThrow('unavailable')
+  })
+})
+
+// groupBy on SuperTabDecision once panicked the Prisma engine on Mongo: the digest counts the open decisions it reads instead.
+describe('the decisions waiting in a project', () => {
+  it('counts each conversation and person\'s open decisions without groupBy, reading only who and where', async () => {
+    const asked: unknown[] = []
+    const rows = [{ conversationId: 'c1', personId: 'owner' }, { conversationId: 'c2', personId: 'peer' }, { conversationId: 'c1', personId: 'owner' },
+      { conversationId: 'c1', personId: 'peer' }, { conversationId: 'c1', personId: 'owner' }]
+    const tx = { superTabDecision: {
+      groupBy: async () => { throw new Error('groupBy on SuperTabDecision') },
+      findMany: async (args: unknown) => { asked.push(args); return rows },
+    } } as unknown as Prisma.TransactionClient
+    expect(await waitingInProject(tx, 'tab', 'web')).toEqual([{ conversationId: 'c1', personId: 'owner', count: 3 },
+      { conversationId: 'c2', personId: 'peer', count: 1 }, { conversationId: 'c1', personId: 'peer', count: 1 }])
+    expect(asked).toEqual([{ where: { tabId: 'tab', projectId: 'web', AND: [{ OR: [{ answeredAt: null }, { answeredAt: { isSet: false } }] },
+      { OR: [{ kind: null }, { kind: { isSet: false } }] }] },
+      select: { conversationId: true, personId: true } }])
   })
 })
