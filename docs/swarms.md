@@ -289,6 +289,11 @@ server:
   never go in the avatar folder, and the server makes avatar links for that
   folder alone.
 
+If a private avatar bucket is added later, pictures already uploaded to the
+CDN are not moved and get no more links: those people and agents show the
+default face until a picture is uploaded or picked again. Their old CDN links
+still open, as before.
+
 A server with no attachments bucket refuses uploads; the eight pictures still
 work.
 
