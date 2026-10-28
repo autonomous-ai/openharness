@@ -6,19 +6,30 @@ import 'app_log.dart';
 import 'log_file.dart';
 import 'log_stream.dart';
 
-/// Base name of the dial's per-day file under `~/.harness/logs`, written by the
+/// Base name of the dial's per-day files under `~/.harness/logs`, written by the
 /// CLI daemon (`cli/src/cable/dialLog.ts`), never by this app.
 const String kDialLogBase = 'dial';
 
-/// Follows `dial-YYYYMMDD.log` into the in-memory [LogStream], so the dial is
-/// a source in Settings ▸ Debug beside the app's own.
+/// Prefix of one device's log folder under `~/.harness/logs`: the daemon
+/// writes each dial and Pro to `usb-<id>/dial-YYYYMMDD.log`
+/// (`cli/src/cable/cableFleet.ts` `logFolder`).
+const String kDialDeviceFolderPrefix = 'usb-';
+
+/// Follows the dial logs into the in-memory [LogStream], so the dials are a
+/// source in Settings ▸ Debug beside the app's own.
 ///
 /// The other sources are *mirrors* — the app writes the file and the ring at
-/// once. This one cannot be: the daemon writes the dial's file, and the app
-/// only reads it. So it tails: every second it reads whatever bytes were
-/// appended since last time, one entry per line, category `dial`. On first
-/// start it takes only the last [_catchUpBytes] of today's file, enough for
-/// the recent context without replaying a whole day into a 500-entry ring.
+/// once. This one cannot be: the daemon writes the dial's files, and the app
+/// only reads them. So it tails: every second it reads whatever bytes were
+/// appended since last time, one entry per line, category `dial`.
+///
+/// Each plugged-in device has its own folder, `usb-<id>/dial-YYYYMMDD.log`,
+/// and its lines are tagged `[<id>]` so two dials stay apart (the Debug
+/// search finds one by its id). A folder is followed while it has a file for
+/// today, at most [maxDevices] of them; one that appears later is picked up on
+/// the next poll, and one that goes, or has no file for the new day, is
+/// dropped. A daemon older than the per-device folders wrote one top-level
+/// `dial-YYYYMMDD.log`, still read, untagged.
 ///
 /// Levels come from the line itself: the firmware's `W (ticks)` / `E (ticks)`
 /// prefixes, and a `[daemon]` line is the daemon speaking. The file is the
@@ -29,25 +40,27 @@ class DialLogTail {
     this.stream, {
     DateTime Function()? clock,
     this.interval = const Duration(seconds: 1),
+    this.maxDevices = 16,
   }) : _clock = clock ?? DateTime.now;
 
   final Directory directory;
   final LogStream stream;
   final Duration interval;
+
+  /// How many device folders are tailed at once. Folders past it are said
+  /// once in the stream rather than silently left out.
+  final int maxDevices;
+
   final DateTime Function() _clock;
 
-  static const int _catchUpBytes = 16 * 1024;
-
   Timer? _timer;
-  String? _day;
-  int _offset = 0;
-  String _partial = '';
-  // Set when the catch-up window opened mid-line: the first "line" read is a
-  // fragment and is dropped rather than shown as a half sentence.
-  bool _dropFirst = false;
+  Future<void>? _polling;
+  late final _DayFileTail _topLevel = _DayFileTail(directory, null, stream);
+  final Map<String, _DayFileTail> _devices = {};
+  bool _saidOverCap = false;
 
-  File get currentFile =>
-      File('${directory.path}/${dailyLogName(kDialLogBase, _clock())}');
+  /// The device ids whose folders are followed now, sorted.
+  List<String> get devices => _devices.keys.toList()..sort();
 
   void start() {
     _timer ??= Timer.periodic(interval, (_) => unawaited(poll()));
@@ -60,14 +73,85 @@ class DialLogTail {
   }
 
   /// One read of whatever is new. Public so a test can drive it without a
-  /// timer; safe to call when nothing changed.
-  Future<void> poll() async {
+  /// timer; safe to call when nothing changed. A call made while one is still
+  /// reading joins it, so the timer never reads the same bytes twice.
+  Future<void> poll() =>
+      _polling ??= _pollOnce().whenComplete(() => _polling = null);
+
+  Future<void> _pollOnce() async {
+    final name = dailyLogName(kDialLogBase, _clock());
+    await _topLevel.poll(name);
+    final present = await _deviceIdsWithFile(name);
+    _devices.removeWhere((id, _) => !present.contains(id));
+    final waiting = present.where((id) => !_devices.containsKey(id)).toList()
+      ..sort();
+    for (final id in waiting) {
+      if (_devices.length >= maxDevices) break;
+      _devices[id] = _DayFileTail(
+        Directory('${directory.path}/$kDialDeviceFolderPrefix$id'),
+        id,
+        stream,
+      );
+    }
+    final left = present.length - _devices.length;
+    if (left > 0 && !_saidOverCap) {
+      stream.add(
+        AppLogLevel.warn,
+        'dial',
+        '$left more dial log${left == 1 ? '' : 's'} not followed '
+            '(limit $maxDevices)',
+      );
+    }
+    _saidOverCap = left > 0;
+    for (final id in devices) {
+      await _devices[id]!.poll(name);
+    }
+  }
+
+  /// Ids of the `usb-<id>` folders holding a [name] file; empty when the logs
+  /// folder cannot be read.
+  Future<Set<String>> _deviceIdsWithFile(String name) async {
+    final ids = <String>{};
     try {
-      final now = _clock();
-      final day = dailyLogName(kDialLogBase, now);
-      final file = currentFile;
+      await for (final entity in directory.list()) {
+        if (entity is! Directory) continue;
+        final folder = entity.uri.pathSegments.lastWhere((s) => s.isNotEmpty);
+        if (!folder.startsWith(kDialDeviceFolderPrefix)) continue;
+        if (!await File('${entity.path}/$name').exists()) continue;
+        ids.add(folder.substring(kDialDeviceFolderPrefix.length));
+      }
+    } on Object {
+      // No logs folder yet, or one being removed: nothing to follow.
+    }
+    return ids;
+  }
+}
+
+/// Follows one folder's day file: on a new day (or the first poll) it starts
+/// from the last [_catchUpBytes], enough for the recent context without
+/// replaying a whole day into a 500-entry ring.
+class _DayFileTail {
+  _DayFileTail(this.folder, this.device, this.stream);
+
+  final Directory folder;
+
+  /// The `[id]` each line is tagged with; null for the untagged top-level file.
+  final String? device;
+  final LogStream stream;
+
+  static const int _catchUpBytes = 16 * 1024;
+
+  String? _day;
+  int _offset = 0;
+  String _partial = '';
+  // Set when the catch-up window opened mid-line: the first "line" read is a
+  // fragment and is dropped rather than shown as a half sentence.
+  bool _dropFirst = false;
+
+  Future<void> poll(String day) async {
+    try {
+      final file = File('${folder.path}/$day');
       if (day != _day) {
-        // A new day (or the first poll): start from the tail, not the top.
         _day = day;
         _partial = '';
         _offset = 0;
@@ -110,7 +194,12 @@ class DialLogTail {
       }
       if (line.isEmpty) continue;
       final parsed = parseDialLine(line);
-      stream.add(parsed.level, 'dial', parsed.message);
+      final tag = device;
+      stream.add(
+        parsed.level,
+        'dial',
+        tag == null ? parsed.message : '[$tag] ${parsed.message}',
+      );
     }
   }
 }

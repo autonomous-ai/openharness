@@ -356,12 +356,18 @@ describe('a hot read whose index the database lacks', () => {
     // Re-check of #1994: a listing whose reply was read before the removal lands after a read dropped the listing.
     it('a listing that started before the removal does not name it again once it lands', async () => {
       let land!: () => void
-      const landed = new Promise<void>(resolve => { land = resolve })
-      const slow = { $runCommandRaw: async (command: Prisma.InputJsonObject) => { const reply = await db.$runCommandRaw(command); await landed; return reply } } as unknown as PrismaClient
+      let captured!: () => void
+      const landed = new Promise<void>(resolve => { land = resolve }), read = new Promise<void>(resolve => { captured = resolve })
+      const slow = { $runCommandRaw: async (command: Prisma.InputJsonObject) => {
+        const reply = await db.$runCommandRaw(command)
+        captured()
+        await landed
+        return reply
+      } } as unknown as PrismaClient
       const rows = await removed(async () => {
         const late = listGroupIndexes(slow)
-        // The reply is read (index still there) before the removal below: give the command time to come back.
-        await new Promise(resolve => setTimeout(resolve, 200))
+        // The reply is read (index still there) before the removal below.
+        await read
         return { late }
       }, async ({ late }) => {
         expect(await groupsBy(db, 'agents', match())).toEqual([{ key: s.web }])
