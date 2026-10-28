@@ -10,12 +10,14 @@ import { CircuitOpenError, type CircuitBreaker } from './circuitBreaker.js'
  *
  * Every command goes through `sendCommand`, so this one place covers the bus and every module that borrows its
  * connection. A transaction or pipeline (`sendCommand` with a stream) passes untouched: refusing one of its commands
- * would split the batch it writes at once. It still has the command timeout.
+ * would split the batch it writes at once. It still has the command timeout. So do the commands ioredis sends while it
+ * (re)connects (its ready check, SELECT): refusing those would keep a recovered Redis from ever becoming ready. A
+ * command of ours on a connection that is not ready fails at once anyway, with no offline queue.
  */
 export function guardRedisCommands(redis: Redis, breaker: CircuitBreaker): void {
   const send = redis.sendCommand.bind(redis)
   redis.sendCommand = ((command: Command, stream?: unknown, node?: unknown) => {
-    if (stream) return (send as (c: Command, s?: unknown, n?: unknown) => unknown)(command, stream, node)
+    if (stream || redis.status !== 'ready') return (send as (c: Command, s?: unknown, n?: unknown) => unknown)(command, stream, node)
     breaker.run(() => {
       send(command)
       return command.promise

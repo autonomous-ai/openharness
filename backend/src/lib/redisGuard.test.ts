@@ -107,4 +107,27 @@ describe('guarded Redis commands', () => {
 
     expect(breaker.state()).toBe('closed')
   })
+
+  it('lets a connection that is not ready yet send its own setup, so it can come back while the circuit is open', async () => {
+    // A Redis that answers, including the INFO that ioredis' ready check sends before the connection is ready.
+    server = createServer(socket => {
+      sockets.add(socket)
+      socket.on('data', (chunk: Buffer) => {
+        // One answer per command in the chunk: a command starts with its `*` count, and INFO is the only one named alone.
+        for (const command of chunk.toString('utf8').split(/(?=\*\d+\r\n)/)) {
+          if (command) socket.write(/^\*1\r\n\$4\r\ninfo\r\n$/i.test(command) ? '$9\r\nloading:0\r\n' : '$-1\r\n')
+        }
+      })
+    })
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve))
+    client = new Redis({ port: (server.address() as AddressInfo).port, host: '127.0.0.1', enableOfflineQueue: false, lazyConnect: true })
+    const breaker = createCircuitBreaker({ name: 'redis', failureThreshold: 1, openMs: 60_000 })
+    await breaker.run(() => Promise.reject(new Error('Command timed out'))).catch(() => {})
+    guardRedisCommands(client, breaker)
+
+    await client.connect()
+
+    expect(client.status).toBe('ready')
+    await expect(client.get('k')).rejects.toBeInstanceOf(CircuitOpenError)
+  })
 })
