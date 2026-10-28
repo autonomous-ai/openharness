@@ -250,7 +250,10 @@ class SuperTabController extends ChangeNotifier {
   /// read, as the backend's page cursor names it (section 4.6). Null at the
   /// start of the conversation.
   final _before = <String, SuperTabPage?>{};
-  final _reading = <String, Future<void>>{};
+
+  /// Each conversation's reads under way, newest and older apart: an older
+  /// page asked for during a poll's read is a read of its own.
+  final _reading = <(String, bool), Future<void>>{};
   final expandedProjects = <String>{};
   final expandedMachines = <String>{};
   bool devicesSelected = false;
@@ -1337,7 +1340,9 @@ class SuperTabController extends ChangeNotifier {
   /// On first open only for the conversation the saved state named; after
   /// that, for a conversation the state has and no read of it under way.
   String? _earlyQuery(String id) {
-    if (!_policy.messagesWithState || _reading.containsKey(id)) return null;
+    if (!_policy.messagesWithState || _reading.containsKey((id, false))) {
+      return null;
+    }
     final known = snapshot == null
         ? _savedSelection
         : snapshot!.conversation(id) != null;
@@ -1377,7 +1382,8 @@ class SuperTabController extends ChangeNotifier {
     }
   }
 
-  /// Joins a read of [id] already under way, so a caller can wait for it.
+  /// Joins a read of [id] in the same direction already under way, so a
+  /// caller can wait for it.
   Future<void> loadMessages(String id, {bool older = false}) {
     if (older) _acted();
     return _readMessages(id, older: older);
@@ -1390,11 +1396,11 @@ class SuperTabController extends ChangeNotifier {
     bool older = false,
     bool light = false,
     _EarlyRead? early,
-  }) => _reading[id] ??=
+  }) => _reading[(id, older)] ??=
       _loadMessages(id, older: older, light: light, early: early).whenComplete(
         () {
           // A block: whenComplete would wait on the removed future, itself.
-          _reading.remove(id);
+          _reading.remove((id, older));
         },
       );
 
@@ -1494,6 +1500,13 @@ class SuperTabController extends ChangeNotifier {
           combined[row.id] = row;
         }
         _keepRows(id, receipt['messages'] as List);
+      }
+      // An older page read meanwhile (during the receipt read above) stays:
+      // what is held now, under what this read brought.
+      if (!replacing) {
+        for (final m in _messages[id] ?? <SuperTabMessage>[]) {
+          combined.putIfAbsent(m.id, () => m);
+        }
       }
       final next = combined.values.toList()..sort(superTabMessageOrder);
       // An adapting read that found nothing new changes nothing on screen.
