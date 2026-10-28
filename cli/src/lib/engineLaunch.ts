@@ -21,7 +21,7 @@ import { defaultWindowsShell } from './windows/shell.js'
 import { engineBin } from './engineBin.js'
 import { launchModelArgs, type LaunchModel } from './launchModel.js'
 import { engineInstallPaths, engineInstallRecipe, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
-import { engineLabel } from './agentNames.js'
+import { engineLabel, engineName } from './agentNames.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
@@ -1540,6 +1540,16 @@ export async function unsupportedLaunchModelFlag(engine: AgentEngine, launchMode
   return null
 }
 
+/** How to update an outdated engine, by its name as people know it; a copy in the home folder is written with ~. */
+export function updateDetail(engine: AgentEngine, update: string | null, binary: string | null): string {
+  const name = engineName(engine)
+  if (update) return `Update ${name} by running ${update}, then try again`
+  if (!binary) return `Update ${name} and try again`
+  const home = homedir()
+  const shown = binary === home || binary.startsWith(home + '/') ? '~' + binary.slice(home.length) : binary
+  return `Update ${name} at ${shown} and try again`
+}
+
 /** The line that updates the copy of [engine] at [binary], the one Harness runs: an npm copy in its own prefix, a
  *  Homebrew one with brew. Null when its source cannot be told. Not the install line: on the Mac Studio (2026-10-28)
  *  codex was a Homebrew cask, and `npm install -g @openai/codex` would have added a second copy PATH never reaches. */
@@ -1601,9 +1611,9 @@ export async function refusePermissionFlagIfUnsupported(
   const update = engineUpdateCommand(engine, binary)
   return {
     error: 'CODEX_CLI_TOO_OLD',
-    detail: `The ${engine} CLI on this machine does not support ${flag}, which Harness uses for this permission mode. `
+    detail: `The ${engineName(engine)} CLI on this machine does not support ${flag}, which Harness uses for this permission mode. `
       // How to update, not only that it is needed (codex_cli_too_old, 2–4 a day).
-      + (update ? `Update ${engine} by running ${update}, then try again` : binary ? `Update the ${engine} at ${binary} and try again` : `Update ${engine} and try again`)
+      + updateDetail(engine, update, binary)
       + `${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
   }
 }

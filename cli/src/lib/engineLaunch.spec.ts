@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { constants, tmpdir } from 'node:os'
+import { constants, homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import {
@@ -29,6 +29,7 @@ import {
   permissionModeFlags,
   refusePermissionFlagIfUnsupported,
   engineUpdateCommand,
+  updateDetail,
   unsupportedLaunchModelFlag,
   resetCommandFlagSupportCache,
   engineFallbackPrelude,
@@ -1257,8 +1258,14 @@ describe('the permission gates', () => {
   it('names the copy to update when it cannot tell how it was installed', async () => {
     const shell = withFakeOpencode('--auto-update')
     const refusal = await refusePermissionFlagIfUnsupported('opencode', { permissionMode: 'auto' }, shell)
-    expect(refusal?.detail).toBe('The opencode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
-      + `Update the opencode at ${join(process.env.HARNESS_ENGINE_TEST_PATH!, 'opencode')} and try again, or choose Ask permissions for this harness.`)
+    expect(refusal?.detail).toBe('The OpenCode CLI on this machine does not support --auto, which Harness uses for this permission mode. '
+      + `Update OpenCode at ${join(process.env.HARNESS_ENGINE_TEST_PATH!, 'opencode')} and try again, or choose Ask permissions for this harness.`)
+  })
+
+  it('writes a copy in the home folder with ~, so the refusal does not show the account name', () => {
+    expect(updateDetail('codex', null, join(homedir(), '.local/bin/codex'))).toBe(`Update Codex at ~/.local/bin/codex and try again`)
+    expect(updateDetail('claude', 'npm install -g @anthropic-ai/claude-code', null)).toBe('Update Claude Code by running npm install -g @anthropic-ai/claude-code, then try again')
+    expect(updateDetail('codex', null, null)).toBe('Update Codex and try again')
   })
 
   it('lets a create through when the flag is there, and when there is no flag to check', async () => {
@@ -1286,7 +1293,7 @@ describe('the permission gates', () => {
     }
     // A create in Ask is told to update, never to choose the Ask it chose.
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
-    expect(refusal?.detail).toContain(`Update the claude at ${join(binDir, 'claude')} and try again.`)
+    expect(refusal?.detail).toContain(`Update Claude Code at ${join(binDir, 'claude')} and try again.`)
     expect(refusal?.detail).not.toContain('choose Ask')
   })
 
