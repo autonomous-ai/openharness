@@ -78,6 +78,9 @@ export function dshShellAvailable(): boolean {
   return process.platform !== 'win32'
 }
 
+/** What a person is told when a package's setup or doctor cannot run here. */
+export const DSH_SHELL_UNAVAILABLE = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
+
 /**
  * The line run before a DSH's command: when the login shell's PATH has no `node`, the Node this
  * daemon runs on joins the END of it. Since the product moved to a private runtime, a machine with no

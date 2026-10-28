@@ -52,6 +52,39 @@ describe('daemon package mutations', () => {
     expect(installDsh).not.toHaveBeenCalled()
   })
 
+  describe('on a computer with no shell for a package\'s scripts (Windows)', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) })
+    afterEach(() => { Object.defineProperty(process, 'platform', platform) })
+    const detail = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
+
+    it('refuses from the catalog entry, before downloading anything, a package or its viewer that runs one', async () => {
+      // 2026-10-28 review of #2026: refused only after the download was placed, its files stayed on disk.
+      catalog.entries = [
+        { id: 'acme/thing', name: 'Thing', engine: 'claude', repo: 'https://example.com/thing', runsScripts: true },
+        { id: 'acme/drawing', name: 'Drawing', engine: 'claude', repo: 'https://example.com/drawing', viewerUse: 'acme/viewer' },
+        { id: 'acme/viewer', kind: 'viewer', name: 'Viewer', repo: 'https://example.com/viewer', runsScripts: true },
+      ]
+      for (const id of ['acme/thing', 'acme/drawing', 'acme/viewer']) {
+        expect(await mutateDsh({ id }, () => {}), id).toEqual({ ok: false, error: 'SHELL_UNAVAILABLE', detail })
+      }
+      // The download is installDsh's: it never started.
+      expect(installDsh).not.toHaveBeenCalled()
+    })
+
+    it('installs a package with no scripts, and leaves a link install to its check after the download', async () => {
+      catalog.entries = [{ id: 'acme/plain', name: 'Plain', engine: 'claude', repo: 'https://example.com/plain' }]
+      expect(await mutateDsh({ id: 'acme/plain' }, () => {})).toMatchObject({ ok: true })
+      expect(await mutateDsh({ url: 'https://example.com/unlisted' }, () => {})).toMatchObject({ ok: true })
+      expect(installDsh).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  it('a package that runs scripts installs where a shell runs them', async () => {
+    catalog.entries = [{ id: 'acme/thing', name: 'Thing', engine: 'claude', repo: 'https://example.com/thing', runsScripts: true }]
+    expect(await mutateDsh({ id: 'acme/thing' }, () => {})).toMatchObject({ ok: true })
+  })
+
   it('throttles output, immediately sends doctor lines, and discards lines after terminal phases', async () => {
     vi.useFakeTimers()
     const progress = vi.fn()
