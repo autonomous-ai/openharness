@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import { createMetrics, metricsAddress, registerRequestMetrics, startMetricsServer, timeQuery } from './metrics.js'
 
@@ -130,5 +130,21 @@ describe('metrics listener', () => {
     } finally {
       await new Promise(resolve => server.close(resolve))
     }
+  })
+
+  it('logs a port already in use instead of crashing the API', async () => {
+    const metrics = createMetrics()
+    const first = startMetricsServer(metrics.registry, { port: 0, host: '127.0.0.1' })
+    await new Promise(resolve => first.once('listening', resolve))
+    const lines: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((line: unknown) => { lines.push(String(line)) })
+    const second = startMetricsServer(metrics.registry, { port: (first.address() as AddressInfo).port, host: '127.0.0.1' })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    vi.restoreAllMocks()
+    expect(second.listening).toBe(false)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('metrics listener failed')
+    expect(lines[0]).toContain('EADDRINUSE')
+    await new Promise(resolve => first.close(resolve))
   })
 })

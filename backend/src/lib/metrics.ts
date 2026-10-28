@@ -94,7 +94,7 @@ export function metricsAddress({ portBase, host = '127.0.0.1' }: { portBase?: nu
   return portBase === undefined ? undefined : { port: portBase + workerIndex, host }
 }
 
-/** A listener of its own for the scraper: GET /metrics, and 404 for everything else. */
+/** A listener of its own for the scraper: GET /metrics, and 404 for everything else. A failure to bind is logged. */
 export function startMetricsServer(registry: Registry, { port, host }: { port: number; host: string }): http.Server {
   const server = http.createServer((req, res) => {
     if (req.method !== 'GET' || (req.url ?? '').split('?')[0] !== '/metrics') {
@@ -106,6 +106,9 @@ export function startMetricsServer(registry: Registry, { port, host }: { port: n
       (err) => { logger.error('metrics scrape failed', err); res.writeHead(500).end() },
     )
   })
+  // A port already taken must cost the scrape, not the API: unhandled, this 'error' reaches
+  // uncaughtException in server.ts, which drains every socket and exits.
+  server.on('error', (err) => { logger.error('metrics listener failed', err, { host, port }) })
   server.listen(port, host, () => {
     logger.info(`backend metrics listener on ${host}:${(server.address() as { port: number }).port}`)
   })
