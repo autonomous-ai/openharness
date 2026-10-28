@@ -339,6 +339,13 @@ export async function runDshDoctor(installed: InstalledDsh, onLine?: (line: stri
 
 export async function installDsh(opts: DshInstallOptions): Promise<DshInstallResult> {
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
+  // Once fetched or linked, before it is placed: a package with no catalog entry (installed from a link) cannot be
+  // refused before the download (dsh/service.ts), but nothing of it may stay on disk (review of #2026, 2026-10-28).
+  const cannotRunHere = (manifest: DshManifest): DshInstallResult | null => {
+    if (!((manifest.toolchain?.setup || manifest.toolchain?.doctor) && !dshShellAvailable())) return null
+    progress({ id: manifest.id, phase: 'failed', detail: DSH_SHELL_UNAVAILABLE, error: 'SHELL_UNAVAILABLE' })
+    return { ok: false, error: 'SHELL_UNAVAILABLE', detail: DSH_SHELL_UNAVAILABLE }
+  }
   const wrongId = (actual: string): DshInstallResult => {
     const detail = `Catalog requested ${opts.expectedId}, but the package declares ${actual}`
     progress({ id: opts.expectedId ?? null, phase: 'failed', detail, error: 'PACKAGE_ID_MISMATCH' })
@@ -359,6 +366,8 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
       if (!linked.ok) { progress({ id: null, phase: 'failed', detail: linked.detail, error: linked.error }); return linked }
       manifest = linked.manifest
       if (opts.expectedId && manifest.id !== opts.expectedId) return wrongId(manifest.id)
+      const refused = cannotRunHere(manifest)
+      if (refused) return refused
       unlock = lockDsh(manifest.id)
       if (!unlock) return dshBusy(manifest.id)
       realDir = linked.realDir
@@ -375,6 +384,9 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
         rmSync(cloned.tmpDir, { recursive: true, force: true })
         return wrongId(manifest.id)
       }
+      // The fetched copy goes with `staged`, in the finally below.
+      const refused = cannotRunHere(manifest)
+      if (refused) return refused
       unlock = lockDsh(manifest.id)
       if (!unlock) return dshBusy(manifest.id)
       commit = cloned.commit
