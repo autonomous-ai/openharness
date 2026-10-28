@@ -135,8 +135,9 @@ export function teamEngineReporter(): TeamEngineReporter {
   })
 }
 
-/** What `harness team status` and setup say of the engines, and exactly how to sign them in. */
-export function engineLines(engines: TeamEngines | undefined, ago: (at: number) => string): string[] {
+/** What `harness team status` and setup say of the engines, and exactly how to sign them in, on [platform]'s computer. */
+export function engineLines(engines: TeamEngines | undefined, ago: (at: number) => string, platform: NodeJS.Platform = 'darwin'): string[] {
+  const computer = platform === 'darwin' ? 'this Mac' : 'this computer'
   if (!engines) {
     return ['  engines     ? not reported yet: the team daemon reports them once it runs']
   }
@@ -151,7 +152,7 @@ export function engineLines(engines: TeamEngines | undefined, ago: (at: number) 
   lines.push(`              (checked ${ago(engines.checkedAt)})`)
   const unsigned = TEAM_ENGINES.filter(({ engine }) => engines[engine].installed && engines[engine].signedIn !== true && !engines[engine].relayed)
   if (unsigned.length) {
-    lines.push('', '  To sign the team account\'s engines in, once: in Harness, open a terminal on this Mac\'s Harness Team machine',
+    lines.push('', `  To sign the team account's engines in, once: in Harness, open a terminal on ${computer}'s Harness Team machine`,
       '  (it is listed among your machines), and run there:')
     for (const { name, signIn } of unsigned) lines.push(`    ${signIn.padEnd(28)}${name}`)
     lines.push('  Your own sign-ins are not copied into the team account; each engine bills the account you sign in with.')

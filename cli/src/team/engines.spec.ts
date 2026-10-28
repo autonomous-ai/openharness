@@ -45,6 +45,10 @@ describe('the team account\'s engines', () => {
     expect(lines).toContain('Claude Code ✓ installed · ✗ not signed in')
     expect(lines).toContain('Codex       ✗ not installed · harness team setup installs it')
     expect(lines).toContain('open a terminal on this Mac\'s Harness Team machine')
+    // Off a Mac the computer is not a Mac (seen in `harness team setup` on Linux, 2026-10-28).
+    const linux = engineLines(engines({ claude: { installed: true, signedIn: false }, codex: { installed: true, signedIn: false } }), ago, 'linux').join('\n')
+    expect(linux).toContain('open a terminal on this computer\'s Harness Team machine')
+    expect(linux).not.toContain('Mac')
     expect(lines).toContain('    claude                      Claude Code')
     expect(lines).not.toContain('codex login')
     expect(lines).toContain('Your own sign-ins are not copied into the team account')

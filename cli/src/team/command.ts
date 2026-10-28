@@ -333,7 +333,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   else if (privacy) { deps.err(`✗ Not private (${privacy.item}): ${privacy.detail}`); code = 1 }
   else deps.out('! The team daemon has not reported its privacy check yet: harness team status')
   // Installed by setup into the team account's own home; signed in once by the owner, in a terminal on the team machine.
-  for (const line of engineLines(engines, (at) => ago(deps.now(), at))) deps.out(line)
+  for (const line of engineLines(engines, (at) => ago(deps.now(), at), deps.platform)) deps.out(line)
   deps.out('  status: harness team status   ·   undo: harness team remove')
   return code
 }
@@ -390,7 +390,7 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   const homePrivate = homeMode === 0o700
     || (deps.platform === 'linux' && homeMode !== null && (homeMode & 0o007) === 0 && privacy?.passed === true)
   deps.out(`  your home   ${ownerHome} · mode ${homeMode === null ? 'unknown' : homeMode.toString(8)}${homePrivate ? ' ✓' : ' ✗ should be 700: harness team setup makes it private again'}`)
-  for (const line of engineLines(report?.engines, (at) => ago(now, at))) deps.out(line)
+  for (const line of engineLines(report?.engines, (at) => ago(now, at), deps.platform)) deps.out(line)
   deps.out('')
   deps.out('  What setup made:')
   for (const line of madeLines(here, owner, ownerHome)) deps.out(`  ${line}`)
