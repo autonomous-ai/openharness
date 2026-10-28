@@ -249,4 +249,74 @@ void main() {
 
     await closed(tester);
   });
+
+  group('open full screen, the picture goes with its account', () {
+    final viewer = key('swarm-attachment-viewer');
+
+    /// The picture open full screen and decoded; the image cache's key for
+    /// its decoded picture.
+    Future<Object> opened(WidgetTester tester) async {
+      await pump(tester);
+      await until(tester, () => drawn(tester));
+      await tester.tap(preview);
+      await tester.pumpAndSettle();
+      final picture = tester
+          .widget<Image>(
+            find.descendant(of: viewer, matching: find.byType(Image)),
+          )
+          .image;
+      final key = (await tester.runAsync(
+        () => picture.obtainKey(ImageConfiguration.empty),
+      ))!;
+      await until(
+        tester,
+        () => PaintingBinding.instance.imageCache.containsKey(key),
+      );
+      return key;
+    }
+
+    final changes = <String, Future<void> Function()>{
+      'another account': () => store.keepOnly('person-b'),
+      'sign-out or Swarm off': () => store.keepOnly(null),
+      "a Swarm leaving the account's list": () => store.clear(),
+    };
+    for (final MapEntry(key: change, value: run) in changes.entries) {
+      testWidgets('$change closes it at once, and lets the picture go', (
+        tester,
+      ) async {
+        final picture = await opened(tester);
+
+        // On the test's clock, as the keeper asks it: the cache it closes
+        // was opened there.
+        var changed = false;
+        unawaited(run().whenComplete(() => changed = true));
+        await tester.pump();
+
+        expect(
+          find.descendant(of: viewer, matching: find.byType(Image)),
+          findsNothing,
+          reason: 'blank from the first frame',
+        );
+        await tester.pumpAndSettle();
+        expect(viewer, findsNothing);
+        expect(
+          PaintingBinding.instance.imageCache.containsKey(picture),
+          isFalse,
+        );
+
+        await until(tester, () => changed);
+        await closed(tester);
+      });
+    }
+
+    testWidgets('the same account kept again leaves it open', (tester) async {
+      await opened(tester);
+
+      await tester.runAsync(() => store.keepOnly('person-me'));
+      await tester.pumpAndSettle();
+
+      expect(viewer, findsOneWidget);
+      await closed(tester);
+    });
+  });
 }

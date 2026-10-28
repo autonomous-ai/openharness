@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import 'package:harness_mobile/logging/app_log.dart';
@@ -43,6 +44,16 @@ class SwarmAttachmentStore {
   /// The account files are kept for; null while nobody's are.
   String? _account;
 
+  /// Moves the moment the files kept stop being what they were: another
+  /// account, nobody's, or the account's emptied ([clear]). Asked for, not
+  /// done: a screen showing a kept file lets it go at once, not after the
+  /// emptying, which waits for fetches under way.
+  ValueListenable<int> get turns => _turns;
+  final _turns = ValueNotifier(0);
+
+  /// The account [keepOnly] was last asked to keep files for.
+  String? _asked;
+
   /// Whether [keepOnly] has emptied all but [_account]'s files: until it
   /// has, the folder may hold what an earlier run, or another account, left.
   bool _kept = false;
@@ -83,45 +94,54 @@ class SwarmAttachmentStore {
   /// Keeps [accountId]'s files and empties every other account's; with null
   /// (nobody signed in, or Swarm off) empties everything. A file that could
   /// not go throws, after the rest went; the next call tries again.
-  Future<void> keepOnly(String? accountId) => _serially(() async {
-    if (accountId != _account) {
-      _account = accountId;
-      _kept = _clearOwed = false;
+  Future<void> keepOnly(String? accountId) {
+    if (accountId != _asked) {
+      _asked = accountId;
+      _turns.value++;
     }
-    if (_kept && !_clearOwed) return;
-    await _close();
-    final root = await _root();
-    if (await root.exists()) {
-      final keep = accountId == null || _clearOwed ? null : _name(accountId);
-      (Object, StackTrace)? failed;
-      await for (final entry in root.list(followLinks: false)) {
-        if (entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty) == keep) {
-          continue;
+    return _serially(() async {
+      if (accountId != _account) {
+        _account = accountId;
+        _kept = _clearOwed = false;
+      }
+      if (_kept && !_clearOwed) return;
+      await _close();
+      final root = await _root();
+      if (await root.exists()) {
+        final keep = accountId == null || _clearOwed ? null : _name(accountId);
+        (Object, StackTrace)? failed;
+        await for (final entry in root.list(followLinks: false)) {
+          if (entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty) == keep) {
+            continue;
+          }
+          try {
+            await _delete(entry);
+          } catch (error, stack) {
+            failed ??= (error, stack);
+          }
         }
-        try {
-          await _delete(entry);
-        } catch (error, stack) {
-          failed ??= (error, stack);
+        if (failed case (final error, final stack)) {
+          Error.throwWithStackTrace(error, stack);
         }
       }
-      if (failed case (final error, final stack)) {
-        Error.throwWithStackTrace(error, stack);
-      }
-    }
-    _kept = true;
-    _clearOwed = false;
-  });
+      _kept = true;
+      _clearOwed = false;
+    });
+  }
 
   /// Empties the account's files: a Swarm left its list. One that could not
   /// go throws, and the next [keepOnly] empties them.
-  Future<void> clear() => _serially(() async {
-    await _close();
-    final account = _account;
-    if (account == null) return;
-    _clearOwed = true;
-    await _delete(await _folderOf(account));
-    _clearOwed = false;
-  });
+  Future<void> clear() {
+    _turns.value++;
+    return _serially(() async {
+      await _close();
+      final account = _account;
+      if (account == null) return;
+      _clearOwed = true;
+      await _delete(await _folderOf(account));
+      _clearOwed = false;
+    });
+  }
 
   /// Runs [change] after the changes before it and the fetches under way. One
   /// that fails holds up none after it.

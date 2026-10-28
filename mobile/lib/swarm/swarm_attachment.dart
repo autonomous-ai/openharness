@@ -129,9 +129,12 @@ class _PreviewState extends State<_Preview> {
                               // Decoded at the box's size, not the picture's.
                               image: ResizeImage(
                                 FileImage(file),
-                                width: (width *
-                                        MediaQuery.devicePixelRatioOf(context))
-                                    .round(),
+                                width:
+                                    (width *
+                                            MediaQuery.devicePixelRatioOf(
+                                              context,
+                                            ))
+                                        .round(),
                               ),
                               fit: BoxFit.cover,
                               gaplessPlayback: true,
@@ -160,7 +163,11 @@ class _PreviewState extends State<_Preview> {
   void _open(BuildContext context, File file) => unawaited(
     Navigator.of(context).push(
       phoneRoute(
-        (_) => SwarmAttachmentViewer(name: widget.file.name, file: file),
+        (_) => SwarmAttachmentViewer(
+          name: widget.file.name,
+          file: file,
+          store: widget.store,
+        ),
         listensForItself: true,
       ),
     ),
@@ -168,21 +175,69 @@ class _PreviewState extends State<_Preview> {
 }
 
 /// A picture full screen, to pinch and zoom; its name and a close at the top.
-class SwarmAttachmentViewer extends StatelessWidget {
+///
+/// It shows a file [store] keeps for one account, so it goes when that
+/// changes ([SwarmAttachmentStore.turns]: another account, sign-out, Swarm
+/// off, a Swarm leaving the list): blank at once, its decoded picture let go,
+/// and closed.
+class SwarmAttachmentViewer extends StatefulWidget {
   const SwarmAttachmentViewer({
     super.key,
     required this.name,
     required this.file,
+    required this.store,
   });
 
   final String name;
   final File file;
+  final SwarmAttachmentStore store;
+
+  @override
+  State<SwarmAttachmentViewer> createState() => _ViewerState();
+}
+
+class _ViewerState extends State<SwarmAttachmentViewer> {
+  /// The store's turn the picture was opened in.
+  late final int _turn;
+
+  /// The decoded picture, as last drawn.
+  ImageProvider? _picture;
+  bool _gone = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _turn = widget.store.turns.value;
+    widget.store.turns.addListener(_turned);
+  }
+
+  @override
+  void dispose() {
+    widget.store.turns.removeListener(_turned);
+    super.dispose();
+  }
+
+  void _turned() {
+    if (_gone || widget.store.turns.value == _turn) return;
+    setState(() => _gone = true);
+    unawaited(_picture?.evict());
+    final route = ModalRoute.of(context);
+    if (route != null && route.isActive) {
+      Navigator.of(context).removeRoute(route);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     final screen = MediaQuery.sizeOf(context).width;
     final ratio = MediaQuery.devicePixelRatioOf(context);
+    // Twice the screen, so a zoom stays sharp without holding the picture at
+    // its full size.
+    final picture = _picture = ResizeImage(
+      FileImage(widget.file),
+      width: (screen * ratio * 2).round(),
+    );
     return Scaffold(
       key: const ValueKey('swarm-attachment-viewer'),
       backgroundColor: tty.ground,
@@ -196,23 +251,17 @@ class SwarmAttachmentViewer extends StatelessWidget {
                 label: 'Close',
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: name,
+              title: _gone ? '' : widget.name,
             ),
             Expanded(
-              child: InteractiveViewer(
-                maxScale: 4,
-                child: Center(
-                  child: Image(
-                    // Twice the screen, so a zoom stays sharp without holding
-                    // the picture at its full size.
-                    image: ResizeImage(
-                      FileImage(file),
-                      width: (screen * ratio * 2).round(),
+              child: _gone
+                  ? const SizedBox.expand()
+                  : InteractiveViewer(
+                      maxScale: 4,
+                      child: Center(
+                        child: Image(image: picture, fit: BoxFit.contain),
+                      ),
                     ),
-                    fit: BoxFit.contain,
-                  ),
-                ),
-              ),
             ),
           ],
         ),
