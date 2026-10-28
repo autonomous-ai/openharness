@@ -1965,7 +1965,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Account HTTP and the persistent machine cache belong to the gateway. The core routes the request
   // and keeps only state reported by that service, so a backend outage cannot stall an agent's loop.
-  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown>; retryAfterMs?: number }> {
     return gatewayOps.backend(method, path, body)
   }
 
