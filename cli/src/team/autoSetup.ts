@@ -136,7 +136,7 @@ export class TeamAutoSetup {
 
   private async run(): Promise<void> {
     const { deps } = this
-    deps.log('setting up the Harness Team account: macOS asks for an administrator password')
+    deps.log(`setting up the Harness Team account: ${deps.platform === 'darwin' ? 'macOS' : 'the system'} asks for an administrator password`)
     let outcome: { code: number; result: Record<string, unknown> | null }
     try {
       outcome = await deps.setup()

@@ -109,6 +109,8 @@ describe('the Harness Team account, set up on its own', () => {
     expect(await linux.auto.offer('manual')).toEqual({ state: 'started' })
     await linux.auto.settled()
     expect(linux.deps.setup).toHaveBeenCalledTimes(1)
+    // Its log names the system that asks (the gridtest VM said "macOS" on Linux, 2026-10-28).
+    expect(linux.log[0]).toBe('setting up the Harness Team account: the system asks for an administrator password')
     expect(await fake({ platform: 'linux', accountExists: vi.fn(async () => true) }).auto.offer('join')).toEqual({ state: 'exists' })
     // Windows has its own plan, and nothing yet.
     expect(await fake({ platform: 'win32' }).auto.offer('join', undefined, true)).toEqual({ state: 'unsupported' })
