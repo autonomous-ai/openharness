@@ -1,5 +1,5 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
@@ -1038,5 +1038,58 @@ describe('Swarm cards', () => {
     const bare = new DaemonCableHost(wiring())
     bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.superTabSelected('st1', 'p1')
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()
+  })
+})
+
+describe('firmware release lookup', () => {
+  // A dial on 9.9.9 is never offered the manifest's 0.0.1, so each call ends after the manifest read and
+  // the count below is exactly the GETs a plugged-in dial costs.
+  const manifest = { circle: { version: '0.0.1', url: 'https://x/fw.bin', sha256: 'a'.repeat(64), size: 1 } }
+  function stubManifest(ok = () => true) {
+    const fetch = vi.fn(async () => (ok() ? new Response(JSON.stringify(manifest)) : new Response('', { status: 503 })))
+    vi.stubGlobal('fetch', fetch)
+    return fetch
+  }
+  afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
+
+  it('answers repeat keepalives from the release it read, for 30 minutes', async () => {
+    vi.useFakeTimers()
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    for (let i = 0; i < 19; i++) {
+      vi.advanceTimersByTime(15_000)
+      await host.firmwareFor('9.9.9', 'circle', true)
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(30 * 60_000)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the manifest at once unless a keepalive asks, and per OTA key', async () => {
+    const fetch = stubManifest()
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await host.firmwareFor('9.9.9', 'harness-pro', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('never keeps a failed read: the next keepalive asks again', async () => {
+    let up = true
+    const fetch = stubManifest(() => up)
+    const host = new DaemonCableHost(wiring())
+    await host.firmwareFor('9.9.9', 'circle')
+    up = false
+    // Nor does an earlier good read stand in for it.
+    await host.firmwareFor('9.9.9', 'circle')
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(3)
+    up = true
+    await host.firmwareFor('9.9.9', 'circle', true)
+    await host.firmwareFor('9.9.9', 'circle', true)
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 })

@@ -1069,6 +1069,33 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('asks for a fresh release on a new dial, image or connection, and lets keepalives reuse one', async () => {
+    const firmwareFor = vi.fn(async (_v: string, _key: string, _keepalive?: boolean) => null)
+    const ports: LoopbackPort[] = []
+    const session = new CableSession(makeHost({ firmwareFor }), tmpLog(), async (onData, onClosed) => {
+      const p = new LoopbackPort(onData, onClosed)
+      ports.push(p)
+      return p
+    })
+    session.start()
+    await vi.waitFor(() => expect(ports).toHaveLength(1))
+    const hi = { t: 'hello', product: 'harness', fw: '0.0.1', proto: 2, mac: 'aa:bb' }
+    for (const hello of [hi, hi, hi, { ...hi, fw: '0.0.2' }, { ...hi, fw: '0.0.2' }, { ...hi, fw: '0.0.2', mac: 'cc:dd' }]) {
+      ports[0].say(hello)
+      await settle()
+    }
+    await ports[0].close('unplugged')
+    await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+    ports[1].say({ ...hi, fw: '0.0.2', mac: 'cc:dd' })
+    await settle()
+    expect(firmwareFor.mock.calls).toEqual([
+      ['0.0.1', 'commander'], ['0.0.1', 'commander', true], ['0.0.1', 'commander', true],
+      ['0.0.2', 'commander'], ['0.0.2', 'commander', true], ['0.0.2', 'commander'],
+      ['0.0.2', 'commander'],
+    ])
+    await session.stop()
+  })
+
   it('offers the image to a SECOND dial, even after a first one took it', async () => {
     // Found in the field: one dial updated, was unplugged, and a second still on the old image was plugged
     // into the same daemon and never offered anything. `offered` held bare version strings, so it was a
