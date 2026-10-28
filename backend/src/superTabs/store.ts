@@ -215,7 +215,13 @@ export interface SuperTabStoreHooks {
   /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
    *  out, this server remembers alone. */
   polls?: PollMemory
+  /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
+   *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
+  deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
 }
+
+/** Which agent, of which Swarm, on which machine, has a delivery to read. */
+export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
 
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
 export interface PollMemory {
@@ -258,6 +264,7 @@ export class SuperTabStore {
       contribution: (tx, state, actor, command) => this.contribution(tx, state, actor, command),
       teamHost: (tx, user) => this.teamHost(tx, user),
       workspaceAccess: (tx, state, userId) => requireWorkspaceAccess(tx, state, userId),
+      announce: (tx, waiting) => this.announce(tx, waiting),
     })
     this.workspaces = new SwarmWorkspaces(db, {
       transaction: body => transaction(db, body),
@@ -1513,8 +1520,16 @@ export class SuperTabStore {
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
           authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
+        this.announce(tx, { machineId: target.machineId, tabId, agentId: recipient })
       }
     }
+  }
+
+  /** Once `tx` commits, never for an attempt that failed or was retried: told earlier, a host could read before the delivery
+   *  is visible, and wait 30 s for its next read. */
+  private announce(tx: Transaction, waiting: DeliveriesWaiting): void {
+    const told = this.hooks.deliveriesWaiting
+    if (told) afterCommit(tx, () => told(waiting))
   }
 
   /** One page of a conversation, read by (sequence, id): rows written by one command before the store by parts share a

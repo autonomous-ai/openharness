@@ -655,6 +655,60 @@ describe('the delivery poll of an agent with nothing waiting', () => {
   })
 })
 
+// Hosts read an idle agent's deliveries only every 30 s once the server pushes (stability roadmap 2.4): each new one is
+// announced to the machine its agent runs on, once its write commits, so the host reads it at once.
+describe('the push for a new delivery', () => {
+  const announcing = () => {
+    const waiting: Array<{ machineId: string; tabId: string; agentId: string }> = []
+    return { waiting, hooks: { deliveriesWaiting: (w: { machineId: string; tabId: string; agentId: string }) => { waiting.push(w) } } }
+  }
+
+  it('names the machine, Swarm and agent of a message\'s recipient once it is written', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    waiting.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    expect(waiting).toEqual([{ machineId: 'test-host', tabId: f.tab, agentId: f.worker }])
+  })
+
+  // The host reads as soon as it hears: a push heard before the commit would find nothing and wait 30 s for the next read.
+  it('is heard only once its write has committed', async () => {
+    let open = 0
+    const client = new Proxy(db, { get(target, key, receiver) {
+      if (key !== '$transaction') return Reflect.get(target, key, receiver)
+      return async (body: unknown, options: unknown) => {
+        open++
+        try { return await (target.$transaction as (b: unknown, o: unknown) => Promise<unknown>)(body, options) } finally { open-- }
+      }
+    } }) as PrismaClient
+    const heard: number[] = []
+    const f = await swarm({ client, hooks: { deliveriesWaiting: () => { heard.push(open) } } })
+    heard.length = 0
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    expect(heard).toEqual([0])
+  })
+
+  it('names the Lead\'s machine for a turn typed into a worker\'s terminal', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
+    waiting.length = 0
+    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'prompt', previousEventId: null, text: 'Typed by hand',
+      truncated: false, interrupted: false })
+    expect(waiting).toEqual([{ machineId: 'lead-host', tabId: f.tab, agentId: f.lead }])
+  })
+
+  it('announces the update request the Lead\'s own poll writes for it', async () => {
+    const { waiting, hooks } = announcing()
+    const f = await swarm({ hooks })
+    await f.leadInbox()
+    waiting.length = 0
+    f.clock.now += 5 * MINUTE
+    await f.timed.deliveries(host, f.tab, f.lead)
+    expect(waiting).toContainEqual({ machineId: 'lead-host', tabId: f.tab, agentId: f.lead })
+  })
+})
+
 describe('the morning digest', () => {
   // #1772 review: every open decision counts, however many there are, and private ones never crowd out shared ones.
   it('counts every decision waiting, past 200, and is not crowded out by newer private ones', async () => {
