@@ -3,6 +3,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from '../lib/authSession.js'
+import { SIGN_OUT_BUTTON_FLAG, signOutAsked } from '../lib/signOut.js'
 import type { AdminScript, RunAdmin } from './admin.js'
 import { REPAIR_PROMPT, SETUP_PROMPT, teamCommand, type TeamCommandDeps } from './command.js'
 import type { TeamConfig } from './config.js'
@@ -47,7 +48,8 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
     out: (line) => out.push(line), err: (line) => err.push(line),
     user: () => 'owner-placeholder', home: () => OWNER_HOME, uid: () => 501, hostname: () => 'Mac-placeholder',
     env: {}, interactive: false, ask: vi.fn(async () => 'y'), now: () => now, sleep: vi.fn(async (ms: number) => { now += ms }),
-    session: () => session, writeSession: vi.fn((s: AuthSession) => { session = s }), clearSession: vi.fn(() => { session = null }),
+    session: () => session, writeSession: vi.fn((s: AuthSession) => { session = s }), signOutAsked: (flags) => signOutAsked({ interactive: over.interactive ?? false, flags, ancestors: [], isApp: () => false }),
+    removeSignIn: vi.fn(() => { session = null }),
     auth: vi.fn(async () => ({ session: session!, headers: { authorization: 'Bearer x' } })), post: post as never,
     get: vi.fn(async (path: string) => path === '/api/machines' ? { machines: MACHINES } : { user: { id: 'user-placeholder-1' } }) as never,
     delete: vi.fn(async () => ({ deleted: true })) as never, machineKey: () => ({ priv: new Uint8Array(32).fill(9) }),
@@ -463,6 +465,21 @@ describe('harness team on and off', () => {
     expect(old.deps.startDaemon).toHaveBeenCalled()
   })
 
+  // 10-27: a sign-out nobody asked for (a desktop test's `harness logout`) signed a whole Mac out. `team off`
+  // takes the sign-in away too, so it asks the same: a terminal, or the flag a person's button passes.
+  it('off with no terminal and no flag refuses, and keeps the team sign-in and its refresh token', async () => {
+    const f = fake()
+    const team = { ...computer, kind: 'team' as const, refreshToken: 'htr_team' }
+    f.setSession(team)
+
+    expect(await teamCommand(['off'], f.deps)).toBe(1)
+
+    expect(f.session()).toEqual(team)
+    expect(f.post).not.toHaveBeenCalledWith('/api/auth/revoke', expect.anything())
+    expect(f.deps.stopDaemon).not.toHaveBeenCalled()
+    expect(f.err.join('\n')).toContain('--from-sign-out-button')
+  })
+
   it('off: signs the team session out, then the ordinary sign-in at a terminal, or says how', async () => {
     const signIn = vi.fn(async () => {})
     const f = fake({ interactive: true, signIn })
@@ -473,12 +490,12 @@ describe('harness team on and off', () => {
     expect(signIn).toHaveBeenCalledWith(true)
     const quiet = fake()
     quiet.setSession({ ...computer, kind: 'team' })
-    expect(await teamCommand(['off'], quiet.deps)).toBe(0)
+    expect(await teamCommand(['off', SIGN_OUT_BUTTON_FLAG], quiet.deps)).toBe(0)
     expect(quiet.out.join('\n')).toContain('harness login')
     expect(quiet.deps.startDaemon).toHaveBeenCalled()
     const json = fake()
     json.setSession({ ...computer, kind: 'team' })
-    expect(await teamCommand(['off', '--json'], json.deps)).toBe(0)
+    expect(await teamCommand(['off', '--json', SIGN_OUT_BUTTON_FLAG], json.deps)).toBe(0)
     expect(JSON.parse(json.out[0]!)).toMatchObject({ ok: true, changed: true, next: 'harness login' })
     const notTeam = fake()
     expect(await teamCommand(['off'], notTeam.deps)).toBe(0)

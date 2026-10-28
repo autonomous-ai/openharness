@@ -48,7 +48,8 @@ import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { ancestors, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -1321,13 +1322,15 @@ async function updateCommand(force: boolean): Promise<void> {
  * on this box first, while the token that makes their deregistration authoritative still exists.
  */
 async function logout(): Promise<void> {
+  const chain = ancestors()
+  const asked = personAsked('logout', chain)
   // Through the lock-taking stop, not an inline kill: a logout that lands mid-handoff would otherwise
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
   const { pid: stoppedPid } = await stopDaemonOrExit()
-  // Before clearAuthSession: see the note above on serve children. Its exit code is deliberately
+  // Before removeSignIn: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
-  clearAuthSession()
+  removeSignIn('logout', asked, chain)
   rmSync(MACHINE_NAME_FILE, { force: true })
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
@@ -1738,14 +1741,29 @@ function clearAdapterState(): void {
   rmStateFiles(cliDir)
 }
 
+/**
+ * How a person asked for `harness [command]` to take this computer's sign-in away; exits with why not when
+ * nothing says one did. 10-27: a desktop test ran the real `harness logout`, with no person anywhere near it,
+ * and signed the whole Mac out, every agent on it with it (lib/signOut.ts).
+ */
+function personAsked(command: string, chain: readonly Asker[]): SignOutAsked {
+  const asked = signOutAsked({ interactive: process.stdin.isTTY === true, flags: process.argv.slice(2), ancestors: chain })
+  if (asked) return asked
+  console.error(`\n✗ \`harness ${command}\` signs this computer out, and nothing says a person asked: it has no terminal, `
+    + `and no ${SIGN_OUT_BUTTON_FLAG} from the desktop app's Sign out button. Run it in a terminal.\n`)
+  process.exit(1)
+}
+
 /** Stop the daemon and clear local state so the next login starts fresh. */
 async function resetCommand(): Promise<void> {
+  const chain = ancestors()
+  const asked = personAsked('reset', chain)
   // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
   const r = await stopDaemonOrExit()
   clearAdapterState()
   console.log(`\n  ✓ Cleared local machine CLI state at ${tildify(env.ADAPTER_DATA_DIR)}.`)
   if (r.pid) console.log(`    Stopped adapter process ${r.pid}.`)
-  clearAuthSession()
+  removeSignIn('reset', asked, chain)
   console.log('\n  Start again with: harness login, then harness start\n')
   // The SECOND door onto the sign-out `logout` performs, and it clears MORE, so somebody running it
   // is if anything likelier to believe nothing is left. Same call, so the two cannot drift.

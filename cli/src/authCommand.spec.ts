@@ -222,6 +222,42 @@ describe.skipIf(process.platform === 'win32')('harness status connection setting
   })
 })
 
+// 10-27: a desktop test ran the real `harness logout` with no person anywhere near it, and signed the whole Mac
+// out, every agent on it with it. The sign-in goes only when a person asks: at a terminal, or through the
+// desktop app's sign-out button, which says so with a flag. Every removal is logged with who asked.
+describe('signing out takes a person', () => {
+  const sessionFile = (root: string): string => join(root, 'auth', 'session.json')
+  const logFile = (root: string): string => join(root, 'data', 'harness.log')
+
+  it.each([['logout'], ['reset']])('%s with no terminal and no flag refuses, and keeps the sign-in', (command) => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = runSync(root, [command])
+
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('--from-sign-out-button')
+    expect(existsSync(sessionFile(root))).toBe(true)
+  })
+
+  it('logout from the sign-out button signs out, and harness.log names what asked and its parent', () => {
+    const root = tempRoot()
+    seedSession(root)
+
+    const result = runSync(root, ['logout', '--from-sign-out-button'])
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(existsSync(sessionFile(root))).toBe(false)
+    const line = readFileSync(logFile(root), 'utf8').split('\n').find((l) => l.includes('[auth]'))
+    expect(line).toContain('sign-in removed')
+    expect(line).toContain('reason=logout')
+    expect(line).toContain('asked=sign-out button')
+    expect(line).toContain(`parent=${process.pid}`)
+    // The parent's own command line: here, the node running this suite.
+    expect(line).toContain(process.execPath.split('/').pop()!)
+  })
+})
+
 describe('harness auth status --json', () => {
   it('reports loggedIn:false with no saved session, and never touches the network', () => {
     const root = tempRoot()
