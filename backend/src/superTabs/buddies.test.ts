@@ -468,3 +468,12 @@ describe('a Buddy chat stored in parts', () => {
     expect(back.parkedConversations).toBeUndefined()
   })
 })
+
+describe('a Buddy\'s terminal alert', () => {
+  it('tells its owner in their chat, never the PM in the project chat', () => {
+    const f = setup()
+    f.run({ type: 'tab.buddies', enabled: true })
+    const rows = f.run({ type: 'agent.alert', agentId: 'buddy', alert: 'prompt', active: true }, agentActor('buddy')).messages
+    expect(rows.map(r => [r.conversationId, r.recipients])).toEqual([[f.chat, []]])
+  })
+})

@@ -177,12 +177,38 @@ each person and project, and the server answers a repeat with the conversation
 it already made.
 
 It behaves like the project chat: replies, attachments, the unread mark and the
-product manager's tags in Notifications. Only that person and the product
+product manager's tags in Notifications. While the Swarm's Buddies are on, it is read-only (see Buddies). Only that person and the product
 manager read it. Other members, the project's owner and the Swarm's owner
 included, never receive it, its messages or its notifications. The chat is
 chat only: no work is assigned in it, and only the product manager joins it
 among agents. As with any session, the owner of the machine running the
 product manager can see what its terminal shows.
+
+## Buddies
+
+A Buddy is a person's own agent in one project. They brainstorm with it in a chat that only they and their Buddy read:
+it asks what they want and why, offers two or three options with the one it recommends, and agrees the scope with
+them. When they say to send it to the product manager, it posts one proposal (goal, scope and priority) in the project
+chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
+the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
+
+The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy. Their
+chats stay for their owners to read.
+
+- Each person may add one Buddy per project. They choose the project, a machine in the Swarm's Machines list, and
+  Claude Code or Codex. The Buddy runs under that machine's own rules, like any Swarm agent. The person whose machine
+  runs it can see its terminal, so the add screen and the chat name that person.
+- A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
+  the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
+  Swarm read shows no machines or routing rules.
+- A proposal is sent only for its owner's own message in their Buddy chat that asked for it, and only once for each such
+  message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
+- Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
+  stay there; the Buddy posts only what its owner asks it to send.
+- Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again
+  reopens the same chat. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
+- While Buddies are on, Chat with PM is read-only. Nobody opens a new one or posts in an old one, the product manager
+  included, and old history stays readable. To talk to the product manager, people use the project chat.
 
 ## Leaderboard
 
