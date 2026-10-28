@@ -67,9 +67,9 @@ export async function readLight(db: Db, view: CacheView, tabId: string, opts: Om
   return { ...light, machines }
 }
 
-/** The Swarm's newest data change (parts/load.ts lastChangedAt). */
+/** The Swarm's newest data change (parts/load.ts lastChangedAt), held at its main stamp: a machine's reading leaves it. */
 export async function readLastChangedAt(db: Db, view: CacheView, tabId: string): Promise<number | null> {
-  return view.get(tabId, 'lastChangedAt', 'all', async () => (await store.lastChangedAt(db, [tabId])).get(tabId) ?? null)
+  return view.get(tabId, 'lastChangedAt', 'main', async () => (await store.lastChangedAt(db, [tabId])).get(tabId) ?? null)
 }
 
 /** The Swarm's parts changed after `since` (parts/load.ts loadChanged): from the held feed when it reaches back that far, else read. */
@@ -80,5 +80,5 @@ export async function readChanged(db: Db, view: CacheView, tabId: string, since:
     const from = since - FEED_SLACK_MS
     return { from, parts: (await store.loadChanged(db, [tabId], new Date(from))).get(tabId) ?? [] }
   })
-  return since >= feed.from ? feed.parts.filter(p => p.changedAt > since) : direct()
+  return since >= feed.from ? feed.parts.filter(p => Math.max(p.changedAt, p.readAt ?? 0) > since) : direct()
 }

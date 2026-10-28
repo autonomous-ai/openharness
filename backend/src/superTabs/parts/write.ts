@@ -43,7 +43,7 @@ export function delegate(tx: Transaction, kind: PartKind) {
     groupBy(args: unknown): Promise<Array<{ tabId: string; _max: { changedAt: Date | null } }>>
   }
 }
-export interface PartRow { id: string; tabId: string; key: string; version: number; changedAt: Date; deleted: boolean; ordinal: number; data: unknown
+export interface PartRow { id: string; tabId: string; key: string; version: number; changedAt: Date; readAt?: Date | null; deleted: boolean; ordinal: number; data: unknown
   dormant?: boolean; groupCounter?: number; visibilityEpoch?: number; sequenceBase?: number }
 
 export const partId = (tabId: string, key: string) => `${tabId}:${key}`
@@ -102,8 +102,10 @@ async function keepFinishedAt(tx: Transaction, id: string, fields: Record<string
  */
 export async function guardedWrite(tx: Transaction, tabId: string, write: PartWrite, stamp: number): Promise<number> {
   const model = delegate(tx, write.kind), id = partId(tabId, write.key)
-  // A machine's own reading leaves what its host hears of unmarked (commit.ts hostMarker): only the machine stamp moves.
-  if (write.op !== 'touch') noteChange(tx, tabId, write.kind === 'machine' && write.op === 'update' && !write.host ? 'machine' : 'main')
+  // A machine's own reading leaves what its host hears of unmarked (commit.ts hostMarker): only the machine stamp moves, and
+  // it is dated `readAt`, not `changedAt`, so the Swarm's newest change stays (load.ts lastChangedAt).
+  const reading = write.kind === 'machine' && write.op === 'update' && !write.host
+  if (write.op !== 'touch') noteChange(tx, tabId, reading ? 'machine' : 'main')
   if (write.op === 'insert') {
     let fields = { ...extracted(write.kind, write.data, stamp), ...write.head, ...write.host }
     // A part added again under the same key continues from its tombstone's version (spec ruling 6).
@@ -123,7 +125,7 @@ export async function guardedWrite(tx: Transaction, tabId: string, write: PartWr
   }
   const data = write.op === 'touch' ? {}
     : write.op === 'remove' ? { changedAt: new Date(stamp), deleted: true, purgeAt: new Date(stamp + RETENTION_MS), data: json(write.data), ...write.host }
-    : { changedAt: new Date(stamp), data: json(write.data), ...(write.kind === 'start'
+    : { ...reading ? { readAt: new Date(stamp) } : { changedAt: new Date(stamp) }, data: json(write.data), ...(write.kind === 'start'
       ? await keepFinishedAt(tx, id, extracted(write.kind, write.data, stamp)) : extracted(write.kind, write.data, stamp)), ...write.head, ...write.host }
   const updated = await model.updateMany({ where: { id, version: write.seen, deleted: false }, data: { version: write.seen + 1, ...data } })
   if (!updated.count) throw new PartConflict(write.kind, write.key)

@@ -80,14 +80,16 @@ export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<v
   }
 }
 
-/** Parts of these Swarms whose data changed after `since`, by tab, each kind in turn. Tombstones and dormant groups come
- *  with their last data and `deleted`/`dormant` set, so the reader can check who may see them before sending anything. */
+/** Parts of these Swarms whose data changed after `since`, by tab, each kind in turn, machines also by their own reading
+ *  (`readAt`). Tombstones and dormant groups come with their last data and `deleted`/`dormant` set, so the reader can
+ *  check who may see them before sending anything. */
 export async function loadChanged(tx: Transaction, tabIds: string[], since: Date, kinds: readonly PartKind[] = PART_KINDS): Promise<Map<string, Part[]>> {
   const changed = new Map<string, Part[]>(tabIds.map(id => [id, []]))
   if (!tabIds.length) return changed
   for (const kind of kinds) {
-    for (const row of await delegate(tx, kind).findMany({ where: { tabId: { in: tabIds }, changedAt: { gt: since } } })) {
-      changed.get(row.tabId)!.push(toPart(kind, row))
+    const after = kind === 'machine' ? { OR: [{ changedAt: { gt: since } }, { readAt: { gt: since } }] } : { changedAt: { gt: since } }
+    for (const row of await delegate(tx, kind).findMany({ where: { tabId: { in: tabIds }, ...after } })) {
+      changed.get(row.tabId)!.push({ ...toPart(kind, row), ...row.readAt ? { readAt: row.readAt.getTime() } : {} })
     }
   }
   return changed

@@ -12,8 +12,10 @@ export interface Part<T = unknown> {
   key: string
   /** Moves on every write and every guarded touch; never resets. */
   version: number
-  /** Epoch ms of the last data change (or tombstone). A touch leaves it. */
+  /** Epoch ms of the last data change (or tombstone). A touch leaves it, and so does a machine's own reading (`readAt`). */
   changedAt: number
+  /** A machine part's last write of its own reading alone, when there was one (change reads only). */
+  readAt?: number
   deleted?: true
   dormant?: true
   ordinal: number

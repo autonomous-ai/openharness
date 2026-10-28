@@ -9,7 +9,10 @@ bumps), `backend/src/superTabs/cachedReads.ts` (reads built from what the cache 
 - **Stamps.** Redis hash `swarm:stamp:{tabId}` with two counters:
   - `main` moves on any commit that changes the Swarm's parts.
   - `machine` moves when a machine part's own reading is the only change (a report every 15 s). What a machine's host
-    hears of is unmarked by such a write (`parts/commit.ts hostMarker`), so nothing else depends on it.
+    hears of is unmarked by such a write (`parts/commit.ts hostMarker`), so nothing else depends on it. Such a write
+    dates the part's `readAt`, not its `changedAt`. The change feed reads both. The Swarm's `lastChangedAt` (max
+    `changedAt`) therefore no longer moves every 15 s for every machine. Clients keep the part with the higher
+    version and never read `changedAt`.
   - Touches change no data and move nothing.
 - **Bump after commit.** Every part write records its Swarm in the transaction (`parts/write.ts guardedWrite`,
   `parts/load.ts insertParts`). `swarmTransaction` bumps those Swarms after the commit, before the caller answers. Any
@@ -23,7 +26,10 @@ bumps), `backend/src/superTabs/cachedReads.ts` (reads built from what the cache 
   - the machine parts (`main` + `machine`);
   - quiet groups named by id or all of them (`main`);
   - the light selections the change and host reads use (`main`);
-  - the change feed of the last two minutes, and `lastChangedAt` (`main` + `machine`);
+  - the change feed from 15 s before the cursor of the read that missed (`main` + `machine`);
+  - `lastChangedAt`, computed by `parts/load.ts lastChangedAt` once per main stamp (`main`). It is not written to a
+    stored field: a field every commit writes is the hotspot the parts design rejected (its section 3.7), and a write
+    after the commit could be lost.
   - the host form's signature and state (`main`).
 - **Permissions after the cache.** Every reader's view is built from the held state by `read/views.ts readerView`, the
   only path to a client, as before. Held values are frozen, so no reader can change what the next one reads.
@@ -46,7 +52,9 @@ bumps), `backend/src/superTabs/cachedReads.ts` (reads built from what the cache 
   roadmap 1.1 Mongo query rate.
 - **Compatibility:** responses are unchanged, and old CLI, Desktop and phone clients read the same shapes. During a
   rolling deploy, old processes don't bump. An entry on a new process is then stale for at most 60 s after an old
-  process's write. Once every process is new, a commit is visible to the next read everywhere.
+  process's write. An old process also misses machine readings dated by `readAt` until the machine's next settings
+  change. Recommended rollout: deploy with `SWARM_READ_CACHE=off`, then turn it on once every pod runs the release.
+  Once every process is new, a commit is visible to the next read everywhere.
 - **Migration + rollback:** nothing is stored outside Redis keys, which are disposable. Roll back by deploying the
   previous release, or with `SWARM_READ_CACHE=off`. Writes still bump with the switch off, so processes that keep the
   cache on stay right.

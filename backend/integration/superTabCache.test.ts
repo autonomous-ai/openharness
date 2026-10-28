@@ -15,7 +15,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import type { HeadData, MachineData } from '../src/superTabs/parts/index.js'
 import { sweepSwarms } from '../src/superTabs/sweeps.js'
 import { SwarmCache } from '../src/superTabs/cache.js'
-import { readChanged, readParts } from '../src/superTabs/cachedReads.js'
+import { readChanged, readLastChangedAt, readParts } from '../src/superTabs/cachedReads.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -278,5 +278,49 @@ describe('a command\'s load', () => {
     expect(Object.isFrozen(group.data)).toBe(true)
     expect(loaded.state.conversations.find(c => c.id === web)).toBe(group.data)
     expect(() => { loaded.state.conversations.find(c => c.id === web)!.title = 'changed in place' }).toThrow(TypeError)
+  })
+})
+
+describe('a machine\'s own reading', () => {
+  async function withMachine() {
+    const { tabId } = await privateScene()
+    const machine: MachineData = { machineId: 'm1', contribution: null, reservations: [], released: [], closingSessions: [], cleanups: [] }
+    await swarmTransaction(db, tx => guardedWrite(tx, tabId, { op: 'insert', kind: 'machine', key: 'm1', data: machine, ordinal: 1 }, Date.now() - 60_000))
+    const write = async (at: number, change: Partial<MachineData>, settings: boolean) => swarmTransaction(db, async tx => {
+      const row = await tx.swarmMachine.findUniqueOrThrow({ where: { id: `${tabId}:m1` } })
+      await guardedWrite(tx, tabId, { op: 'update', kind: 'machine', key: 'm1', seen: row.version, data: { ...row.data as unknown as MachineData, ...change },
+        ...settings ? { host: { hostChangedAt: new Date(at) } } : {} }, at)
+    })
+    return { tabId, write }
+  }
+  const newest = async (tabId: string) => (await parts.lastChangedAt(db, [tabId])).get(tabId)
+
+  it('leaves the Swarm\'s newest change where it was, and still reaches readers of the change feed', async () => {
+    const { tabId, write } = await withMachine()
+    const before = await newest(tabId)
+    const at = Date.now()
+    await write(at, { released: ['reading-only'] }, false)
+    expect(await newest(tabId)).toBe(before)
+    const changed = (await parts.loadChanged(db, [tabId], new Date(at - 1))).get(tabId)!
+    expect(changed.filter(p => p.kind === 'machine').map(p => (p.data as MachineData).released)).toEqual([['reading-only']])
+    const cache = new SwarmCache(stamps)
+    expect((await readChanged(db, await cache.at([tabId]), tabId, at - 1)).filter(p => p.kind === 'machine').length).toBe(1)
+    expect(await readChanged(db, await cache.at([tabId]), tabId, at)).toEqual([])
+  })
+
+  it('moves the newest change when the machine\'s settings change', async () => {
+    const { tabId, write } = await withMachine()
+    const at = Date.now() + 5_000
+    await write(at, { released: ['settings'] }, true)
+    expect(await newest(tabId)).toBe(at)
+  })
+
+  it('keeps the newest change held over a machine report', async () => {
+    const { tabId, write } = await withMachine()
+    const cache = new SwarmCache(stamps)
+    const first = await readLastChangedAt(db, await cache.at([tabId]), tabId)
+    await write(Date.now(), { released: ['again'] }, false)
+    const again = await partReads(async () => readLastChangedAt(db, await cache.at([tabId]), tabId))
+    expect(again).toEqual({ value: first, reads: 0 })
   })
 })
