@@ -466,6 +466,26 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'ultracode' })
   })
 
+  // A session launched with --effort, or adopted, never prints "Set effort level", and its banner names no effort:
+  // its Lead read as "opus unknown" in the Swarm sidebar (2026-10-28). Claude Code records the effort on each reply.
+  it('observes the effort Claude Code records on each assistant reply', () => {
+    const manager = new RuntimeProfileManager()
+    const value = session('claude')
+    const reply = (effort: unknown) => JSON.stringify({
+      type: 'assistant', effort, perTurnEffort: effort, message: { model: 'claude-opus-5-5' },
+    })
+    manager.hydrate(value, [reply('medium')])
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'medium' })
+
+    manager.ingest(value, reply('high'))
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'high' })
+
+    // A word Claude Code does not offer is not an effort: the last real one stays.
+    manager.ingest(value, reply('turbo'))
+    manager.ingest(value, reply(7))
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'high' })
+  })
+
   it('observes Codex model, effort, and plan mode from rollout settings', () => {
     const manager = new RuntimeProfileManager()
     const value = session('codex')
@@ -520,6 +540,8 @@ describe('RuntimeProfileManager.transcriptFields', () => {
     expect(manager.transcriptFields(claude, assistant('<synthetic>'))).toEqual([])
     const local = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: `<local-command-stdout>${text}</local-command-stdout>` } })
     expect(manager.transcriptFields(claude, local('Set effort level to high'))).toEqual(['effort'])
+    expect(manager.transcriptFields(claude, JSON.stringify({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5-5' } })))
+      .toEqual(['model', 'effort'])
     expect(manager.transcriptFields(claude, JSON.stringify({ type: 'user', message: { role: 'user', content: 'plain' } }))).toEqual([])
   })
 

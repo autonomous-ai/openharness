@@ -124,7 +124,12 @@ function decode(raw: Record<string, unknown>): RuntimeRecord | null {
   const setModel = !!modelMatch
   const nextModel = modelMatch ? normalizeClaudeDisplay(modelMatch[1]) : null
   const effortMatch = /Set effort level to\s+(low|medium|high|xhigh|max|ultracode)/i.exec(content)
-  const effort = effortMatch?.[1].toLowerCase() ?? (confirmsClaudeAutoEffort(content) ? 'auto' : null)
+  // Each reply records the effort it ran with. A session launched with --effort, or adopted, prints no "Set effort
+  // level" and its banner names none: without this its Lead read as "opus unknown" in the Swarm sidebar (2026-10-28).
+  const replyEffort = raw.type === 'assistant' ? text(raw.effort).toLowerCase() : ''
+  const effort = effortMatch?.[1].toLowerCase()
+    ?? (CLAUDE_EFFORTS.has(replyEffort) ? replyEffort : null)
+    ?? (confirmsClaudeAutoEffort(content) ? 'auto' : null)
   const version = parseVersion(cliVersion) ? cliVersion : null
   return version || model || setModel || effort ? { version, model, setModel, nextModel, effort } : null
 }
