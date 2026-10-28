@@ -39,6 +39,12 @@ const envSchema = z.object({
   // Base internal port; each worker binds MESH_PORT_BASE + NODE_APP_INSTANCE (distinct per worker).
   MESH_PORT_BASE: z.string().default('8095').transform(Number),
 
+  // Prometheus /metrics on an internal listener of its own (lib/metrics.ts), never the public PORT. Off
+  // unless set; each pm2 worker binds METRICS_PORT_BASE + NODE_APP_INSTANCE. Loopback by default: a pod
+  // whose scraper reads the pod IP sets METRICS_HOST=0.0.0.0 and does NOT list the port on its Service.
+  METRICS_PORT_BASE: z.preprocess((v) => (v === '' ? undefined : v), z.coerce.number().int().min(1).max(65535).optional()),
+  METRICS_HOST: z.string().default('127.0.0.1'),
+
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.
   TERMINAL_P2P_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),

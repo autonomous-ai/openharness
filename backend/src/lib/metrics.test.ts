@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
-import { createMetrics, registerRequestMetrics, timeQuery } from './metrics.js'
+import type { AddressInfo } from 'node:net'
+import { createMetrics, metricsAddress, registerRequestMetrics, startMetricsServer, timeQuery } from './metrics.js'
 
 async function appWithMetrics() {
   const metrics = createMetrics()
@@ -103,5 +104,31 @@ describe('database query timing', () => {
     const metrics = createMetrics()
     await timeQuery(metrics, { operation: '$runCommandRaw', args: { ping: 1 }, query: async () => ({ ok: 1 }) }, { now: clock(3), log: sink() })
     expect(await queryCounts(metrics)).toEqual(['prisma_query_duration_seconds_count{model="raw",operation="$runCommandRaw"} 1'])
+  })
+})
+
+describe('metrics listener', () => {
+  it('is off unless a port is set, and gives each pm2 worker its own port on loopback by default', () => {
+    expect(metricsAddress({}, 0)).toBeUndefined()
+    expect(metricsAddress({ portBase: 9464 }, 0)).toEqual({ port: 9464, host: '127.0.0.1' })
+    expect(metricsAddress({ portBase: 9464 }, 3)).toEqual({ port: 9467, host: '127.0.0.1' })
+    expect(metricsAddress({ portBase: 9464, host: '0.0.0.0' }, 0)).toEqual({ port: 9464, host: '0.0.0.0' })
+  })
+
+  it('serves the registry at GET /metrics and nothing else', async () => {
+    const metrics = createMetrics()
+    const server = startMetricsServer(metrics.registry, { port: 0, host: '127.0.0.1' })
+    await new Promise(resolve => server.once('listening', resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    try {
+      const scrape = await fetch(`${base}/metrics`)
+      expect(scrape.status).toBe(200)
+      expect(scrape.headers.get('content-type')).toBe('text/plain; version=0.0.4; charset=utf-8')
+      expect(await scrape.text()).toContain('# TYPE http_request_duration_seconds histogram')
+      expect((await fetch(`${base}/api/health`)).status).toBe(404)
+      expect((await fetch(`${base}/metrics`, { method: 'POST' })).status).toBe(404)
+    } finally {
+      await new Promise(resolve => server.close(resolve))
+    }
   })
 })

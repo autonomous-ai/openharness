@@ -17,6 +17,8 @@ import { handleWebUpgrade } from './lib/webWs.js'
 import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
+import { metrics, metricsAddress, registerRequestMetrics, startMetricsServer } from './lib/metrics.js'
+import { WORKER_INDEX } from './lib/instance.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, redisCount, redisSsoProfileStore } from './lib/bus.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
@@ -121,6 +123,9 @@ async function start(): Promise<void> {
 
   app.setErrorHandler(errorHandler)
 
+  // Latency by route pattern and status for every control-API request (WS upgrades never reach Fastify).
+  registerRequestMetrics(app, metrics)
+
   registerJsonBodyParser(app)
 
   app.addHook('onSend', async (_request, reply) => {
@@ -154,6 +159,9 @@ async function start(): Promise<void> {
   const appProxyServer = startSubdomainProxy()
   // Internal mesh listener (Phase 2, MESH_ENABLED) — peers forward here when this instance owns the socket.
   const meshServer = startMeshProxy()
+  // Prometheus scrape on an internal port of its own, off unless METRICS_PORT_BASE is set.
+  const metricsAt = metricsAddress({ portBase: env.METRICS_PORT_BASE, host: env.METRICS_HOST }, WORKER_INDEX)
+  const metricsServer = metricsAt && startMetricsServer(metrics.registry, metricsAt)
 
   let shuttingDown = false
   const shutdown = async (signal: string, exitCode = 0) => {
@@ -163,6 +171,7 @@ async function start(): Promise<void> {
     try {
       appProxyServer.close()
       meshServer?.close()
+      metricsServer?.close()
       // Start Fastify's close (it tells the http server to stop accepting new connections) but DON'T await
       // it yet: http.Server#close only resolves once every connection has ended, and an upgraded WebSocket
       // is a connection that never ends on its own — so awaiting here would hang until clients happened to

@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client'
 import type { FastifyInstance } from 'fastify'
+import http from 'node:http'
 import { collectDefaultMetrics, Histogram, Registry } from 'prom-client'
 import { logger } from '../utils/logger.js'
 
@@ -83,4 +84,30 @@ export function registerRequestMetrics(app: FastifyInstance, metrics: Metrics): 
       reply.elapsedTime / 1000,
     )
   })
+}
+
+/**
+ * Where this worker serves /metrics: off unless a port is set; each pm2 worker binds base + its index (as
+ * the mesh port does); loopback unless the deploy says otherwise. Never the public control port.
+ */
+export function metricsAddress({ portBase, host = '127.0.0.1' }: { portBase?: number; host?: string }, workerIndex: number) {
+  return portBase === undefined ? undefined : { port: portBase + workerIndex, host }
+}
+
+/** A listener of its own for the scraper: GET /metrics, and 404 for everything else. */
+export function startMetricsServer(registry: Registry, { port, host }: { port: number; host: string }): http.Server {
+  const server = http.createServer((req, res) => {
+    if (req.method !== 'GET' || (req.url ?? '').split('?')[0] !== '/metrics') {
+      res.writeHead(404).end()
+      return
+    }
+    registry.metrics().then(
+      (text) => { res.writeHead(200, { 'Content-Type': registry.contentType }).end(text) },
+      (err) => { logger.error('metrics scrape failed', err); res.writeHead(500).end() },
+    )
+  })
+  server.listen(port, host, () => {
+    logger.info(`backend metrics listener on ${host}:${(server.address() as { port: number }).port}`)
+  })
+  return server
 }

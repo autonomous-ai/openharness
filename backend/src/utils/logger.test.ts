@@ -57,6 +57,15 @@ describe('logger, in the cluster', () => {
     expect(entry.message).toBe('broke')
     expect(entry.error).toBe('the cause')
   })
+
+  it('keeps the stack of an error, so a production 500 says where it came from', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const cause = new Error('the cause')
+    json().error('broke', cause)
+    const entry = JSON.parse(String(error.mock.calls[0][0]))
+    expect(entry.stack).toBe(cause.stack)
+    expect(entry.stack).toContain('logger.test.ts')
+  })
 })
 
 describe('logger, on a terminal', () => {
