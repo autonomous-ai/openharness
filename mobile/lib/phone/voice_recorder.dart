@@ -45,24 +45,12 @@ abstract interface class VoiceLevelMeter {
   ValueListenable<double> get level;
 }
 
-/// A [VoiceRecorder] that can hand over a take a phrase at a time, so its
-/// words can come back while the person is still talking.
-///
-/// ⚠️ **Its own interface, as [VoiceLevelMeter] is.** A recorder that cannot
-/// cut — a test's fake, the sample — still records whole takes, transcribed
-/// when they end.
-abstract interface class VoicePhrases {
-  /// What was recorded since the take started or was last cut, while the
-  /// recording goes on. Null when nothing arrived in it, or no take is running.
-  Future<VoiceTake?> cut();
-}
-
 /// [VoiceRecorder] over the phone's microphone.
 ///
 /// Streams raw PCM and wraps it here, rather than recording a file: a file
 /// needs somewhere to live and something to delete it, and a phrase of speech
 /// is a few hundred kilobytes that are about to be uploaded anyway.
-class MicVoiceRecorder implements VoiceRecorder, VoiceLevelMeter, VoicePhrases {
+class MicVoiceRecorder implements VoiceRecorder, VoiceLevelMeter {
   /// What the backend's transcription is tuned on — the dial sends 8–16 kHz
   /// mono — and a minute of it is under 2 MB to upload.
   static const _requested = RecordConfig(
@@ -192,11 +180,7 @@ class MicVoiceRecorder implements VoiceRecorder, VoiceLevelMeter, VoicePhrases {
     _subscription = null;
     _drained = null;
     _level.value = 0;
-    return _wrap(_pcm.takeBytes());
-  }
-
-  /// [pcm] as a take at the rate it was recorded at; null when it is empty.
-  VoiceTake? _wrap(Uint8List pcm) {
+    final pcm = _pcm.takeBytes();
     if (pcm.isEmpty) return null;
     final samples = pcm.length ~/ (2 * _channels);
     return (
@@ -205,15 +189,6 @@ class MicVoiceRecorder implements VoiceRecorder, VoiceLevelMeter, VoicePhrases {
       peak: pcm16Peak(pcm),
     );
   }
-
-  /// The buffers kept so far, and the stream left running: the next buffer
-  /// starts the next phrase. Cut at a breath, so nothing waits on a tail the
-  /// way [_stop] does — what is still on its way joins the next phrase.
-  @override
-  Future<VoiceTake?> cut() => _serially(() async {
-    if (_drained == null) return null;
-    return _wrap(_pcm.takeBytes());
-  });
 
   @override
   Future<void> cancel() => _serially(_cancel);

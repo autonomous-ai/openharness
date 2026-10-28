@@ -116,42 +116,6 @@ void main() {
       },
     );
 
-    test('a phrase cut from a take hands over what was said so far, and the '
-        'take records on', () async {
-      final mic = MicVoiceRecorder();
-      await mic.start();
-      plugin.say(pcm(List.filled(1600, 4000)));
-      await pumpEventQueue();
-
-      final phrase = await mic.cut();
-      expect(phrase, isNotNull);
-      expect(phrase!.length, const Duration(milliseconds: 100));
-      expect(phrase.peak, 4000);
-      expect(String.fromCharCodes(phrase.wav.sublist(0, 4)), 'RIFF');
-      expect(plugin.calls, isNot(contains('stop')));
-
-      plugin.say(pcm(List.filled(3200, -7000)));
-      await pumpEventQueue();
-      final rest = await mic.stop();
-      expect(rest!.length, const Duration(milliseconds: 200));
-      expect(rest.peak, 7000, reason: 'only what came after the cut');
-      await mic.dispose();
-    });
-
-    test(
-      'a phrase cut with nothing new said, or with no take, is none',
-      () async {
-        final mic = MicVoiceRecorder();
-        expect(await mic.cut(), isNull, reason: 'no take running');
-        await mic.start();
-        plugin.say(pcm(List.filled(160, 100)));
-        await pumpEventQueue();
-        expect(await mic.cut(), isNotNull);
-        expect(await mic.cut(), isNull, reason: 'nothing since the last cut');
-        await mic.dispose();
-      },
-    );
-
     test('a take in which nothing arrived is none', () async {
       final mic = MicVoiceRecorder();
       await mic.start();

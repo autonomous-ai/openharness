@@ -48,26 +48,6 @@ class FakeVoiceRecorder implements VoiceRecorder {
   Future<void> dispose() async {}
 }
 
-/// A [FakeVoiceRecorder] that can cut a take a phrase at a time: each [cut]
-/// hands back the next of [phrases] — speech-loud unless a test says
-/// otherwise — and none once they run out.
-class FakePhraseRecorder extends FakeVoiceRecorder implements VoicePhrases {
-  final List<VoiceTake?> phrases = [];
-  int cuts = 0;
-
-  static VoiceTake said({int peak = 9000}) => (
-    wav: Uint8List.fromList([5, 6, 7, 8]),
-    length: const Duration(seconds: 1),
-    peak: peak,
-  );
-
-  @override
-  Future<VoiceTake?> cut() async {
-    cuts++;
-    return phrases.isEmpty ? null : phrases.removeAt(0);
-  }
-}
-
 /// The backend's `/api/voice/stt`: answers each recording with the next of
 /// [replies], or with [pending] held open until the test completes it.
 class FakeTranscriber {

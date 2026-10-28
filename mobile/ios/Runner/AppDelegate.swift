@@ -1,6 +1,8 @@
+import AVFoundation
 import AudioToolbox
 import AuthenticationServices
 import Flutter
+import Speech
 import UIKit
 import UserNotifications
 
@@ -25,6 +27,176 @@ import UserNotifications
     HandoffChannel.register(with: engineBridge.pluginRegistry)
     ChimeChannel.register(with: engineBridge.pluginRegistry)
     AppBadgeChannel.register(with: engineBridge.pluginRegistry)
+    DictationChannel.register(with: engineBridge.pluginRegistry)
+  }
+}
+
+/// `harness/dictation` — the phone's own speech recognizer, the one the keyboard's dictation uses
+/// (Dart: `SwarmChannelDictation` in `lib/swarm/swarm_dictation.dart`): a Swarm chat's message box
+/// fills with the words as they are said.
+///
+/// `access` asks for speech recognition, then the microphone, the first time, and answers `allowed`,
+/// `denied` (speech recognition refused or restricted: Dart records and has the backend transcribe,
+/// as before) or `noMic`. `start` takes Dart's `take` and a `locale`, and answers false when the
+/// phone has no recognizer for it now. Then, each with the take: `words` (everything heard so far,
+/// revised as it goes), `level` (the microphone's RMS, ten a second) and once `end` — `done`,
+/// `noSpeech` or `failed`. `stop` ends listening, and the last words and the end follow; `cancel`
+/// ends it with nothing more said.
+///
+/// ⚠️ **On the phone wherever it can be.** `requiresOnDeviceRecognition` whenever the recognizer
+/// supports the language on this phone; only where it does not does the audio go to Apple to be
+/// recognized, as the keyboard's dictation does. Nothing heard is logged or kept here.
+final class DictationChannel {
+  private static var shared: DictationChannel?
+
+  private let channel: FlutterMethodChannel
+
+  /// The take listening now. Its audio goes from the engine's tap into the request; the recognizer
+  /// is held for as long as its task runs.
+  private var current:
+    (
+      take: Int, recognizer: SFSpeechRecognizer, engine: AVAudioEngine,
+      request: SFSpeechAudioBufferRecognitionRequest, task: SFSpeechRecognitionTask
+    )?
+
+  static func register(with registry: FlutterPluginRegistry) {
+    guard let messenger = registry.registrar(forPlugin: "HarnessDictation")?.messenger() else { return }
+    shared = DictationChannel(messenger: messenger)
+  }
+
+  private init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "harness/dictation", binaryMessenger: messenger)
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handle(call, result: result)
+    }
+  }
+
+  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let arguments = call.arguments as? [String: Any]
+    let take = arguments?["take"] as? Int
+    switch call.method {
+    case "access":
+      Self.access { result($0) }
+    case "start":
+      guard let take, let locale = arguments?["locale"] as? String else {
+        result(FlutterError(code: "bad-args", message: "A take and a locale", details: nil))
+        return
+      }
+      result(start(take, locale: locale))
+    case "stop":
+      if let current, current.take == take {
+        // The last words, then the end, come through the task.
+        current.engine.stop()
+        current.engine.inputNode.removeTap(onBus: 0)
+        current.request.endAudio()
+      }
+      result(nil)
+    case "cancel":
+      if current?.take == take { finish(nil) }
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  /// Speech recognition, then the microphone: asked the first time, and answered at once after.
+  private static func access(_ answer: @escaping (String) -> Void) {
+    SFSpeechRecognizer.requestAuthorization { status in
+      guard status == .authorized else {
+        DispatchQueue.main.async { answer("denied") }
+        return
+      }
+      let microphone: (Bool) -> Void = { granted in
+        DispatchQueue.main.async { answer(granted ? "allowed" : "noMic") }
+      }
+      if #available(iOS 17.0, *) {
+        AVAudioApplication.requestRecordPermission(completionHandler: microphone)
+      } else {
+        AVAudioSession.sharedInstance().requestRecordPermission(microphone)
+      }
+    }
+  }
+
+  /// Listens for [take] in [locale]. False, with nothing open, when it cannot.
+  private func start(_ take: Int, locale: String) -> Bool {
+    finish(nil)
+    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+      recognizer.isAvailable
+    else { return false }
+    let request = SFSpeechAudioBufferRecognitionRequest()
+    request.shouldReportPartialResults = true
+    request.taskHint = .dictation
+    if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+    if #available(iOS 16.0, *) { request.addsPunctuation = true }
+
+    let session = AVAudioSession.sharedInstance()
+    let engine = AVAudioEngine()
+    let input = engine.inputNode
+    do {
+      try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+      try session.setActive(true, options: .notifyOthersOnDeactivation)
+      let format = input.outputFormat(forBus: 0)
+      guard format.sampleRate > 0, format.channelCount > 0 else {
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        return false
+      }
+      var measured = 0.0
+      input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        request.append(buffer)
+        let now = CACurrentMediaTime()
+        guard now - measured >= 0.1, let rms = Self.rms(buffer) else { return }
+        measured = now
+        DispatchQueue.main.async {
+          guard let self, self.current?.take == take else { return }
+          self.channel.invokeMethod("level", arguments: ["take": take, "rms": rms])
+        }
+      }
+      engine.prepare()
+      try engine.start()
+    } catch {
+      input.removeTap(onBus: 0)
+      try? session.setActive(false, options: .notifyOthersOnDeactivation)
+      return false
+    }
+
+    let task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+      let text = result?.bestTranscription.formattedString
+      let final = result?.isFinal ?? false
+      // "No speech detected": stopped, or given up, before a word was heard.
+      let silent = (error as NSError?).map { $0.domain == "kAFAssistantErrorDomain" && $0.code == 1110 }
+      DispatchQueue.main.async {
+        guard let self, self.current?.take == take else { return }
+        if let text { self.channel.invokeMethod("words", arguments: ["take": take, "text": text]) }
+        if final {
+          self.finish("done")
+        } else if let silent {
+          self.finish(silent ? "noSpeech" : "failed")
+        }
+      }
+    }
+    current = (take, recognizer, engine, request, task)
+    return true
+  }
+
+  /// Closes the take listening now, and says how it ended — or nothing, for a cancel.
+  private func finish(_ end: String?) {
+    guard let current else { return }
+    self.current = nil
+    if end == nil { current.task.cancel() }
+    current.engine.stop()
+    current.engine.inputNode.removeTap(onBus: 0)
+    current.request.endAudio()
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    if let end { channel.invokeMethod("end", arguments: ["take": current.take, "end": end]) }
+  }
+
+  /// How loud [buffer] is, 0…1 of full scale.
+  private static func rms(_ buffer: AVAudioPCMBuffer) -> Double? {
+    guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return nil }
+    let count = Int(buffer.frameLength)
+    var sum: Float = 0
+    for index in 0..<count { sum += samples[index] * samples[index] }
+    return Double((sum / Float(count)).squareRoot())
   }
 }
 

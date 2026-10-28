@@ -113,29 +113,6 @@ class VoiceInputController extends ChangeNotifier {
   /// that the person cannot see.
   Future<bool> Function()? mayTranscribe;
 
-  /// Where a take's words go as each part of it comes back — its phrases ([cutPhrase]) while it
-  /// records, then the rest as it ends — in the order they were said, instead of joining
-  /// [transcript]. Null keeps them for [submit]: the terminal's way.
-  ///
-  /// The Swarm composer puts them straight in the message box, so what is said shows there while the
-  /// person is still talking.
-  void Function(String words)? onWords;
-
-  /// The take's phrases, each landing in [onWords] after the one said before it ([cutPhrase]). Null
-  /// until the take's first cut.
-  Future<void>? _phrases;
-
-  /// What this take's phrases came to: words heard in one, one lost on its way, and the loudest
-  /// sample any of them had — which, with the rest of the take, tells "nobody spoke" apart from "no
-  /// sound reached the microphone".
-  bool _phraseHeard = false;
-  bool _phraseLost = false;
-  int _phrasePeak = 0;
-
-  /// A phrase of this take its owner did not let go ([mayTranscribe]): the take fails, though
-  /// nothing went wrong to say.
-  bool _phraseWithheld = false;
-
   VoiceInputStatus _status = VoiceInputStatus.idle;
   String _heard = '';
   String? _notice;
@@ -226,9 +203,6 @@ class VoiceInputController extends ChangeNotifier {
       return;
     }
     final take = ++_take;
-    _phrases = null;
-    _phraseHeard = _phraseLost = _phraseWithheld = false;
-    _phrasePeak = 0;
     if (pretend != null && pretend() != null) {
       _startPretending(pretend);
       return;
@@ -261,75 +235,13 @@ class VoiceInputController extends ChangeNotifier {
   void _reachLimit() => unawaited((onTakeLimit ?? stopListening)());
 
   /// Ends the take and transcribes it.
-  Future<bool> stopListening() async {
+  Future<void> stopListening() async {
     if (_status == VoiceInputStatus.starting) {
       _abandonTake();
       _setStatus(VoiceInputStatus.idle);
-      return false;
+      return;
     }
-    if (_status == VoiceInputStatus.listening) {
-      return await _transcribeTake() == _Take.heard;
-    }
-    return false;
-  }
-
-  /// Transcribes what was said since the take began or was last cut, while it records on: its words
-  /// go to [onWords] once those said before them have. Each phrase goes the way a whole take does —
-  /// through [mayTranscribe] to [transcriber] — and a silent one goes nowhere.
-  ///
-  /// Nothing with nobody taking the words ([onWords]), a recorder that cannot cut ([VoicePhrases]),
-  /// or a pretend take: the take is then transcribed whole as it ends.
-  ///
-  /// ⚠️ The phrase joins [_phrases] before anything is awaited: an end asked for right after it has
-  /// to find it there, or its words would land after the rest of the take — or never.
-  Future<void> cutPhrase() {
-    final recorder = _recorder;
-    if (onWords == null ||
-        recorder is! VoicePhrases ||
-        _pretending != null ||
-        _status != VoiceInputStatus.listening) {
-      return Future.value();
-    }
-    final take = _take;
-    final words = _hearPhrase((recorder as VoicePhrases).cut(), take);
-    final before = _phrases ?? Future.value();
-    return _phrases = before.then((_) async {
-      final heard = await words;
-      if (take == _take && heard.isNotEmpty) onWords?.call(heard);
-    });
-  }
-
-  /// One phrase's words, or the rest of the take's: empty when it was silent, not let go or lost —
-  /// a lost one said in [notice] at once. What it came to is kept for the take's end
-  /// ([_endPhrased]).
-  Future<String> _hearPhrase(Future<VoiceTake?> cut, int take) async {
-    try {
-      final phrase = await cut;
-      if (take != _take || phrase == null) return '';
-      if (phrase.peak > _phrasePeak) _phrasePeak = phrase.peak;
-      if (phrase.peak < silencePeak) return '';
-      if (mayTranscribe case final mayTranscribe?) {
-        final go = await mayTranscribe();
-        if (take != _take) return '';
-        if (!go) {
-          _phraseWithheld = true;
-          return '';
-        }
-      }
-      final language = _language.value;
-      final words = (await transcriber(phrase.wav, language)).trim();
-      appLog.info('voice', 'stt[$language]: ${words.length} chars');
-      if (take != _take) return '';
-      if (words.isNotEmpty) _phraseHeard = true;
-      return words;
-    } catch (error) {
-      appLog.warn('voice', 'stt[${_language.value}] failed', error: error);
-      if (take == _take) {
-        _phraseLost = true;
-        _setStatus(_status, notice: VoiceNotice.notTranscribed);
-      }
-      return '';
-    }
+    if (_status == VoiceInputStatus.listening) await _transcribeTake();
   }
 
   /// A push-to-talk hold has begun. Pairs with [finishHold].
@@ -517,16 +429,6 @@ class VoiceInputController extends ChangeNotifier {
             : 'take: ${recording.length.inMilliseconds}ms '
                   '${recording.wav.length}B peak=${recording.peak}',
       );
-      // Cut into phrases: the rest is transcribed alongside the last of them, and lands after them —
-      // it was said after them.
-      if (_phrases case final phrases?) {
-        final rest = _hearPhrase(Future.value(recording), take);
-        await phrases;
-        final words = await rest;
-        if (take != _take) return _Take.failed;
-        if (words.isNotEmpty) onWords?.call(words);
-        return _endPhrased();
-      }
       // Too short to be speech — a brushed button. Silent on purpose: there is
       // no failure to report, and a notice would be the app talking back about
       // something the person did not mean to do.
@@ -551,11 +453,7 @@ class VoiceInputController extends ChangeNotifier {
       // The count, never the words: a transcript is what someone said.
       appLog.info('voice', 'stt[$language]: ${words.length} chars');
       if (take != _take) return _Take.failed;
-      if (onWords case final land?) {
-        if (words.trim().isNotEmpty) land(words.trim());
-      } else {
-        _heard = _joinWords(_heard, words);
-      }
+      _heard = _joinWords(_heard, words);
       _setStatus(
         VoiceInputStatus.idle,
         notice: words.isEmpty ? VoiceNotice.nothingHeard : null,
@@ -571,27 +469,6 @@ class VoiceInputController extends ChangeNotifier {
       }
       return _Take.failed;
     }
-  }
-
-  /// The end of a take cut into phrases, once all of it has landed.
-  ///
-  /// A quiet end after heard phrases is no failure — the person stopped talking before they tapped —
-  /// while a phrase lost on its way fails the whole take, whatever else was heard: what landed is
-  /// missing a piece.
-  _Take _endPhrased() {
-    _setStatus(
-      VoiceInputStatus.idle,
-      notice: _phraseLost
-          ? VoiceNotice.notTranscribed
-          : _phraseHeard || _phraseWithheld
-          ? null
-          : _phrasePeak < silencePeak
-          ? VoiceNotice.noSound
-          : VoiceNotice.nothingHeard,
-    );
-    return _phraseHeard && !_phraseLost && !_phraseWithheld
-        ? _Take.heard
-        : _Take.failed;
   }
 
   Future<bool> _micAllowed() async {

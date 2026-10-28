@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image_picker/image_picker.dart' show XFile;
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/voice_input_controller.dart';
 import 'package:harness_mobile/phone/voice_mic_face.dart';
@@ -11,18 +10,17 @@ import 'package:harness_mobile/phone/voice_recorder.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_voice.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// Talking instead of typing in a Swarm chat (Tony, 10-28): the terminal's
-/// mic in the composer puts what is said into the message box phrase by
-/// phrase while the person talks, where it can be edited; a second tap on the
-/// mic stops and sends what is in the box (10-28). A pause leaves the words in
-/// the box unsent. A long press on the mic picks the language.
+/// Talking instead of typing in a Swarm chat (Tony, 10-28), where the phone
+/// has no speech recognizer of its own to use: the terminal's mic in the
+/// composer records, and what the backend hears lands in the message box as
+/// the take ends; a second tap on the mic stops and sends what is in the box.
+/// A pause leaves the words in the box unsent. A long press on the mic picks
+/// the language. With the phone's recognizer: `swarm_chat_dictation_test`.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const commands = '/api/super-tabs/$tab/commands';
@@ -31,13 +29,9 @@ void main() {
   late _MeteredRecorder recorder;
   late FakeTranscriber stt;
 
-  /// The names of the files a post began to upload.
-  late List<String> uploads;
-
   setUp(() {
     recorder = _MeteredRecorder();
     stt = FakeTranscriber();
-    uploads = [];
     fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -92,19 +86,6 @@ void main() {
       request: fake.request,
       notices: SilentSystemNotices(),
       features: features,
-      upload:
-          ({
-            required tabId,
-            required conversationId,
-            required name,
-            required mime,
-            required bytes,
-            required cancel,
-            required onProgress,
-          }) {
-            uploads.add(name);
-            return Completer<Map<String, dynamic>>().future;
-          },
       voice: voice
           ? () => VoiceInputController(
               transcriber: stt.call,
@@ -142,15 +123,6 @@ void main() {
   String box(WidgetTester tester) =>
       tester.widget<TextField>(find.byType(TextField)).controller!.text;
 
-  /// Speech for half a second, then a breath: the phrase is cut.
-  Future<void> sayPhrase(WidgetTester tester) async {
-    recorder.meter.value = 0.8;
-    await tester.pump(const Duration(milliseconds: 500));
-    recorder.meter.value = 0.02;
-    await tester.pump(SwarmVoice.breath);
-    await frames(tester);
-  }
-
   testWidgets('a second tap stops the take and sends what it heard', (
     tester,
   ) async {
@@ -172,50 +144,20 @@ void main() {
     expect(box(tester), isEmpty);
   });
 
-  testWidgets('words show in the box while the person is still talking', (
+  testWidgets('what was typed goes with what is said, on the second tap', (
     tester,
   ) async {
     await pump(tester);
-    recorder.phrases.addAll([
-      FakePhraseRecorder.said(),
-      FakePhraseRecorder.said(),
-    ]);
-    stt.replies.addAll(['hôm nay mình làm', 'gì nữa']);
-
-    await tapMic(tester);
-    await sayPhrase(tester);
-    expect(box(tester), 'hôm nay mình làm');
-    expect(recorder.recording, isTrue, reason: 'still listening');
-
-    await sayPhrase(tester);
-    expect(box(tester), 'hôm nay mình làm gì nữa');
-    expect(recorder.recording, isTrue);
-    expect(fake.commands, isEmpty);
-
-    await tapMic(tester);
-    await tester.pumpAndSettle();
-    expect(fake.commands.single['text'], 'hôm nay mình làm gì nữa');
-  });
-
-  testWidgets('what was typed, and what is typed while talking, goes with the '
-      'second tap', (tester) async {
-    await pump(tester);
     await tester.enterText(find.byType(TextField), 'Nova:');
     await tester.pump();
-    recorder.phrases.add(FakePhraseRecorder.said());
     stt.replies.add('ship the fix');
 
     await tapMic(tester);
-    await sayPhrase(tester);
-    expect(box(tester), 'Nova: ship the fix');
-
-    await tester.enterText(find.byType(TextField), 'Nova: ship it tomorrow');
-    await tester.pump();
-    expect(fake.commands, isEmpty);
-
     await tapMic(tester);
     await tester.pumpAndSettle();
-    expect(fake.commands.single['text'], 'Nova: ship it tomorrow');
+
+    expect(fake.commands.single['text'], 'Nova: ship the fix');
+    expect(box(tester), isEmpty);
   });
 
   testWidgets('a second tap with nothing in the box sends nothing', (
@@ -231,65 +173,6 @@ void main() {
     expect(box(tester), isEmpty);
     expect(fake.commands, isEmpty);
     expect(find.text("Didn't catch that · tap the mic again"), findsOneWidget);
-  });
-
-  testWidgets('a second tap sends nothing once the box was emptied, though '
-      'files wait to go', (tester) async {
-    final documents = pickSwarmFiles, copies = swarmPickerCopyFolders;
-    addTearDown(() {
-      pickSwarmFiles = documents;
-      swarmPickerCopyFolders = copies;
-    });
-    swarmPickerCopyFolders = () async => const [];
-    pickSwarmFiles = () async => [
-      XFile.fromData(
-        Uint8List(12),
-        path: '/picker-copies/crash.log',
-        length: 12,
-      ),
-    ];
-    await pump(tester);
-    await tester.tap(key('swarm-attach'));
-    await tester.pumpAndSettle();
-    await tester.tap(key('swarm-attach-files'));
-    await tester.pumpAndSettle();
-    expect(key('swarm-outgoing-crash.log'), findsOneWidget);
-    recorder.phrases.add(FakePhraseRecorder.said());
-    stt.replies.add('wrong words');
-
-    await tapMic(tester);
-    await sayPhrase(tester);
-    expect(box(tester), 'wrong words');
-    await tester.enterText(find.byType(TextField), '');
-    await tester.pump();
-    await tapMic(tester);
-    await tester.pumpAndSettle();
-
-    expect(uploads, isEmpty);
-    expect(fake.commands, isEmpty);
-    expect(key('swarm-outgoing-crash.log'), findsOneWidget);
-  });
-
-  testWidgets('a take that lost a phrase keeps the box and sends nothing', (
-    tester,
-  ) async {
-    await pump(tester);
-    recorder.phrases.add(FakePhraseRecorder.said());
-    stt.fails = true;
-
-    await tapMic(tester);
-    await sayPhrase(tester);
-    expect(
-      find.text("Couldn't transcribe · tap the mic again"),
-      findsOneWidget,
-    );
-
-    stt.fails = false;
-    stt.replies.add('and the rest');
-    await tapMic(tester);
-    await tester.pumpAndSettle();
-    expect(box(tester), 'and the rest');
-    expect(fake.commands, isEmpty);
   });
 
   testWidgets('a pause after speaking ends the take, its words left in the box '
@@ -329,6 +212,76 @@ void main() {
     recorder.meter.value = 0.02;
     await tester.pump(const Duration(seconds: 2));
     expect(recorder.recording, isTrue, reason: 'talking again restarts it');
+  });
+
+  /// The microphone as loud as [levels] (hundredths), a 100 ms buffer each —
+  /// what Tony's iPhone 14 measured in his room on 10-29.
+  Future<void> feed(WidgetTester tester, List<int> levels) async {
+    for (final level in levels) {
+      recorder.meter.value = level / 100;
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+  /// His mic opening (a click, then warming up), and a sentence.
+  const opening = [21, 34, 34, 36, 36, 37, 38, 40, 40, 38, 38, 41];
+  const sentence = [87, 90, 79, 80, 93, 92, 88, 94, 91, 87, 63, 63, 75, 81, 78];
+
+  /// A second of his room, quiet: louder than speech was assumed to be.
+  const room = [43, 43, 42, 44, 42, 44, 43, 45, 43, 42];
+
+  testWidgets('in a room as loud as Tony\'s, a pause after speaking still '
+      'ends the take, its words left in the box unsent', (tester) async {
+    await pump(tester);
+    stt.replies.add('hôm nay mình làm gì');
+
+    await tapMic(tester);
+    await feed(tester, [...opening, ...sentence, 52]);
+    await feed(tester, [...room, ...room, 43, 44, 42, 43, 44]);
+    expect(recorder.recording, isTrue, reason: 'two and a half seconds');
+
+    await feed(tester, [...room]);
+    await frames(tester);
+    expect(recorder.recording, isFalse);
+    expect(box(tester), 'hôm nay mình làm gì');
+    expect(fake.commands, isEmpty);
+  });
+
+  testWidgets('in a room as loud as Tony\'s, the room alone never ends a '
+      'take, nor does a breath between sentences', (tester) async {
+    await pump(tester);
+
+    await tapMic(tester);
+    await feed(tester, [...opening, for (var i = 0; i < 8; i++) ...room]);
+    await feed(tester, [...sentence, ...room, ...room, ...sentence]);
+    await feed(tester, [...room, 45, 46, 47, 46, 47, 47, 45, 45, 46, 45]);
+    expect(recorder.recording, isTrue);
+  });
+
+  testWidgets('in a loud room, a rustle a little above it is not speech: the '
+      'take runs on', (tester) async {
+    await pump(tester);
+
+    await tapMic(tester);
+    await feed(tester, [...opening, ...room, ...room, 58, 60, 57]);
+    await feed(tester, [...room, ...room, ...room, ...room]);
+    expect(recorder.recording, isTrue, reason: 'nothing said yet');
+  });
+
+  testWidgets('a second take in the same loud room pauses as the first did', (
+    tester,
+  ) async {
+    await pump(tester);
+    stt.replies.addAll(['một', 'hai']);
+
+    for (final _ in ['first', 'second']) {
+      await tapMic(tester);
+      await feed(tester, [...opening, ...sentence, 52]);
+      await feed(tester, [...room, ...room, ...room, ...room]);
+      await frames(tester);
+      expect(recorder.recording, isFalse);
+    }
+    expect(box(tester), 'một hai');
   });
 
   testWidgets('a tap while the microphone is opening calls the take off', (
@@ -805,9 +758,9 @@ void main() {
   });
 }
 
-/// A microphone that also says how loud it is: what the breath that cuts a
-/// phrase, and the pause that ends a take, listen to.
-class _MeteredRecorder extends FakePhraseRecorder implements VoiceLevelMeter {
+/// A microphone that also says how loud it is: what the pause that ends a
+/// take listens to.
+class _MeteredRecorder extends FakeVoiceRecorder implements VoiceLevelMeter {
   final meter = ValueNotifier<double>(0);
 
   /// Holds [stop] open until the test completes it: a microphone that takes
