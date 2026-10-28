@@ -309,6 +309,9 @@ Future<void> showSuperTabAgentDetails(
                       _fact('Started', fullDateTime(value)),
                     if (info.questionOwner case final value?)
                       _fact('Who can answer', value),
+                    if (controller.snapshot?.kudosFor(agent: agent.id)
+                        case final n? when n > 0)
+                      _fact('Thanks received', '$n'),
                   ],
                 ),
               ),

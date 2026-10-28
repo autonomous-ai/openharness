@@ -30,6 +30,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.replyGone = false,
     this.grouped = false,
     this.onReply,
+    this.onThank,
     this.onOpenAgent,
     this.onOpenReply,
     this.references = const {},
@@ -58,7 +59,7 @@ class SuperTabMessageRow extends StatefulWidget {
   /// The original [reply] would show is no longer in the conversation.
   final bool replyGone;
   final bool grouped;
-  final VoidCallback? onReply, onOpenAgent;
+  final VoidCallback? onReply, onThank, onOpenAgent;
 
   /// Follows the quote to the original, given this row so that the way back
   /// can return it to the same place on screen.
@@ -368,6 +369,8 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   ),
                                 ),
                               SuperTabPullRequestLinks(message.text),
+                              if (message.kudos.isNotEmpty)
+                                SuperTabKudosLine(message),
                               SuperTabReactionBar(
                                 message: message,
                                 readerId: widget.readerId,
@@ -410,6 +413,16 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   onPressed: widget.onReply,
                                 ),
                               ),
+                            if (widget.onThank != null)
+                              fingerTarget(
+                                enabled: phone,
+                                AppIconButton(
+                                  key: ValueKey('super-thank-${message.id}'),
+                                  icon: AppIcons.heart,
+                                  tooltip: 'Say thanks',
+                                  onPressed: widget.onThank,
+                                ),
+                              ),
                             fingerTarget(
                               enabled: phone,
                               AppIconButton(
@@ -427,6 +440,47 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Who thanked a message's author, under the message; the notes are in its tooltip. A fun stat, never points.
+class SuperTabKudosLine extends StatelessWidget {
+  const SuperTabKudosLine(this.message, {super.key});
+  final SuperTabMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = {for (final kudos in message.kudos) kudos.fromName}.toList();
+    final shown = names.length > 3
+        ? '${names.take(3).join(', ')} and ${names.length - 3} more'
+        : names.join(', ');
+    return Padding(
+      key: ValueKey('super-kudos-${message.id}'),
+      padding: const EdgeInsets.only(top: 6),
+      child: Tooltip(
+        message: [
+          for (final kudos in message.kudos)
+            kudos.note == null
+                ? kudos.fromName
+                : '${kudos.fromName}: ${kudos.note}',
+        ].join('\n'),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(AppIcons.heart, size: 13, color: DesktopChrome.accent),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                'Thanks from $shown',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.metadata(),
+              ),
+            ),
+          ],
         ),
       ),
     );

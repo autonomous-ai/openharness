@@ -1121,6 +1121,23 @@ model SuperTabDecision {
   @@index([tabId, projectId, createdAt])
 }
 
+/// A member's thanks to the author of a message, one per giver and message (superTabs/kudos.ts). Kept out of the tab
+/// state so an older backend still reads it.
+model SuperTabKudos {
+  id             String   @id @map("_id")
+  tabId          String
+  conversationId String
+  messageId      String
+  /// The giver as an Author, without its membership generation.
+  from           Json
+  /// person:<id> or agent:<id>
+  toKey          String
+  note           String?
+  createdAt      DateTime
+
+  @@index([tabId, conversationId, messageId])
+}
+
 /// One uploaded file, which one message of the actor that uploaded it can send once.
 model SuperTabAttachment {
   id             String   @id @map("_id")

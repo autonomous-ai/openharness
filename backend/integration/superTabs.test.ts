@@ -18,6 +18,7 @@ import { DEFAULT_ROUTING_POLICY } from '../src/superTabs/routingPolicy.js'
 import { stableId, type SuperTabState } from '../src/superTabs/model.js'
 import { ensureTerminalExpiry, TERMINAL_EXPIRY_MS } from '../src/superTabs/terminal.js'
 import { ensureMentionExpiry, MENTION_EXPIRY_MS } from '../src/superTabs/mentions.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite, PartConflict } from '../src/superTabs/parts/write.js'
 import { ensurePartExpiry, sweepSwarms } from '../src/superTabs/sweeps.js'
@@ -3508,5 +3509,130 @@ describe('Swarm parts under concurrent writes', () => {
     const assigned = await run(tab, { type: 'work.assign', conversationId: 'lead', agentId, routeDecisionId }, host, lead)
     expect(assigned.result.assignmentId).toBeTruthy()
     expect((await store.routeDecision(owner, tab, routeDecisionId)).final).toMatchObject({ kind: 'new', startId })
+  })
+})
+
+describe('kudos', () => {
+  const send = async (tab: string, conversationId: string, text: string, user = owner, asAgentId?: string) =>
+    (await run(tab, { type: 'message.send', conversationId, text, replyTo: null, recipientIds: [] }, user, asAgentId)).result.messageId as string
+  const thank = (tab: string, conversationId: string, messageId: string, user = peer, asAgentId?: string, note?: string, operationId?: string) =>
+    run(tab, { type: 'kudos.give', conversationId, messageId, ...(note === undefined ? {} : { note }) }, user, asAgentId, operationId)
+  const counts = async (tab: string, user: AuthUser, asAgentId?: string) =>
+    ((await store.read(user, tab, asAgentId)).state as SuperTabState & { kudosReceived?: Record<string, number> }).kudosReceived
+  const shown = async (tab: string, conversationId: string, messageId: string, user = owner) =>
+    ((await store.messages(user, tab, conversationId, {})).messages.find(m => m.id === messageId) as unknown as { kudos: unknown[] }).kudos
+  async function thanked() {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const messageId = await send(tab, 'lead', 'The release notes are up.')
+    return { tab, lead, messageId }
+  }
+
+  it('thanks the author of a message, shows it on the message and counts it for every reader', async () => {
+    const { tab, messageId } = await thanked()
+    await thank(tab, 'lead', messageId, peer, undefined, '  Clear and quick.  ')
+    expect(await shown(tab, 'lead', messageId)).toEqual([{ from: { kind: 'person', id: peer.sub, name: peer.email },
+      to: { kind: 'person', id: owner.sub }, note: 'Clear and quick.', createdAt: expect.any(Date) }])
+    expect(await shown(tab, 'lead', messageId, peer)).toHaveLength(1)
+    expect(await counts(tab, owner)).toEqual({ [`person:${owner.sub}`]: 1 })
+    expect(await counts(tab, peer)).toEqual({ [`person:${owner.sub}`]: 1 })
+    const reads = new SwarmReads(store)
+    const first = await reads.firstLoad(peer, tab)
+    expect(first.derived).toMatchObject({ kudosReceived: { [`person:${owner.sub}`]: 1 } })
+    expect((await reads.changes(peer, tab, first.cursor)).derived).toMatchObject({ kudosReceived: { [`person:${owner.sub}`]: 1 } })
+  })
+
+  it('counts one kudos per giver and message: a repeat, a new note or a race adds nothing', async () => {
+    const { tab, messageId } = await thanked()
+    await thank(tab, 'lead', messageId, peer, undefined, 'First.')
+    await thank(tab, 'lead', messageId, peer, undefined, 'Second.')
+    await Promise.all([1, 2, 3].map(() => thank(tab, 'lead', messageId)))
+    const operationId = randomUUID()
+    await thank(tab, 'lead', messageId, peer, undefined, undefined, operationId)
+    await thank(tab, 'lead', messageId, peer, undefined, undefined, operationId)
+    expect(await shown(tab, 'lead', messageId)).toEqual([expect.objectContaining({ note: 'First.' })])
+    expect(await counts(tab, owner)).toEqual({ [`person:${owner.sub}`]: 1 })
+  })
+
+  it('lets an agent thank a person and a person thank an agent, and keeps a note to one line', async () => {
+    const { tab, lead, messageId } = await thanked()
+    await thank(tab, 'lead', messageId, host, lead)
+    const fromLead = await send(tab, 'lead', 'Merged.', host, lead)
+    await thank(tab, 'lead', fromLead, owner, undefined, 'Nice')
+    await thank(tab, 'lead', fromLead, peer)
+    expect(await counts(tab, owner)).toEqual({ [`person:${owner.sub}`]: 1, [`agent:${lead}`]: 2 })
+    expect(await counts(tab, host, lead)).toEqual({ [`person:${owner.sub}`]: 1, [`agent:${lead}`]: 2 })
+    expect(await shown(tab, 'lead', messageId)).toEqual([expect.objectContaining({ from: expect.objectContaining({ kind: 'agent', id: lead }), note: null })])
+    await expect(thank(tab, 'lead', fromLead, owner, undefined, 'two\nlines')).rejects.toMatchObject({ name: 'ZodError' })
+    await expect(thank(tab, 'lead', fromLead, owner, undefined, 'x'.repeat(121))).rejects.toMatchObject({ name: 'ZodError' })
+  })
+
+  it('refuses one\'s own message, a viewer, and a message that is not in that conversation or not for everyone', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab, 'viewer')
+    const own = await send(tab, 'lead', 'Mine.')
+    await expect(thank(tab, 'lead', own, owner)).rejects.toMatchObject({ code: 'KUDOS_SELF' })
+    await expect(thank(tab, 'lead', own, peer)).rejects.toMatchObject({ code: 'READ_ONLY' })
+    const other = String((await run(tab, { type: 'conversation.create', title: 'Elsewhere', brief: '', checks: [] })).result.conversationId)
+    await run(tab, { type: 'conversation.agent', conversationId: other, agentId: lead, present: true, lead: true })
+    await expect(thank(tab, other, own, host, lead)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(thank(tab, 'lead', 'no-such-message', host, lead)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    const notice = String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Skill updated.', replyTo: null, recipientIds: [lead],
+      agentOnly: true }, host, lead)).result.messageId)
+    await expect(thank(tab, 'lead', notice, owner)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await counts(tab, owner)).toEqual({})
+  })
+
+  it('refuses thanks from an agent that does not take part in the conversation', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Without the Lead', brief: '', checks: [] })).result.conversationId)
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: false, lead: false })
+    const message = await send(tab, group, 'Shipped.')
+    await expect(thank(tab, group, message, host, lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(await counts(tab, owner)).toEqual({})
+  })
+
+  it('refuses thanks in an archived conversation', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Archived', brief: '', checks: [] })).result.conversationId)
+    const message = await send(tab, group, 'Shipped.')
+    await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })
+    await expect(thank(tab, group, message, peer)).rejects.toMatchObject({ code: 'ARCHIVED' })
+    expect(await counts(tab, owner)).toEqual({})
+  })
+
+  it('shows and counts kudos only for people who can read the conversation, rechecked on every read', async () => {
+    const { tab, lead, messageId } = await thanked()
+    await thank(tab, 'lead', messageId)
+    const chat = String((await run(tab, { type: 'conversation.create', title: 'Chat with PM', brief: '', checks: [], audience: { personIds: [owner.sub] } }))
+      .result.conversationId)
+    await run(tab, { type: 'conversation.agent', conversationId: chat, agentId: lead, present: true, lead: false })
+    const privately = await send(tab, chat, 'Between us.')
+    await thank(tab, chat, privately, host, lead)
+    await expect(thank(tab, chat, privately, peer)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await counts(tab, owner)).toEqual({ [`person:${owner.sub}`]: 2 })
+    expect(await counts(tab, peer)).toEqual({ [`person:${owner.sub}`]: 1 })
+    expect((await new SwarmReads(store).firstLoad(peer, tab)).derived).toMatchObject({ kudosReceived: { [`person:${owner.sub}`]: 1 } })
+    await expect(store.messages(peer, tab, chat, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(await counts(tab, owner)).toEqual({ [`person:${owner.sub}`]: 2 })
+    expect(await counts(tab, peer)).toEqual({})
+  })
+
+  it('still counts kudos in a conversation that went quiet', async () => {
+    const { tab, lead } = await fixture()
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Done work', brief: '', checks: [] })).result.conversationId)
+    await thank(tab, group, await send(tab, group, 'Shipped.'), host, lead)
+    await db.swarmGroup.updateMany({ where: { tabId: tab, key: group }, data: { dormant: true } })
+    expect((await store.read(owner, tab)).state.conversations.map(c => c.id)).not.toContain(group)
+    expect(await counts(tab, owner)).toEqual({ [`person:${owner.sub}`]: 1 })
+  })
+
+  it('keeps the stored tab as the previous backend reads and writes it', async () => {
+    const { tab, messageId } = await thanked()
+    await thank(tab, 'lead', messageId, peer, undefined, 'Thanks')
+    expect(JSON.stringify(await storedState(tab))).not.toMatch(/kudos/i)
+    expect(JSON.stringify(await db.superTabMessage.findMany({ where: { tabId: tab } }))).not.toMatch(/kudos/i)
   })
 })

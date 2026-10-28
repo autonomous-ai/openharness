@@ -252,7 +252,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${person.email}\n${person.role}'),
+              Text(
+                [
+                  person.email,
+                  person.role,
+                  if (c.snapshot?.kudosFor(person: person.id) case final n?
+                      when n > 0)
+                    'Thanks received: $n',
+                ].join('\n'),
+              ),
               if (score != null) ...[
                 const SizedBox(height: 12),
                 LeaderboardPersonWeek(score: score),

@@ -68,6 +68,9 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** Kudos each member received, by person:<id> or agent:<id>, counted in the conversations the reader reads: a fun stat,
+   *  never points. Absent from a backend before kudos. */
+  kudosReceived?: Record<string, number>
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

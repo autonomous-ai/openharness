@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, numberMessages, RECENT_PEOPLE_MS, visibilityChanged } from './commit.js'
 
 describe('writing a Swarm\'s parts', () => {
   it('keeps the newest 200 released harnesses of each machine and drops the oldest', () => {
@@ -12,6 +12,19 @@ describe('writing a Swarm\'s parts', () => {
     expect(busy[0]).toBe('h5')
     expect(busy.at(-1)).toBe('h204')
     expect(state.releasedHarnesses.filter(r => r.machineId === 'quiet')).toEqual([{ machineId: 'quiet', harnessId: 'only' }])
+  })
+
+  it('keeps who posted in each conversation lately, newest first, people only, for the office map', () => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    const by = (kind: 'person' | 'agent', id: string, source?: Record<string, unknown>) => ({ id: `${kind}-${id}-${Math.random()}`, conversationId: 'lead',
+      author: { kind, id, name: id, membershipGeneration: 'tab' }, text: 'Hi', replyTo: null, recipients: [], ...(source ? { source } : {}) })
+    const t0 = Date.parse('2026-10-27T01:00:00.000Z')
+    numberMessages(state, [by('person', 'old')], t0 - RECENT_PEOPLE_MS - 1)
+    numberMessages(state, [by('person', 'ana'), by('agent', 'lead'), by('person', 'bo')], t0 - 1000)
+    numberMessages(state, [by('person', 'ana'), by('person', 'cy', { kind: 'agent-only' })], t0)
+    expect(state.conversations[0]!.recentPeople).toEqual({ ana: '2026-10-27T01:00:00.000Z', bo: '2026-10-27T00:59:59.000Z' })
+    numberMessages(state, Array.from({ length: 10 }, (_, i) => by('person', `p${i}`)), t0)
+    expect(Object.keys(state.conversations[0]!.recentPeople!)).toEqual(['p9', 'p8', 'p7', 'p6', 'p5', 'p4', 'p3', 'p2'])
   })
 
   it('moves the visibility epoch when who sees what changes, and not for an ordinary write', () => {

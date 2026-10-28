@@ -903,6 +903,33 @@ class SuperTabController extends ChangeNotifier {
     return id is String && await select(id);
   }
 
+  /// Thanks the author of [message] (backend kudos.ts): null once given, else what to tell the person. A second time
+  /// changes nothing.
+  Future<String?> giveKudos(SuperTabMessage message, String note) async {
+    final text = note.trim();
+    try {
+      await request(
+        'POST',
+        '$_path/commands',
+        body: {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'kudos.give',
+            'conversationId': message.conversationId,
+            'messageId': message.id,
+            if (text.isNotEmpty) 'note': text,
+          },
+        },
+      );
+    } on SuperTabFailure catch (failure) {
+      return failure.message;
+    } catch (_) {
+      return 'Could not send thanks. Try again.';
+    }
+    await Future.wait([_readMessages(message.conversationId), refresh()]);
+    return null;
+  }
+
   String _pmChatOperation(String projectId, String? generation) {
     final id = 'pm-chat-$projectId-$accountId-${generation ?? ''}';
     // The backend's operation ids are at most 160 characters.
