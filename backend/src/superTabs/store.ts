@@ -16,6 +16,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVA
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
+import { retryTransient } from './retry.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -145,8 +146,8 @@ export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {})
  */
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
-  let hintless = false
-  for (let attempt = 1; ; attempt++) {
+  let hintless = false, staleIndex: unknown = null
+  return retryTransient(async () => {
     let committed: Array<() => void> = []
     const drops = listingDrops()
     try {
@@ -159,17 +160,10 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
       return result
     } catch (error) {
       // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next attempts name none.
-      if (listingDrops() !== drops) hintless = true
-      else if (!retryable(error)) throw error
-      // An expired or unstartable transaction (P2028) is load: one more try, then the client retries after Retry-After.
-      if (attempt >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
-        // A unique key still taken after every retry is a real duplicate, not contention.
-        if (errorCode(error) === 'P2002') throw error
-        fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
-      }
-      await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (attempt - 1)))
+      if (listingDrops() !== drops) { hintless = true; staleIndex = error }
+      throw error
     }
-  }
+  }, sleep, error => error === staleIndex)
 }
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
 /** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
@@ -194,16 +188,6 @@ const pollMemoryFailed = (error: unknown): void => {
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
 const POLLED_CAP = 5_000
-const TRANSACTION_ATTEMPTS = 8
-const EXPIRED_TRANSACTION_ATTEMPTS = 2
-const TRANSACTION_BACKOFF_MS = 50
-const TRANSACTION_BACKOFF_CAP_MS = 1_500
-const errorCode = (error: unknown): unknown => error && typeof error === 'object' && 'code' in error ? error.code : null
-function retryable(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  return ['P2034', 'P2002', 'P2028'].includes(errorCode(error) as string) || (error instanceof Error && error.message.includes('TransientTransactionError'))
-
-}
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000

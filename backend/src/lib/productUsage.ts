@@ -2,9 +2,10 @@ import { healthBreakdowns } from '../analytics/productHealth.js'
 import type { ProductUsageContext } from '../types/productHealthContract.js'
 import { createHmac } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Prisma } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
 import { env } from '../config/env.js'
 import { prisma } from './prisma.js'
+import { ensureIndex } from './db/indexes.js'
 import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
@@ -276,14 +277,12 @@ export async function deleteLegacyProductUsage(userId: string): Promise<void> {
   ])
 }
 
-async function ensureProductUsageTotalKey(): Promise<void> {
+async function ensureProductUsageTotalKey(db: PrismaClient): Promise<void> {
   // The API can receive relay counts before the singleton's general schema push. That push may
   // also decline unrelated changes. Install this correctness boundary explicitly; do not rely on it.
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
-      await prisma.$runCommandRaw({ createIndexes: 'product_usage_totals', indexes: [{
-        key: { dayUtc: 1, metric: 1 }, name: 'product_usage_totals_dayUtc_metric_key', unique: true,
-      }] })
+      await ensureIndex(db, 'product_usage_totals', { key: { dayUtc: 1, metric: 1 }, name: 'product_usage_totals_dayUtc_metric_key', unique: true })
       return
     } catch (error) {
       const failure = error as { meta?: { code?: string | number; message?: string } }
@@ -293,7 +292,7 @@ async function ensureProductUsageTotalKey(): Promise<void> {
     // from concurrent writers: a changed/deleted row conflicts and retries instead of losing counts.
     // Bound each pass; a large backlog fails worker startup and resumes safely on its next start.
     try {
-      await prisma.$transaction(async tx => {
+      await db.$transaction(async tx => {
         const [group] = await tx.productUsageTotal.groupBy({
           by: ['dayUtc', 'metric'], having: { id: { _count: { gt: 1 } } },
           orderBy: [{ dayUtc: 'asc' }, { metric: 'asc' }], take: 1,
@@ -317,11 +316,9 @@ async function ensureProductUsageTotalKey(): Promise<void> {
 }
 
 /** Run only in the singleton worker. Required keys and expiry must survive a declined schema push. */
-export async function ensureProductUsageExpiry(): Promise<void> {
-  await prisma.$runCommandRaw({ createIndexes: 'product_usage_preferences', indexes: [{
-    key: { userId: 1 }, name: 'product_usage_preferences_userId_key', unique: true,
-  }] })
-  await ensureProductUsageTotalKey()
+export async function ensureProductUsageExpiry(db: PrismaClient = prisma): Promise<void> {
+  await ensureIndex(db, 'product_usage_preferences', { key: { userId: 1 }, name: 'product_usage_preferences_userId_key', unique: true })
+  await ensureProductUsageTotalKey(db)
   for (const [collection, field, seconds] of [
     ['product_usage_receipts', 'expiresAt', 0],
     ['product_usage_totals', 'dayUtc', 396 * DAY / 1000],
@@ -330,9 +327,7 @@ export async function ensureProductUsageExpiry(): Promise<void> {
       .map(name => [name, 'dayUtc', PRODUCT_USAGE_DAYS * DAY / 1000]),
     ['product_usage_activity', 'expiresAt', 0],
   ] as [string, string, number][]) {
-    await prisma.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { [field]: 1 }, name: 'product_usage_expiry', expireAfterSeconds: seconds }] })
+    await ensureIndex(db, collection, { key: { [field]: 1 }, name: 'product_usage_expiry', expireAfterSeconds: seconds })
   }
-  await prisma.$runCommandRaw({ createIndexes: 'product_usage_activity', indexes: [{
-    key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true,
-  }] })
+  await ensureIndex(db, 'product_usage_activity', { key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true })
 }

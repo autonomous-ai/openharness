@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@prisma/client'
+import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
@@ -17,8 +18,7 @@ export const TERMINAL_RECHECK_MS = 5_000
 export const TERMINAL_EXPIRY_MS = 120_000
 /** Run by the singleton worker at startup, like the product-usage expiry indexes. */
 export async function ensureTerminalExpiry(db: PrismaClient): Promise<void> {
-  await db.$runCommandRaw({ createIndexes: 'SuperTabTerminalRequest', indexes: [{ key: { createdAt: 1 }, name: 'terminal_request_expiry',
-    expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 }] })
+  await ensureIndex(db, 'SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 })
 }
 /** A limited agent without a shown reset time is skipped by routing for this long. */
 export const LIMIT_FALLBACK_MS = 3_600_000
