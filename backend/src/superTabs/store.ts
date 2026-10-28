@@ -10,7 +10,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { pageDeliveries, pageReactions } from './pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions } from './pageReads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
@@ -2042,8 +2042,8 @@ export class SuperTabStore {
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written), ...stoppedMachines(state, idle),
         ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)
-      const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
-        orderBy: { createdAt: 'asc' }, take: 100 })
+      const rows = await inConversationOrder(tx, tabId, await tx.superTabDelivery.findMany({
+        where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 }))
       const allowed: SuperTabDelivery[] = []
       for (const delivery of rows) {
         if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)

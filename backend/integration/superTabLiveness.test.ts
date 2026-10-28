@@ -685,9 +685,13 @@ describe('the push for a new delivery', () => {
     expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
     expect(first.map(row => row.messageId)).toEqual(page.map(row => row.id))
 
-    // Make the tie explicit rather than relying only on Prisma's shared batch timestamp, then read again.
+    // Make the tie explicit, and store the rows later sequence first so insertion order cannot stand in for it, then read again.
     const tiedAt = new Date('2026-10-28T00:00:00.000Z')
-    await db.superTabDelivery.updateMany({ where: { tabId: f.tab, messageId: { in: expectedIds } }, data: { createdAt: tiedAt } })
+    const stored = await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    await db.superTabDelivery.deleteMany({ where: { tabId: f.tab, messageId: { in: expectedIds } } })
+    for (const id of [...page.map(row => row.id)].reverse()) {
+      await db.superTabDelivery.create({ data: { ...stored.find(row => row.messageId === id)!, createdAt: tiedAt } })
+    }
     const again = (await f.timed.deliveries(host, f.tab, f.lead)).filter(row => expectedIds.includes(row.messageId))
     expect(again.map(row => row.createdAt)).toEqual([tiedAt, tiedAt, tiedAt])
     expect(again.map(row => row.messageId)).toEqual(page.map(row => row.id))
