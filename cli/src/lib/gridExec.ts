@@ -184,6 +184,12 @@ export async function gridVersion(opts: GridExecOptions = {}): Promise<string | 
   return match ? match[1] : null
 }
 
+/** A plain release number such as `0.3.61`: three whole numbers and nothing else (no `-rc1`, no spaces, no quotes). */
+export function isReleaseNumber(value: string): boolean {
+  const parts = value.split('.')
+  return parts.length === 3 && parts.every((part) => String(Number.parseInt(part, 10)) === part)
+}
+
 /** Ordinary three-part semver compare, enough for a floor check. A version that cannot be parsed is
  *  treated as NOT meeting the floor: refusing to drive an unknown build is the safe direction. */
 export function meetsVersionFloor(version: string | null, floor: string = GRID_VERSION_FLOOR): boolean {
