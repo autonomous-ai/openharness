@@ -21,7 +21,7 @@ import { readDshManifest, viewerUse, type DshManifest } from './manifest.js'
 import { PACKAGE_PATH_RE, type DshRegistryEntry } from './registry.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
-import { dshShellAvailable, runDshCommand } from './shell.js'
+import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 
@@ -408,9 +408,8 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
 
   // Refused before anything runs, rather than as a setup or doctor that could not start (`spawn /bin/sh ENOENT`).
   if ((manifest.toolchain?.setup || manifest.toolchain?.doctor) && !dshShellAvailable()) {
-    const detail = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
-    progress({ id: manifest.id, phase: 'failed', detail, error: 'SHELL_UNAVAILABLE' })
-    return { ok: false, error: 'SHELL_UNAVAILABLE', detail }
+    progress({ id: manifest.id, phase: 'failed', detail: DSH_SHELL_UNAVAILABLE, error: 'SHELL_UNAVAILABLE' })
+    return { ok: false, error: 'SHELL_UNAVAILABLE', detail: DSH_SHELL_UNAVAILABLE }
   }
 
   const setupLines: string[] = []
