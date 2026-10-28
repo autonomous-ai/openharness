@@ -20,7 +20,8 @@ function count(value: unknown): number {
   throw new Error(`Not a number: ${JSON.stringify(value)}`)
 }
 
-async function bytesOut(db: PrismaClient): Promise<number> {
+/** What MongoDB has sent its clients so far (`serverStatus` network bytes out). */
+export async function bytesOut(db: PrismaClient): Promise<number> {
   const status = await db.$runCommandRaw({ serverStatus: 1 }) as { network: { bytesOut: unknown } }
   return count(status.network.bytesOut)
 }
