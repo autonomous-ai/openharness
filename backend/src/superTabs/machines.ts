@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
-import { agentProjectId, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -389,14 +389,16 @@ export function expireRemovals(state: SuperTabState, now: number): MessageDraft[
 
 /** One line in each project's chat when a machine's removal ends, saying why (2026-10-28), so a machine that leaves the
  *  Machines list without its host's confirmation does not go unexplained. Written as the machine's owner, or the Swarm's
- *  owner once they left. A Harness Team account follows its Mac and says nothing of its own. */
+ *  owner once they left, only where that person can open the project. A Harness Team account follows its Mac and says
+ *  nothing of its own. */
 export function removalEnded(state: SuperTabState, pool: ContributedMachine, how: RemovalEnd): MessageDraft[] {
   const writer = state.people.find(p => p.id === pool.contributorId) ?? state.people.find(p => p.id === state.ownerId)
   if (pool.hostMachineId || !pool.removal || !writer) return []
   const why = how === 'confirmed' ? 'its host confirmed its cleanup.'
     : how === 'offline' ? 'it is offline. It cleans up when it next connects.'
     : `its host did not confirm its cleanup within ${REMOVAL_FALLBACK_MS / 60_000} minutes. It finishes the cleanup when it next connects.`
-  return projectsOf(state).filter(p => state.conversations.some(c => c.id === p.leadConversationId)).map(p => ({
+  const reader: Actor = { kind: 'person', userId: writer.id, email: writer.email }
+  return projectsOf(state).filter(p => canReadProject(state, reader, p) && state.conversations.some(c => c.id === p.leadConversationId)).map(p => ({
     id: stableId('machine-removal-ended', pool.removal!.id, pool.machineId, p.leadConversationId), conversationId: p.leadConversationId,
     author: { kind: 'person', id: writer.id, name: writer.email, membershipGeneration: writer.generation },
     text: `${pool.name} left the Swarm: ${why}`, replyTo: null, recipients: [], source: { kind: 'system' } }))

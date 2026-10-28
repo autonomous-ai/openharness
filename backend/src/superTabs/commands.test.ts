@@ -1917,6 +1917,15 @@ describe('machine.remove', () => {
       conversationId, source: { kind: 'system' }, recipients: [], text: 'Studio left the Swarm: its host confirmed its cleanup.' })))
   })
 
+  it('writes the line only in the chats of projects its machine owner can open', () => {
+    const f = fixture()
+    f.invite()
+    contribute(f, 'peer')
+    f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })
+    const removalId = f.run({ type: 'machine.remove', machineId: 'host' }, peer).result.removalId as string
+    expect(f.run(cleaned(removalId), peer).messages.map(m => [m.conversationId, m.author.id])).toEqual([['lead', 'peer']])
+  })
+
   it.each([['has no reading', null], ['was last read long ago', 1000 - 45_001]] as const)(
     'drops a machine that is offline (%s) at once, and keeps its cleanup for its host', (_why, receivedAt) => {
       const f = fixture()
