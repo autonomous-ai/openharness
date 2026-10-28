@@ -23,7 +23,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerg
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
-import { openReview, openReviewOf, projectPullRequest } from './autoReview.js'
+import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -1155,6 +1155,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
+      if (command.archived && verdictPending(state, group)) {
+        fail('REVIEW_PENDING', 'This review has no verdict yet. Cancel it, or finish the work it reviews, before archiving it.')
+      }
       group.archived = command.archived
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).

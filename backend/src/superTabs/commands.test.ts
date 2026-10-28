@@ -1263,13 +1263,25 @@ describe('Reviewer role', () => {
       expect(reviews()[0]!.brief.startsWith('Privacy first:')).toBe(true)
     })
 
+    it('keeps a review with no verdict from being archived by hand while the work it reviews is going', () => {
+      const { f, leadActor, group, built, reviewer, fresh, markReady, reviews } = ready()
+      for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      markReady(`Ready. ${pr}`)
+      const review = reviews()[0]!.id
+      expect(() => f.run({ type: 'conversation.archive', conversationId: review, archived: true }, leadActor)).toThrow('no verdict yet')
+      expect(reviews()[0]!.archived).toBe(false)
+      f.run({ type: 'work.cancel', conversationId: group, assignmentId: built, reason: 'Dropped' }, leadActor)
+      f.run({ type: 'conversation.archive', conversationId: review, archived: true }, leadActor)
+      expect(reviews()[0]!.archived).toBe(true)
+    })
+
     it('waits for a Reviewer when none is free, and tells the Lead to route and start one', () => {
       const { f, lead, leadActor, reviewer, fresh, markReady, reviews } = ready()
       for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
       const effects = markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment).toBeNull()
       expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
-        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one, or cancel it here.'])
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
     })
 
     it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {

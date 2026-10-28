@@ -26,13 +26,21 @@ export function projectPullRequest(state: SuperTabState, group: Conversation, te
   return null
 }
 
-/** A review of [group] that is still open: not cancelled and with no verdict yet. */
+/** A review group whose Reviewer has given no verdict (no check carries evidence) and that nobody cancelled. */
+const verdictMissing = (group: Conversation): boolean =>
+  !!group.reviewOf && group.assignment?.status !== 'cancelled' && !group.checks.some(c => c.evidence)
+
+/** A review of [group] that is still open: not archived, not cancelled and with no verdict yet. */
 export const openReviewOf = (state: SuperTabState, group: Conversation): Conversation | undefined =>
   state.conversations.find(c => c.reviewOf === group.id && !c.archived && verdictMissing(c))
 
-/** A review group whose Reviewer has given no verdict (no check carries evidence) and that nobody cancelled. */
-export const verdictMissing = (group: Conversation): boolean =>
-  !!group.reviewOf && group.assignment?.status !== 'cancelled' && !group.checks.some(c => c.evidence)
+/** A review that may not be archived, by hand or by itself: no verdict, not cancelled, and the work it reviews still going.
+ *  Once that work is done or cancelled the review is moot. A review with no Reviewer has no assignment to cancel, so that
+ *  is its way out (ruling in #610). */
+export const verdictPending = (state: SuperTabState, review: Conversation): boolean => {
+  const reviewed = review.reviewOf ? state.conversations.find(c => c.id === review.reviewOf) : undefined
+  return verdictMissing(review) && !!reviewed && activeWork(reviewed)
+}
 
 const free = (state: SuperTabState, agent: Agent) =>
   !state.conversations.some(c => c.leadId === agent.id || (activeWork(c) && c.assignment!.agentId === agent.id))
@@ -110,6 +118,6 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
   const name = reviewer && (reviewer.displayName ?? reviewer.name)
   if (leadId) messages.push(row('lead', reviewer
     ? `Review opened by itself for #${group.number}: ${name} reviews it. Cancel it here if it is not needed.`
-    : `Review opened by itself for #${group.number}, but no Reviewer is free. Route it and start one, or cancel it here.`, [leadId]))
+    : `Review opened by itself for #${group.number}, but no Reviewer is free. Route it and start one.`, [leadId]))
   return { review, reviewer, messages }
 }
