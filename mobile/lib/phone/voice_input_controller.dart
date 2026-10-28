@@ -97,6 +97,14 @@ class VoiceInputController extends ChangeNotifier {
   /// mid-take is the one that take is heard in.
   final ValueListenable<String> _language;
 
+  /// What a take that reaches [maxTake] does instead of ending there: null ends it and transcribes
+  /// it ([stopListening]), its words kept for the next send — the terminal's way.
+  ///
+  /// The Swarm composer takes it over: it puts the words in the message box, and while a system
+  /// prompt covers the app it holds the take open, since nothing may be sent to be transcribed that
+  /// the person cannot see.
+  Future<void> Function()? onTakeLimit;
+
   VoiceInputStatus _status = VoiceInputStatus.idle;
   String _heard = '';
   String? _notice;
@@ -210,10 +218,13 @@ class VoiceInputController extends ChangeNotifier {
       unawaited(_recorder.cancel());
       return;
     }
-    _takeLimit = Timer(maxTake, () => unawaited(stopListening()));
+    _takeLimit = Timer(maxTake, _reachLimit);
     _takeClock = Stopwatch()..start();
     _setStatus(VoiceInputStatus.listening);
   }
+
+  /// [maxTake] has passed: the take ends, unless [onTakeLimit] takes it over.
+  void _reachLimit() => unawaited((onTakeLimit ?? stopListening)());
 
   /// Ends the take and transcribes it.
   Future<void> stopListening() async {
@@ -463,7 +474,7 @@ class VoiceInputController extends ChangeNotifier {
       _pretendLevel.value =
           0.15 + 0.6 * syllable * (0.6 + 0.4 * _pretendRandom.nextDouble());
     });
-    _takeLimit = Timer(maxTake, () => unawaited(stopListening()));
+    _takeLimit = Timer(maxTake, _reachLimit);
     _takeClock = Stopwatch()..start();
     _setStatus(VoiceInputStatus.listening);
   }

@@ -22,6 +22,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// ⚠️ **Only while the chat is seen.** A take goes the moment the chat does —
 /// covered by another screen ([hide]) or the app sent to the background — so
 /// nothing is recorded, or sent to be transcribed, behind the person's back.
+/// Behind a system prompt the take is kept, but nothing ends it by itself
+/// until the app is back: neither its pause nor its time limit.
 class SwarmVoice extends ChangeNotifier {
   SwarmVoice({required this.create, required this.insert});
 
@@ -50,6 +52,14 @@ class SwarmVoice extends ChangeNotifier {
 
   /// Hears the app go to the background, from the first tap.
   AppLifecycleListener? _lifecycle;
+
+  /// The app is in front: not behind a system prompt or Control Center, nor
+  /// gone. Only then does a take end by itself and go to be transcribed.
+  bool _inFront = true;
+
+  /// The take reached [VoiceInputController.maxTake] while the app was not
+  /// in front: it ends as the app comes back.
+  bool _limitReached = false;
 
   /// The voice input, from the first tap: a recorder opens a platform
   /// channel, and a chat nobody talks to should not.
@@ -94,19 +104,53 @@ class SwarmVoice extends ChangeNotifier {
     final voice = _voice = create();
     voice.addListener(_changed);
     voice.level.addListener(_heard);
-    // ⚠️ Not on `inactive`: the microphone permission prompt itself leaves the
-    // app inactive, and so do Control Center and a call's banner — the app is
-    // still in front, and the take it asked for must survive them.
-    _lifecycle = AppLifecycleListener(
-      onStateChange: (state) {
-        if (state == AppLifecycleState.hidden ||
-            state == AppLifecycleState.paused ||
-            state == AppLifecycleState.detached) {
-          hide();
-        }
-      },
-    );
+    voice.onTakeLimit = () async => _limit(voice);
+    final state = WidgetsBinding.instance.lifecycleState;
+    _inFront = state == null || state == AppLifecycleState.resumed;
+    _lifecycle = AppLifecycleListener(onStateChange: _lifecycleChanged);
     return voice;
+  }
+
+  void _lifecycleChanged(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        _inFront = true;
+        _back();
+      // ⚠️ Kept, not thrown away: the microphone permission prompt itself
+      // leaves the app inactive, and so do Control Center and a call's banner,
+      // and the take asked for must survive them. Only its ending waits.
+      case AppLifecycleState.inactive:
+        _inFront = false;
+        _stopPause();
+      case AppLifecycleState.hidden ||
+          AppLifecycleState.paused ||
+          AppLifecycleState.detached:
+        _inFront = false;
+        hide();
+    }
+  }
+
+  /// The app is back in front: a take that reached its limit meanwhile ends
+  /// now, and a quiet after speech starts its pause again.
+  void _back() {
+    final voice = _voice;
+    if (voice == null || voice.status != VoiceInputStatus.listening) return;
+    if (_limitReached) {
+      _limitReached = false;
+      _finish(voice);
+      return;
+    }
+    _heard();
+  }
+
+  /// The take reached [VoiceInputController.maxTake]: it ends into the box,
+  /// as a tap would — once the app is in front, never behind a prompt.
+  void _limit(VoiceInputController voice) {
+    if (_inFront) {
+      _finish(voice);
+    } else {
+      _limitReached = true;
+    }
   }
 
   /// Ends the take, its words into the draft. A take that fails keeps the
@@ -125,6 +169,7 @@ class SwarmVoice extends ChangeNotifier {
     if (_voice?.status != VoiceInputStatus.listening) {
       _stopPause();
       _spoke = false;
+      _limitReached = false;
     }
     notifyListeners();
   }
@@ -140,7 +185,7 @@ class SwarmVoice extends ChangeNotifier {
       if (level >= _speech) _spoke = true;
       return;
     }
-    if (!_spoke) return;
+    if (!_spoke || !_inFront) return;
     _pauseTimer ??= Timer(pause, () {
       _pauseTimer = null;
       if (!_disposed && voice.status == VoiceInputStatus.listening) {

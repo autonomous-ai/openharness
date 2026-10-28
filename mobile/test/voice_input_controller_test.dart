@@ -30,6 +30,42 @@ void main() {
     language.dispose();
   });
 
+  test('a take that reaches its limit ends there, its words kept for the '
+      'next send', () {
+    fakeAsync((async) {
+      backend.replies.add('a long thought');
+      unawaited(voice.startListening());
+      async.flushMicrotasks();
+
+      async.elapse(VoiceInputController.maxTake);
+      async.flushMicrotasks();
+
+      expect(recorder.stops, 1);
+      expect(voice.status, VoiceInputStatus.idle);
+      expect(voice.transcript, 'a long thought');
+    });
+  });
+
+  test('an owner that takes over the limit is told, and the take runs on', () {
+    fakeAsync((async) {
+      var told = 0;
+      voice.onTakeLimit = () async => told++;
+      unawaited(voice.startListening());
+      async.flushMicrotasks();
+
+      async.elapse(VoiceInputController.maxTake - const Duration(seconds: 1));
+      expect(told, 0);
+      async.elapse(const Duration(seconds: 1));
+      async.flushMicrotasks();
+
+      expect(told, 1);
+      expect(recorder.stops, 0);
+      expect(backend.calls, isEmpty);
+      expect(voice.status, VoiceInputStatus.listening);
+      voice.clear();
+    });
+  });
+
   test('at rest until the mic is pressed', () async {
     expect(voice.isIdle, isTrue);
     expect(recorder.starts, 0);

@@ -405,6 +405,106 @@ void main() {
     expect(find.byType(VoiceMicCore), findsNothing, reason: 'back at rest');
   });
 
+  // Review of #2014 at 42c8eac9c: the reviewer's probe, in its order.
+  testWidgets('a pause under a system prompt sends nothing; the take waits '
+      'for the app to be back', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    stt.replies.add('said before Control Center');
+    await tapMic(tester);
+    recorder.meter.value = 0.8;
+    await tester.pump(const Duration(milliseconds: 500));
+
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    recorder.meter.value = 0.02;
+    await tester.pump(const Duration(seconds: 4));
+    expect(stt.calls, isEmpty, reason: 'Control Center over the chat');
+    expect(recorder.recording, isTrue, reason: 'the take is kept');
+
+    await lifecycle(tester, [AppLifecycleState.resumed]);
+    await tester.pump(const Duration(milliseconds: 2900));
+    expect(recorder.recording, isTrue, reason: 'the pause starts again');
+    await tester.pump(const Duration(milliseconds: 200));
+    await frames(tester);
+    expect(box(tester), 'said before Control Center');
+    expect(fake.commands, isEmpty);
+  });
+
+  testWidgets('a pause already counting stops under a system prompt, and the '
+      'take goes if the app then goes away', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    await tapMic(tester);
+    recorder.meter.value = 0.8;
+    await tester.pump(const Duration(milliseconds: 500));
+    recorder.meter.value = 0.02;
+    await tester.pump(const Duration(seconds: 2));
+
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    await tester.pump(const Duration(seconds: 4));
+    expect(stt.calls, isEmpty);
+    expect(recorder.recording, isTrue);
+
+    await lifecycle(tester, [
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ]);
+    await lifecycle(tester, [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]);
+    await tester.pump(const Duration(seconds: 5));
+    expect(recorder.cancels, 1);
+    expect(stt.calls, isEmpty);
+    expect(box(tester), isEmpty);
+  });
+
+  testWidgets('a take that reaches its limit puts its words in the box', (
+    tester,
+  ) async {
+    await pump(tester);
+    stt.replies.add('five minutes of it');
+    await tapMic(tester);
+
+    await tester.pump(const Duration(minutes: 5));
+    await frames(tester);
+
+    expect(recorder.recording, isFalse);
+    expect(box(tester), 'five minutes of it');
+    expect(fake.commands, isEmpty);
+  });
+
+  testWidgets('a take that reaches its limit under a system prompt is held '
+      'until the app is back', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    stt.replies.add('held over the limit');
+    await tapMic(tester);
+
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    await tester.pump(const Duration(minutes: 5, seconds: 10));
+    expect(stt.calls, isEmpty);
+    expect(recorder.recording, isTrue);
+
+    await lifecycle(tester, [AppLifecycleState.resumed]);
+    await frames(tester);
+    expect(recorder.recording, isFalse);
+    expect(box(tester), 'held over the limit');
+  });
+
   testWidgets('back on the chat, the mic starts a fresh take', (tester) async {
     await pump(tester);
     stt.replies.add('second try');
