@@ -1,8 +1,11 @@
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/finger_target.dart';
 import '../identity.dart';
+import '../model.dart';
+import '../until.dart';
 import 'format.dart';
 import 'model.dart';
 
@@ -13,19 +16,18 @@ const _nameInset = 32.0;
 TextStyle _figures(TextStyle style) =>
     style.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
 
-/// One person in the Humans section: avatar, name and this week's points in
-/// fixed columns, with Shipped, Unblocked and Lent on a quiet line beneath.
-/// Without a [score] (no board yet, or a server without one) only the name.
+/// One person in the Humans section: avatar, name, status and this week's
+/// points in fixed columns, with Shipped, Unblocked and Lent on a quiet line
+/// beneath. Without a [score] (no board yet, or a server without one) only the
+/// name and status.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
     super.key,
-    required this.personId,
-    required this.name,
-    required this.email,
+    required this.person,
     required this.score,
     required this.onTap,
   });
-  final String personId, name, email;
+  final SuperTabPerson person;
   final SuperTabPersonScore? score;
   final VoidCallback onTap;
 
@@ -44,7 +46,7 @@ class LeaderboardPersonRow extends StatelessWidget {
       ),
     );
     return InkWell(
-      key: ValueKey('super-person-$personId'),
+      key: ValueKey('super-person-${person.id}'),
       onTap: onTap,
       child: ConstrainedBox(
         // A phone's row is a finger's height; a mouse keeps 36.
@@ -60,20 +62,29 @@ class LeaderboardPersonRow extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  SuperTabAvatar(
-                    identity: 'person:$personId',
-                    name: name,
-                    size: 24,
-                  ),
+                  SuperTabAvatar.person(person, size: 24),
                   const SizedBox(width: _nameInset - 24),
                   Expanded(
                     child: Tooltip(
-                      message: email,
-                      child: Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: DesktopChrome.control(),
+                      message: person.email,
+                      child: SuperTabUntil(
+                        until: person.status?.until,
+                        builder: (context) => Text.rich(
+                          TextSpan(
+                            text: superTabPersonName(person.email),
+                            children: [
+                              if (person.statusAt(clock.now())
+                                  case final status?)
+                                TextSpan(
+                                  text: '  ${status.text}',
+                                  style: DesktopChrome.metadata(),
+                                ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.control(),
+                        ),
                       ),
                     ),
                   ),

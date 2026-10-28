@@ -1951,13 +1951,13 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.routeDecision(owner, tab, id)).toMatchObject({ outcome: 'done', assignmentId: second })
   })
 
-  it('limits route records to 30 per tab per hour', async () => {
+  it('records more than 30 routes in an hour: there is no hourly cap', async () => {
     const { tab, lead } = await fixture()
     const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Docs.' },
       candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'claude', model: 'haiku', effort: 'auto', quality: 1, cost: 1, title: 'New agent', label: 'New agent' }],
       excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
     for (let i = 0; i < 30; i++) await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)
-    await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 })
+    await expect(run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).resolves.toBeDefined()
   })
 })
 
@@ -2696,7 +2696,7 @@ describe('Lead mentions', () => {
     const [mention, ...rest] = await list(tab, peer, 'waiting')
     expect(rest).toEqual([])
     expect(mention).toEqual({ id: expect.any(String), projectId: 'lead', projectName: 'Pilot', conversationId: group, conversationTitle: 'Copy review',
-      messageId, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
+      messageId, leadId: lead, leadName: expect.any(String), text: text.slice(0, 200), createdAt: expect.any(String), resolvedAt: null, resolvedBy: null })
     expect(mention!.leadName).toBe((await waiting(tab, owner)).agents.find(a => a.id === lead)!.displayName)
     expect(await list(tab, owner, 'waiting')).toEqual([])
     expect(await list(tab, peer, 'earlier')).toEqual([])

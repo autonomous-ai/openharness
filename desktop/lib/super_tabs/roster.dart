@@ -26,6 +26,7 @@ import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
 import 'model.dart';
+import 'profile_sheet.dart';
 import 'section_heading.dart';
 import 'team_glance.dart';
 import 'team_glance_panel.dart';
@@ -240,7 +241,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return native ?? HarnessActivity.unknown;
   }
 
-  /// A person's email and role, and their week when the board has them.
+  /// A person's email and role, and their week when the board has them. One's
+  /// own also opens the profile sheet, where one's avatar and status change.
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
       showAppDialog<void>(
         context: context,
@@ -258,6 +260,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ],
           ),
           actions: [
+            if (person.id == c.accountId && c.canWrite)
+              TextButton(
+                key: const ValueKey('super-profile-edit'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  showSuperTabProfile(this.context, c);
+                },
+                child: const Text('Edit profile'),
+              ),
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
@@ -424,10 +435,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Row(
             children: [
-              SuperTabAvatar(
-                identity: 'agent:${agent.id}',
+              SuperTabAvatar.agent(
+                agent,
                 name: name,
                 size: 24,
+                engineBadge: false,
               ),
               const SizedBox(width: 8),
               Expanded(child: _agentIdentity(name, role, badge)),
@@ -550,9 +562,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         ),
       for (final person in ranked)
         LeaderboardPersonRow(
-          personId: person.id,
-          name: superTabPersonName(person.email),
-          email: person.email,
+          person: person,
           score: scores[person.id],
           onTap: () => _person(person, scores[person.id]),
         ),
