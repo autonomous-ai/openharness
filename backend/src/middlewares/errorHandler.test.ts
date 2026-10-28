@@ -27,6 +27,21 @@ describe('the shared error handler', () => {
     expect(res.json()).toEqual({ success: false, error: { code: 'SWARM_BUSY', message: 'This Swarm is busy. Try again in a moment.' } })
   })
 
+  it('asks a migrating Swarm\'s caller to retry too', async () => {
+    thrown = new SuperTabError('SWARM_MIGRATING', 'This Swarm is being updated. Try again in a moment.', 503)
+    const res = await app.inject({ method: 'GET', url: '/fails' })
+    expect(res.statusCode).toBe(503)
+    expect(res.headers['retry-after']).toBe('2')
+  })
+
+  it('sends no Retry-After with a 503 that waiting does not change', async () => {
+    thrown = new SuperTabError('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)
+    const res = await app.inject({ method: 'GET', url: '/fails' })
+    expect(res.statusCode).toBe(503)
+    expect(res.headers['retry-after']).toBeUndefined()
+    expect(res.json().error.code).toBe('ATTACHMENTS_UNAVAILABLE')
+  })
+
   it('answers any other Swarm refusal with its own status', async () => {
     thrown = new SuperTabError('FORBIDDEN', 'Not yours.', 403)
     const res = await app.inject({ method: 'GET', url: '/fails' })
@@ -47,12 +62,12 @@ describe('the shared error handler', () => {
     }
   })
 
-  it('answers a duplicate key as 409, not 500', async () => {
+  it('answers a genuine duplicate key as 409 in its own words, not 500', async () => {
     thrown = prismaError('P2002', 'Unique constraint failed on the constraint: `SwarmGroup_pkey`')
     const res = await app.inject({ method: 'GET', url: '/fails' })
     expect(res.statusCode).toBe(409)
     expect(res.headers['retry-after']).toBeUndefined()
-    expect(res.json().error).toEqual({ code: 'CONFLICT', message: 'This was changed at the same moment by another request. Read it again.' })
+    expect(res.json().error).toEqual({ code: 'DUPLICATE', message: 'This already exists, so nothing new was saved.' })
   })
 
   it('keeps anything else a 500 and logs its stack', async () => {

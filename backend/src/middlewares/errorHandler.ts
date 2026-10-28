@@ -4,6 +4,9 @@ import { sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { SuperTabError } from '../superTabs/model.js'
 
+/** The Swarm 503s that waiting fixes. Others (no attachment store, no picture uploads) are this server's setup. */
+const RETRYABLE_SWARM_CODES = new Set(['SWARM_BUSY', 'SWARM_MIGRATING'])
+
 /** How long a busy answer asks the caller to wait: just past the Swarm transaction's longest backoff (1.5 s). */
 const BUSY_RETRY_AFTER_SECONDS = 2
 
@@ -38,7 +41,7 @@ export async function errorHandler(
 
   // A Swarm refusal or busy answer thrown outside the Super Tab routes (the harness-shares list asks the Swarm store).
   if (error instanceof SuperTabError) {
-    if (error.status === 503) {
+    if (RETRYABLE_SWARM_CODES.has(error.code)) {
       logger.warn('Swarm busy', { code: error.code, path: request.url, method: request.method })
       return sendBusy(reply, error.message, error.code)
     }
@@ -46,7 +49,7 @@ export async function errorHandler(
   }
 
   // A database transaction that expired or could not start (P2028) is load, not a fault: the caller retries.
-  // A unique key another request took at the same moment (P2002) is a conflict, never a 500.
+  // A unique key still taken after the retries (P2002) is a genuine duplicate: a conflict, never a 500.
   const prisma = prismaCode(error)
   if (prisma === 'P2028') {
     logger.warn('Database transaction expired or could not start', { path: request.url, method: request.method, message: error.message })
@@ -54,7 +57,7 @@ export async function errorHandler(
   }
   if (prisma === 'P2002') {
     logger.warn('Duplicate key', { path: request.url, method: request.method, message: error.message })
-    return sendError(reply, 'This was changed at the same moment by another request. Read it again.', 'CONFLICT', 409)
+    return sendError(reply, 'This already exists, so nothing new was saved.', 'DUPLICATE', 409)
   }
 
   if (error.validation) {

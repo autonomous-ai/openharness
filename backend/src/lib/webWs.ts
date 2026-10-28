@@ -83,7 +83,6 @@ export function declaredClient(query: URLSearchParams): { surface: 'mobile' | 'w
   return { surface, build: surface === 'mobile' ? { release: query.get('release'), debug: query.get('debug') === '1' } : {} }
 }
 
-/** HTTP upgrade hook for `/api/web-ws`. Subprotocol = SSO access token or legacy agent apiKey. */
 /** Sends `frame` down once `wake` has made sure its machine runs, to the client still selected then. A deselect, another
  *  machine's select or the socket's close during the wait leaves no client for it, and the frame is dropped: it was meant
  *  for that machine (2026-10-28 prod: "Cannot read properties of null (reading 'sendDown')"). A failed wake sends nothing. */
@@ -94,6 +93,7 @@ export async function sendWhenAwake(selected: () => HubClient | null, wake: () =
   if (selected() === target) target.sendDown(frame)
 }
 
+/** HTTP upgrade hook for `/api/web-ws`. Subprotocol = SSO access token or legacy agent apiKey. */
 export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
   const cred = extractKey(req)
   if (!cred) { socket.destroy(); return }

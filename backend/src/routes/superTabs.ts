@@ -76,6 +76,13 @@ async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   }
 }
 
+/** A terminal recording's host stops recording for good on a 409 (cli superTabs/native.ts). A duplicate key that outlived
+ *  every transaction retry is not the recording's fault, so it answers busy, which the host retries. */
+function busyOnDuplicate(error: unknown): never {
+  if ((error as { code?: unknown } | null)?.code === 'P2002') fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
+  throw error
+}
+
 /** Uses the normal authenticated control API. It never accepts caller-provided host/contributor identities.
  *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
 /** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
@@ -140,7 +147,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.native.read(req.user!, req.params.tabId, req.params.contextId)))
   app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeEventSchema> }>('/api/super-tabs/:tabId/native/:contextId',
     { preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
-    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body)))
+    (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body).catch(busyOnDuplicate)))
   app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
   app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
     (req, reply) => respond(reply, () => store.saveAccountPolicy(req.user!, req.body.revision, req.body.policy)))

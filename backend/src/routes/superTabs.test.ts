@@ -12,7 +12,7 @@ describe('Super Tab route failures', () => {
     app = Fastify()
     app.setErrorHandler(errorHandler)
     app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
-    const store = { hostGrids: async () => { throw thrown } }
+    const store = { hostGrids: async () => { throw thrown }, native: { append: async () => { throw thrown } } }
     await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: {} as never })
     await app.ready()
   })
@@ -38,5 +38,15 @@ describe('Super Tab route failures', () => {
     const res = await app.inject({ method: 'GET', url: '/api/super-tabs/grids' })
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
+  })
+
+  it('answers a terminal recording\'s duplicate key as busy, so the host keeps recording and retries', async () => {
+    // The host stops a recording for good on a 409 (cli superTabs/native.ts); a duplicate that outlived every retry is
+    // not the recording's fault.
+    thrown = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' })
+    const res = await app.inject({ method: 'POST', url: '/api/super-tabs/tab-1/native/ctx-1', payload: { turnId: 'turn-1', kind: 'prompt', previousEventId: null, text: 'hi', truncated: false, interrupted: false } })
+    expect(res.statusCode).toBe(503)
+    expect(res.headers['retry-after']).toBe('2')
+    expect(res.json().error.code).toBe('SWARM_BUSY')
   })
 })
