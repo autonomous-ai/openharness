@@ -1,5 +1,6 @@
 import { realTeamRelayLaunch } from '../team/relay.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
+import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
 import { createModelControls } from './engines/modelControls.js'
@@ -1341,8 +1342,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hermesDb })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
+  // An agent whose turns keep ending at once has its automatic writes held a while (core/turns/shortTurnGuard.ts).
+  const shortTurns = createShortTurnGuard({ now: Date.now, log: (line) => console.warn(line) })
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
+    shortTurns,
     // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
     ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
     readScreen: screens.read,
@@ -1812,6 +1816,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A live turn, however short and with no input of its own (a /loop wake-up, a background notification), restarts
     // the agent's quiet period: the mover's ticks alone, seconds apart, would miss it.
     working: (agentId) => hostQuiet.noteActivity(agentId, 'working'),
+    shortTurns,
   })
   // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
   const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })
@@ -1825,6 +1830,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   conversationOwners.settle()
   const forgetSession = createForgetSession({
     owners: conversationOwners,
+    shortTurns,
     forgetAttach: attach.forget,
     onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,

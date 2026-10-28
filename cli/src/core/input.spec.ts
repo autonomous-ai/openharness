@@ -11,6 +11,7 @@ import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
 import { createInput, createMessageRequest, deviceInputDeps, heldScreen, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
+import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
@@ -134,6 +135,19 @@ describe('the session input controller\'s dependencies', () => {
     expect(wired.validateRuntime).toBe(given.terminal.validateTerminal)
     expect(wired.capture).toBe(given.terminal.captureTerminal)
     expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBeNull()
+  })
+
+  it('holds an automatic write to an agent the short-turn guard holds, without reading its pane, until the hold ends', async () => {
+    let at = 0
+    const shortTurns = createShortTurnGuard({ now: () => at, log: () => {} })
+    for (let i = 0; i < 10; i++) { shortTurns.started('s1', 'a1'); at += 1_000; shortTurns.ended('s1') }
+    const { deps: given } = deps({ shortTurns })
+    const wired = sessionInputDeps(given, () => lock([]))
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBe('team_waiting_control')
+    expect(given.terminal.captureTerminal).not.toHaveBeenCalled()
+    expect(await wired.beforeTeamWrite!(agents.get('cx')!, 'team:service:superTabs:d2')).toBeNull()
+    at += 30_000
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!, 'team:service:superTabs:d1')).toBeNull()
   })
 
   it('hands the controller the move gate when it was given one, and none otherwise', () => {
