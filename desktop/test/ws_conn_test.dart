@@ -515,6 +515,53 @@ void main() {
     expect(conn!.isClosed, isTrue);
   });
 
+  // The browser reads its version from the host's release file at start-up; a socket dialled while that read is out
+  // waits for it a moment, so the web build's first sockets carry it too (the e2e harness counts them per kind).
+  test('a socket waits up to a second for the version read, then dials with it', () async {
+    hub = await FakeHub.start();
+    final read = Completer<void>();
+    appVersionRead = read.future;
+    addTearDown(() {
+      appVersionRead = null;
+      declaredAppVersion = null;
+    });
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    unawaited(conn!.connect());
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    declaredAppVersion = '1.3.58';
+    read.complete();
+    await conn!.request('agents_list');
+    expect(hub.declaredVersions, ['1.3.58']);
+  });
+
+  test('a version read that never ends holds a dial for a second at most', () async {
+    hub = await FakeHub.start();
+    appVersionRead = Completer<void>().future;
+    addTearDown(() => appVersionRead = null);
+    conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'access-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+    );
+    final started = DateTime.now();
+    await conn!.connect();
+    await conn!.request('agents_list');
+    expect(DateTime.now().difference(started), lessThan(const Duration(seconds: 2)));
+    expect(hub.declaredVersions, [null]);
+  });
+
   test(
     'a fixed reconnect delay retries at that pace instead of backing off',
     () async {

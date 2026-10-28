@@ -53,14 +53,25 @@ const connectionStableAfter = Duration(minutes: 1);
 /// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
 String? declaredAppVersion;
 
+/// The read behind [declaredAppVersion] while it is out; null natively before start-up and in tests.
+Future<void>? appVersionRead;
+
 /// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
-Future<void> rememberAppVersionForSockets() async {
-  try {
-    declaredAppVersion = await runningAppVersion();
-  } catch (_) {
-    // Sockets go on saying what they are, without a version.
-  }
+Future<void> rememberAppVersionForSockets() {
+  final read = () async {
+    try {
+      declaredAppVersion = await runningAppVersion();
+    } catch (_) {
+      // Sockets go on saying what they are, without a version.
+    }
+  }();
+  appVersionRead = read;
+  return read;
 }
+
+/// How long a backend dial waits for [appVersionRead]: the browser reads its version from the
+/// host's release file, and a socket dialled before that read lands would carry none.
+const _appVersionWait = Duration(seconds: 1);
 
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
@@ -399,6 +410,11 @@ class WsConn {
         }
         uri = local;
       } else {
+        final versionRead = appVersionRead;
+        if (versionRead != null && declaredAppVersion == null) {
+          await versionRead.timeout(_appVersionWait, onTimeout: () {});
+          if (_closing) return;
+        }
         final base = Uri.parse(
           '$wsBaseUrl/api/${_directObserver ? 'observer-ws' : 'web-ws'}',
         );
