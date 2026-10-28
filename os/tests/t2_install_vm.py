@@ -105,7 +105,7 @@ def main():
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             text = screen_text(vm, label + '-offline-first-use')
-            if 'me@harness' in re.sub(r'\s+', '', text):
+            if 'me@harness' in re.sub(r'\s+', '', text).lower():
                 break
             if 'connect to wi-fi' in text:
                 vm.keys('meta_l', 't')

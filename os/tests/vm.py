@@ -550,10 +550,11 @@ def check_graphical_keyboard(vm, name, *, allow_welcome=False):
     vm.keys('shift', 't')
     # New terminal is asynchronous. Require both a newly focused pane and its
     # empty shell prompt before typing, rather than sleeping for a guessed time.
+    # The installer's `harness` becomes the hotspot's `Harness-XXXX` once setup names the computer.
     vm.command('for n in $(seq 1 60); do '
                'current=$(hn display-message -p "#{pane_id}"); '
                'if test "$current" != ' + shlex.quote(previous_pane[1]) +
-               ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@harness [^]]*\]\$$') +
+               ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@[Hh]arness[^ ]* [^]]*\]\$$') +
                '; then exit 0; fi; sleep .25; done; exit 1', timeout=25)
     marker = 'keyboard-' + name + '-ready'
     vm.type_probe('echo ' + marker)

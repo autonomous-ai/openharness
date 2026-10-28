@@ -107,7 +107,7 @@ def main():
         record[label + '_boot_id'] = vm.read_file('/proc/sys/kernel/random/boot_id').decode().strip()
         for _ in range(60):
             text = screen_text(vm, label + '-workspace')
-            if 'me@harness' in re.sub(r'\s+', '', text):
+            if 'me@harness' in re.sub(r'\s+', '', text).lower():
                 break
             if 'connect to wi-fi' in text:
                 vm.keys('meta_l', 't')

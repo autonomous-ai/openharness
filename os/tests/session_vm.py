@@ -167,7 +167,7 @@ def installed_session(vm, config, result):
     while True:
         vm.send('\n')
         try:
-            vm.wait(r'\[me@harness [^\r\n]*\]\$ ', timeout=2)
+            vm.wait(r'\[me@[Hh]arness[^ ]* [^\r\n]*\]\$ ', timeout=2)
             break
         except TimeoutError:
             if time.monotonic() >= deadline:

@@ -124,7 +124,7 @@ def main():
         while True:
             vm.send('\n')
             try:
-                vm.wait(r'\[me@harness [^\r\n]*\]\$ ', timeout=2)
+                vm.wait(r'\[me@[Hh]arness[^ ]* [^\r\n]*\]\$ ', timeout=2)
                 break
             except TimeoutError:
                 assert time.monotonic() < deadline, 'Serial did not resume'

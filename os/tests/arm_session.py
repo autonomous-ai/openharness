@@ -141,7 +141,7 @@ class SessionVM(VM):
             raise RuntimeError('No current pane before keyboard probe')
         self.keys('meta_l', 't')
         self.wait_user('test "$(hn display-message -p "#{pane_id}")" != ' + shlex.quote(old[0]) +
-                       ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@harness [^]]*\]\$'))
+                       ' && hn capture-pane -p | grep -Eq ' + shlex.quote(r'^\[me@[Hh]arness[^ ]* [^]]*\]\$'))
         # Separate words stay legible to OCR in narrow restored panes; the
         # shell capture still requires the exact independently typed line.
         marker = 'arm ' + name.replace('-', ' ') + ' ready'
