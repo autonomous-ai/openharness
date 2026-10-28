@@ -1,3 +1,4 @@
+import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
 import { activeWork, agentRole, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, projectsOf } from './projects.js'
@@ -69,6 +70,8 @@ export function stopIdleWorkers(state: SuperTabState, projectId: string, now: nu
   const rows: MessageDraft[] = []
   for (const worker of state.agents) {
     if (!worker.startedSession || worker.workDecision === 'stop' || busy.has(worker.id) || agentProjectId(state, worker) !== projectId) continue
+    // A Buddy waits for its owner, however long; only they, or the Swarm's owner turning Buddies off, stop it (buddies.ts).
+    if (isBuddy(worker)) continue
     if (state.conversations.some(c => c.leadId === worker.id || (activeWork(c) && c.assignment!.agentId === worker.id))) continue
     if (waitingToResume(state, worker)) continue
     const groups = groupsOf(state, worker, asleep)

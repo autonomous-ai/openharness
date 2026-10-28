@@ -130,6 +130,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   // owner's message there asking for it.
   z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, goal: z.string().trim().min(1).max(2000),
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']) }).strict(),
+  z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
   z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -320,6 +321,7 @@ function leadWorkerBounced(recent: CommandContext['recent'] = [], leadId: string
 
 /** A Reviewer is assigned only review groups, and a review group only a Reviewer. */
 function assignable(group: Conversation, worker: Agent): void {
+  if (isBuddy(worker)) fail('BUDDY_NOT_ASSIGNABLE', 'A Buddy is never assigned work: it brainstorms with its owner. Assign an Engineer.')
   const reviewer = agentRole(worker) === 'reviewer'
   if (reviewer && !group.reviewOf) fail('REVIEWER_NOT_ASSIGNABLE', 'A Reviewer is assigned only review groups. Assign a Builder.')
   if (!reviewer && group.reviewOf) fail('REVIEW_GROUP', 'A review group is assigned only to a Reviewer.')
@@ -1322,6 +1324,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         { kind: 'buddy-proposal', personId: owner.id, ownerMessageId: command.ownerMessageId })
       break
     }
+    case 'buddy.remove': {
+      if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person removes their own Buddy.', 403)
+      const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
+      const chatId = buddyChatId(project.id, me)
+      const target = state.agents.find(a => a.buddyOf?.personId === me.id && agentProjectId(state, a) === project.id)
+      const starting = state.starts?.filter(s => s.request.conversationId === chatId && !s.harnessId && !s.error) ?? []
+      if (!target && !starting.length) fail('NOT_FOUND', 'You have no Buddy in this project.', 404)
+      for (const start of starting) start.error = 'Removed by its owner before it started.'
+      // Its session closes; its chat stays, and adding a Buddy again reopens it.
+      if (target) removeAgent(target)
+      break
+    }
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
@@ -1389,7 +1403,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
         if (!start.poolSettled) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
-          : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
+          : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
         start.poolSettled = true
         break
       }
@@ -1423,8 +1437,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
-      if (start.request.buddyOf) message(group.id, buddyReady(start.request.name), [], null, SYSTEM_ROW)
-      else message(group.id, start.poolGeneration
+      // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
+      if (!start.request.buddyOf) message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
         : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
       break
@@ -1561,6 +1575,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, command.conversationId)
       const group = open(state, command.conversationId)
       const member = agent(state, command.agentId)
+      if (isBuddy(member)) fail('BUDDY_CHAT_ONLY', 'A Buddy stays in its own chat: its owner\'s alone.', 403)
       sameProject(state, group, member)
       if (member.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       const reviewer = agentRole(member) === 'reviewer'
@@ -1628,7 +1643,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal) ?? []) {
         removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm with its owner`)
       }
-      for (const target of state.agents.filter(a => a.contributorId === member.id)) removeAgent(target)
+      // Their Buddies go with them, on whosever machine they run.
+      for (const target of state.agents.filter(a => a.contributorId === member.id || a.buddyOf?.personId === member.id)) removeAgent(target)
       state.people = state.people.filter(p => p.id !== member.id)
       state.invitations = state.invitations.filter(i => i.email !== member.email)
       result.removedUserId = member.id

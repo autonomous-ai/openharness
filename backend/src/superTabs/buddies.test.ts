@@ -167,12 +167,14 @@ describe('adding a Buddy', () => {
   it('makes the started agent a Buddy in its owner\'s chat, and says it is ready there', () => {
     const f = fresh()
     const added = addBuddy(f, peer, f.app.projectId)
-    const joined = f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'native', configuration }, peer,
-      { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } })
+    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+    const joined = f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'native', configuration }, peer, host)
     const buddy = f.state.agents.find(a => a.id === joined.result.agentId)!
     expect(buddy.buddyOf).toEqual({ personId: 'peer', generation: 'first' })
     expect(group(f, added.result.conversationId as string).agentIds).toEqual([buddy.id])
-    expect(joined.messages.map(m => [m.conversationId, m.text])).toEqual([[added.result.conversationId, 'peer\'s Buddy is ready. Tell it what you have in mind.']])
+    expect(joined.messages).toEqual([])
+    const settled = f.run({ type: 'agent.startSettled', startId: added.result.startId as string, warning: null }, peer, host)
+    expect(settled.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual([[added.result.conversationId, 'peer\'s Buddy is ready. Tell it what you have in mind.', []]])
   })
 
   it('is one per person and project, while it starts or runs; another project or person may have their own', () => {
@@ -335,5 +337,73 @@ describe('a Buddy\'s proposal to the PM', () => {
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal }, peer)).toThrow('Only a Buddy')
     f.state.buddies = undefined
     expect(() => propose()).toThrow('Buddies are off')
+  })
+})
+
+describe('removing a Buddy', () => {
+  /** fresh() with peer's Buddy started on peer's Mac. */
+  function running() {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+    const agentId = f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'native', configuration }, peer, host).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId: added.result.startId as string, warning: null }, peer, host)
+    return { f, chat: added.result.conversationId as string, agentId }
+  }
+
+  it('is its owner\'s: its session closes and its chat stays for them', () => {
+    const { f, chat, agentId } = running()
+    expect(() => f.run({ type: 'buddy.remove', projectId: f.app.projectId })).toThrow('no Buddy')
+    const removed = f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    expect(removed.cancelledAgents).toEqual([agentId])
+    expect(f.state.closingSessions).toEqual([{ agentId, machineId: 'peer-mac', harnessId: 'native', machineOwnerId: 'peer' }])
+    expect(group(f, chat)).toMatchObject({ agentIds: [], archived: false })
+    expect(addBuddy(f, peer, f.app.projectId).result.conversationId).toBe(chat)
+  })
+
+  it('cancels one still starting', () => {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toBe('Removed by its owner before it started.')
+  })
+
+  it('happens when its owner leaves the Swarm, whoever\'s machine it runs on', () => {
+    const { f, agentId } = running()
+    f.state.machines![0]!.contributorId = 'owner'
+    f.state.agents.find(a => a.id === agentId)!.contributorId = 'owner'
+    f.run({ type: 'member.remove', userId: 'peer' })
+    expect(f.state.agents.map(a => a.id)).not.toContain(agentId)
+  })
+
+  it('happens with its project', () => {
+    const { f, agentId } = running()
+    f.run({ type: 'project.delete', projectId: f.app.projectId })
+    expect(f.state.agents.map(a => a.id)).not.toContain(agentId)
+  })
+})
+
+describe('a Buddy is never a worker', () => {
+  it('is never assigned work nor added to a group', () => {
+    const f = setup()
+    f.run({ type: 'tab.buddies', enabled: true })
+    expect(() => f.run({ type: 'work.define', conversationId: f.group, brief: 'Do it', checks: [{ description: 'Done', independent: false }] })).not.toThrow()
+    expect(() => f.run({ type: 'work.assign', conversationId: f.group, agentId: 'buddy' })).toThrow('A Buddy is never assigned work')
+    expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: 'buddy', present: true, lead: false })).toThrow('A Buddy stays in its own chat')
+  })
+
+  it('is left alone by the idle tidy-up: it waits for its owner', async () => {
+    const { stopIdleWorkers } = await import('./tidy.js')
+    const f = setup(), now = 10 * 3_600_000
+    machine(f, 'machine', 'owner')
+    const buddy = f.state.agents.find(a => a.id === 'buddy')!
+    buddy.startedSession = { creationId: 'c', sessionId: 's', createdAt: new Date(0).toISOString() }
+    // An Engineer just like it, in the same chat, idle as long and reported clean, is stopped: the Buddy is not.
+    f.state.agents.push({ ...structuredClone(buddy), id: 'builder', harnessId: 'builder-harness', buddyOf: undefined })
+    group(f, f.chat).agentIds.push('builder')
+    Object.assign(f.state.machines![0]!.observation!, { receivedAt: now, runningHarnessIds: ['buddy-harness', 'builder-harness'],
+      harnessUncommitted: { 'buddy-harness': false, 'builder-harness': false } })
+    expect(stopIdleWorkers(f.state, f.app.projectId, now, new Set()).map(row => row.source)).toEqual([{ kind: 'idle-stop', agentId: 'builder' }])
+    expect(buddy.workDecision).toBeUndefined()
   })
 })
