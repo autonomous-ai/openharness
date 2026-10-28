@@ -1611,23 +1611,27 @@ export class SuperTabStore {
 
   /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
   private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
+    const rows: Prisma.SuperTabMessageCreateManyInput[] = []
+    const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     for (const message of messages) {
-      await tx.superTabMessage.create({ data: { id: message.id, tabId, conversationId: message.conversationId,
+      rows.push({ id: message.id, tabId, conversationId: message.conversationId,
         sequence: sequences.get(message.id)!, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
-        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] } })
+        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
-        await tx.superTabDelivery.create({ data: { id: stableId(message.id, recipient), tabId,
+        deliveries.push({ id: stableId(message.id, recipient), tabId,
           conversationId: message.conversationId, messageId: message.id, agentId: recipient, machineId: target.machineId,
           machineOwnerId: target.machineOwnerId,
           assignmentId: activeWork(group) && group.assignment?.agentId === recipient ? group.assignment.id : null,
           membershipGeneration: target.membershipGeneration, authorKind: message.author.kind,
-          authorId: message.author.id, authorGeneration: message.author.membershipGeneration } })
-        this.announce(tx, { machineId: target.machineId, tabId, agentId: recipient })
+          authorId: message.author.id, authorGeneration: message.author.membershipGeneration })
       }
     }
+    if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
+    for (const delivery of deliveries) this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
   }
 
   /** Once `tx` commits, never for an attempt that failed or was retried: told earlier, a host could read before the delivery
