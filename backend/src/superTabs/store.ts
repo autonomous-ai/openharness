@@ -1541,12 +1541,15 @@ export class SuperTabStore {
         ...(forward ? past(cursor.after!, cursor.afterId, 'gt') : cursor.before !== undefined ? past(cursor.before, cursor.beforeId, 'lt') : {}) }
       // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
       // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
+      // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again.
       const rows: SuperTabMessage[] = []
-      for (let skip = 0; rows.length <= 100; skip += 101) {
-        const order = forward ? 'asc' as const : 'desc' as const
-        const batch = await tx.superTabMessage.findMany({ where, orderBy: [{ sequence: order }, { id: order }], skip, take: 101 })
+      const order = forward ? 'asc' as const : 'desc' as const
+      for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
+        const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
+          orderBy: [{ sequence: order }, { id: order }], take: 101 })
         rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
         if (batch.length < 101) break
+        edge = batch.at(-1)
       }
       const page = rows.slice(0, 100)
       const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null

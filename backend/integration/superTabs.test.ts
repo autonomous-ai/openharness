@@ -1124,6 +1124,31 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(rest.next).toBeNull()
   })
 
+  it('reads each hidden row once on its way to a page, however many there are, even when they share a sequence', async () => {
+    const { tab, lead } = await fixture()
+    // 2,000 of the Lead's notices, as one command before the store by parts wrote them: on one sequence, between two posts.
+    const row = (id: string, sequence: number, hidden: boolean) => ({ id, tabId: tab, conversationId: 'lead', sequence,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: id, replyTo: null, recipientIds: hidden ? [lead] : [],
+      ...(hidden ? { source: { kind: 'agent-only' } } : {}) })
+    await db.superTabMessage.createMany({ data: [row('a-first', 0, false),
+      ...Array.from({ length: 2_000 }, (_, i) => row(`b-notice-${String(i).padStart(4, '0')}`, 1, true)), row('c-last', 2, false)] })
+    // What MongoDB reads of the messages for one page: an offset is walked in the index (keys), rows are fetched (documents).
+    const examined = async (read: () => Promise<unknown>) => {
+      await db.$runCommandRaw({ profile: 2 })
+      try { await read() } finally { await db.$runCommandRaw({ profile: 0 }) }
+      const { cursor } = await db.$runCommandRaw({ find: 'system.profile', filter: {}, projection: { ns: 1, keysExamined: 1, docsExamined: 1 }, limit: 1000 }) as
+        { cursor: { firstBatch: Array<{ ns: string; keysExamined?: number; docsExamined?: number }> } }
+      await db.$runCommandRaw({ drop: 'system.profile' })
+      return cursor.firstBatch.filter(entry => entry.ns.endsWith('.SuperTabMessage'))
+        .reduce((sum, entry) => sum + (entry.keysExamined ?? 0) + (entry.docsExamined ?? 0), 0)
+    }
+    let opened!: Awaited<ReturnType<typeof store.messages>>
+    expect(await examined(async () => { opened = await store.messages(owner, tab, 'lead', {}) })).toBeLessThan(6_000)
+    expect(opened.messages.map(m => m.id)).toEqual(['a-first', 'c-last'])
+    expect(opened.next).toBeNull()
+    expect((await store.messages(owner, tab, 'lead', { after: 0 })).messages.map(m => m.id)).toEqual(['c-last'])
+  })
+
   it('accepts an agent-only notice only from an agent to itself alone', async () => {
     const { tab, lead } = await fixture()
     const worker = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Worker', configuration: config, lead: false })).result.agentId as string
