@@ -276,6 +276,22 @@ describe('the models service', () => {
         vi.mocked(managedGridPath).mockReturnValue(null)
       }
     })
+
+    it('on Windows, which has no managed grid, follows the pin with the grid installed there — and installs none', async () => {
+      const platform = process.platform
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+      try {
+        vi.mocked(gridAvailable).mockReturnValue(false)
+        setup()
+        expect(ensureManagedGrid).not.toHaveBeenCalled()
+        vi.mocked(gridAvailable).mockReturnValue(true)
+        await vi.mocked(startGridPinRecheck).mock.calls.at(-1)![0]!.ensure!()
+        expect(ensureManagedGrid).toHaveBeenCalledOnce()
+      } finally {
+        Object.defineProperty(process, 'platform', { value: platform })
+        vi.mocked(gridAvailable).mockReturnValue(true)
+      }
+    })
   })
 
   describe('its port', () => {

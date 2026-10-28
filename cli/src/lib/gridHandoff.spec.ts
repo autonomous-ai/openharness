@@ -84,6 +84,21 @@ describe('handOffToGrid — which grid it runs', () => {
     expect(updateCheckSeenBy('override')).toBe('1')
   })
 
+  it('waits while an install holds grid calls back (gridCalls.ts)', async () => {
+    process.env.HARNESS_GRID_BIN = fakeGrid(join(root, 'elsewhere'), 'override')
+    const { handOffToGrid } = await load()
+    const { withGridCallsPaused } = await import('./gridCalls.js')
+    let finish: () => void = () => {}
+    const install = withGridCallsPaused(() => new Promise<void>((resolve) => { finish = resolve }))
+    const call = handOffToGrid('tok_1', { json: true })
+    // Spawning takes up to half a second on a busy Mac: give it well over that.
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    expect(ran('override')).toBe(false)
+    finish()
+    await install
+    expect((await call).code).toBe('OK')
+  })
+
   it('prefers the managed runtime over a grid on PATH', async () => {
     fakeGrid(join(root, 'path-bin'), 'path')
     process.env.PATH = join(root, 'path-bin')
