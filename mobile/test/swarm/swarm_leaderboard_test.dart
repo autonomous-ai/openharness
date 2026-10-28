@@ -15,6 +15,7 @@ void main() {
 
       expect(read.week, 1792454400000);
       expect(read.shipped, 19);
+      expect(read.shippedBefore, 11);
       expect(
         [for (final p in read.people) p.personId],
         ['diego', 'ken', 'dee'],
@@ -45,6 +46,7 @@ void main() {
       });
 
       expect(read.shipped, 0);
+      expect(read.shippedBefore, 0);
       final kim = read.people.single;
       expect(kim.points, 0);
       expect(kim.medal, isNull);

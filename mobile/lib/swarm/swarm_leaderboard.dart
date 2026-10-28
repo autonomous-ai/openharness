@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
 import 'model.dart';
@@ -29,12 +30,12 @@ void openSwarmLeaderboard(
   ),
 );
 
-/// One project's leaderboard, as the desktop's Humans section shows it and
-/// the approved mockup lays it out on a phone: what the team shipped in the
-/// week shown, the week in a picker, then each person with their cup or
-/// place, initial, name and points, and their 🚀 shipped, 🔓 unblocked and
-/// 💻 lent beneath. A person's row opens their week in a sheet. First place
-/// sparkles once as the page opens, unless Reduce Motion is on.
+/// One project's leaderboard, in the Team first design Tony chose: the
+/// team's week leads — what it shipped, big, and the week before — with the
+/// week picker in its corner; then "Who moved it", a card for each person
+/// with their initial, name and cup, what they shipped, unblocked and lent in
+/// words, and their points. A card opens the person's week in a sheet. First
+/// place sparkles once as the page opens, unless Reduce Motion is on.
 ///
 /// People are named from the members its Swarm already read; the board
 /// itself is read on open, on a pull, on another week, and every few minutes
@@ -201,22 +202,23 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
           final person? => superTabPersonName(person.email),
           null => 'Former member',
         };
+    final week = swarmWeekName(reader?.week, current);
+    final pickWeek = reader == null
+        ? null
+        : () => unawaited(_pickWeek(context, reader, current));
     return [
-      SizedBox(
-        height: 52,
-        child: Row(
-          children: [
-            if (board != null) _ShippedChip(board.shipped),
-            const Spacer(),
-            _WeekButton(
-              label: swarmWeekName(reader?.week, current),
-              onTap: reader == null
-                  ? null
-                  : () => unawaited(_pickWeek(context, reader, current)),
-            ),
-          ],
+      if (board != null)
+        _TeamCard(
+          week: week,
+          shipped: board.shipped,
+          before: board.shippedBefore,
+          onWeek: pickWeek,
+        )
+      else
+        Align(
+          alignment: Alignment.centerRight,
+          child: _WeekButton(label: week, onTap: pickWeek),
         ),
-      ),
       if (error != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
@@ -227,13 +229,20 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
           ),
         ),
       if (board == null || snapshot == null)
-        if (error == null)
+        if (error == null) ...[
+          if (board == null)
+            const SkeletonBlock(
+              child: Padding(
+                padding: EdgeInsets.only(bottom: 14),
+                child: Skeleton(height: 128, radius: 18),
+              ),
+            ),
           SwarmSkeletonRows(
             id: 'swarm-leaderboard-loading',
             rows: 4,
             round: true,
-          )
-        else
+          ),
+        ] else
           Align(
             alignment: Alignment.centerLeft,
             child: SwarmButton(
@@ -248,23 +257,24 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
           )
       else if (board.people.isEmpty)
         SwarmRow.line('Nobody is on the board yet.')
-      else
-        SwarmGroup(
-          children: [
-            for (final (i, score) in board.people.indexed)
-              _PersonRow(
-                key: ValueKey('swarm-leaderboard-person-${score.personId}'),
-                score: score,
-                name: nameOf(score.personId),
-                sparkle: i == 0 && _sparkling
-                    ? () => setState(() => _sparkling = false)
-                    : null,
-                onTap: () => unawaited(
-                  _showPerson(context, score, nameOf(score.personId)),
-                ),
+      else ...[
+        const SwarmCaption('Who moved it', first: true),
+        for (final (i, score) in board.people.indexed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: _PersonCard(
+              key: ValueKey('swarm-leaderboard-person-${score.personId}'),
+              score: score,
+              name: nameOf(score.personId),
+              sparkle: i == 0 && _sparkling
+                  ? () => setState(() => _sparkling = false)
+                  : null,
+              onTap: () => unawaited(
+                _showPerson(context, score, nameOf(score.personId)),
               ),
-          ],
-        ),
+            ),
+          ),
+      ],
     ];
   }
 
@@ -328,39 +338,119 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
   );
 }
 
-/// What the team shipped in the week shown, in a small chip.
-class _ShippedChip extends StatelessWidget {
-  const _ShippedChip(this.shipped);
+/// The team's week first (the Team first design Tony chose): what it
+/// shipped in the week shown, big, and what it shipped the week before, on
+/// the accent; the week picker in its corner.
+class _TeamCard extends StatelessWidget {
+  const _TeamCard({
+    required this.week,
+    required this.shipped,
+    required this.before,
+    required this.onWeek,
+  });
 
-  final int shipped;
+  /// "This week", "Last week", …: the week shown.
+  final String week;
+  final int shipped, before;
+  final VoidCallback? onWeek;
 
   @override
-  Widget build(BuildContext context) => Container(
-    key: const ValueKey('swarm-leaderboard-shipped'),
-    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-    decoration: BoxDecoration(
-      color: AppGlass.rowFill,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: AppGlass.hair),
-    ),
-    child: Text(
-      '🚀 $shipped shipped',
-      style: TextStyle(
-        color: AppPalette.textPrimary,
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
-        fontFeatures: const [FontFeature.tabularFigures()],
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final fill = AppPalette.accentOnSurface;
+    // Ink that reads on whichever accent the palette has.
+    final ink = ThemeData.estimateBrightnessForColor(fill) == Brightness.dark
+        ? Colors.white
+        : const Color(0xFF181818);
+    const figures = [FontFeature.tabularFigures()];
+    final earlier = week == 'This week' ? 'last week' : 'the week before';
+    return Semantics(
+      container: true,
+      label: 'Team ${week.toLowerCase()}: $shipped shipped, $before $earlier',
+      child: Container(
+        key: const ValueKey('swarm-leaderboard-team'),
+        margin: const EdgeInsets.fromLTRB(0, 6, 0, 18),
+        padding: const EdgeInsets.fromLTRB(18, 4, 4, 16),
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: ExcludeSemantics(
+                    child: Text(
+                      'Team ${week.toLowerCase()}',
+                      style: TextStyle(
+                        color: ink,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+                _WeekButton(label: week, onTap: onWeek, ink: ink),
+              ],
+            ),
+            ExcludeSemantics(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  const Text('🚀', style: TextStyle(fontSize: 34)),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$shipped',
+                    style: TextStyle(
+                      color: ink,
+                      fontSize: 44,
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                      fontFeatures: figures,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'shipped',
+                    style: TextStyle(
+                      color: ink,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            ExcludeSemantics(
+              child: Text(
+                '$before shipped $earlier',
+                style: TextStyle(
+                  color: ink.withValues(alpha: .85),
+                  fontSize: 14,
+                  fontFeatures: figures,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// The week shown and its arrow: opens the week picker.
 class _WeekButton extends StatelessWidget {
-  const _WeekButton({required this.label, required this.onTap});
+  const _WeekButton({required this.label, required this.onTap, this.ink});
 
   final String label;
   final VoidCallback? onTap;
+
+  /// Its colour on a fill; the page's own text colours without one.
+  final Color? ink;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -385,13 +475,16 @@ class _WeekButton extends StatelessWidget {
             children: [
               Text(
                 label,
-                style: TextStyle(color: AppPalette.textPrimary, fontSize: 15),
+                style: TextStyle(
+                  color: ink ?? AppPalette.textPrimary,
+                  fontSize: 15,
+                ),
               ),
               const SizedBox(width: 4),
               Icon(
                 LucideIcons.chevronDown300,
                 size: 18,
-                color: AppPalette.textSecondary,
+                color: ink ?? AppPalette.textSecondary,
               ),
             ],
           ),
@@ -401,10 +494,11 @@ class _WeekButton extends StatelessWidget {
   );
 }
 
-/// One person on the board: their cup or place, initial, name and points,
-/// and beneath, what they shipped, unblocked and lent.
-class _PersonRow extends StatelessWidget {
-  const _PersonRow({
+/// One person on the board as a card: their initial, name and cup, what
+/// they shipped, unblocked and lent in words, and their points; first
+/// place's points on gold.
+class _PersonCard extends StatelessWidget {
+  const _PersonCard({
     super.key,
     required this.score,
     required this.name,
@@ -419,16 +513,13 @@ class _PersonRow extends StatelessWidget {
   /// First place sparkling as the page opens; called once it has.
   final VoidCallback? sparkle;
 
+  /// First place's points, on a gold that reads on either ground.
+  static const _gold = Color(0xFFD9A520);
+
   @override
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     const figures = [FontFeature.tabularFigures()];
-    final quiet = TextStyle(
-      color: AppPalette.textSecondary,
-      fontSize: 13.5,
-      height: 1.35,
-      fontFeatures: figures,
-    );
     final medal = score.medal;
     return Semantics(
       button: true,
@@ -437,89 +528,105 @@ class _PersonRow extends StatelessWidget {
           '${score.shipped} shipped, ${score.unblocked} unblocked, '
           '${swarmHours(score.lentMs)} hours lent',
       excludeSemantics: true,
-      child: InkWell(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 60),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 10, 14, 10),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 30,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    alignment: Alignment.center,
-                    children: [
-                      Text(
-                        medal == null ? '${score.rank}' : swarmCup(medal),
-                        textAlign: TextAlign.center,
-                        style: medal == null
-                            ? TextStyle(
-                                color: AppPalette.textSecondary,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w500,
-                                fontFeatures: figures,
-                              )
-                            : const TextStyle(fontSize: 22, height: 1.1),
-                      ),
-                      if (sparkle case final done?)
-                        Positioned(
-                          top: -10,
-                          right: -8,
-                          child: _Sparkle(onDone: done),
+      child: Material(
+        color: AppGlass.rowFill,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onTap();
+          },
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 64),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+              child: Row(
+                children: [
+                  SwarmAvatar(id: score.personId, name: name, size: 40),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: AppPalette.textPrimary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.3,
+                                ),
+                              ),
+                            ),
+                            if (medal != null) ...[
+                              const SizedBox(width: 6),
+                              Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Text(
+                                    swarmCup(medal),
+                                    style: const TextStyle(
+                                      fontSize: 17,
+                                      height: 1.1,
+                                    ),
+                                  ),
+                                  if (sparkle case final done?)
+                                    Positioned(
+                                      top: -10,
+                                      right: -14,
+                                      child: _Sparkle(onDone: done),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ],
                         ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SwarmAvatar(id: score.personId, name: name),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppPalette.textPrimary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                          height: 1.3,
-                        ),
-                      ),
-                      const SizedBox(height: 3),
-                      Wrap(
-                        spacing: 14,
-                        children: [
-                          Text('🚀 ${score.shipped}', style: quiet),
-                          Text('🔓 ${score.unblocked}', style: quiet),
-                          Text(
-                            '💻 ${swarmLentHours(score.lentMs)}',
-                            style: quiet,
+                        const SizedBox(height: 3),
+                        Text(
+                          '${score.shipped} shipped · '
+                          '${score.unblocked} unblocked · '
+                          '${swarmLentHours(score.lentMs)} lent',
+                          style: TextStyle(
+                            color: AppPalette.textSecondary,
+                            fontSize: 13.5,
+                            height: 1.35,
+                            fontFeatures: figures,
                           ),
-                        ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: medal == SwarmMedal.gold
+                          ? _gold.withValues(alpha: .28)
+                          : AppPalette.textPrimary.withValues(alpha: .07),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${score.points} pts',
+                      style: TextStyle(
+                        color: AppPalette.textPrimary,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        fontFeatures: figures,
                       ),
-                    ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  '${score.points} pts',
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: figures,
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -528,7 +635,7 @@ class _PersonRow extends StatelessWidget {
   }
 }
 
-/// A light sparkle over first place's cup: it swells and fades once, then
+/// A light sparkle beside first place's cup: it swells and fades once, then
 /// tells [onDone].
 class _Sparkle extends StatefulWidget {
   const _Sparkle({required this.onDone});

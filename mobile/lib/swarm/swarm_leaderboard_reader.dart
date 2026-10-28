@@ -30,6 +30,7 @@ class SwarmLeaderboard {
   SwarmLeaderboard.fromJson(Map<String, dynamic> json)
     : week = _int(json['week']),
       shipped = _int(_map(_map(json['goal'])['thisWeek'])['shipped']),
+      shippedBefore = _int(_map(_map(json['goal'])['lastWeek'])['shipped']),
       people = List.unmodifiable([
         for (final row in json['people'] as List? ?? const [])
           if (row is Map) SwarmScore.fromJson(_map(row)),
@@ -40,6 +41,9 @@ class SwarmLeaderboard {
 
   /// What the project shipped in the week.
   final int shipped;
+
+  /// What it shipped the week before.
+  final int shippedBefore;
 
   /// Most points first.
   final List<SwarmScore> people;

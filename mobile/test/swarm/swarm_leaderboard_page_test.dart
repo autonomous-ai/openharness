@@ -111,13 +111,21 @@ void main() {
 
     expect(key('swarm-leaderboard-loading'), findsNothing);
     expect(find.text('Leaderboard'), findsOneWidget);
+    // Team first: the team's week leads, the week picker in it.
+    const team = 'swarm-leaderboard-team';
+    expect(inside(team, find.text('Team this week')), findsOneWidget);
+    expect(inside(team, find.text('🚀')), findsOneWidget);
+    expect(inside(team, find.text('19')), findsOneWidget);
+    expect(inside(team, find.text('shipped')), findsOneWidget);
+    expect(inside(team, find.text('11 shipped last week')), findsOneWidget);
     expect(
-      inside('swarm-leaderboard-shipped', find.text('🚀 19 shipped')),
+      inside(team, inside('swarm-leaderboard-week', find.text('This week'))),
       findsOneWidget,
     );
+    expect(find.text('Who moved it'), findsOneWidget);
     expect(
-      inside('swarm-leaderboard-week', find.text('This week')),
-      findsOneWidget,
+      y(tester, team),
+      lessThan(y(tester, 'swarm-leaderboard-person-diego')),
     );
 
     const diego = 'swarm-leaderboard-person-diego';
@@ -125,17 +133,25 @@ void main() {
     expect(inside(diego, find.text('diego')), findsOneWidget);
     expect(inside(diego, find.text('D')), findsOneWidget, reason: 'initial');
     expect(inside(diego, find.text('28 pts')), findsOneWidget);
-    expect(inside(diego, find.text('🚀 8')), findsOneWidget);
-    expect(inside(diego, find.text('🔓 1')), findsOneWidget);
-    expect(inside(diego, find.text('💻 40h')), findsOneWidget);
+    expect(
+      inside(diego, find.text('8 shipped · 1 unblocked · 40h lent')),
+      findsOneWidget,
+      reason: 'the stats in words',
+    );
     expect(
       inside('swarm-leaderboard-person-ken', find.text('🥈')),
       findsOneWidget,
     );
     const dee = 'swarm-leaderboard-person-dee';
-    expect(inside(dee, find.text('4')), findsOneWidget, reason: 'no cup');
     expect(inside(dee, find.text('Former member')), findsOneWidget);
     expect(inside(dee, find.text('0 pts')), findsOneWidget);
+    for (final cup in ['🥇', '🥈', '🥉', '4']) {
+      expect(inside(dee, find.text(cup)), findsNothing, reason: 'no cup');
+    }
+    expect(
+      inside(dee, find.text('0 shipped · 0 unblocked · 0h lent')),
+      findsOneWidget,
+    );
 
     expect(
       y(tester, diego),
@@ -182,8 +198,11 @@ void main() {
       inside('swarm-leaderboard-week', find.text('Last week')),
       findsOneWidget,
     );
+    const team = 'swarm-leaderboard-team';
+    expect(inside(team, find.text('Team last week')), findsOneWidget);
+    expect(inside(team, find.text('11')), findsOneWidget);
     expect(
-      inside('swarm-leaderboard-shipped', find.text('🚀 11 shipped')),
+      inside(team, find.text('11 shipped the week before')),
       findsOneWidget,
     );
     expect(key('swarm-leaderboard-person-diego'), findsNothing);
@@ -355,7 +374,7 @@ void main() {
         findsNothing,
         reason: 'the old account\'s board is gone at once',
       );
-      expect(find.text('🚀 19 shipped'), findsNothing);
+      expect(key('swarm-leaderboard-team'), findsNothing);
 
       await tester.pumpAndSettle();
       expect(key('swarm-leaderboard-person-diego'), findsNothing);
@@ -363,7 +382,10 @@ void main() {
         inside('swarm-leaderboard-person-ken', find.text('9 pts')),
         findsOneWidget,
       );
-      expect(find.text('🚀 2 shipped'), findsOneWidget);
+      expect(
+        inside('swarm-leaderboard-team', find.text('2')),
+        findsOneWidget,
+      );
       expect(
         fake.paths.where((p) => p.startsWith(path)).length,
         before + 1,
@@ -385,7 +407,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(key('swarm-leaderboard-person-diego'), findsNothing);
-      expect(find.text('🚀 19 shipped'), findsNothing);
+      expect(key('swarm-leaderboard-team'), findsNothing);
       expect(key('swarm-leaderboard-loading'), findsNothing);
 
       await tester.pump(const Duration(minutes: 11));
