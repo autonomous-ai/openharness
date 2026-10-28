@@ -1514,8 +1514,8 @@ static void swarm_pane_checks(const char *dir) {
     fake_ms += 6000; scene_take(); assert(scene_says("2:20"));   // the dial's own clock carries it on
     // 2b a long name, done: the recap card. A recap for another Lead is dropped.
     enter_at("s1", "L1");
-    ui_supertab_recap("s1", "L2", "Not this one.", 1792560000u, false); scene_take(); assert(!scene_says("Not this one."));
-    ui_supertab_recap("s1", "L1", "Release candidate built and checked on both dials.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "L2", "", "Not this one.", 1792560000u, false); scene_take(); assert(!scene_says("Not this one."));
+    ui_supertab_recap("s1", "L1", "", "Release candidate built and checked on both dials.", 1792560000u, false); scene_take();
     assert(scene_says("Release candidate built"));
     FOCUS_PAGE("swarm-2b");
     // 2g a 1,500-byte recap: four lines, the last ending in "…".
@@ -1523,13 +1523,13 @@ static void swarm_pane_checks(const char *dir) {
         char longer[HT_SUPERTAB_TEXT]; size_t n = 0;
         while (n + 6 < sizeof longer - 1) { memcpy(longer + n, "words ", 6); n += 6; }
         longer[n] = 0;
-        ui_supertab_recap("s1", "L1", longer, 1792560000u, false); scene_take();
+        ui_supertab_recap("s1", "L1", "", longer, 1792560000u, false); scene_take();
         const char *last = ""; int lines = card_lines(&last);
         assert(lines >= 1 && lines <= 4 && strstr(last, "\xe2\x80\xa6"));
         FOCUS_PAGE("swarm-2g");
     }
     // 2f no message yet: the resting face, no card.
-    ui_supertab_recap("s1", "L1", "", 0, true); scene_take();
+    ui_supertab_recap("s1", "L1", "", "", 0, true); scene_take();
     { const char *last; assert(!card_lines(&last)); }
     // With nothing unread the bell leaves the lower arc to the resting face's one line, as in the mockup.
     for (int i = 0; i < s.notice_count; i++) notice_mark_read(&s.notice[i]);
@@ -1537,7 +1537,7 @@ static void swarm_pane_checks(const char *dir) {
     FOCUS_PAGE("swarm-2f");
     // 2c "docs" needs you, here: its wait's question takes the recap's place, in the asking pose.
     enter_at("s1", "L2");
-    ui_supertab_recap("s1", "L2", "Docs drafted.", 1792560000u, false);
+    ui_supertab_recap("s1", "L2", "", "Docs drafted.", 1792560000u, false);
     assert(!ui_supertab_wait("h2", "supertab:w1", "openharness", false, "Publish the docs today?"));   // on the face: no beep
     scene_take(); assert(scene_says("Publish the docs") && !scene_says("Docs drafted."));
     FOCUS_PAGE("swarm-2c");
@@ -1551,7 +1551,7 @@ static void swarm_pane_checks(const char *dir) {
         static const void *asking[64], *done[64]; int asking_n = pet_frames(asking);
         card_begin("s1", "t1", "openharness"); openharness_card(); card.leads[1].state = HT_LEAD_DONE;   // L3, firmware
         assert(!strcmp(card.leads[1].id, "L3")); card_send(); ui_supertab_wait_close("h3", "supertab:w2");
-        ui_supertab_recap("s1", "L3", "Release key found; build signed.", 1792560000u, false);
+        ui_supertab_recap("s1", "L3", "", "Release key found; build signed.", 1792560000u, false);
         int done_n = pet_frames(done); bool other = false;
         for (int i = 0; i < asking_n; i++) { bool shared = false; for (int k = 0; k < done_n; k++) shared |= asking[i] == done[k]; other |= !shared; }
         assert(asking_n && done_n && other);
@@ -1570,7 +1570,7 @@ static void swarm_pane_checks(const char *dir) {
     card_lead("L0", "mobile", "claude", "h0", "work", 0, 134); card_lead("L1", "Round dial firmware release candidate", "claude", "h1", "done", 1, -1);
     card_lead("L2", "docs", "claude", "h2", "ask", 2, -1); card_lead("L3", "firmware", "codex", "h3", "stuck", 3, -1);
     card_lead("L4", "backend", "cursor", "", "ask", 4, -1); card_send();
-    ui_supertab_recap("s1", "L4", "Need a decision on the cache size.", 1792560000u, false); scene_take();
+    ui_supertab_recap("s1", "L4", "", "Need a decision on the cache size.", 1792560000u, false); scene_take();
     assert(scene_says("Need a decision") && !scene_says("Working"));
     FOCUS_PAGE("swarm-2e-ask");
     // 2h a Swarm with no projects: PANES' own empty page, and "Choose a tab" goes to TABS.

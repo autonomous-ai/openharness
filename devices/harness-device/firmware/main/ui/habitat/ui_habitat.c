@@ -4994,10 +4994,10 @@ bool ui_supertab(const ht_supertab_t *in)
     display_unlock();
     return beep;
 }
-void ui_supertab_recap(const char *tab, const char *lead, const char *text, uint32_t at, bool none)
+void ui_supertab_recap(const char *tab, const char *lead, const char *chat_id, const char *text, uint32_t at, bool none)
 {
     display_lock();
-    if (ht_supertabs_recap_put(&swarm, tab, lead, text, at, none)) change();
+    if (ht_supertabs_recap_put(&swarm, tab, lead, chat_id, text, at, none)) change();
     display_unlock();
 }
 // `lead` "" is the desktop on that Swarm's tab with no project open (its Chat with PM, a DM): the dial still goes in, on
