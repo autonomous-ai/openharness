@@ -416,13 +416,9 @@ void main() {
       });
       await c.refresh();
       await tester.pump(const Duration(milliseconds: 100));
-      expect(find.textContaining('Atlas is busy · waiting'), findsOneWidget);
-      expect(
-        find.text(
-          "Atlas is finishing another task. Your message goes in by itself when it's done.",
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('Sent'), findsOneWidget);
+      expect(find.textContaining('Atlas is busy'), findsNothing);
+      expect(find.textContaining('by itself'), findsNothing);
       await shot('receipt-held');
       receipt['status'] = 'uncertain';
       await c.refresh();

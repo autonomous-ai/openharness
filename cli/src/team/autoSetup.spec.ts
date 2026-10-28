@@ -38,6 +38,25 @@ describe('the Harness Team account, set up on its own', () => {
     expect(f.log.join('\n')).toContain('the Harness Team account is set up')
   })
 
+  it('says in its log why it asked nothing, one line per answer, so a Mac that never saw the prompt can tell why', async () => {
+    const cases: Array<[Partial<AutoSetupDeps>, string]> = [
+      [{ platform: 'linux' }, 'unsupported'], [{ session: () => null }, 'signed-out'], [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'],
+      [{ accountExists: vi.fn(async () => true) }, 'exists'],
+    ]
+    for (const [over, state] of cases) {
+      const f = fake(over)
+      await f.auto.offer('startup', async () => true)
+      expect(f.log, state).toEqual([`the Harness Team account was not offered (startup): ${state}`])
+    }
+    const declined = fake()
+    declined.setDecision({ state: 'declined', at: 1 })
+    await declined.auto.offer('join')
+    expect(declined.log).toEqual(['the Harness Team account was not offered (join): declined'])
+    const alone = fake()
+    await alone.auto.offer('startup', async () => false)
+    expect(alone.log).toEqual(['the Harness Team account was not offered (startup): not-shared'])
+  })
+
   it('asks nothing off a Mac, signed out, on a computer that runs team work only, or where the account exists', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
       [{ platform: 'linux' }, 'unsupported'], [{ platform: 'win32' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
@@ -93,6 +112,30 @@ describe('the Harness Team account, set up on its own', () => {
     expect(await shared.auto.offer('startup', async () => true)).toEqual({ state: 'started' })
     await shared.auto.settled()
     expect(shared.deps.setup).toHaveBeenCalledTimes(1)
+  })
+
+  it('says it is wanted without asking macOS, so Desktop can explain it first; "Not now" is remembered', async () => {
+    const f = fake()
+    expect(await f.auto.offer('startup', async () => true, true)).toEqual({ state: 'wanted' })
+    expect(await f.auto.offer('startup', async () => false, true)).toEqual({ state: 'not-shared' })
+    expect(f.deps.setup).not.toHaveBeenCalled()
+    f.auto.decline()
+    expect(f.decision()).toEqual({ state: 'declined', at: 1_000_000 })
+    expect(await f.auto.offer('join', undefined, true)).toEqual({ state: 'declined' })
+    const there = fake({ accountExists: vi.fn(async () => true) })
+    expect(await there.auto.offer('manual', undefined, true)).toEqual({ state: 'exists' })
+  })
+
+  it('runs when the person asks, past a cancel or a failure remembered from before, and alone in a Swarm', async () => {
+    const f = fake()
+    f.setDecision({ state: 'declined', at: 1 })
+    expect(await f.auto.offer('manual', undefined, true)).toEqual({ state: 'wanted' })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+    await f.auto.settled()
+    f.setDecision({ state: 'failed', at: 1_000_000 })
+    expect(await f.auto.offer('manual')).toEqual({ state: 'started' })
+    await f.auto.settled()
+    expect(f.deps.setup).toHaveBeenCalledTimes(2)
   })
 
   it('keeps its memory in the daemon\'s own folder, private, and reads nothing it did not write', () => {

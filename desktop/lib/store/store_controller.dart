@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../api/api_client.dart';
@@ -119,17 +121,46 @@ class StoreController extends ChangeNotifier {
     if (reviewsLoading.contains(harnessId)) return;
     reviewsLoading.add(harnessId);
     notifyListeners();
+    final done = Completer<void>();
+    _reviewsReads[harnessId] = done.future;
     try {
-      final page = await api.reviews(harnessId);
-      reviews[harnessId] = page;
-      ratings[harnessId] = page.rating;
-      reviewsError.remove(harnessId);
-    } catch (error) {
-      reviewsError[harnessId] = _sentence(error, 'Reviews are not available right now');
+      do {
+        _readAgain.remove(harnessId);
+        try {
+          final page = await api.reviews(harnessId);
+          // Asked before a write landed: its answer is older than the page.
+          if (_readAgain.contains(harnessId)) continue;
+          reviews[harnessId] = page;
+          ratings[harnessId] = page.rating;
+          reviewsError.remove(harnessId);
+        } catch (error) {
+          reviewsError[harnessId] = _sentence(
+            error,
+            'Reviews are not available right now',
+          );
+        }
+      } while (_readAgain.contains(harnessId));
     } finally {
       reviewsLoading.remove(harnessId);
+      _reviewsReads.remove(harnessId);
+      done.complete();
       notifyListeners();
     }
+  }
+
+  /// The reads under way, so a write can wait for the one that reads it back.
+  final Map<String, Future<void>> _reviewsReads = {};
+
+  /// Pages written to while a read of them was under way: that read goes again.
+  final Set<String> _readAgain = {};
+
+  /// Read [harnessId]'s page after a write. A read already under way was asked
+  /// before the write, so it reads once more rather than answering for it.
+  Future<void> _readBack(String harnessId) {
+    final pending = _reviewsReads[harnessId];
+    if (pending == null) return loadReviews(harnessId);
+    _readAgain.add(harnessId);
+    return pending;
   }
 
   /// Write the signed-in person's review. Null on success, else a sentence.
@@ -144,7 +175,7 @@ class StoreController extends ChangeNotifier {
     } catch (error) {
       return _sentence(error, 'Your review could not be posted');
     }
-    await loadReviews(harnessId);
+    await _readBack(harnessId);
     return null;
   }
 
@@ -155,7 +186,7 @@ class StoreController extends ChangeNotifier {
     } catch (error) {
       return _sentence(error, 'Your review could not be removed');
     }
-    await loadReviews(harnessId);
+    await _readBack(harnessId);
     return null;
   }
 

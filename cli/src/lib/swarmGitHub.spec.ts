@@ -13,6 +13,8 @@ let made = 0
 const fresh = (name: string) => { const dir = join(root, `${name}-${made++}`); mkdirSync(dir, { recursive: true }); return dir }
 const home = fresh('home')
 const script = (file: string, body: string) => { writeFileSync(file, `#!/bin/sh\n${body}\n`); chmodSync(file, 0o755); return file }
+/** GitHub's stateless installation token: ghs_, the app id, and a JWT, about 520 characters with dots and dashes. */
+const STATELESS = `ghs_123456_eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiIxMjM0NTYifQ.${'s'.repeat(470)}-x_y`
 const git = (cwd: string, args: string[], env: Record<string, string> = {}, input?: string) => spawnSync('git', args, {
   cwd, input, encoding: 'utf8', env: { PATH: process.env.PATH!, HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.com',
     GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.com', ...env },
@@ -71,6 +73,8 @@ describe('the shared helper and hooks', () => {
     expect(run(['ls-remote', '--get-url', 'https://github.com/acme/app.git']).stdout.trim()).toBe('https://github.com/acme/app.git')
     expect(run(['ls-remote', '--get-url', 'git@github.com:acme/app.git']).stdout.trim()).toBe('https://github.com/acme/app.git')
     expect(run(['config', '--get-all', 'credential.helper']).stdout).not.toContain('owner-helper')
+    // GitHub's stateless installation token, ghs_APPID_ and a JWT of about 520 characters, is in GitHub's form.
+    expect(swarmGitPrepareEnv(STATELESS).HARNESS_SWARM_GIT_TOKEN).toBe(STATELESS)
     // A token not in GitHub's form is refused before any git runs with it.
     expect(() => swarmGitPrepareEnv('not a token; rm -rf /')).toThrow('not in the form GitHub gives')
   })
@@ -177,6 +181,8 @@ describe('a session\'s gh login and trailers', () => {
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
     // Trailers are kept: who the work is for does not change with the token.
     expect(readFileSync(join(dir, 'trailers'), 'utf8')).toBe('Co-authored-by: Ada <ada@example.com>\n')
+    writeSessionGitHub(dir, STATELESS)
+    expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toContain(`    oauth_token: ${STATELESS}\n`)
     writeSessionGitHub(dir, 'not a token\n    oauth_token: other')
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
   })

@@ -18,7 +18,8 @@ const KNOWN_FOR_MS = 6 * 60 * 60_000
 /** A verdict about a port with no attachment identity is only a pause, since nothing says when it changes. */
 const UNKNOWN_FOR_MS = 10 * 60_000
 
-interface Verdict { session?: string; at: number; dial?: true }
+/** `board`: what a dial's greeting named it (`hello.board`), "pro" for a Harness Pro; absent for a round dial. */
+interface Verdict { session?: string; at: number; dial?: true; board?: string }
 
 const keyOf = (port: DialPort) => (port.serialNumber ?? port.path).toUpperCase()
 
@@ -31,7 +32,7 @@ export class DialVerdicts {
       const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
       for (const [key, value] of Object.entries(raw)) {
         const v = value as Partial<Verdict> | null
-        if (v && typeof v.at === 'number') this.foreign.set(key, { at: v.at, ...(typeof v.session === 'string' ? { session: v.session } : {}), ...(v.dial === true ? { dial: true as const } : {}) })
+        if (v && typeof v.at === 'number') this.foreign.set(key, { at: v.at, ...(typeof v.session === 'string' ? { session: v.session } : {}), ...(v.dial === true ? { dial: true as const } : {}), ...(typeof v.board === 'string' ? { board: v.board } : {}) })
       }
     } catch { /* unreadable: start with no opinions, and rewrite it on the next verdict */ }
   }
@@ -51,11 +52,19 @@ export class DialVerdicts {
     if (this.foreign.delete(keyOf(port))) this.save()
   }
 
-  /** This board greeted as a dial: it is one, whatever a later silence looks like. */
-  markDial(port: DialPort): void {
-    if (this.foreign.get(keyOf(port))?.dial) return
-    this.foreign.set(keyOf(port), { at: this.now(), dial: true })
+  /** This board greeted as a dial: it is one, whatever a later silence looks like. `board` is its hello's. */
+  markDial(port: DialPort, board?: string): void {
+    const known = this.foreign.get(keyOf(port))
+    if (known?.dial && (!board || known.board === board)) return
+    const kept = board ?? known?.board
+    this.foreign.set(keyOf(port), { at: this.now(), dial: true, ...(kept ? { board: kept } : {}) })
     this.save()
+  }
+
+  /** Did this board greet as a Harness Pro? The one board the fleet may reset over the cable (cableFleet.ts). */
+  isPro(port: DialPort): boolean {
+    const known = this.foreign.get(keyOf(port))
+    return known?.dial === true && known.board === 'pro'
   }
 
   markForeign(port: DialPort): void {

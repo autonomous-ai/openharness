@@ -312,6 +312,29 @@ describe('harness new: the daemon', () => {
     expect(here.out.at(-1)).toBe('Open it in Harness with ⌘O.')
   })
 
+  // A typo used to reach the cloud service and come back a counted launch failure (Oct 26 report): refused here, in
+  // the service's own words, before anything is sent.
+  it.each([
+    [['cursor-cloud'], 'Tell Cursor Cloud what to do.'],
+    [['cursor-cloud', '--', '  '], 'Tell Cursor Cloud what to do.'],
+    [['cursor-cloud', '--repo', 'gitlab.com/a/b', '--', 'x'], 'That is not a GitHub repository: give owner/name or https://github.com/owner/name.'],
+    [['cursor-cloud', '--', 'x'], 'Choose a GitHub repository for Cursor Cloud.'],
+    [['fo'], 'Tell Fo what to do.'],
+  ])('refuses a cloud request the service would refuse, sending nothing: %j', async (argv, words) => {
+    expect(() => parseNewArgs(argv, env)).toThrow(new NewUsageError(words))
+    const socket = new FakeSocket(() => null)
+    const refused = deps(argv, socket)
+    expect(await newCommand(refused)).toBe(2)
+    expect(refused.err[0]).toBe(words)
+    expect(socket.sent).toEqual([])
+  })
+
+  it('lets Devin Cloud start without a repository, and a cloud agent with one', () => {
+    expect(parseNewArgs(['devin-cloud', '--', 'x'], env)).toMatchObject({ agent: 'devin-cloud', prompt: 'x', repo: null })
+    expect(parseNewArgs(['cursor-cloud', '--repo', 'https://github.com/acme/api', '--', 'x'], env)).toMatchObject({ repo: 'https://github.com/acme/api' })
+    expect(parseNewArgs(['fo', '--task', 'book a table'], env)).toMatchObject({ agent: 'fo', prompt: 'book a table' })
+  })
+
   it('refuses the old @machine before asking anything of a machine, and says what to type', async () => {
     const socket = new FakeSocket(() => null)
     const old = deps(['claude', '@office', 'lamp-first-task', '--', 'What is 2+2?'], socket)

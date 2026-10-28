@@ -17,6 +17,7 @@ import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '..
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequestDeps, type RestartAgent, type ResumeAgent } from './launches.js'
 import * as pendingLaunches from './pendingLaunches.js'
+import { SWARM_LAUNCH } from '../../superTabs/inCore/launch.js'
 
 /**
  * The requests that start an agent's process, answered by the core: every refusal before a pane exists,
@@ -91,6 +92,7 @@ function setup(over: Partial<LaunchRequestDeps> = {}, launches: { create?: Creat
     createAgent: () => create, forkAgent: () => fork, resumeAgent: () => resume, restartAgent: () => restart,
     byAgent: (id) => known.get(id), toProject: vi.fn(async (s: RegisteredSession) => frameOf(s)),
     modelTarget: resolveNewAgentModel,
+    swarmLaunch: SWARM_LAUNCH,
     ...over,
   }
   const requests = createLaunchRequests(deps)
@@ -302,6 +304,17 @@ describe('agent_create, refused before any pane exists', () => {
       expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
     }
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
+  // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
+  it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
+    const { ask, create } = setup({ swarmLaunch: undefined })
+    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmGitHub: true }, { swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true }]) {
+      expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
+    }
+    expect(create).not.toHaveBeenCalled()
+    await ask({ engine: 'claude', cwd: '/w', swarmRole: null })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmRole')
   })
 
   it('a first prompt that is not text, too long, or for an engine that cannot take one', async () => {
@@ -1022,6 +1035,17 @@ describe('agent_resume and agent_restart', () => {
     expect(await failed.relaunch('agent_restart', { agentId: 'a1' })).toStrictEqual({ error: 'RESTART_FAILED', detail: 'claude did not come back up' })
     const bare = setup({}, { restart: vi.fn(async () => ({ ok: false as const, error: 'AGENT_NOT_FOUND' })) })
     expect(await bare.relaunch('agent_restart', { agentId: 'a1' })).toStrictEqual({ error: 'AGENT_NOT_FOUND' })
+  })
+
+  // Which check refused a resume's history (lib/resumeAgentService.ts) reaches the reply, so its counter can name it.
+  it('pass a refusal\'s reason on, directly and through a receipt', async () => {
+    const refused = { ok: false as const, error: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' }
+    const direct = setup({}, { resume: vi.fn(async () => refused) })
+    expect(await direct.relaunch('agent_resume', { agentId: 'a1' })).toStrictEqual({ error: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' })
+    const kept = setup({}, { resume: vi.fn(async () => refused) })
+    await kept.relaunch('agent_resume', { agentId: 'a1', creationId: CREATION })
+    await vi.waitFor(() => expect(kept.replies).toStrictEqual([{ creationId: CREATION, state: 'failed',
+      failure: { code: 'RESUME_PREPARATION_FAILED', reason: 'invalid_json', detail: 'Could not prepare the saved conversation.' } }]))
   })
 
   it('keep a receipt: one relaunch per creation id, an unobserved one unconfirmed, a refusal failed and cut short', async () => {

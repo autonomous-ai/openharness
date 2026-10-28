@@ -145,7 +145,6 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         delivery?.pending == true &&
         message.createdAt != null &&
         now.difference(message.createdAt!) < const Duration(seconds: 3);
-    final held = delivery?.pending == true && delivery?.holdReason != null;
     var color = DesktopChrome.muted;
     var icon = AppIcons.check;
     String title = 'Sent';
@@ -214,33 +213,11 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
-    } else if (held) {
-      color = grid.AppPalette.warn;
-      detail = switch (delivery!.holdReason) {
-        'team_waiting_idle' => '$name is busy',
-        'team_waiting_user' => "someone is typing in $name's terminal",
-        'team_waiting_draft' => "$name's terminal has unsent text",
-        _ => "$name can't take messages right now",
-      };
-      if (delivery.holdSince != null) {
-        detail +=
-            ' · waiting ${_clockText(now.difference(delivery.holdSince!))}';
-      }
-      note = switch (delivery.holdReason) {
-        'team_waiting_idle' =>
-          "$name is finishing another task. Your message goes in by itself when it's done.",
-        'team_waiting_user' =>
-          "Someone is typing in $name's terminal. Your message goes in by itself when that clears.",
-        'team_waiting_draft' =>
-          "$name's terminal has unsent text. Your message goes in by itself when that clears.",
-        _ =>
-          "$name can't take messages right now. Your message goes in by itself when that clears.",
-      };
     } else if (fresh) {
       title = 'Sending…';
       sending = true;
     }
-    _clock(fresh || working || held || (delivery?.pending == true && offline));
+    _clock(fresh || working || (delivery?.pending == true && offline));
     final style = DesktopChrome.metadata(color: color).copyWith(
       fontSize: 12,
       fontFeatures: const [FontFeature.tabularFigures()],

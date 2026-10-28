@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/widgets/app_icon_button.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 
 /// Keeps resource headings aligned whether their add action is available or not.
 class SuperTabSectionHeading extends StatelessWidget {
@@ -14,6 +15,7 @@ class SuperTabSectionHeading extends StatelessWidget {
     this.trailing,
     this.actions = const [],
     this.endInset = 12,
+    this.startInset,
     this.collapsed,
     this.onToggleCollapsed,
   });
@@ -32,6 +34,11 @@ class SuperTabSectionHeading extends StatelessWidget {
   /// The space after the last action. The left sidebar passes 0 to align +
   /// with its rows' trailing disclosure controls.
   final double endInset;
+
+  /// The space before the title; a collapsible heading's own inset when not
+  /// given, else 16. The left sidebar passes [indentFor] 0 for a heading that
+  /// does not collapse, to align it with the ones that do.
+  final double? startInset;
 
   /// Whether a collapsible group's body is currently hidden. Ignored unless
   /// [onToggleCollapsed] is set.
@@ -61,9 +68,12 @@ class SuperTabSectionHeading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final collapsible = onToggleCollapsed != null;
+    // A phone's add action is a finger's size.
+    final phone = workspaceIsCompact(context);
+    final addWidth = phone ? kFingerTarget : actionWidth;
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        collapsible ? _leadingInset : 16,
+        startInset ?? (collapsible ? _leadingInset : 16),
         0,
         endInset,
         4,
@@ -91,7 +101,7 @@ class SuperTabSectionHeading extends StatelessWidget {
                 ? 0.0
                 : (constraints.maxWidth -
                           actions.length * actionWidth -
-                          (onAdd != null ? actionWidth : 0) -
+                          (onAdd != null ? addWidth : 0) -
                           _trailingGap -
                           titleWidth)
                       .clamp(0.0, double.infinity);
@@ -152,10 +162,13 @@ class SuperTabSectionHeading extends StatelessWidget {
                 ],
                 ...actions,
                 if (onAdd != null)
-                  AppIconButton(
-                    icon: AppIcons.plus,
-                    tooltip: addTooltip ?? title,
-                    onPressed: onAdd,
+                  fingerTarget(
+                    enabled: phone,
+                    AppIconButton(
+                      icon: AppIcons.plus,
+                      tooltip: addTooltip ?? title,
+                      onPressed: onAdd,
+                    ),
                   ),
               ],
             );

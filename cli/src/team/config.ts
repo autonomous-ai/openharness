@@ -4,6 +4,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { TEAM_CONFIG_FILE, carriedBackendEnv, checkPath, checkPort, checkUser } from './layout.js'
+import { userInfo } from 'node:os'
 
 export interface TeamConfig {
   version: 1
@@ -66,4 +67,10 @@ export function readTeamConfig(path: string = TEAM_CONFIG_FILE, read: (path: str
   } catch {
     return null
   }
+}
+
+/** Whether this process runs as the Harness Team account its Mac's root-owned config names. An account whose name
+ *  cannot be read is not it. */
+export function isTeamAccount(config: () => TeamConfig | null = () => readTeamConfig(), user: () => string = () => userInfo().username): boolean {
+  try { return config()?.user === user() } catch { return false }
 }

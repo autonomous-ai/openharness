@@ -4,8 +4,13 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/shortcuts/shortcuts_browser.dart';
+import 'package:harness/web/parts/terminal_fonts.dart';
 import 'package:harness/web/web_entry.dart';
 import 'package:harness/widgets/key_hints.dart';
 
@@ -17,15 +22,26 @@ void main() {
   ) async {
     final hints = <bool>[];
     final navigator = GlobalKey<NavigatorState>();
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    addTearDown(app.dispose);
+    // Under the app's ProviderScope, as `startHarness` runs it: the frame
+    // reads whether anyone is signed in.
     await tester.pumpWidget(
-      MaterialApp(
-        navigatorKey: navigator,
-        builder: (context, child) => appFrame(child!),
-        home: Builder(
-          builder: (context) {
-            hints.add(KeyHints.visibleOf(context));
-            return const SizedBox.shrink();
-          },
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: MaterialApp(
+          navigatorKey: navigator,
+          builder: (context, child) => appFrame(child!),
+          home: Builder(
+            builder: (context) {
+              hints.add(KeyHints.visibleOf(context));
+              return const SizedBox.shrink();
+            },
+          ),
         ),
       ),
     );
@@ -42,5 +58,8 @@ void main() {
     expect(find.byKey(const ValueKey('shortcuts-search')), findsOneWidget);
     expect(find.text('↑↓ Browse'), findsNothing);
     expect(find.text('Return Practice'), findsNothing);
+    // The frame started the workspace's download, which waits for the terminal
+    // font a test browser never sends: let its grace run out.
+    await tester.pump(terminalFontsGrace);
   });
 }

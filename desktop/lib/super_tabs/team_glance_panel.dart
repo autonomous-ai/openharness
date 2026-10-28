@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
@@ -88,7 +89,7 @@ class _Warning extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(
-          Icons.warning_amber_rounded,
+          AppIcons.triangleAlert,
           size: 16,
           color: grid.AppPalette.warn,
         ),

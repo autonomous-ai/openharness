@@ -27,6 +27,7 @@ import 'link_another_machine_dialog.dart'
 import 'link_machine_dialog.dart';
 import 'machine_actions.dart';
 import 'new_device_notice.dart' show DeviceListReviewLine;
+import 'pointer_words.dart';
 import 'terminal_name_prompt.dart';
 import 'terminal_prompt.dart';
 import 'transient_menus.dart';
@@ -612,7 +613,10 @@ class _MachinesPanelState extends State<_MachinesPanel>
         const SizedBox(height: 16),
         const Text('2. Open Machines and choose Set password.'),
         const SizedBox(height: 6),
-        const _Detail('Back here, click Connect and enter that password.'),
+        _Detail(
+          'Back here, ${clickWord(capital: false)} Connect and enter that '
+          'password.',
+        ),
         const SizedBox(height: 12),
         _button(_server ? 'Hide server setup' : 'Set up a server…', () {
           setState(() => _server = !_server);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from '../commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration, type Conversation } from '../model.js'
+import { leaderboard } from './stats.js'
+import { DAY_MS, WEEK_MS, weekStart } from './week.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -118,6 +120,163 @@ describe('when a request ships', () => {
   })
 })
 
+describe('when the Lead records a merge', () => {
+  // Tuesday 2026-10-27 12:00 UTC.
+  const NOW = Date.UTC(2026, 9, 27, 12), PR = 'https://github.com/o/r/pull/42'
+  const merged = (conversationId: string, extra: Record<string, unknown> = {}) =>
+    commandSchema.parse({ type: 'conversation.merged', conversationId, pullRequestUrl: PR, ...extra })
+  /** A Lead, and a group it opened for the owner, at NOW. */
+  const setup = () => {
+    const f = fixture(), lead = f.add('lead', 'lead', true)
+    f.at(NOW - DAY_MS)
+    const id = f.create(f.asAgent(lead), { requesterId: 'owner' })
+    f.at(NOW)
+    return { f, lead: f.asAgent(lead), id }
+  }
+  const shippedFor = (f: ReturnType<typeof fixture>, personId: string) =>
+    leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week: weekStart(NOW), now: NOW })
+      .people.find(p => p.personId === personId)!
+
+  it('ships the request when its PR merged, links the PR and says so in the group', () => {
+    const { f, lead, id } = setup()
+    const effects = f.run(merged(id), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+    expect(f.group(id).pullRequestUrls).toEqual([PR])
+    expect(effects.messages.map(m => [m.conversationId, m.text])).toEqual([[id, `Merged ${PR}`]])
+    expect(shippedFor(f, 'owner')).toMatchObject({ points: 3, shipped: { count: 1 } })
+  })
+
+  it('records an earlier merge time for a backfill', () => {
+    const { f, lead, id } = setup()
+    f.run(merged(id, { mergedAt: new Date(NOW - 5 * 3_600_000).toISOString() }), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW - 5 * 3_600_000)
+  })
+
+  it('still counts the request when its work is cancelled after the merge', () => {
+    const { f, lead, id } = setup(), { assignmentId } = f.assign(id)
+    f.run(merged(id), lead)
+    f.at(NOW + 3_600_000)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Merged by hand' })
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+    expect(shippedFor(f, 'owner').shipped.count).toBe(1)
+  })
+
+  it('still counts the request when its attempt is lost after the merge', () => {
+    const { f, lead, id } = setup(), { worker } = f.assign(id)
+    f.run(merged(id), lead)
+    f.at(NOW + 3_600_000)
+    f.run({ type: 'agent.remove', agentId: worker })
+    expect(f.group(id).assignment?.status).not.toBe('done')
+    expect(shippedFor(f, 'owner').shipped.count).toBe(1)
+  })
+
+  it('keeps the merge as the ship time when the work is marked done later', () => {
+    const { f, lead, id } = setup(), { worker, assignmentId } = f.assign(id)
+    f.run(merged(id), lead)
+    f.passChecks(id, assignmentId)
+    f.at(NOW + 3_600_000)
+    f.status(id, assignmentId, worker, 'done', `Merged ${PR}`)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+  })
+
+  it('moves the ship time back to the merge when Done was marked first', () => {
+    const { f, lead, id } = setup(), { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Done')
+    f.run(merged(id, { mergedAt: new Date(NOW - 3_600_000).toISOString() }), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW - 3_600_000)
+  })
+
+  it('keeps the first merge time when the same merge is recorded again', () => {
+    const { f, lead, id } = setup()
+    f.run(merged(id), lead)
+    f.at(NOW + DAY_MS)
+    expect(f.run(merged(id), lead).messages).toEqual([])
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+    expect(f.group(id).pullRequestUrls).toEqual([PR])
+  })
+
+  it('refuses a merge time in the future or older than the four weeks the board reads', () => {
+    const { f, lead, id } = setup()
+    expect(() => f.run(merged(id, { mergedAt: new Date(NOW + 60_000).toISOString() }), lead)).toThrow('four weeks')
+    expect(() => f.run(merged(id, { mergedAt: new Date(NOW - 4 * WEEK_MS).toISOString() }), lead)).toThrow('four weeks')
+    expect(f.group(id).ledger?.shippedAt).toBeUndefined()
+  })
+
+  it('takes only a GitHub pull request link', () => {
+    const parse = (pullRequestUrl: string) => () => commandSchema.parse({ type: 'conversation.merged', conversationId: 'g', pullRequestUrl })
+    expect(parse(PR)).not.toThrow()
+    expect(parse('https://example.com/o/r/pull/1')).toThrow()
+    expect(parse('https://github.com/o/r/issues/1')).toThrow()
+  })
+
+  it('keeps the record to the Lead and owners: a collaborator who reads the group cannot ship it', () => {
+    const { f, id } = setup()
+    f.invitePeer()
+    expect(() => f.run(merged(id), peer)).toThrow('Lead or an owner')
+    expect(f.group(id).ledger?.shippedAt).toBeUndefined()
+    expect(f.group(id).pullRequestUrls).toBeUndefined()
+  })
+
+  it('takes the record from the Swarm and project owner', () => {
+    const { f, id } = setup()
+    f.run(merged(id), owner)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+  })
+
+  it('ships in the week of the merge when Done was marked the Sunday before', () => {
+    const { f, lead, id } = setup(), { worker, assignmentId } = f.assign(id)
+    // Sunday 2026-11-01 23:00 UTC, then Monday 2026-11-02 01:00 UTC: the next leaderboard week.
+    const sunday = Date.UTC(2026, 10, 1, 23), monday = Date.UTC(2026, 10, 2, 1)
+    f.passChecks(id, assignmentId)
+    f.at(sunday)
+    f.status(id, assignmentId, worker, 'done', 'Done')
+    f.at(monday)
+    f.run(merged(id), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(monday)
+    const board = (week: number) => leaderboard({ state: f.state, groups: f.state.conversations, machines: [], projectId: 'lead', week, now: monday })
+    expect(board(weekStart(monday)).goal.thisWeek.shipped).toBe(1)
+    expect(board(weekStart(sunday)).goal.thisWeek.shipped).toBe(0)
+  })
+
+  it('keeps the earliest of two merge records, whatever order they come in', () => {
+    const { f, lead, id } = setup()
+    f.run(merged(id, { mergedAt: new Date(NOW - 3_600_000).toISOString() }), lead)
+    f.run(merged(id, { mergedAt: new Date(NOW - 2 * 3_600_000).toISOString() }), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW - 2 * 3_600_000)
+    f.run(merged(id, { mergedAt: new Date(NOW - 3_600_000).toISOString() }), lead)
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW - 2 * 3_600_000)
+  })
+
+  it('keeps the merge as the ship time when Done came first and the work is cancelled later', () => {
+    const { f, lead, id } = setup(), { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.at(NOW - DAY_MS + 3_600_000)
+    f.status(id, assignmentId, worker, 'done', 'Done')
+    f.at(NOW)
+    f.run(merged(id), lead)
+    f.run({ type: 'work.define', conversationId: id, brief: 'More', checks })
+    const again = f.assign(id, worker)
+    f.at(NOW + 3_600_000)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: again.assignmentId, reason: 'Not needed' })
+    expect(f.group(id).ledger?.shippedAt).toBe(NOW)
+    expect(shippedFor(f, 'owner').shipped.count).toBe(1)
+  })
+
+  it('keeps the record to the Lead: a worker in the group cannot ship it', () => {
+    const { f, id } = setup(), worker = f.add('worker', id)
+    expect(() => f.run(merged(id), f.asAgent(worker))).toThrow('coordinating lead')
+  })
+
+  it('refuses a review group and a private conversation: neither is a request', () => {
+    const { f, lead, id } = setup()
+    const review = f.create(lead, { reviewOf: id, title: 'Review', brief: 'Review it.' })
+    expect(() => f.run(merged(review), lead)).toThrow('review group')
+    const chat = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
+    expect(() => f.run(merged(chat))).toThrow('chat only')
+  })
+})
+
 describe('who unblocks waiting work', () => {
   it('credits the person the item waits on with their answer and how long the agent waited', () => {
     const f = fixture(), id = f.create(), { worker, assignmentId } = f.assign(id)
@@ -220,5 +379,89 @@ describe('who unblocks waiting work', () => {
       f.status(id, assignmentId, worker, 'working')
     }
     expect(f.group(id).ledger?.unblocks?.map(u => u.at)).toEqual([4 * week + 2_000, 6 * week + 2_000])
+  })
+})
+
+describe('the model behind each assignment, and its first review (roadmap, Dec: about 30% of work on cheaper models)', () => {
+  const independent = [{ description: 'Works', independent: false }, { description: 'Independent review', independent: true }]
+  /** Reads a check by its kind, so the order of the checks does not matter. */
+  const verdict = (f: ReturnType<typeof fixture>, id: string, assignmentId: string, passed: boolean, isIndependent = true, actor: Actor = owner) => {
+    const check = f.group(id).checks.find(c => c.independent === isIndependent)!
+    f.run({ type: 'work.check', conversationId: id, assignmentId, checkId: check.id, passed, evidence: 'rev abc' }, actor)
+  }
+
+  it('records the engine and model each assignment runs on', () => {
+    const f = fixture()
+    f.at(5_000)
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', at: 5_000 }])
+  })
+
+  it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('grid-worker', id)
+    f.state.starts = [{ id: 's1', creationId: 'c1', actorKey: 'agent:lead', contributorId: 'owner', membershipGeneration: 'g', machineOwnerId: 'host-owner',
+      hostGrant: null, harnessId: 'grid-worker', dispatched: true, error: null,
+      request: { conversationId: id, machineId: 'host', engine: 'claude', model: 'default', effort: 'default', name: 'Builder', cwd: '/repo', worktree: true,
+        gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab',
+        requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
+    const { assignmentId } = f.assign(id, worker)
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', grid: true, at: 1_000 }])
+  })
+
+  it('keeps the first verdict on an independent check as the assignment\'s first review, and ignores later and other checks', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    verdict(f, id, assignmentId, true, false)
+    expect(f.group(id).ledger!.runs![0]).not.toHaveProperty('firstReview')
+    verdict(f, id, assignmentId, false)
+    verdict(f, id, assignmentId, true)
+    expect(f.group(id).ledger!.runs![0]).toMatchObject({ assignmentId, firstReview: false })
+    // A new attempt is reviewed on its own.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    verdict(f, id, second.assignmentId, true)
+    expect(f.group(id).ledger!.runs!.map(r => [r.assignmentId, r.firstReview])).toEqual([[assignmentId, false], [second.assignmentId, true]])
+  })
+
+  it('passes a first review only when every independent check passed its first verdict, and later repairs never rewrite a failure', () => {
+    // Review of #1808: two independent checks, the first passed and the second failed, counted as a pass.
+    const two = [{ description: 'Code review', independent: true }, { description: 'Security review', independent: true }]
+    const f = fixture()
+    const id = f.create(owner, { checks: two })
+    const { assignmentId } = f.assign(id)
+    const [code, security] = f.group(id).checks
+    const check = (checkId: string, passed: boolean) =>
+      f.run({ type: 'work.check', conversationId: id, assignmentId, checkId, passed, evidence: 'rev abc' })
+    check(code!.id, true)
+    // One check still waits for its verdict: the review is not over.
+    expect(f.group(id).ledger!.runs![0]).not.toHaveProperty('firstReview')
+    check(security!.id, false)
+    check(security!.id, true)
+    check(code!.id, false)
+    check(code!.id, true)
+    expect(f.group(id).ledger!.runs![0]).toMatchObject({ firstReview: false, firstVerdicts: { [code!.id]: true, [security!.id]: false } })
+    const g = fixture()
+    const both = g.create(owner, { checks: two })
+    const attempt = g.assign(both).assignmentId
+    for (const c of g.group(both).checks) g.run({ type: 'work.check', conversationId: both, assignmentId: attempt, checkId: c.id, passed: true, evidence: 'rev abc' })
+    expect(g.group(both).ledger!.runs![0]).toMatchObject({ firstReview: true })
+  })
+
+  it('keeps the last 20 assignments of a group', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    let first = ''
+    for (let i = 0; i < 21; i++) {
+      const { assignmentId } = f.assign(id, worker)
+      if (i === 0) first = assignmentId
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    expect(f.group(id).ledger!.runs).toHaveLength(20)
+    expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
   })
 })

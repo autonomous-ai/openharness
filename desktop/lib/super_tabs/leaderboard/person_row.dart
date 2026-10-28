@@ -1,111 +1,135 @@
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 
 import '../../widgets/desktop_chrome.dart';
+import '../../widgets/finger_target.dart';
 import '../identity.dart';
+import '../model.dart';
+import '../until.dart';
 import 'format.dart';
 import 'model.dart';
-import 'progress_bar.dart';
 
-/// Where the name starts: after the medal (24) and the avatar (20) with its gap (6).
-const _nameInset = 50.0;
+/// Where the name and the quiet line start: after the avatar (24) and its gap (8).
+const _nameInset = 32.0;
 
-const _medals = {
-  SuperTabMedal.gold: '🏆',
-  SuperTabMedal.silver: '🥈',
-  SuperTabMedal.bronze: '🥉',
-};
+/// Figures of one width, so the numbers of one column line up row under row.
+TextStyle _figures(TextStyle style) =>
+    style.copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
 
-/// One person: medal, name, points bar and their three numbers; tapped, their week.
+/// One person in the Humans section: avatar, name, status and this week's
+/// points in fixed columns, with Shipped, Unblocked and Lent on a quiet line
+/// beneath. Without a [score] (no board yet, or a server without one) only the
+/// name and status.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
     super.key,
+    required this.person,
     required this.score,
-    required this.name,
-    required this.topPoints,
-    required this.open,
     required this.onTap,
   });
-  final SuperTabPersonScore score;
-  final String name;
-  final int topPoints;
-  final bool open;
+  final SuperTabPerson person;
+  final SuperTabPersonScore? score;
   final VoidCallback onTap;
-
-  /// Today's Swarm avatar, sized for the shared avatar widget (v2 H) to drop in here.
-  Widget _avatar() => SuperTabAvatar(
-    identity: 'person:${score.personId}',
-    name: name,
-    size: 20,
-  );
 
   @override
   Widget build(BuildContext context) {
-    final lent = score.lentMachines == 0
-        ? '—'
-        : plural(score.lentMachines, 'machine');
+    final scale = MediaQuery.textScalerOf(context);
+    final score = this.score;
+    final quiet = _figures(DesktopChrome.metadata());
+    Widget cell(double width, String text) => SizedBox(
+      width: scale.scale(width),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: quiet,
+      ),
+    );
     return InkWell(
-      key: ValueKey('leaderboard-person-${score.personId}'),
-      borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+      key: ValueKey('super-person-${person.id}'),
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                SizedBox(width: 24, child: Text(_medals[score.medal] ?? '')),
-                _avatar(),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    name,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.control(medium: true),
+      child: ConstrainedBox(
+        // A phone's row is a finger's height; a mouse keeps 36.
+        constraints: BoxConstraints(
+          minHeight: fingerHeight(36, enabled: workspaceIsCompact(context)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  SuperTabAvatar.person(person, size: 24),
+                  const SizedBox(width: _nameInset - 24),
+                  Expanded(
+                    child: Tooltip(
+                      message: person.email,
+                      child: SuperTabUntil(
+                        until: person.status?.until,
+                        builder: (context) => Text.rich(
+                          TextSpan(
+                            text: superTabPersonName(person.email),
+                            children: [
+                              if (person.statusAt(clock.now())
+                                  case final status?)
+                                TextSpan(
+                                  text: '  ${status.text}',
+                                  style: DesktopChrome.metadata(),
+                                ),
+                            ],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: DesktopChrome.control(),
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-                if (score.streakDays > 1) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    '🔥 ${score.streakDays}',
-                    style: DesktopChrome.metadata(),
-                  ),
+                  if (score != null)
+                    SizedBox(
+                      width: scale.scale(64),
+                      child: Text(
+                        '${score.points} pts',
+                        maxLines: 1,
+                        textAlign: TextAlign.right,
+                        style: _figures(DesktopChrome.control(medium: true)),
+                      ),
+                    ),
                 ],
-                const SizedBox(width: 8),
-                Expanded(
-                  child: LeaderboardProgressBar(
-                    fraction: topPoints == 0 ? 0 : score.points / topPoints,
+              ),
+              if (score != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: _nameInset, top: 2),
+                  child: Row(
+                    children: [
+                      cell(72, '${score.shipped} shipped'),
+                      cell(88, '${score.unblocked} unblocked'),
+                      Expanded(
+                        child: Text(
+                          '${leaderboardHours(score.lentMs)} h lent',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: quiet,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text('${score.points} pts', style: DesktopChrome.control()),
-              ],
-            ),
-            Padding(
-              padding: const EdgeInsets.only(left: _nameInset, top: 2),
-              child: Text(
-                '🚀 ${score.shipped} shipped   🔓 ${score.unblocked}   ⚡ $lent',
-                style: DesktopChrome.metadata(),
-              ),
-            ),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.topCenter,
-              child: open
-                  ? _Detail(score: score)
-                  : const SizedBox(width: double.infinity),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// A person's week, as the mockup's "Tap a name" card.
-class _Detail extends StatelessWidget {
-  const _Detail({required this.score});
+/// A person's week, shown when their name is tapped: the medians, the time
+/// freed and lent, and their shipping streak.
+class LeaderboardPersonWeek extends StatelessWidget {
+  const LeaderboardPersonWeek({super.key, required this.score});
   final SuperTabPersonScore score;
 
   @override
@@ -114,63 +138,60 @@ class _Detail extends StatelessWidget {
         ms == null ? '' : ' · median ${leaderboardDuration(ms)}$what';
     final rows = [
       (
-        '🚀 Shipped',
+        'Points',
+        score.medal == null
+            ? '${score.points} this week'
+            : '${score.points} this week · place ${score.rank}',
+      ),
+      (
+        'Shipped',
         score.shipped == 0
             ? 'Nothing landed yet'
             : '${plural(score.shipped, 'ask')} landed${median(score.medianAskToShipMs, ' to ship')}',
       ),
       (
-        '🔓 Unblocked',
+        'Unblocked',
         score.unblocked == 0
             ? 'Nothing answered yet'
             : '${score.unblocked} answered${median(score.medianAnswerMs, '')} · ${leaderboardDuration(score.unblockedMs)} of agent time freed',
       ),
       (
-        '⚡ Lent',
+        'Lent',
         score.lentMachines == 0
             ? 'Nothing lent yet'
-            : '${plural(score.lentMachines, 'machine')} · ${leaderboardHours(score.lentMs)} slot-hours',
+            : '${plural(score.lentMachines, 'machine')} · ${leaderboardHours(score.lentMs)} agent-hours',
       ),
       (
-        '🔥 Streak',
+        'Streak',
         score.streakDays == 0
             ? 'No streak yet'
             : '${plural(score.streakDays, 'day')} shipping',
       ),
     ];
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(left: _nameInset, top: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: DesktopChrome.field,
-        borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-        border: Border.all(color: DesktopChrome.rim),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final (label, value) in rows)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 88,
-                    child: Text(
-                      label,
-                      style: DesktopChrome.metadata(
-                        color: DesktopChrome.foreground,
-                      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final (label, value) in rows)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 88,
+                  child: Text(
+                    label,
+                    style: DesktopChrome.metadata(
+                      color: DesktopChrome.foreground,
                     ),
                   ),
-                  Expanded(child: Text(value, style: DesktopChrome.metadata())),
-                ],
-              ),
+                ),
+                Expanded(child: Text(value, style: DesktopChrome.metadata())),
+              ],
             ),
-        ],
-      ),
+          ),
+      ],
     );
   }
 }

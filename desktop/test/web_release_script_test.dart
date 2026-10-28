@@ -14,7 +14,8 @@ const _unusedLucide = [
   '$_lucide/Lucide500',
   '$_lucide/Lucide600',
 ];
-const _others = ['MaterialIcons', 'Roboto Mono'];
+const _mono = 'Roboto Mono';
+const _others = ['MaterialIcons'];
 
 String _assetOf(String family) => switch (family) {
   '$_lucide/Lucide' => '$_lucide/assets/lucide.ttf',
@@ -71,9 +72,8 @@ Future<void> _git(Directory repo, List<String> args) async {
 /// whose `flutter` writes [families].
 Future<ProcessResult> _release(Directory repo, List<String> families) async {
   Directory(p.join(repo.path, 'scripts')).createSync();
-  File(
-    'scripts/build-web-release.sh',
-  ).copySync(p.join(repo.path, 'scripts', 'build-web-release.sh'));
+  File('scripts/build-web-release.sh')
+      .copySync(p.join(repo.path, 'scripts', 'build-web-release.sh'));
   final flutter = File(p.join(repo.path, 'fake-flutter.sh'))
     ..writeAsStringSync(_fakeFlutter(families));
   await Process.run('chmod', ['+x', flutter.path]);
@@ -116,7 +116,12 @@ void main() {
   final skip = Platform.isWindows ? 'needs bash and python3' : null;
 
   test('the web release drops the Lucide weights the app never uses', () async {
-    final result = await _release(repo, [..._others, ..._unusedLucide, _used]);
+    final result = await _release(repo, [
+      ..._others,
+      _mono,
+      ..._unusedLucide,
+      _used,
+    ]);
 
     expect(result.exitCode, 0, reason: '${result.stderr}');
     expect(_manifestFamilies(repo), [..._others, _used]);
@@ -129,7 +134,7 @@ void main() {
   }, skip: skip);
 
   test('the archive carries only the fonts the manifest lists', () async {
-    await _release(repo, [..._others, ..._unusedLucide, _used]);
+    await _release(repo, [..._others, _mono, ..._unusedLucide, _used]);
 
     final listing = await Process.run('tar', [
       '-tzf',
@@ -144,25 +149,103 @@ void main() {
     expect(files.where((file) => file.endsWith('lucide.ttf')), isEmpty);
   }, skip: skip);
 
-  test('the page fetches the fonts it ships beside the app, not after it', () async {
-    final result = await _release(repo, [..._others, ..._unusedLucide, _used]);
+  test(
+    'the page fetches the fonts it ships beside the app, not after it',
+    () async {
+      final result = await _release(repo, [
+        ..._others,
+        _mono,
+        ..._unusedLucide,
+        _used,
+      ]);
+
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      final index = _builtIndex(repo);
+      final head = index.substring(0, index.indexOf('</head>'));
+      expect(head, contains(_preload('FontManifest.json')));
+      for (final family in [..._others, _used]) {
+        expect(head, contains(_preload(_assetOf(family))), reason: family);
+      }
+      for (final family in _unusedLucide) {
+        expect(index, isNot(contains(_assetOf(family))), reason: family);
+      }
+    },
+    skip: skip,
+  );
+
+  test('the page connects to the API while the app downloads', () async {
+    final result = await _release(repo, [
+      ..._others,
+      _mono,
+      ..._unusedLucide,
+      _used,
+    ]);
 
     expect(result.exitCode, 0, reason: '${result.stderr}');
     final index = _builtIndex(repo);
     final head = index.substring(0, index.indexOf('</head>'));
-    expect(head, contains(_preload('FontManifest.json')));
-    for (final family in [..._others, _used]) {
-      expect(head, contains(_preload(_assetOf(family))), reason: family);
-    }
-    for (final family in _unusedLucide) {
-      expect(index, isNot(contains(_assetOf(family))), reason: family);
-    }
+    // Anonymous, as the app's requests are: a credentialed preconnect would
+    // open a connection they never use.
+    expect(
+      head,
+      contains(
+        '<link rel="preconnect" href="https://harness-api.autonomous.ai" crossorigin>',
+      ),
+    );
+    final release = jsonDecode(
+      File(p.join(repo.path, 'build', 'web-release', 'release.json'))
+          .readAsStringSync(),
+    );
+    expect(release['apiUrl'], 'https://harness-api.autonomous.ai');
   }, skip: skip);
 
-  test('a build with no Lucide 400 font fails instead of shipping blind', () async {
-    final result = await _release(repo, [..._others, ..._unusedLucide]);
+  test(
+    'the terminal font leaves the first visit and stays in the release',
+    () async {
+      final result = await _release(repo, [
+        ..._others,
+        _mono,
+        ..._unusedLucide,
+        _used,
+      ]);
 
-    expect(result.exitCode, isNot(0));
-    expect('${result.stderr}', contains(_used));
-  }, skip: skip);
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      // Nothing waits for it before the first frame: not the engine's font
+      // list, not the page's preloads. The workspace part loads it by name.
+      expect(_manifestFamilies(repo), isNot(contains(_mono)));
+      expect(_builtIndex(repo), isNot(contains(_assetOf(_mono))));
+      expect(_shipped(repo, _mono), isTrue);
+    },
+    skip: skip,
+  );
+
+  test(
+    'a build with no terminal font fails instead of shipping blind',
+    () async {
+      final result = await _release(repo, [
+        ..._others,
+        ..._unusedLucide,
+        _used,
+      ]);
+
+      expect(result.exitCode, isNot(0));
+      expect('${result.stderr}', contains(_mono));
+    },
+    skip: skip,
+  );
+
+  test(
+    'a build with no Lucide 400 font fails instead of shipping blind',
+    () async {
+      final result = await _release(repo, [
+        ..._others,
+        _mono,
+        ..._unusedLucide,
+      ]);
+
+      expect(result.exitCode, isNot(0));
+      expect('${result.stderr}', contains(_used));
+    },
+    skip: skip,
+  );
 }

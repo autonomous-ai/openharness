@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -76,7 +77,13 @@ void main() {
     await monitor.refresh();
     app.changed();
     expect(monitor.label, 'Harnesses 1');
+    // A computer clicks; a phone's browser taps (audit finding S8).
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     expect(monitor.detail, contains('Click to open Harness Monitor'));
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    expect(monitor.detail, contains('Tap to open Harness Monitor'));
+    expect(monitor.detail, isNot(contains('Click')));
+    debugDefaultTargetPlatformOverride = null;
     expect(app.requests, isEmpty);
   });
   test('one snapshot preserves partial totals, shared servers, machine scope and nested storage', () async {

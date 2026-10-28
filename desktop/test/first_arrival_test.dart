@@ -126,6 +126,42 @@ class _OpeningApp extends _PreparingApp {
   }
 }
 
+/// A create the machine answered: made (its harness's id) with no pane yet, or still being confirmed.
+class _AnsweredApp extends _OpeningApp {
+  _AnsweredApp({this.awaiting = false});
+  final bool awaiting;
+  final attempts = <AgentCreationAttempt?>[];
+  @override
+  Future<String?> createAgent(
+    String machineId, {
+    required String engine,
+    required String? folder,
+    ProjectFolderRequest? projectFolder,
+    bool bypassPermission = true,
+    String? permissionMode,
+    String? codexHome,
+    String? dsh,
+    GridModel? model,
+    String? prompt,
+    String? name,
+    String? agent,
+    String? swarmId,
+    String? swarmRole,
+    String? swarmSkillMode,
+    PaneSplitRequest? split,
+    AgentCreationAttempt? attempt,
+    HarnessPlacement? placement,
+  }) async {
+    starts.add((engine: engine, folder: folder, prompt: prompt));
+    attempts.add(attempt);
+    attempt!.answeredForTest(
+      agentId: awaiting ? null : 'first',
+      awaitingConfirmation: awaiting,
+    );
+    return awaiting ? 'Still starting. Check again in a moment.' : null;
+  }
+}
+
 final _base = DateTime(2026, 10, 8, 12);
 
 /// A conversation last active [minutesAgo] minutes before noon.
@@ -331,6 +367,51 @@ void main() {
         '/work/first-task',
       ]);
     });
+
+    // A second create resumed the same session and was refused as already a harness (Oct 26 report).
+    test('retry after the harness was made but not shown waits for that harness, and creates nothing', () async {
+      final app = _AnsweredApp();
+      addTearDown(app.dispose);
+      final arrival = _PreparingArrival(_MemoryStore())
+        ..begin(downloads: false);
+      await arrival.restore();
+      arrival.index.complete([]);
+      expect(await arrival.run(app), isFalse);
+      expect(
+        arrival.error,
+        'The harness has not opened yet. Try again to check it.',
+      );
+      // Still not shown: the same answer again, and still no second create.
+      expect(await arrival.retry(app), isFalse);
+      expect(
+        arrival.error,
+        'The harness has not opened yet. Try again to check it.',
+      );
+      app.activeSwarm.panes.add(
+        TerminalPane(id: 1, machineId: 'local', agentId: 'first'),
+      );
+      expect(await arrival.retry(app), isTrue);
+      expect(app.starts, hasLength(1));
+      expect(app.allPanes.single.firstTask, FirstArrival.starterTask);
+      expect(arrival.needsRecovery, isFalse);
+    });
+
+    test(
+      'retry while a start is being confirmed asks about the same start again',
+      () async {
+        final app = _AnsweredApp(awaiting: true);
+        addTearDown(app.dispose);
+        final arrival = _PreparingArrival(_MemoryStore())
+          ..begin(downloads: false);
+        await arrival.restore();
+        arrival.index.complete([]);
+        expect(await arrival.run(app), isFalse);
+        expect(arrival.checkingStatus, isTrue);
+        expect(await arrival.retry(app), isFalse);
+        expect(app.attempts, hasLength(2));
+        expect(app.attempts.last, same(app.attempts.first));
+      },
+    );
 
     test('the index and engine check start together and both finish before planning', () async {
       final app = _PreparingApp();

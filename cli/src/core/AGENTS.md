@@ -17,7 +17,16 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
    attach that read an 803 MB transcript whole.
 5. **100% coverage, per file** (`npm run test:core`), and an end-to-end test (`../../e2e/`) for any
    behaviour a person can see. The end-to-end suite has found every race fixed here so far: run it.
-6. **Evidence must be newer than the state it contradicts.** A scan, probe or read that began before
+6. **The Swarm is a subsystem the core runs without.** `HARNESS_SWARM=off` (harnessd/swarmSwitch.ts, on by default)
+   leaves the Super Tab service off and loads none of the Swarm's code, in the core or any service. So no core file
+   imports anything of `../superTabs/` or `../lib/swarm*`, not even types. What the core needs of it is typed in
+   `api.ts` (`SuperTabsCore`, `SuperTabsPort`, `SwarmAgents`, `SwarmLaunch`, `AdoptSwarmSkill`) and handed in by
+   `main.ts` from `../superTabs/inCore.ts`; the services that act on it get their side from `../superTabs/inServices.ts`
+   (`serviceProcess.ts`, or `main.ts` when they run here). Both are imported dynamically and only while it is on.
+   Every such dependency is optional, and absent is exactly the daemon without the Swarm. `src/architecture.spec.ts`
+   holds every import of its code to those doors and walks each process's imports; `src/leanEntry.spec.ts` checks the
+   shipped build, and `e2e/swarmSwitch.e2e.ts` what each process loads.
+7. **Evidence must be newer than the state it contradicts.** A scan, probe or read that began before
    a change must not be used to undo that change (see `terminalAgentReconciler.ts` `probedAs`,
    `routeTouched`, and `transcripts/relaunch.ts`). Most of the races found end to end were this.
 
@@ -54,7 +63,10 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   master is too old to run it, still in its own process.
 - `stall.ts`: a test-only fault that holds the core's event loop still (`HARNESSD_TEST_FAULTS=core.stall:…`).
 - `main.ts`: the core's entry (`harness __run`) and composition root, `runForeground`: it builds these
-  modules, starts the services through `serviceHost` and wires the socket. The one core file that imports
+  modules, starts the services through `serviceHost` and wires the socket. While the Swarm is on it loads the Swarm's
+  side of this process from `../superTabs/inCore.ts` (and `../superTabs/inServices.ts` for the services that act on it,
+  when they run here) and hands it to the modules that take it; off, it leaves the
+  Super Tab service off (`serviceHost.leaveOff`), whose requests are then answered `SERVICE_UNAVAILABLE`. The one core file that imports
   services and the socket, and the one outside the 100% coverage: wiring only, run end to end. The
   services that run in their own processes by default it imports only dynamically, through
   `../services/inline.ts`, and only when one runs in this process instead.

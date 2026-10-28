@@ -307,6 +307,9 @@ export class IsolatedDaemon {
       TERMINAL_BACKENDS: 'tmux',
       TMUX_REAP_INTERVAL_MS: '5000',
       TERMINAL_RECONCILE_INTERVAL_MS: '5000',
+      // The Swarm switch (harnessd/services.ts), as the run was started with: `HARNESS_SWARM=off npm run test:e2e` runs
+      // every daemon of the suite with the Swarm off. A test's own env still decides.
+      ...(process.env.HARNESS_SWARM !== undefined ? { HARNESS_SWARM: process.env.HARNESS_SWARM } : {}),
       ...options.env,
     })
     // A Claude Code home moved in the environment this run was started from is the person's: the daemon

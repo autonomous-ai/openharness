@@ -161,6 +161,14 @@ without touching zoom or the synced layout, so the same desk keeps its grid on a
 arrangement (`Swarm.arranged`), because that is what a split divides: without it the menu's Split pane could never run on a phone. Do not change desktop behavior for the
 web, and do not copy shared screens into `lib/web/` — add a seam instead.
 
+**A browser downloads the app in parts** (`lib/web/parts/`, `DeferredPart`/`DeferredPartView`): the
+signed-in workspace (`web_entry.dart` → `workspace_part.dart`, fetched once the first frame is up, so a
+first visit's sign-in page skips its 4.4 MB), the Finder and its editor (`pane_grid.dart`), and the chat's
+text viewer (`attachment_chips.dart`). Shared code reaches the last two through a compile-time import
+switch (`if (dart.library.js_interop)`, as `main.dart` picks the web entry), so a computer compiles the
+same files as ever (`test/pane_grid_finder_test.dart`). Importing one of these libraries directly from
+shared code puts it back in `main.dart.js`. Check a real build with `tool/web_ux/deferred-parts.mjs`.
+
 A browser on a phone or tablet (iOS, Android by `defaultTargetPlatform`, whatever the window's width) gets a bar over
 every screen, sign-in and shared harnesses included, sending it to the Harness app in its store
 (`web/shell/web_store_banner.dart`). It is the app's frame — `startHarness(frame:)`, which `main.dart` takes from the
@@ -291,8 +299,14 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   showing the machine as connecting; only a refusal that outlasts two rounds (~15s), or a frozen
   log, asks for the password. The desk frames (`app_focus`, `app_panes`, `app_swarms`, `app_unread`,
   `agent_seen`) are for this computer's daemon and only ride a loopback connection. A viewer with no
-  machine connected hears no push, so it re-reads the machine list every 20s while that lasts
-  (`deafMachineListInterval`) and when the tab comes back to the front.
+  machine connected hears no push, so it re-reads the machine list itself while that lasts
+  (`state/machine_list_watch.dart`): after 4 s, 8 s, then every 10 s under the connect page
+  (`waitsForFirstComputer`), or 15 s then every 30 s under the asleep band, and every 20 s
+  otherwise (a computer still connecting). A push, the tab coming back to the front (which reads
+  at once) and Retry start that pace over, and while recovery retries a failed or stale list it is
+  the only one asking. A hidden tab reads nothing on this pace; the one read it still makes is the
+  5-minute safety net every window keeps (`machineListSafetyNetInterval`). The browser's connect
+  page and asleep band keep no timer of their own.
 - **Both REST and the local WS prefer the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
   CLI `lib/localSocket.ts`): `~/.harness/cli/data/daemon-<port>.sock`, 0600, named for the port in
   `localCliBaseUrl` so it always leads to the same daemon as the TCP fallback. The loopback port takes

@@ -1,0 +1,3 @@
+# Bash must parse these on Linux, macOS and Git Bash, even with core.autocrlf.
+toolchain/*.sh text eol=lf
+TYPST_VERSION text eol=lf

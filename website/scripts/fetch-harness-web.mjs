@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { configureReleaseAssets, releaseAssetBase } from './harness-web-assets.mjs';
 import { moveDirectory } from './move-directory.mjs';
+import { precompressFolder } from './precompress.mjs';
 
 // This package hosts the compiled app; its only source is desktop/ in the same repository.
 // Release builds pass the bundle CI just built via HARNESS_WEB_ARCHIVE (see Dockerfile.k8s and
@@ -52,6 +53,8 @@ try {
   const entry = configureReleaseAssets(index, release);
   const versioned = path.join(temporary, 'versioned');
   await cp(extracted, versioned, { recursive: true });
+  // Only the release folder new pages load from; the unversioned copy serves tabs already open.
+  await precompressFolder(versioned);
   const versionedDestination = path.join(extracted, releaseAssetBase(release).slice('/harness-web/'.length));
   await mkdir(path.dirname(versionedDestination), { recursive: true });
   await moveDirectory(versioned, versionedDestination);

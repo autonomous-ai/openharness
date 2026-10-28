@@ -1,5 +1,4 @@
-import { prepareSwarmSkill, type SwarmSkill } from './swarmSkills.js'
-import { swarmGitHubLaunch } from './swarmGitHub.js'
+import type { SwarmSkill } from './savedSkill.js'
 /**
  * What a pane has to be launched WITH, beyond the engine's own argv, for the engine to come back
  * where it was: on the same grid with the same credential, or under the same Codex profile.
@@ -104,13 +103,27 @@ export interface LaunchOverridesDeps {
    * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
+  /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
+   *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
+  ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
   /** Read an engine's settings for the pull request line (engines/launches.ts `attributionArgs`). A seam, like
    *  `readCodexConfig`: absent ⇒ the real file. */
   readAttribution?: (path: string) => string | null
+  /** What the Swarm prepares on every relaunch of a session it started: its skill file and instructions
+   *  (lib/swarmSkills.ts) and the Harness GitHub App's git and gh (lib/swarmGitHub.ts), handed in by the core from
+   *  superTabs/inCore.ts. Absent while the Swarm is off (`HARNESS_SWARM`), when such a session is not relaunched: as
+   *  with a harness package that is missing, starting it without its role would silently change what it is. */
+  swarm?: {
+    prepare(workspace: string, saved: SwarmSkill): { instructions: string }
+    github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+  }
 }
+
+/** The answer to relaunching a Swarm session while the Swarm is off on this computer. */
+export const SWARM_OFF = { ok: false, error: 'SWARM_SKILL_FAILED', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' } as const
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
 export interface LaunchSource extends NativeLaunchSource {
@@ -211,6 +224,8 @@ export async function prepareLaunchOverrides(
 ): Promise<LaunchPreparationResult> {
   const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
   if (!current()) return changed
+  if (source.swarmSkill && !deps.swarm) return SWARM_OFF
+  const swarm = deps.swarm
   const owner = current
   source = structuredClone(source)
   const inspected = capturedNative ? { ok: true as const, launch: capturedNative } : await deps.native?.(engine, source, { id: configKey, current: owner })
@@ -273,8 +288,8 @@ export async function prepareLaunchOverrides(
     if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
     // A session started for another person's project keeps git and gh on the Harness GitHub App (lib/swarmGitHub.ts).
     if (source.swarmSkill?.github) {
-      let github: ReturnType<typeof swarmGitHubLaunch>
-      try { github = swarmGitHubLaunch(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
+      let github: ReturnType<NonNullable<LaunchOverridesDeps['swarm']>['github']>
+      try { github = swarm!.github(source.swarmSkill.key) } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
       if (github) overrides = { ...overrides, env: { ...overrides.env, ...github.env }, clearEnv: [...overrides.clearEnv, ...github.clearEnv] }
     }
     // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
@@ -293,7 +308,7 @@ export async function prepareLaunchOverrides(
     if (source.swarmSkill) {
       try {
         if (!source.cwd) throw new Error('The Swarm session has no saved workspace')
-        swarmInstructions = prepareSwarmSkill(source.cwd, source.swarmSkill).instructions
+        swarmInstructions = swarm!.prepare(source.cwd, source.swarmSkill).instructions
       } catch (error) { return { ok: false, error: 'SWARM_SKILL_FAILED', detail: String(error) } }
     }
     const told = agentLaunchArgs(engine, source.startedBy, {
@@ -326,12 +341,16 @@ async function prepareBaseLaunchOverrides(
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
     const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
+    // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
+    // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
+    // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).
+    const relay = await deps.ownerRelay?.(engine) ?? null
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
-    const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
-    if (restored || provider.length) {
+    const provider = relay ? relay.args : ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
+    if (restored || provider.length || relay) {
       ownLogin = {
-        env: { ...(restored?.env ?? {}) },
+        env: { ...(relay?.env ?? {}), ...(restored?.env ?? {}) },
         extraArgs: [...provider, ...(restored?.args ?? [])],
         clearEnv: [],
         ...(restored?.sessionModel ? { sessionModel: restored.sessionModel } : {}),

@@ -26,3 +26,16 @@ describe('the host-fields digest a conversation write stores (group 3b)', () => 
     }
   })
 })
+
+describe('the finished-work mark a conversation write stores', () => {
+  const group = (status: string | null): GroupData => ({ id: 'g', projectId: 'p', title: 'Work', leadId: 'lead', agentIds: ['lead'], archived: false,
+    brief: '', checks: [], lastMessageSequence: 0, assignment: status === null ? null : { id: 'w', agentId: 'worker', status: status as never,
+      configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
+      execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null } })
+
+  it('is set only while its task is done or cancelled: the archive pass reads only those (archive.ts)', () => {
+    expect(extracted('group', group('done'), 1).workFinished).toBe(true)
+    expect(extracted('group', group('cancelled'), 1).workFinished).toBe(true)
+    for (const status of ['working', 'review', 'lost', 'stopped', null]) expect(extracted('group', group(status), 1).workFinished).toBe(false)
+  })
+})

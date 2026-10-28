@@ -10,6 +10,7 @@ import 'web_ux/scenarios/first_load.dart';
 import 'web_ux/scenarios/menus.dart';
 import 'web_ux/scenarios/pane.dart';
 import 'web_ux/scenarios/scenario.dart';
+import 'web_ux/scenarios/speed.dart';
 import 'web_ux/scenarios/states.dart';
 import 'web_ux/scenarios/store.dart';
 import 'web_ux/scenarios/welcome.dart';
@@ -26,6 +27,7 @@ final Map<String, WebUxScenario> webUxScenarios = mergeScenarios([
   paneScenarios,
   welcomeScenarios,
   statesScenarios,
+  speedScenarios,
 ]);
 
 /// Every group's scenarios in one map; a name in two groups is an error.

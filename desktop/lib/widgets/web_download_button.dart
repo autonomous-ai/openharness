@@ -1,10 +1,10 @@
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/desktop_download.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/workspace_bar_style.dart';
+import 'pointer_words.dart';
 import 'workspace_bar_control.dart';
 import 'workspace_share_button.dart';
 
@@ -19,10 +19,7 @@ Future<bool> openInNewTab(Uri uri) =>
 /// (`web/shell/web_store_banner.dart`): a computer's download is no use there,
 /// so [WebDownloadButton] is left out (audit finding S9).
 bool browserHasAppStore([TargetPlatform? platform]) =>
-    switch (platform ?? defaultTargetPlatform) {
-      TargetPlatform.iOS || TargetPlatform.android => true,
-      _ => false,
-    };
+    isPhoneOrTablet(platform);
 
 /// The Harness product page.
 final harnessAppPage = Uri.parse('https://www.autonomous.ai/harness-app');

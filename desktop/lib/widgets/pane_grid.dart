@@ -1,4 +1,6 @@
-import '../finder/widgets/finder_pane_panel.dart';
+// A browser leaves the Finder out of main.dart.js until a Finder tile is drawn.
+import '../finder/widgets/finder_pane_panel.dart'
+    if (dart.library.js_interop) '../web/parts/finder_pane_panel.dart';
 import '../super_tabs/pane.dart';
 import '../super_tabs/saved_session.dart';
 import '../sharing/shared_harness_panel.dart';

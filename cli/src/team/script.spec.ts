@@ -554,3 +554,11 @@ describe('real permission bits on a temporary folder', () => {
     expect(statSync(join(dir, 'bin')).mode & 0o777).toBe(0o755)
   })
 })
+
+describe('what setup carries from the owner\'s environment', () => {
+  it('carries the backend it signs in to, and never switches the team account\'s updates off', async () => {
+    const { carriedBackendEnv } = await import('./layout.js')
+    expect(carriedBackendEnv({ AUTONOMOUS_ENV: 'stag', ADAPTER_UPDATE_DISABLE: 'true' })).toEqual({ AUTONOMOUS_ENV: 'stag' })
+    expect(carriedBackendEnv({ ADAPTER_UPDATE_DISABLE: '1' })).toEqual({})
+  })
+})

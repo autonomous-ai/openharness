@@ -13,6 +13,7 @@ import 'package:harness/core/open_in_browser.dart';
 import 'package:harness/super_tabs/attachment_chips.dart';
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/model.dart';
+import 'package:harness/web/parts/attachment_text_viewer.dart';
 
 void main() {
   testWidgets('a text file opens in the browser, not fetched in the page', (

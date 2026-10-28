@@ -5,7 +5,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, isLeads, visibleState, type Actor, type AgentStart } from '../model.js'
+import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart } from '../model.js'
 import { mentionsWaiting } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { transaction, type SuperTabStore } from '../store.js'
@@ -18,10 +18,11 @@ import { readableWeek, recentDormantGroups } from '../leaderboard/read.js'
 import { LEDGER_WEEKS } from '../leaderboard/record.js'
 import { leaderboard } from '../leaderboard/stats.js'
 import { WEEK_MS } from '../leaderboard/week.js'
-import { READ_FORMAT, SWARM_MIGRATING, type Changes, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
+import { READ_FORMAT, SWARM_MIGRATING, type Changes, type Derived, type DormantGroups, type FirstLoad, type OneGroup, type SwarmList } from './contract.js'
+import { AvatarLinks } from '../avatarLinks.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
-import { envelope, groupView, readerView, type ReaderView } from './views.js'
+import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
 
 type Transaction = Prisma.TransactionClient
@@ -35,15 +36,25 @@ export class SwarmReads {
   constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
+    this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars) : null
   }
+  private readonly avatarLinks: AvatarLinks | null
 
   async firstLoad(user: AuthUser, tabId: string, asAgentId?: string): Promise<FirstLoad> {
     const t0 = this.now()
     return this.read(user, tabId, async tx => {
       const { parts: loaded, view, lastChangedAt } = await this.load(tx, user, tabId, asAgentId, t0, { includeRecentStarts: true })
       return { format: READ_FORMAT, tabId, cursor: cursorFor(t0, loaded.visibilityEpoch), serverTime: t0, lastChangedAt, epoch: loaded.visibilityEpoch,
-        ...(this.options.githubApp ? { githubApp: true as const } : {}), ...view.parts, derived: view.derived }
+        ...(this.options.githubApp ? { githubApp: true as const } : {}), ...view.parts, derived: await this.withAvatars(view, t0) }
     })
+  }
+
+  /** The reader's avatar links (avatarLinks.ts), only ever in a member's read: issued afresh each time, never stored. */
+  private async withAvatars(view: ReaderView, now: number): Promise<Derived> {
+    if (!this.avatarLinks) return view.derived
+    const seen = new Set(Object.keys(view.derived.agents))
+    const avatars = await this.avatarLinks.forReader(view.state, view.state.agents.filter(a => seen.has(a.id)), now)
+    return Object.keys(avatars).length ? { ...view.derived, avatars } : view.derived
   }
 
   async changes(user: AuthUser, tabId: string, cursor: string, asAgentId?: string): Promise<Changes> {
@@ -64,7 +75,7 @@ export class SwarmReads {
       const dormant = [...new Set(changed.flatMap(p => p.kind === 'start' ? [(p.data as AgentStart).request.conversationId] : []))].filter(id => !held.has(id))
       if (dormant.length) read = await this.load(tx, user, tabId, asAgentId, t0, { ...light, groupIds: [...mentioned, ...dormant] }, parts.loadLight)
       return { format: READ_FORMAT, reload: false, cursor: cursorFor(t0, read.parts.visibilityEpoch), serverTime: t0, lastChangedAt: read.lastChangedAt,
-        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor), derived: read.view.derived }
+        epoch: read.parts.visibilityEpoch, ...changesFor(read.view, changed, read.actor), derived: await this.withAvatars(read.view, t0) }
     })
   }
 
@@ -77,7 +88,8 @@ export class SwarmReads {
       const before = page.before ? decodeDormantPage(page.before) : undefined
       const rows = await parts.loadDormant(tx, tabId, { ...(page.projectId ? { projectId: page.projectId } : {}), ...(before ? { before } : {}) })
       const readable = rows.filter(p => { try { return canReadGroup(state, actor, p.data!) } catch { return false } })
-      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }))),
+      const seen = readable.some(p => p.data!.task?.requires) ? seenMachineIds(visibleState(state, actor, this.now())) : new Set<string>()
+      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }, seen))),
         next: rows.length === 50 ? encodeDormantPage(rows.at(-1)!) : null }
     })
   }
@@ -90,7 +102,9 @@ export class SwarmReads {
       if (active) return { group: active }
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
-      if (dormant && canReadGroup(view.state, actor, dormant.data!)) return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true })) }
+      if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
+        return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true }, seenIn(view.parts))) }
+      }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
   }
@@ -147,6 +161,7 @@ export class SwarmReads {
       parts.lastChangedAt(tx, [tabId]),
     ])
     return { parts: loaded, actor, lastChangedAt: newest.get(tabId) ?? null,
-      view: readerView(loaded, actor, t0, { teamMachines, ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1] } : {}) }) }
+      view: readerView(loaded, actor, t0, { teamMachines,
+        ...(counts ? { mentionsWaiting: counts[0], decisionsWaiting: counts[1].count, decisionsDigest: counts[1].digest } : {}) }) }
   }
 }
