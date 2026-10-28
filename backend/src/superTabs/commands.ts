@@ -14,11 +14,15 @@ import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
+import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged, recordStatus } from './leaderboard/record.js'
+import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
+import { react, reactionSchema, type ReactionTarget } from './reactions.js'
+import { shipNotice, shippedAt } from './ship.js'
+import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -135,10 +139,14 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('invite.revoke'), inviteId: id }).strict(),
   z.object({ type: z.literal('invite.accept'), inviteId: id }).strict(),
   z.object({ type: z.literal('member.remove'), userId: id }).strict(),
+  z.object({ type: z.literal('member.status'), status: statusSchema.nullable() }).strict(),
+  z.object({ type: z.literal('member.avatar'), avatar: avatarChoice }).strict(),
+  z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
     attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
+  z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
   z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
@@ -174,6 +182,7 @@ export const operationSchema = z.object({ operationId: id, command: commandSchem
  *  chat row is redacted (terminal.ts). Not a role's skill text, which only its project's owner, Lead and hosts read. */
 const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'message.send': ['text'],
+  'member.status': ['status.text'],
   'agent.add': ['name', 'initialMessage'],
   'agent.start': ['request.name', 'overrideReason'],
   'agent.startFailed': ['error'],
@@ -243,6 +252,10 @@ export interface CommandContext {
   delivery?: { id: string; conversationId: string; agentId: string; messageId: string; text: string; attachments?: Attachment[] }
   /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
   attachments?: Attachment[]
+  /** The avatar upload `member.avatar` or `agent.avatar` names, checked by the store the same way (profile.ts). */
+  avatarUpload?: AvatarUpload
+  /** The message `message.react` names, read by the store (reactions.ts). */
+  reaction?: ReactionTarget
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
@@ -611,7 +624,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // A launch already under way would arrive with nowhere to go; it finishes in moments.
     if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
     for (const start of pending) {
-      start.error = 'Its machine was removed from the Swarm.'
+      start.error = MACHINE_REMOVED
       effects.messages.push({ id: stableId(operationId, 'start', start.id), conversationId: start.request.conversationId, author: sender,
         text: `${start.request.name} will not start: its machine was removed from the Swarm.`, replyTo: null, recipients: [], source: SYSTEM_ROW })
     }
@@ -901,7 +914,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
-      for (const start of abandoned) start.error = 'Abandoned before it started.'
+      for (const start of abandoned) start.error = ABANDONED
       // Each project's Lead chat hears once about its own starts, whichever of its groups asked.
       const byLeadChat = new Map<string, Set<string>>()
       for (const start of abandoned) {
@@ -1274,7 +1287,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
-        message(group.id, `Could not start ${start.request.name}: ${command.error}`, lead ? [lead] : [], null, SYSTEM_ROW)
+        message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')
@@ -1291,6 +1304,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         machineOwnerId: start.machineOwnerId, contributorId: start.contributorId, membershipGeneration: start.membershipGeneration,
         hostGrant: start.hostGrant, name: start.request.name, configuration: command.configuration, configurationVersion: operationId,
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
+        ...(start.request.gridModel ? { gridModel: start.request.gridModel } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
@@ -1328,8 +1342,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       target.harnessId = command.harnessId
       target.replacement = { previousHarnessId: command.previousHarnessId, harnessId: command.harnessId }
-      // A new terminal is not the session that lost its task.
+      // A new terminal is not the session that lost its task, nor one started on a grid model: it reports its own.
       delete target.lostTask
+      delete target.gridModel
       target.configuration = command.configuration
       target.configurationVersion = operationId
       if (command.startedSession) target.startedSession = command.startedSession
@@ -1475,6 +1490,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'invite.revoke':
       owner(state, actor)
       state.invitations = state.invitations.filter(i => i.id !== command.inviteId)
+      break
+    case 'member.status':
+      setStatus(state, actor, command.status, context.now)
+      break
+    case 'message.react':
+      result.changed = react(postable(state, actor, command.conversationId), command.messageId, command.on, context.reaction)
+      break
+    case 'member.avatar':
+      setMemberAvatar(state, actor, command.avatar, context.avatarUpload)
+      break
+    case 'agent.avatar':
+      setAgentAvatar(state, actor, command.agentId, command.avatar, context.avatarUpload)
       break
     case 'member.remove': {
       if (actor.kind !== 'person' || (actor.userId !== state.ownerId && actor.userId !== command.userId)) {
@@ -1672,6 +1699,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
       renewLease(group.assignment, context.now)
+      recordRun(state, group, group.assignment, worker, context.now)
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
       result.assignmentId = operationId
       let routeNote: { decisionId: string; text: string } | null = null, personChose = false
@@ -1730,6 +1758,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         const asked = command.ask ? `\n\nAsked ${person(state, command.ask.personId).email}.` : ''
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
+        if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
+          appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
+          const shipped = shipNotice(state, group, sender, operationId)
+          if (shipped) effects.messages.push(shipped)
+        }
       }
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
@@ -1793,6 +1827,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (check.independent && actor.kind === 'agent' && actor.agentId === group.assignment.agentId) fail('INDEPENDENT_REVIEW', 'Another agent or a person must perform this check.')
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
+      recordReview(group, check, command.passed)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
