@@ -92,6 +92,18 @@ describe('account HTTP in the gateway', () => {
         message: 'The Harness backend did not answer GET /api/auth/me within 20s. Try again in a moment.' } } })
     }
   })
+  // A refusal must keep its status whatever its body does: 401/403 sign out, 426 asks for an update, 429/5xx carry Retry-After.
+  it('keeps a refusal\'s status with {} when its body stalls or is not JSON', async () => {
+    const { api, request } = setup()
+    const stalled = (status: number, headers: Record<string, string> = {}) => new Response(
+      new ReadableStream({ start(controller) { controller.error(new DOMException('late', 'TimeoutError')) } }), { status, headers })
+    request.mockResolvedValueOnce(stalled(401))
+    expect(await api.backend('GET', '/api/auth/me')).toEqual({ status: 401, body: {} })
+    request.mockResolvedValueOnce(stalled(503, { 'retry-after': '30' }))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 503, body: {}, retryAfterMs: 30_000 })
+    request.mockResolvedValueOnce(new Response('<html>Upgrade Required</html>', { status: 426 }))
+    expect(await api.backend('GET', '/api/super-tabs/hosts/machine-1/changes?full=1')).toEqual({ status: 426, body: {} })
+  })
   it('answers a success whose body is not JSON as a bad response, and an empty one as {}', async () => {
     const { api, request } = setup()
     request.mockResolvedValueOnce(new Response('<html>Bad gateway</html>', { status: 200 }))

@@ -68,12 +68,15 @@ export function createAccountHttp(deps: AccountHttpDeps) {
       if (timedOut(e)) return timeout()
       return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${e.cause?.message ?? e.message}). Check the connection and try again.`)
     }
-    // The timeout also covers the body: one that stalls after the headers, or a proxy's HTML page, is not an empty success.
+    // The timeout also covers the body: a success that stalls after the headers, or a proxy's HTML page, is not an empty
+    // success (Diego 10-29). A refusal keeps its status whatever its body does: 401/403 sign out, 426 asks for an update.
     let answer: Record<string, unknown> = {}
     if (res.body !== null && res.headers?.get?.('content-length') !== '0') {
       try { answer = await res.json() as Record<string, unknown> } catch (error) {
-        if (timedOut(error as Error)) return timeout()
-        if (res.status >= 200 && res.status < 300) return failure(502, 'BACKEND_BAD_RESPONSE', `The Harness backend answered ${method} ${path} with an unreadable reply. Try again in a moment.`)
+        if (res.status >= 200 && res.status < 300) {
+          return timedOut(error as Error) ? timeout()
+            : failure(502, 'BACKEND_BAD_RESPONSE', `The Harness backend answered ${method} ${path} with an unreadable reply. Try again in a moment.`)
+        }
       }
     }
     const retry = res.status === 429 || res.status >= 500 ? retryAfterMs(res.headers?.get?.('retry-after') ?? null) : null
