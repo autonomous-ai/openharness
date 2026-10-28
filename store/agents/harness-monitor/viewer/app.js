@@ -1,5 +1,5 @@
 import { ACTIVITY, SPINNER, COLUMNS, PRESETS, isLive, visibleRows, number, memory, bytes, age, formatValue, sumReading, storageTotal } from './table.js'
-import { hostHidden, liveConnection } from './live.js'
+import { hostHidden, liveConnection, observedAt } from './live.js'
 const el = id => document.getElementById(id)
 const dom = {
   search: el('search'), filter: el('filter'), machine: el('machine'), columns: el('columns'), columnOptions: el('column-options'),
@@ -451,7 +451,7 @@ dom.freeze.onclick = () => {
   syncLive(); render()
 }
 function applySnapshot(snapshot) {
-  state.snapshot = snapshot; state.rows = (snapshot.rows ?? []).filter(row => row.online !== false); state.receivedAt = Date.now()
+  state.snapshot = snapshot; state.rows = (snapshot.rows ?? []).filter(row => row.online !== false); state.receivedAt = observedAt(snapshot)
   const machines = new Map((snapshot.machines ?? []).map(m => [m.machineId, m.name]))
   for (const row of state.rows) machines.set(row.machineId, row.machine)
   const signature = JSON.stringify([...machines])

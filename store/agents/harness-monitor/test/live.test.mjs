@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { hostHidden, liveConnection } from '../viewer/live.js'
+import { hostHidden, liveConnection, observedAt } from '../viewer/live.js'
 
 /** A stand-in for the page's EventSource: counts what was opened and closed. */
 function streams() {
@@ -34,4 +34,11 @@ test('Harness says when its tab is out of sight by marking the page', () => {
   assert.equal(hostHidden({ dataset: { hostVisible: 'false' } }), true)
   assert.equal(hostHidden({ dataset: { hostVisible: 'true' } }), false)
   assert.equal(hostHidden({ dataset: {} }), false, 'a page opened outside Harness, or by an older Harness, is visible')
+})
+
+test('readings are dated by when they were observed, so a reopened page does not call old readings new', () => {
+  const now = 1_000_000
+  assert.equal(observedAt({ observedAt: now - 600_000 }, now), now - 600_000, 'readings kept while nobody watched say how old they are')
+  assert.equal(observedAt({ observedAt: null, status: 'starting' }, now), now, 'the first, empty snapshot has no observation yet')
+  assert.equal(observedAt({ observedAt: now + 5_000 }, now), now, 'never dated in the future')
 })

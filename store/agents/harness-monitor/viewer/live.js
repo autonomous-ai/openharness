@@ -21,3 +21,8 @@ export function liveConnection({ open, paused }) {
     get open() { return stream !== null },
   }
 }
+
+/** When a snapshot's readings were taken. A page that reconnects first gets the readings the server
+ *  kept while nobody watched, and those must not read as "Updated just now" until the next read lands. */
+export const observedAt = (snapshot, now = Date.now()) =>
+  Number.isFinite(snapshot?.observedAt) ? Math.min(snapshot.observedAt, now) : now
