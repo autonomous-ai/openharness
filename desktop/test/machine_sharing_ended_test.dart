@@ -39,7 +39,7 @@ class _Discovery extends LocalCliDiscovery {
 }
 
 class _Connection extends WsConn {
-  _Connection(String machineId)
+  _Connection(String machineId, {this.onWake})
     : super(
         wsBaseUrl: 'ws://fixture.invalid',
         autonomousEnv: 'test',
@@ -49,6 +49,9 @@ class _Connection extends WsConn {
         onEvent: (_) {},
         onStatus: (_) {},
       );
+  final void Function(String machineId)? onWake;
+  @override
+  void wake(String reason) => onWake?.call(machineId);
   @override
   Future<void> waitUntilReady({required Duration timeout}) async {}
   @override
@@ -61,13 +64,13 @@ class _Connection extends WsConn {
 
 /// Signed in, with this computer's daemon and its machine connections faked.
 class _App extends AppNotifier {
-  _App(_Api api)
+  _App(_Api api, {void Function(String machineId)? onWake})
     : super(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
         localCliDiscovery: _Discovery(),
-        connectionForTest: _Connection.new,
+        connectionForTest: (id) => _Connection(id, onWake: onWake),
       ) {
     this.api = api;
   }
@@ -233,6 +236,22 @@ void main() {
       expect(app.lastErrorRetryable, isFalse);
     });
   }
+
+  // A relayed machine that was off waits parked (WsConn.isParked) until it is reported back: the
+  // machine list's refresh saying it is online is that word.
+  test('a machine the list reports online wakes its parked connection', () async {
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'Studio',
+      status: 'online',
+    );
+    final api = _Api()..listed = const [studio];
+    final woken = <String>[];
+    app = _App(api, onWake: woken.add)..status = AppStatus.authenticated;
+    await app.refreshMachines();
+    expect(woken, contains('studio'));
+  });
 
   test('every refusal code reads as a sentence', () {
     for (final code in [

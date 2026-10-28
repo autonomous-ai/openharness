@@ -212,6 +212,53 @@ class WsConn {
 
   bool get isReady => _ready && _channel != null;
 
+  /// Waiting for its machine, which the daemon's relay said is off ([_park]).
+  bool get isParked => _parked;
+  bool _parked = false;
+
+  /// The rechecks dialled in a row on their own, each parked again: what doubles the next wait.
+  int _parkedRechecks = 0;
+  static const _recheck = 'recheck';
+
+  /// The wait before a parked connection dials again on its own after [rechecks] of them in a
+  /// row: a minute, then 2, 4, 8, and 15 at most. Anything that says the machine is back [wake]s it.
+  static Duration parkedRecheckAfter(int rechecks) {
+    final wait = const Duration(minutes: 1) * (1 << min(max(rechecks, 0), 4));
+    return wait > const Duration(minutes: 15)
+        ? const Duration(minutes: 15)
+        : wait;
+  }
+
+  /// The daemon's relay refused this machine as off (`MACHINE_OFFLINE`): wait for it.
+  ///
+  /// ⚠️ **Why (prod, 2026-10-28).** Daemon relays made 2,304 of 2,308 backend socket opens in 15
+  /// minutes, living a median 0.4 s. A relayed machine that was off was redialled on the 15–30 s
+  /// backoff for as long as the app ran, and each dial cost the daemon a backend socket refused at
+  /// once: about 2.7 a minute for every machine that was off, in every window.
+  void _park() {
+    _parked = true;
+    _reconnectTimer?.cancel();
+    final wait = parkedRecheckAfter(_parkedRechecks);
+    _reconnectTimer = Timer(wait, () => wake(_recheck));
+    onStatus(ConnectionStatus.reconnecting);
+    appLog.info(
+      'ws',
+      'parked $machineId · the relay says it is off; recheck in ${wait.inSeconds}s',
+    );
+  }
+
+  /// Dial a parked connection now: the machine is reported back, or somebody asks for it. Its own
+  /// recheck makes the next wait longer; anything else starts the waits over.
+  void wake(String reason) {
+    if (!_parked || _closing) return;
+    _parked = false;
+    _parkedRechecks = reason == _recheck ? _parkedRechecks + 1 : 0;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _attempt = 0;
+    unawaited(connect());
+  }
+
   /// Wait for this machine's handshake without queuing a request or changing
   /// its timeout. Callers can then start independent RPCs with their own budgets.
   Future<void> waitUntilReady({required Duration timeout}) {
@@ -350,6 +397,12 @@ class WsConn {
 
   Future<void> connect() async {
     if (_closing || _connecting) return;
+    // A dial asked for while parked (a forced redial) is the recheck's too.
+    if (_parked) {
+      _parked = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+    }
     _connecting = true;
     _ready = false;
     onStatus(
@@ -538,6 +591,7 @@ class WsConn {
 
   void _markReady() {
     _observerHandshakeTimer?.cancel();
+    _parkedRechecks = 0;
     _ready = true;
     _refreshedToken = null;
     _stableTimer?.cancel();
@@ -1011,6 +1065,10 @@ class WsConn {
     }
     final code = channel.closeCode;
     if (isLocal) {
+      if (channel.closeReason == 'MACHINE_OFFLINE') {
+        _park();
+        return;
+      }
       if (finalSelectRefusals.contains(channel.closeReason)) {
         // The relay could not select the machine, for good: told as a 4404 is, never redialled.
         _closing = true;

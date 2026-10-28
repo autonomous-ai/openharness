@@ -567,6 +567,45 @@ void main() {
     );
   }
 
+  // Prod, 2026-10-28: relays living 0.4 s made 2,304 of 2,308 backend socket opens in 15 minutes.
+  // A relayed machine that is off was redialled on the 15–30 s backoff for as long as the app ran,
+  // each dial refused at once: about 2.7 a minute for every machine that was off. It now waits for
+  // word that the machine is back, and rechecks on its own only every 1, 2, 4, 8, then 15 minutes.
+  test('a relayed machine that is off waits to be woken instead of redialling', () async {
+    // The reason is what counts: a current daemon closes with 1013, an older one with 1011 (a
+    // dart:io server cannot send 1013, a reserved code).
+    hub = await FakeHub.start(closeCodeOnSelect: 1011);
+    hub.closeReasonOnSelect = 'MACHINE_OFFLINE';
+    conn = WsConn(
+      wsBaseUrl: 'wss://unused.example',
+      autonomousEnv: 'prod',
+      machineId: 'm1',
+      accessTokenProvider: (_, _) async => 'sso-token',
+      onAuthFailure: (_) {},
+      onEvent: (_) {},
+      onStatus: (_) {},
+      transportKind: WsTransportKind.localPlaintext,
+      allowLocalTcpFixture: true,
+      localWsUri: Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws'),
+    );
+    await conn!.connect();
+    await Future<void>.delayed(const Duration(milliseconds: 3200));
+    expect(hub.protocols, hasLength(1));
+    expect(conn!.isParked, isTrue);
+    expect(conn!.isClosed, isFalse);
+
+    conn!.wake('machine online');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(hub.protocols, hasLength(2));
+  });
+
+  test('a parked connection rechecks after 1, 2, 4, 8 and then every 15 minutes', () {
+    expect(
+      [for (var n = 0; n < 7; n++) WsConn.parkedRecheckAfter(n).inMinutes],
+      [1, 2, 4, 8, 15, 15, 15],
+    );
+  });
+
   test(
     'a fixed reconnect delay retries at that pace instead of backing off',
     () async {

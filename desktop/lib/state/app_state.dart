@@ -5347,6 +5347,10 @@ class AppNotifier extends ChangeNotifier {
 
   /// What a machine hears the moment its socket is up — first connect, or a
   /// reconnect after its daemon restarted, which has forgotten all of it.
+  /// [machineId]'s socket, if it has one: the test's stand-in, or the pool's.
+  WsConn? _connectionOf(String machineId) =>
+      connectionForTest?.call(machineId) ?? _pool?[machineId];
+
   void _onMachineConnected(String machineId, MachineState machine) {
     machine._selectedConnection =
         connectionForTest?.call(machineId) ?? _pool?[machineId];
@@ -9684,6 +9688,11 @@ class AppNotifier extends ChangeNotifier {
           reportedOnline != null &&
           (state.nodeOnline == null || state.nodeOnline != reportedOnline)) {
         unawaited(_applyInventoryNodeStatus(state, reportedOnline));
+      }
+      // A relayed machine that was off waits for word it is back (WsConn.isParked), and this
+      // list is that word, whether or not this row ever read as offline.
+      if (!state.isLocalMachine && reportedOnline == true) {
+        _connectionOf(machine.machineId)?.wake('listed online');
       }
     }
     // A list that arrived but does not name this computer (a stale copy from before this computer
@@ -17428,6 +17437,7 @@ class AppNotifier extends ChangeNotifier {
       _startOfflineRetry(machine);
     } else {
       _stopOfflineRetry(machineId);
+      if (!machine.isLocalMachine) _connectionOf(machineId)?.wake('online');
       if (wasOnline == false) {
         _markSessionsUnreachable(
           machine,
