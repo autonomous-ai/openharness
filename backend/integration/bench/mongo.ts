@@ -8,6 +8,8 @@ import { PrismaClient } from '@prisma/client'
 
 export interface LocalDatabase {
   db: PrismaClient
+  /** Its loopback address, for a backend process the bench starts itself (resilience.ts). */
+  uri: string
   /** The MongoDB server version the run measured. */
   version: string
   stop(): Promise<void>
@@ -25,5 +27,5 @@ export async function localDatabase(): Promise<LocalDatabase> {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
   const db = new PrismaClient({ datasources: { db: { url: uri } } })
-  return { db, version, async stop() { await db.$disconnect(); await replica.stop() } }
+  return { db, uri, version, async stop() { await db.$disconnect(); await replica.stop() } }
 }
