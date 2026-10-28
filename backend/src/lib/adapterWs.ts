@@ -29,6 +29,7 @@ import {
 } from './bus.js'
 import { trackSocketLiveness } from './hub.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
+import { trackSocket } from './wsAttribution.js'
 import { attachNodeRole, PRESENCE_TTL_SEC } from './nodeRole.js'
 import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, TUI_SURFACES, type ClientSurface, type PresenceWriteState } from './dailyTracking.js'
 import { countryCodeFromHeaders } from './clientGeo.js'
@@ -230,7 +231,10 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   owners.get(machineId)?.close(4000, 'superseded')
   owners.set(machineId, ws)
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, kind: 'adapter' })
-  logger.info('adapter connected', { machineId, computer: label })
+  // Its connect and disconnect lines (lib/wsAttribution.ts): 227 adapter reconnects in 45 minutes in prod (2026-10-28)
+  // could not be explained without the close codes.
+  const track = trackSocket('adapter', 'adapter', ws, { client: 'daemon', version: clientVersion ?? null, machineId, computer: label })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
   send({ t: 'connected', machineId })
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
@@ -583,7 +587,6 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
       // this delete is what stops a reconnect from briefly re-reading the dead value.
       void clearMachineAppState(machineId)
       touchMachinePresence('close') // exact lastSeenAt at disconnect; a superseded socket must not stamp it
-      logger.info('adapter disconnected', { machineId })
     }
   }
   ws.on('close', cleanup)

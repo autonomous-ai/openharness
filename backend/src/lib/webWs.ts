@@ -59,6 +59,7 @@ import {
   terminalP2pPolicy,
 } from './p2pSignaling.js'
 import { presenceTracker, recordRemoteUsage, touchClientOnlineDay, type ClientBuild } from './dailyTracking.js'
+import { declaredKind, trackSocket } from './wsAttribution.js'
 import { isBackendOnlyDownType } from './backendOnlyFrames.js'
 
 // How often an open mobile/web socket refreshes its person's `user_daily_client_presence` row.
@@ -126,9 +127,10 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       // Who is on the other end, as the client declares it: the mobile app and the web viewer say so;
       // the daemon's relay (and any older client) says nothing and is never counted as a person.
       const { surface, build } = declaredClient(query)
+      const declared = declaredKind(query)
       const user = await authenticateAccessToken(cred, requestedEnvironment)
       if (socket.destroyed) return
-      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface, build))
+      wss.handleUpgrade(req, socket, head, (ws) => attachUserClient(ws, user, surface, build, declared))
     } catch (err) {
       if (socket.destroyed) return
       const invalid = err instanceof SsoAuthError && err.code === 'INVALID_TOKEN'
@@ -149,7 +151,8 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
 }
 
 /** PER-USER socket: starts unattached; `machine_select` scopes it to one owned machine at a time. */
-function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null, build: ClientBuild): void {
+function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'web' | null, build: ClientBuild,
+  declared: ReturnType<typeof declaredKind> = { client: 'unknown', version: null }): void {
   let client: HubClient | null = null
   let currentAgentId: string | null = null
   let currentBinding: Machine | null = null
@@ -162,16 +165,13 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   const p2pSignalRate = new P2pSignalRateGuard()
 
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { userId: user.sub })
-  // What the disconnect line reports (cleanup below): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes declared no
-  // client and lived a median 0.4 s, and that line named only the user, so nothing told a relay's churn apart.
-  const openedAt = Date.now()
-  let selects = 0
-  let refused: string | null = null
+  // Its connect and disconnect lines (lib/wsAttribution.ts): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes
+  // declared no client and lived a median 0.4 s, and these lines named only the user.
+  const track = trackSocket('web', 'web user', ws, { ...declared, userId: user.sub })
   const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number }): void => {
-    refused = payload.error
+    track.selected(payload.error)
     send({ type: 'machine_select_error', payload })
   }
-  logger.info('web user connected', { userId: user.sub })
   send({ type: 'connected', payload: { userId: user.sub } })
 
   // The desktop app never dials this socket — the local daemon does, one per FOREIGN machine it relays —
@@ -341,6 +341,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
 
   // ── Agent selection ──────────────────────────────────────────────────────────────────────────
   const ack = (machineId: string): void => {
+    track.selected('accepted')
     send({
       type: 'connected',
       payload: { machineId: machineId, p2p: terminalP2pPolicy(user.sub, machineId) },
@@ -524,7 +525,6 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       }
     }
     if (type === 'machine_select') {
-      selects++
       const payload = frame.payload as { machineId?: unknown; offline?: unknown } | undefined
       await bindAgent(payload?.machineId, payload?.offline === 'refuse')
       return
@@ -635,12 +635,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (deviceE2eePairUnsub) { deviceE2eePairUnsub(); deviceE2eePairUnsub = null }
     if (documentsUnsub) { documentsUnsub(); documentsUnsub = null }
-    const why = reason?.toString()
-    logger.info('web user disconnected', {
-      userId: user.sub, client: surface ?? 'relay', ...(build.release ? { release: build.release } : {}),
-      ...(currentAgentId ? { machineId: currentAgentId } : {}), ...(code !== undefined ? { code } : {}), ...(why ? { reason: why } : {}),
-      aliveMs: Date.now() - openedAt, selects, ...(refused ? { refused } : {}),
-    })
+    track.closed(code, reason?.toString(), { machineId: currentAgentId ?? undefined })
   }
   ws.on('close', (code: number, reason: Buffer) => cleanup(code, reason))
   ws.on('error', () => cleanup())

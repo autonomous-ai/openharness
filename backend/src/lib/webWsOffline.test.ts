@@ -106,23 +106,31 @@ describe('a refused machine select', () => {
 })
 
 // Prod, 2026-10-28: 2,304 of 2,308 opens in 15 minutes declared no client and lived a median 0.4 s, and the disconnect
-// line said only who. It now says which client, its build, how the socket closed, after how long, and what its
-// selects were answered, so a churn can be told apart from a person's reconnects.
+// line said only who. It now says which client and version, how the socket closed, after how long, and what its selects
+// were answered (lib/wsAttribution.ts), so a relay's churn can be told apart from a person's reconnects.
 describe('a closed socket', () => {
-  const disconnected = () => m.info.mock.calls.filter(c => c[0] === 'web user disconnected').map(c => c[1])
+  const lines = (message: string) => m.info.mock.calls.filter(c => c[0] === message).map(c => c[1])
 
-  it('logs a relay refused as offline with its close, lifetime and refusal', async () => {
-    const ws = await selects({})
+  it('logs a relay refused as offline with its client, close, lifetime and select', async () => {
+    const ws = await selects({}, '&client=relay&v=0.9.1')
     ws.emit('close', 1000, Buffer.from('handshake failed'))
-    expect(disconnected()).toEqual([{ userId: 'owner', client: 'relay', code: 1000, reason: 'handshake failed',
-      aliveMs: expect.any(Number), selects: 1, refused: 'MACHINE_OFFLINE' }])
+    const [connected] = lines('web user connected')
+    expect(connected).toMatchObject({ endpoint: 'web', client: 'relay', version: '0.9.1', userId: 'owner' })
+    expect(lines('web user disconnected')).toEqual([{ ...connected, code: 1000, reason: 'handshake failed',
+      aliveMs: expect.any(Number), selects: 1, select: 'MACHINE_OFFLINE' }])
   })
 
-  it('logs a phone with its build, and the machine it had selected', async () => {
+  it('logs a phone with its release, the machine it had selected, and the select accepted', async () => {
     m.online.mockResolvedValue(true)
     const ws = await selects({}, '&client=mobile&release=1.4.2')
     ws.emit('close', 1006, Buffer.alloc(0))
-    expect(disconnected()).toEqual([{ userId: 'owner', client: 'mobile', release: '1.4.2', machineId: 'owner-mac',
-      code: 1006, aliveMs: expect.any(Number), selects: 1 }])
+    expect(lines('web user disconnected')).toEqual([expect.objectContaining({ client: 'mobile', version: '1.4.2', machineId: 'owner-mac',
+      code: 1006, selects: 1, select: 'accepted' })])
+  })
+
+  it('logs a client that declared nothing as unknown', async () => {
+    const ws = await selects({})
+    ws.emit('close', 1000, Buffer.alloc(0))
+    expect(lines('web user disconnected')[0]).toMatchObject({ client: 'unknown', version: null })
   })
 })
