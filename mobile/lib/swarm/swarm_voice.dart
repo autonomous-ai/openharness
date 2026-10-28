@@ -17,7 +17,8 @@ import 'swarm_dictation.dart';
 /// Talking instead of typing in a chat, into the message box (Tony, 10-28:
 /// "like the Claude app"). Tap to talk; tap again and what is in the box is
 /// sent ([send]) — what the person typed or changed meanwhile included. Only
-/// that tap ends a take (10-29: "until I tap"): no silence does, however long.
+/// that tap ends a take (10-29: "until I tap"): no pause does — save [idle]
+/// without a new word, which stops listening with the words left in the box.
 /// A long press picks the language ([voiceLanguageStore]).
 ///
 /// Two ways to hear, the first wherever it can:
@@ -45,6 +46,12 @@ class SwarmVoice extends ChangeNotifier {
     required this.write,
     required this.send,
   });
+
+  /// How long the recognizer listens without hearing a new word before it
+  /// stops by itself: the microphone is released and the words stay in the
+  /// box, for Send or the next take (Lead, review of #2056: a microphone open
+  /// for nobody). A shorter pause never ends it.
+  static const idle = Duration(minutes: 2);
 
   /// How long the recognizer has to say it has stopped, after a tap asked it
   /// to, before its take is given up and what the box holds is sent.
@@ -77,11 +84,14 @@ class SwarmVoice extends ChangeNotifier {
   /// What the recognizer shows is spliced into the draft after [_liveFrom]:
   /// the draft as the take began, or as the person last left it. [_liveShown]
   /// is the draft as the recognizer last wrote it; a draft that is not, the
-  /// person changed — their change stays, and only words heard after it are
-  /// added ([_liveSkip] of [_liveCount] are already in it).
+  /// person changed — their change stays, with [_liveHeard] as it was then in
+  /// it ([_liveBase]).
   String _liveFrom = '', _liveShown = '';
-  int _liveSkip = 0, _liveCount = 0;
-  Timer? _liveEnd, _liveNoticeTimer;
+
+  /// Every word the recognizer has heard in the take, as it last said them;
+  /// and those of them already in [_liveFrom].
+  List<String> _liveHeard = const [], _liveBase = const [];
+  Timer? _liveEnd, _liveIdle, _liveNoticeTimer;
   final ValueNotifier<double> _liveLevel = ValueNotifier(0);
   String? _liveNotice;
 
@@ -230,7 +240,7 @@ class SwarmVoice extends ChangeNotifier {
       return;
     }
     _liveFrom = _liveShown = draft();
-    _liveSkip = _liveCount = 0;
+    _liveHeard = _liveBase = const [];
     final started = await dictation.start(
       swarmDictationLocale(voiceLanguageStore.value),
       onWords: (words) => _liveWords(take, words),
@@ -250,22 +260,52 @@ class SwarmVoice extends ChangeNotifier {
       return;
     }
     _live = _Live.listening;
+    _waitForWords(take);
     notifyListeners();
   }
 
+  /// Starts [idle] over: a take that hears no new word in it is called off.
+  void _waitForWords(int take) {
+    _liveIdle?.cancel();
+    _liveIdle = Timer(idle, () {
+      if (take == _liveTake && _live == _Live.listening) _offLive();
+    });
+  }
+
   /// Every word the recognizer has heard so far, into the draft after
-  /// [_liveFrom].
+  /// [_liveFrom]: those not already in it, which — after an edit — are the
+  /// ones past what the recognizer said then and says still, however it has
+  /// revised it since. A spoken word may show twice; none is lost.
   void _liveWords(int take, String text) {
     if (take != _liveTake || _live == _Live.off) return;
     final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
     final now = draft();
     if (now != _liveShown) {
       _liveFrom = now;
-      _liveSkip = _liveCount;
+      _liveBase = _liveHeard;
     }
-    _liveCount = words.length;
-    _liveShown = _joined(_liveFrom, words.skip(_liveSkip).join(' '));
+    final heard = words.toList();
+    final changed = heard.join(' ') != _liveHeard.join(' ');
+    _liveHeard = heard;
+    final kept = _sameStart(_liveBase, heard);
+    _liveShown = _joined(_liveFrom, heard.skip(kept).join(' '));
     if (_liveShown != now) write(_liveShown);
+    if (changed && _live == _Live.listening) _waitForWords(take);
+  }
+
+  /// How many words [a] and [b] begin with alike, case and punctuation aside.
+  static int _sameStart(List<String> a, List<String> b) {
+    String plain(String word) => word.toLowerCase().replaceAll(
+      RegExp(r'[^\p{L}\p{N}]', unicode: true),
+      '',
+    );
+    var same = 0;
+    while (same < a.length &&
+        same < b.length &&
+        plain(a[same]) == plain(b[same])) {
+      same++;
+    }
+    return same;
   }
 
   /// The second tap: asks the recognizer to stop — its last words, then its
@@ -299,7 +339,7 @@ class SwarmVoice extends ChangeNotifier {
     _setLiveNotice(switch (end) {
       _ when send => null,
       SwarmDictationEnd.failed => VoiceNotice.notTranscribed,
-      _ when _liveCount == 0 => VoiceNotice.nothingHeard,
+      _ when _liveHeard.isEmpty => VoiceNotice.nothingHeard,
       _ => null,
     });
     notifyListeners();
@@ -321,7 +361,8 @@ class SwarmVoice extends ChangeNotifier {
 
   void _stopLiveTimers() {
     _liveEnd?.cancel();
-    _liveEnd = null;
+    _liveIdle?.cancel();
+    _liveEnd = _liveIdle = null;
   }
 
   /// A notice of the recognizer's, which goes by itself as the terminal's do.

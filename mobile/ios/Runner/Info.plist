@@ -59,7 +59,7 @@
 	     first tap, not at launch. A terminal's recording is transcribed by the
 	     Harness backend (`/api/voice/stt`, the dial's own path), not by the OS. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talk to an agent in a terminal instead of typing.</string>
+	<string>Talk instead of typing, in a terminal or a chat.</string>
 	<!-- A Swarm chat's mic: the phone's own recognizer, the keyboard's
 	     dictation, writes the words into the message box as they are said
 	     (`DictationChannel` in AppDelegate.swift). Asked for on its first tap,

@@ -20,9 +20,11 @@ import 'swarm_fixture.dart';
 
 /// A Swarm chat's mic on the phone's own speech recognizer (Tony, 10-28: the
 /// one the keyboard's dictation uses): the words show in the message box as
-/// they are said, and it listens on — through any silence — until a second
-/// tap stops it and sends what is in the box (Tony, 10-29). Refused, or
-/// without the language, the mic records and the backend transcribes.
+/// they are said, and it listens on — through any pause — until a second tap
+/// stops it and sends what is in the box (Tony, 10-29); only two minutes
+/// without a new word stop it before that, the words left in the box (Lead,
+/// review of #2056). Refused, or without the language, the mic records and the
+/// backend transcribes.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
   const commands = '/api/super-tabs/$tab/commands';
@@ -206,16 +208,37 @@ void main() {
     expect(fake.commands.single['text'], 'Nova: ship it now today');
   });
 
+  // Lead, review of #2056 at a43760af3: an edit, then the recognizer revising
+  // what it heard into fewer words.
+  testWidgets('an edit, then a shorter revision of what was said, drops no '
+      'spoken word', (tester) async {
+    await pump(tester);
+    await tapMic(tester);
+    await say(tester, 'một hai');
+    expect(box(tester), 'một hai');
+
+    await tester.enterText(find.byType(TextField), 'một hai,');
+    await tester.pump();
+    await say(tester, '12');
+    await say(tester, '123 bốn');
+    expect(box(tester), 'một hai, 123 bốn');
+
+    await tapMic(tester);
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], 'một hai, 123 bốn');
+  });
+
   // Tony, 10-29: "listening continues until I tap".
-  testWidgets('listening goes on through any silence until the tap, which '
-      'sends what was said', (tester) async {
+  testWidgets('listening goes on through a silence of nearly two minutes '
+      'until the tap, which sends what was said', (tester) async {
     await pump(tester);
     await tapMic(tester);
     await say(tester, 'xong rồi');
 
-    for (var i = 0; i < 12; i++) {
+    for (var i = 0; i < 11; i++) {
       await tester.pump(const Duration(seconds: 10));
     }
+    await tester.pump(const Duration(seconds: 9));
     expect(dictation.stops, 0);
     expect(dictation.listening, isTrue);
     expect(
@@ -229,18 +252,71 @@ void main() {
     expect(fake.commands.single['text'], 'xong rồi');
   });
 
-  testWidgets('listening has no time limit while the chat is on screen', (
+  testWidgets('talking with pauses under two minutes never stops it', (
     tester,
   ) async {
     await pump(tester);
     await tapMic(tester);
 
-    await tester.pump(const Duration(seconds: 30));
-    expect(dictation.listening, isTrue, reason: 'nothing said yet');
-    await tester.pump(VoiceInputController.maxTake * 2);
-    await frames(tester);
+    var said = 'một';
+    await say(tester, said);
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(seconds: 115));
+      said = '$said hai';
+      await say(tester, said);
+    }
+    expect(dictation.listening, isTrue, reason: 'ten minutes in');
+    expect(dictation.stops + dictation.cancels, 0);
+
+    await tapMic(tester);
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], said);
+  });
+
+  // Lead, review of #2056 at a43760af3 (privacy): the microphone is not held
+  // open for nobody.
+  testWidgets('two minutes without a new word stop listening and release the '
+      'mic; the words stay, for Send or another take', (tester) async {
+    await pump(tester);
+    await tapMic(tester);
+    await say(tester, 'gần xong');
+    await tester.pump(const Duration(seconds: 60));
+    // The same words said again by the recognizer are not new ones.
+    await say(tester, 'gần xong');
+
+    await tester.pump(const Duration(seconds: 59));
     expect(dictation.listening, isTrue);
-    expect(dictation.stops, 0);
+    await tester.pump(const Duration(seconds: 1));
+    await frames(tester);
+    expect(dictation.listening, isFalse);
+    expect(dictation.cancels, 1, reason: 'the microphone released at once');
+    expect(find.byType(VoiceMicCore), findsNothing, reason: 'the mic at rest');
+    expect(box(tester), 'gần xong');
+    expect(fake.commands, isEmpty);
+
+    await tester.tap(key('swarm-send'));
+    await tester.pumpAndSettle();
+    expect(fake.commands.single['text'], 'gần xong');
+
+    await tapMic(tester);
+    expect(dictation.listening, isTrue, reason: 'a new take');
+    expect(dictation.locales, hasLength(2));
+  });
+
+  testWidgets('two minutes with nothing said at all stop listening too', (
+    tester,
+  ) async {
+    await pump(tester);
+    await tester.enterText(find.byType(TextField), 'Draft');
+    await tester.pump();
+    await tapMic(tester);
+
+    await tester.pump(const Duration(minutes: 2));
+    await frames(tester);
+    expect(dictation.listening, isFalse);
+    expect(dictation.cancels, 1);
+    expect(box(tester), 'Draft');
+    expect(fake.commands, isEmpty);
   });
 
   testWidgets('a second tap with nothing said sends nothing', (tester) async {
