@@ -337,11 +337,11 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  /// Forgets the set-aside decisions that are no longer open, so the saved
-  /// set holds only what still waits.
-  void keepDecisionsAside(Set<String> open) {
+  /// Forgets the set-aside decisions known answered or [gone], so the saved
+  /// set holds only what may still wait.
+  void forgetDecisionsAside(bool Function(String id) gone) {
     final before = _decisionsAside.length;
-    _decisionsAside.removeWhere((id) => !open.contains(id));
+    _decisionsAside.removeWhere(gone);
     if (_decisionsAside.length != before) _saveSoon();
   }
 

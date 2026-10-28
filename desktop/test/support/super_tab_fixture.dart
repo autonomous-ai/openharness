@@ -407,6 +407,8 @@ class ConversationServer {
   Completer<void>? holdDecisions;
   // Every read of a decisions list fails, as offline.
   bool failDecisions = false;
+  // The most each decisions list returns, newest first, as the backend caps it.
+  int? decisionPage;
   // A backend from before the decisions digest: it sends the count alone.
   bool decisionsDigestMissing = false;
   // How many times the mentions list was read.
@@ -802,6 +804,7 @@ class ConversationServer {
         jsonEncode({
           'decisions': decisions.reversed
               .where((d) => (d['answeredAt'] == null) == open)
+              .take(decisionPage ?? decisions.length)
               .toList(),
         }),
       ) as Map<String, dynamic>;

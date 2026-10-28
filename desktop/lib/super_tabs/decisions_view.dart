@@ -200,6 +200,7 @@ class SuperTabDecisionCard extends StatelessWidget {
                   _option(index, option),
               ],
             ),
+            if (decisions.failedToSend(decision)) _failed(),
             if (_later() case final later?) ...[
               const SizedBox(height: 4),
               later,
@@ -209,6 +210,26 @@ class SuperTabDecisionCard extends StatelessWidget {
       ),
     );
   }
+
+  /// Its answer did not reach the backend: said on the card it was sent
+  /// from, with Retry, wherever the card is shown.
+  Widget _failed() => Padding(
+    padding: const EdgeInsets.only(top: 6),
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      children: [
+        Text(SuperTabDecisions.sendFailed, style: DesktopChrome.metadata()),
+        quietDecisionAction(
+          key: ValueKey('super-decision-${decision.id}-retry'),
+          label: 'Retry',
+          onPressed: decisions.answering.contains(decision.id)
+              ? null
+              : () => unawaited(decisions.retry(decision)),
+        ),
+      ],
+    ),
+  );
 
   /// Let PM decide · Not now, whichever of them this card offers.
   Widget? _later() {

@@ -72,6 +72,20 @@ class SuperTabDecisions extends ChangeNotifier {
 
   /// Decisions being answered: their buttons wait for the backend.
   final Set<String> answering = {};
+
+  /// The answer that failed to send for each decision, sent again by [retry].
+  final Map<String, Map<String, dynamic>> _failed = {};
+
+  /// Whether the reader's last answer to [decision] failed to send.
+  bool failedToSend(SuperTabDecision decision) =>
+      _failed.containsKey(decision.id);
+
+  /// Sends the answer that failed again: the same option, or Let PM decide.
+  Future<bool> retry(SuperTabDecision decision) =>
+      switch (_failed[decision.id]) {
+        final answer? => _answer(decision, answer),
+        null => Future.value(false),
+      };
   int? _count;
   String? _digest;
   int? _epoch;
@@ -172,7 +186,11 @@ class SuperTabDecisions extends ChangeNotifier {
       if (epoch != _epoch) return;
       open = nextOpen;
       answered = nextAnswered;
-      controller.keepDecisionsAside({for (final d in open) d.id});
+      // The lists are the newest of each (the backend caps them): what is
+      // set aside is forgotten only once it is known answered or gone.
+      final gone = _gone();
+      controller.forgetDecisionsAside(gone);
+      _failed.removeWhere((id, _) => gone(id));
       error = null;
       _failedAt = null;
     } catch (_) {
@@ -180,6 +198,20 @@ class SuperTabDecisions extends ChangeNotifier {
       _failedAt = controller.lastChangedAt;
     }
     notifyListeners();
+  }
+
+  static const sendFailed = 'Could not send your answer. Try again.';
+
+  /// Whether a decision is known answered or gone: in the answered list, or
+  /// missing from an open list that holds every open one (as many as the
+  /// Swarm counts waiting).
+  bool Function(String id) _gone() {
+    final openIds = {for (final d in open) d.id};
+    final answeredIds = {for (final d in answered) d.id};
+    final waiting = controller.snapshot?.decisionsWaiting;
+    final complete = waiting != null && open.length >= waiting;
+    return (id) =>
+        answeredIds.contains(id) || (complete && !openIds.contains(id));
   }
 
   /// The reader's one-tap answer. Any reader may answer what was asked of
@@ -211,8 +243,10 @@ class SuperTabDecisions extends ChangeNotifier {
           },
         },
       );
+      _failed.remove(decision.id);
     } catch (_) {
-      error = 'Could not send your answer. Try again.';
+      // Said on the card that sent it ([failedToSend]), wherever it shows.
+      _failed[decision.id] = answer;
       return false;
     } finally {
       answering.remove(decision.id);

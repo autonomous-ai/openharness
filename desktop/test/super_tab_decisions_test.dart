@@ -442,6 +442,138 @@ void main() {
       },
     );
 
+    test('a decision set aside stays set aside while newer ones push it off the capped list, until it is answered', () async {
+      final server = swarm()
+        ..ask(['Ship how?'], conversationId: 'pm-chat')
+        ..ask(['Name it?'], conversationId: 'pm-chat');
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final decisions = SuperTabDecisions.of(controller);
+      await controller.refresh();
+      await decisions.load();
+      decisions.setAside([decisions.open.last]);
+      expect(controller.decisionsAside, {'decision-1'});
+
+      // The list holds the newest two of three: the oldest is still open.
+      server
+        ..decisionPage = 2
+        ..ask(['Which colour?'], conversationId: 'pm-chat');
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(decisions.open.map((d) => d.id), ['decision-3', 'decision-2']);
+      expect(controller.decisionsAside, {'decision-1'});
+
+      // Newer ones answered: it is back in the list, still set aside.
+      server
+        ..answerDecision('decision-3', 0)
+        ..answerDecision('decision-2', 0);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(decisions.open.map((d) => d.id), ['decision-1']);
+      expect(decisions.shownIn('lead'), isEmpty);
+
+      // Answered: nothing is kept for it.
+      server.answerDecision('decision-1', 0);
+      await controller.refresh();
+      await pumpEventQueue();
+      expect(controller.decisionsAside, isEmpty);
+    });
+
+    test(
+      'a decision set aside is forgotten once it is gone from a complete list',
+      () async {
+        final server = swarm()
+          ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+        final controller = server.controller(account: 'peer');
+        addTearDown(controller.dispose);
+        final decisions = SuperTabDecisions.of(controller);
+        await controller.refresh();
+        await decisions.load();
+        decisions.setAside(decisions.open);
+
+        // The reader can no longer read one: the list, holding every open
+        // one, no longer has it.
+        server.hideDecision('decision-1');
+        await controller.refresh();
+        await pumpEventQueue();
+
+        expect(controller.decisionsAside, {'decision-2'});
+      },
+    );
+
+    testWidgets(
+      'a refused Let PM decide shows on its card in Chat with PM, and Retry sends it again',
+      (tester) async {
+        final server = swarm()
+          ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+        await showView(tester, server);
+        await openPmChat(tester);
+        // An older backend, or one that refuses: the card says so.
+        server.refuse = {
+          'code': 'INVALID_COMMAND',
+          'message': 'Unrecognized key: delegate',
+        };
+
+        await tester.tap(letPmDecide('decision-1'));
+        await tester.pumpAndSettle();
+
+        final card = find.byKey(const ValueKey('super-decision-decision-1'));
+        expect(
+          find.descendant(
+            of: card,
+            matching: find.text('Could not send your answer. Try again.'),
+          ),
+          findsOneWidget,
+        );
+        expect(inPanel('Ship how?'), findsOneWidget);
+        // Only the card that failed says so.
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-decision-decision-2')),
+            matching: find.text('Could not send your answer. Try again.'),
+          ),
+          findsNothing,
+        );
+
+        server.refuse = null;
+        await tester.tap(
+          find.byKey(const ValueKey('super-decision-decision-1-retry')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(server.posts.last['command'], {
+          'type': 'decision.answer',
+          'decisionId': 'decision-1',
+          'delegate': true,
+        });
+        expect(inPanel('Ship how?'), findsNothing);
+        expect(
+          find.text('Could not send your answer. Try again.'),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'a refused answer in the Decisions list says so once, on its card',
+      (tester) async {
+        final server = swarm()..ask(['Ship how?']);
+        await showView(tester, server);
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        server.refuse = {'code': 'DECISION_ANSWERED', 'message': 'Answered.'};
+
+        await tester.tap(option('decision-1', 1));
+        await tester.pumpAndSettle();
+
+        expect(find.text(SuperTabDecisions.sendFailed), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('super-decision-decision-1-retry')),
+          findsOneWidget,
+        );
+      },
+    );
+
     testWidgets('Hide folds the whole section, and Show opens it again', (
       tester,
     ) async {
