@@ -31,7 +31,9 @@ SuperTabMessage shipMessage({
         'kind': 'ship',
         'conversationId': 'g1',
         'title': 'Fix login',
-        'pullRequests': ['https://github.com/autonomous-ai/openharness/pull/12'],
+        'pullRequests': [
+          'https://github.com/autonomous-ai/openharness/pull/12',
+        ],
         'requesterId': me,
         'builderIds': ['agent-builder'],
         'reviewerIds': ['agent-reviewer'],
@@ -44,10 +46,7 @@ void main() {
   group('a ship line as read', () {
     test('is a ship by its source kind alone', () {
       expect(swarmShips(shipMessage()), isTrue);
-      expect(
-        swarmShips(shipMessage(source: {'kind': 'message'})),
-        isFalse,
-      );
+      expect(swarmShips(shipMessage(source: {'kind': 'message'})), isFalse);
       expect(swarmShips(shipMessage(source: {})), isFalse);
     });
 
@@ -85,12 +84,10 @@ void main() {
       expect(ship.requesterId, isNull);
       expect(ship.builderIds, ['agent-builder']);
       expect(ship.reviewerIds, isEmpty);
-      expect([for (final link in ship.pullRequests) link.pathSegments[3]], [
-        '10',
-        '11',
-        '12',
-        '13',
-      ]);
+      expect(
+        [for (final link in ship.pullRequests) link.pathSegments[3]],
+        ['10', '11', '12', '13'],
+      );
     });
   });
 
@@ -157,9 +154,8 @@ void main() {
       FakeSwarm? fake,
       bool still = false,
     }) async {
-      final features =
-          ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
-            ..value = {PhoneExperiment.swarm};
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
       final account = ValueNotifier<String?>(me);
       final host = SwarmHost(
         accountId: () => account.value,
@@ -253,7 +249,14 @@ void main() {
       await pump(tester, shipMessage());
       await tester.pump();
 
-      expect(inside(key('swarm-ship-confetti')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-message-ship-1'),
+          matching: key('swarm-ship-confetti'),
+        ),
+        findsOneWidget,
+        reason: 'over this ship',
+      );
       await tester.pumpAndSettle();
       expect(key('swarm-ship-confetti'), findsNothing, reason: 'it ends');
 
