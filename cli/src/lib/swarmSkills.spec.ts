@@ -72,6 +72,16 @@ describe('built-in Swarm skills', () => {
   const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
+  // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
+  // own: before the red flags, or last where there are none.
+  const shared = '## Shared machines and secrets\n'
+    + '- Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents\' work.\n'
+    + '- Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.\n'
+    + '- Never remove a worktree that a live process still uses. A fresh worktree on the default branch may belong to an agent that is just starting.\n'
+    + '- Install nothing system-wide on a shared machine; put the tools you need in your session folder.\n\n'
+  const sharedLast = `\n${shared.trimEnd()}\n`
+  // The update-request line (Ken, 2026-10-28): the Lead's alone, in both modes, right after its cadence rule.
+  const report = '- Answer each scheduled project update request as soon as it arrives: project.report through the revisions it names, with text null when nothing changed. An unanswered request blocks the later ones and keeps finished groups from archiving.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
   // A failed start is never left (the round-device group, 2026-10-27; superTabs/start.ts): the Lead's alone, in both modes.
   const failedStart = '- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route\'s next machine, or tells the group and its requester. A task that requires a machine or device never moves: when its route says it waits, keep it queued and route it again once that machine can take it.\n'
@@ -128,8 +138,10 @@ describe('built-in Swarm skills', () => {
       expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(text.split(shared)).toHaveLength(role === 'lead' ? 1 : 2)
+      expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(sha(approved(text, 'orchestration').replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, ''))).toBe(sha256)
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
@@ -181,6 +193,22 @@ describe('built-in Swarm skills', () => {
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain.endsWith(`Call the roles Product Manager, Engineer and Reviewer.\n${requestsLast}`)).toBe(true)
   })
+  it('gives each Builder and Reviewer skill its shared-machine rules in a section of their own: before the red flags, or last', () => {
+    const lastBefore = { dev: '- Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.\n',
+      review: '## 4. Finish\nMark your review done with the verdict and revision.\n' }
+    for (const role of ['dev', 'review'] as const) {
+      const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session' }).file, 'utf8')
+      expect(orchestration, role).toContain(`\n\n${shared}## Red flags`)
+      const plain = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode: 'default' }).file, 'utf8')
+      expect(plain.endsWith(`${lastBefore[role]}${sharedLast}`), role).toBe(true)
+    }
+  })
+  it('adds the update-request line right after each Lead skill\'s cadence rule', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`- At project cadence, post progress, blockers and next steps in the project chat; if nothing changed, post nothing.\n${report}`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`Only merged and tried scores 1.0. If nothing changed, post nothing.\n${report}`)
+  })
   it('adds the lost-work line right after each Lead skill\'s 2-hour rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`${twoHours}${lost}`)
@@ -224,8 +252,10 @@ describe('built-in Swarm skills', () => {
     expect(text.split(ask)).toHaveLength(role === 'dev' ? 2 : 1)
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(text.split(sharedLast)).toHaveLength(role === 'lead' ? 1 : 2)
+    expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(sha(approved(text, 'default').replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, ''))).toBe(sha256)
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 

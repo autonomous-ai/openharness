@@ -32,10 +32,16 @@ export interface ContributedMachine {
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
 }
-/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
-export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }
+/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
+ *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string }
 /** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
 export const REMOVAL_FALLBACK_MS = 30 * 60_000
+/** A cleanup that has waited REMOVAL_FALLBACK_MS since its removal, or one too old to say when: it no longer holds its
+ *  owner's add (commands.ts machine.contribute). Diego's Mac, 2026-10-28: its cleanup never finished, and adding it back
+ *  said 'still cleaning up' for good. */
+export const cleanupOverdue = (cleanup: MachineCleanup, now: number): boolean =>
+  !cleanup.requestedAt || now - Date.parse(cleanup.requestedAt) >= REMOVAL_FALLBACK_MS
 /** Why a removal ended: its host confirmed, it was offline, or it kept reporting without confirming for REMOVAL_FALLBACK_MS. */
 export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
@@ -392,7 +398,8 @@ export function machineOffline(pool: ContributedMachine, now: number): boolean {
 /** A removal its host cannot acknowledge (offline) or has not acknowledged in REMOVAL_FALLBACK_MS: the machine's records go, and the
  *  cleanup waits for its host on its next connection. */
 export function expireRemoval(state: SuperTabState, pool: ContributedMachine, now: number): RemovalEnd {
-  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
+  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId,
+    requestedAt: pool.removal!.requestedAt })
   state.machines = state.machines!.filter(m => m !== pool)
   return machineOffline(pool, now) ? 'offline' : 'timedOut'
 }

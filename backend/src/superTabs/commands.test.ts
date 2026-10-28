@@ -2080,11 +2080,81 @@ describe('machine.remove', () => {
       expect.objectContaining({ conversationId: 'lead', source: { kind: 'system' },
         text: 'Studio left the Swarm: its host did not confirm its cleanup within 30 minutes. It finishes the cleanup when it next connects.' })])
     expect(f.state.machines).toEqual([])
-    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
-    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day })).toThrow('still cleaning up')
+    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now: 1000 + day - 1 })).toThrow('still cleaning up')
     // Its host's late confirmation closes the cleanup without telling anyone again.
     expect(f.run(cleaned(removalId), owner, { now: 1000 + day }).messages).toEqual([])
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  // Diego's Mac, 2026-10-28: its cleanup never finished, and adding it back said 'still cleaning up' for good. A cleanup that
+  // has waited 30 minutes no longer holds its owner's add: the add goes through and that cleanup is dropped.
+  it('lets its owner add the machine again once its cleanup has waited 30 minutes, and drops that cleanup', () => {
+    const f = fixture()
+    contribute(f, 'owner', 'host', null)
+    f.run({ type: 'machine.remove', machineId: 'host' })
+    const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    const asOwner = (now: number) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, now })
+    expect(() => f.run(add, owner, asOwner(1000 + 30 * 60_000 - 1))).toThrow(expect.objectContaining({ code: 'MACHINE_CLEANING' }))
+    f.run(add, owner, asOwner(1000 + 30 * 60_000))
+    expect(f.state.machineCleanups).toBeUndefined()
+    expect(f.state.machines!.map(m => [m.machineId, m.removal])).toEqual([['host', undefined]])
+  })
+
+  it('lets its owner add the machine again over a cleanup recorded before cleanups carried their time', () => {
+    const f = fixture()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'before', machineOwnerId: 'owner' }, { machineId: 'other', removalId: 'kept', machineOwnerId: 'owner' }]
+    f.run({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'other', removalId: 'kept', machineOwnerId: 'owner' }])
+    expect(f.state.machines!.map(m => m.machineId)).toEqual(['host'])
+  })
+
+  it('lets only the owner of an old cleanup add its machine over it', () => {
+    const f = fixture()
+    f.invite()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'before', machineOwnerId: 'peer' }]
+    const add = { type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents: 2 } as Command
+    // Another member is no owner of this machine at all.
+    expect(() => f.run(add, peer, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow(expect.objectContaining({ code: 'OWNER_REQUIRED' }))
+    // The machine's owner now is not the person whose host owes that cleanup: it still holds.
+    expect(() => f.run(add, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })).toThrow(expect.objectContaining({ code: 'MACHINE_CLEANING' }))
+    f.run(add, peer, { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } })
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  // Ken's remote-deepseek and WIN-DELL, 2026-10-28: removed, then their machine accounts deleted, so no host would ever
+  // confirm their cleanups, which stayed for good. A machine whose account is gone takes its cleanups with it.
+  it('drops the cleanups of machines whose account is deleted, on any change, and says nothing', () => {
+    const f = fixture()
+    f.state.machineCleanups = [{ machineId: 'gone', removalId: 'a', machineOwnerId: 'owner' }, { machineId: 'host', removalId: 'b', machineOwnerId: 'owner' },
+      { machineId: 'gone', removalId: 'c', machineOwnerId: 'owner' }]
+    expect(f.run({ type: 'tab.rename', name: 'Tidy' }, owner, { deletedMachineIds: ['gone'] }).messages).toEqual([])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId: 'b', machineOwnerId: 'owner' }])
+    f.run({ type: 'tab.rename', name: 'Tidier' }, owner, { deletedMachineIds: ['host'] })
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
+  // Review of #1986 (Minor 2, intended): the adds a host makes by itself, the owner's machine running its Lead and a Mac's
+  // Harness Team account joining where the Mac is, take an overdue cleanup's place like the owner's own add; a fresh one
+  // still holds them off without an error.
+  it('lets the automatic adds take an overdue cleanup\'s place, and leaves a fresh one waiting', () => {
+    const f = fixture()
+    const fresh = new Date(1000 + 30 * 60_000 - 1).toISOString()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh },
+      { machineId: 'team', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh }]
+    const add = (machineId: string) => ({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      ifMissing: true }) as Command
+    const owners = (now: number, hostMachineId?: string) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner', ...(hostMachineId ? { hostMachineId } : {}) }, now })
+    // Fresh: the owner's host skips its automatic add and nothing changes.
+    f.run(add('host'), owner, owners(1000 + 30 * 60_000 - 1))
+    expect([f.state.machines ?? [], f.state.machineCleanups!.map(c => c.machineId)]).toEqual([[], ['host', 'team']])
+    // Overdue: the owner's host adds its machine, then its Team account joins where that Mac is.
+    const later = 1000 + 60 * 60_000
+    f.run(add('host'), owner, owners(later))
+    f.run(add('team'), owner, owners(later, 'host'))
+    expect(f.state.machines!.map(m => [m.machineId, m.hostMachineId, m.removal])).toEqual([['host', undefined, undefined], ['team', 'host', undefined]])
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
@@ -2115,7 +2185,7 @@ describe('machine.remove', () => {
       expect(effects.messages).toEqual([expect.objectContaining({ conversationId: 'lead', source: { kind: 'system' },
         text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
       expect(f.state.machines).toEqual([])
-      expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+      expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
       expect(visibleState(f.state, owner).machines).toEqual([])
       // Its host still gets the cleanup on its next connection; its later acknowledgement closes it and changes nothing else.
       f.run(cleaned(removalId))
@@ -2132,7 +2202,7 @@ describe('machine.remove', () => {
     expect(visibleState(f.state, owner, away).machines).toEqual([])
     f.run({ type: 'tab.rename', name: 'Still away' }, owner, { now: away })
     f.run({ type: 'tab.rename', name: 'Away a day' }, owner, { now: 1000 + 86_400_000 })
-    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     // It comes back, is handed that one cleanup, and acknowledges it: nothing comes back to life.
     f.run(cleaned(removalId))
     expect(f.state.machineCleanups).toBeUndefined()
@@ -2154,7 +2224,7 @@ describe('machine.remove', () => {
     expect(f.run({ type: 'tab.rename', name: 'Still cleaning' }, owner, { now: later }).messages).toEqual([expect.objectContaining({
       conversationId: 'lead', text: 'Studio left the Swarm: it is offline. It cleans up when it next connects.' })])
     expect(f.state.machines).toEqual([])
-    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner' }])
+    expect(f.state.machineCleanups).toEqual([{ machineId: 'host', removalId, machineOwnerId: 'owner', requestedAt: new Date(1000).toISOString() }])
     f.run(cleaned(removalId))
     expect(f.state.machineCleanups).toBeUndefined()
   })

@@ -148,6 +148,11 @@ describe('contributed machine executor', () => {
     expect(where).toMatchObject({ machineId: 'host', dataDir: '/isolated-pool-fixture' })
     await (scoped as (p: unknown) => Promise<unknown>)({ action: 'startStatus' })
     expect(f.backend).toHaveBeenLastCalledWith(f.core, 'GET', '/api/super-tabs/hosts/host/starts/tab/start', undefined)
+    // Any other read went out as an empty start report, which the backend refused with a 400 at every start (prod logs
+    // 2026-10-28): the start endpoint takes only this start's commands.
+    const sent = f.backend.mock.calls.length
+    expect(await (scoped as (p: unknown) => Promise<unknown>)({ action: 'status' })).toMatchObject({ error: 'HOST_UNSUPPORTED' })
+    expect(f.backend.mock.calls.length).toBe(sent)
     expect(f.close).toHaveBeenCalledOnce()
     await f.machine.tick()
     expect(f.open).toHaveBeenCalledOnce()
@@ -1394,6 +1399,16 @@ describe('removed machine cleanup', () => {
       setLive: (sessions: RegisteredSession[]) => { live = sessions }, step: (ms: number) => { now += ms } }
   }
 
+  /** Its first acknowledgement fails as an unreachable backend would; every read still answers. */
+  const failFirstAck = (m: ReturnType<typeof machine>) => {
+    const answer = m.backend.getMockImplementation()!
+    let failed = false
+    m.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && !failed) { failed = true; throw new Error('Backend offline') }
+      return answer(core, method, path, body)
+    })
+  }
+
   it('removes a stopped worker\'s worktree once nothing runs there and nothing is uncommitted, and its branch once merged', async () => {
     const m = machine()
     const host = m.open()
@@ -1451,6 +1466,65 @@ describe('removed machine cleanup', () => {
     await expect(host.clean('../escape', 'other')).rejects.toThrow('Invalid machine removal.')
   })
 
+  // 2026-10-28: once a cleanup has waited past the backend's fallback, its owner can add the machine again and the backend
+  // drops the cleanup (backend machines.ts cleanupOverdue). A cleanup that starts after that must not delete the new Swarm folders.
+  it.each([['added again', {}], ['added again and being removed under a newer removal', { removal: { id: 'newer', state: 'cleaning' } }]])(
+    'deletes nothing and confirms nothing once this machine was %s', async (_why, listed) => {
+    const m = machine()
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot, ...listed }] }) : { parts: [] })
+    const host = m.open()
+    await host.clean('tab', 'removal')
+    for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
+    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.acks()).toEqual([])
+    expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
+    // Settled: the next poll's row, if any, does not run it again.
+    await host.clean('tab', 'removal')
+    expect(m.backend.mock.calls.filter(c => c[1] === 'GET')).toHaveLength(1)
+  })
+
+  // Review of #1986 (Minor 1): the Swarm was read once, at the start. An add that lands while the cleanup runs must keep its
+  // clone and its worktree records, so the Swarm is read again before anything is deleted and before the records change.
+  const addedOnRead = (m: ReturnType<typeof machine>, read: number) => {
+    let reads = 0
+    m.backend.mockImplementation(async (_core, method, path) => {
+      if (method !== 'GET' || !path.startsWith('/api/super-tabs/tab/')) return { parts: [] }
+      if (path.includes('/parts')) reads++
+      return swarmReply(path, { starts: m.starts, ...(reads >= read ? { machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot }] } : {}) })
+    })
+  }
+  const records = (m: ReturnType<typeof machine>) => JSON.parse(readFileSync(swarmWorktreesFile(m.data, 'host'), 'utf8')).worktrees.map((w: { tabId: string }) => w.tabId)
+
+  it('closes and deletes nothing when this machine is added again after the cleanup started', async () => {
+    const m = machine()
+    addedOnRead(m, 2)
+    await m.open().clean('tab', 'removal')
+    for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
+    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(records(m)).toEqual(['tab', 'other-tab'])
+    expect(m.acks()).toEqual([])
+  })
+
+  it('keeps the worktree records and confirms nothing when this machine is added again while its folders are deleted', async () => {
+    const m = machine()
+    addedOnRead(m, 3)
+    await m.open().clean('tab', 'removal')
+    expect(existsSync(m.newRoot)).toBe(false)
+    expect(records(m)).toEqual(['tab', 'other-tab'])
+    expect(m.acks()).toEqual([])
+    expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
+  })
+
+  it('cleans up while the Swarm still lists this machine under this very removal', async () => {
+    const m = machine()
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot, removal: { id: 'removal', state: 'cleaning' } }] }) : { parts: [] })
+    await m.open().clean('tab', 'removal')
+    for (const gone of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(gone), gone).toBe(false)
+    expect(m.acks()).toHaveLength(1)
+  })
+
   it('keeps a person\'s own worktree of the same repository even when the registry now lists it as the agent\'s folder', async () => {
     const m = machine()
     const outside = worktree(m.own, join(m.home, 'code', 'app-feature'), 'feature')
@@ -1473,7 +1547,7 @@ describe('removed machine cleanup', () => {
   it('waits longer after each failed acknowledgement instead of cleaning again every pass', async () => {
     const m = machine()
     const host = m.open()
-    m.backend.mockImplementationOnce(async (_core, _method, path) => swarmReply(path, { starts: [] })).mockRejectedValueOnce(new Error('Backend offline'))
+    failFirstAck(m)
     await expect(host.clean('tab', 'removal')).rejects.toThrow('Backend offline')
     const calls = m.backend.mock.calls.length
     await host.clean('tab', 'removal')
@@ -1506,7 +1580,7 @@ describe('removed machine cleanup', () => {
 
   it('finishes a cleanup after a restart that interrupted its acknowledgement', async () => {
     const m = machine()
-    m.backend.mockImplementationOnce(async (_core, _method, path) => swarmReply(path, { starts: [] })).mockRejectedValueOnce(new Error('Backend offline'))
+    failFirstAck(m)
     await expect(m.open().clean('tab', 'removal')).rejects.toThrow('Backend offline')
     expect(existsSync(m.recorded)).toBe(false)
     await m.open().clean('tab', 'removal')

@@ -842,6 +842,34 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await runs()).toEqual([['moonshotai/kimi-k3', true], ['moonshotai/kimi-k3', true]])
   })
 
+  it('tells a contributed machine its start\'s project skills, which its host cannot read from the Swarm', async () => {
+    // Prod logs 2026-10-28: the host asked for a Swarm status read it may not make (a 400 at every start), then launched
+    // every agent on Harness orchestration, whatever its project ran.
+    const tab = (await store.create(owner, randomUUID(), 'Skills pool')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await db.machine.create({ data: { machineId: 'skills-host', userId: host.sub, apiKey: 'fixture-skills-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine('skills-host')
+    await run(tab, { type: 'machine.contribute', machineId: 'skills-host', name: 'Skills laptop', cwd: '/project', engines: ['claude'], maxAgents: 4 }, host)
+    const generation = (await poolRows(store, host, 'skills-host'))[0]!.machine.generation
+    await store.observeMachine(team.session, tab, 'skills-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
+    const start = async () => String((await run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId: 'skills-host', engine: 'claude',
+      name: 'Builder', cwd: '/project', worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
+    const skillMode = async (startId: string) => (await store.start(host, tab, startId, undefined, 'skills-host')).skillMode
+
+    expect(await skillMode(await start())).toBe('default')
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'orchestration' })
+    expect(await skillMode(await start())).toBe('orchestration')
+    await run(tab, { type: 'project.roles.create', projectId: 'lead', roles: [{ id: 'lead', name: 'Product Manager', kind: 'lead', text: 'LEAD' },
+      { id: 'dev', name: 'Engineer', kind: 'builder', text: 'DEV' }, { id: 'review', name: 'Reviewer', kind: 'reviewer', text: 'REVIEW' }] })
+    await run(tab, { type: 'project.skills', projectId: 'lead', mode: 'custom' })
+    // A Custom set is the Default skills with the owner's role text, which the agent reads after it joins.
+    expect(await skillMode(await start())).toBe('default')
+  })
+
   it('contributes project capacity without sharing the computer and fences host execution', async () => {
     const tab = (await store.create(owner, randomUUID(), 'Machine pool')).id
     const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -2813,7 +2841,7 @@ describe('machine removal', () => {
     expect((await later.read(owner, tab)).state.machines).toEqual([])
     await later.execute(owner, tab, { operationId: randomUUID(), command: { type: 'tab.rename', name: 'A day later' } })
     const stored = await storedState(tab)
-    expect([stored.machines ?? [], stored.machineCleanups]).toEqual([[], [{ machineId: 'test-host', removalId, machineOwnerId: host.sub }]])
+    expect([stored.machines ?? [], stored.machineCleanups]).toEqual([[], [{ machineId: 'test-host', removalId, machineOwnerId: host.sub, requestedAt: expect.any(String) }]])
     expect(await cleanups(tab, later)).toEqual([{ tabId: tab, cleanup: { machineId: 'test-host', removalId } }])
     await later.execute(host, tab, { operationId: randomUUID(), command: { type: 'machine.cleaned', machineId: 'test-host', removalId } })
     expect(await cleanups(tab, later)).toEqual([])
