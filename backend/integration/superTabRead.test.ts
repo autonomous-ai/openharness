@@ -821,6 +821,37 @@ describe('decisions asked of one person (v2)', () => {
     expect(await decisions(s.tabId, peer)).toEqual([expect.objectContaining({ id: first })])
   })
 
+  it('refuses a 21st open decision from one asker to one person, still taking a repeat, and takes it once one is answered', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = (texts: string[]) => post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: texts.map(question) }, owner, s.lead)
+    const batch = (from: number) => Array.from({ length: 10 }, (_, i) => `Question ${from + i}?`)
+    const ids = [...(await ask(batch(1))).body.data.result.decisionIds as string[], ...(await ask(batch(11))).body.data.result.decisionIds as string[]]
+    expect(ids).toHaveLength(20)
+    const refused = await ask(['Question 21?'])
+    expect(refused).toMatchObject({ status: 409, body: { error: { code: 'DECISIONS_FULL' } } })
+    expect(await decisions(s.tabId, peer)).toHaveLength(20)
+    // A repeat of an open one is that decision again, not a new one.
+    expect((await ask(['Question 1?'])).body.data.result.decisionIds).toEqual([ids[0]])
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: ids[0], choice: 0 }, peer)).status).toBe(200)
+    expect((await ask(['Question 21?'])).status).toBe(200)
+  })
+
+  it('removes answered decisions older than the leaderboard\'s 5 weeks when it writes new ones, keeping newer and open ones', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const now = Date.now(), weeks = (n: number) => new Date(now - n * 7 * DAY)
+    const row = (id: string, createdAt: Date, answeredAt?: Date) => ({ id, tabId: s.tabId, batchId: 'old', projectId: 'lead', conversationId: s.web,
+      assignmentId: null, personId: peer.sub, askerAgentId: s.lead, question: `${id}?`, options: ['Yes', 'No'], recommended: 0, unblocks: 'The release',
+      createdAt, ...answeredAt ? { choice: 0, answeredAt } : {} })
+    await db.superTabDecision.createMany({ data: [row('expired', weeks(8), new Date(weeks(5).getTime() - DAY)),
+      row('recent', weeks(8), new Date(weeks(5).getTime() + DAY)), row('waiting', weeks(8))] })
+    expect((await post(s.tabId, { type: 'decision.ask', conversationId: s.web, personId: peer.sub, questions: [question('Ship how?')] }, owner, s.lead)).status).toBe(200)
+    const left = await db.superTabDecision.findMany({ where: { tabId: s.tabId }, select: { id: true } })
+    expect(left.map(d => d.id)).not.toContain('expired')
+    expect(left.map(d => d.id)).toEqual(expect.arrayContaining(['recent', 'waiting']))
+  })
+
   it('keeps a decision of its own for another asker, another task, or other options with the same question text', async () => {
     const s = await scene()
     clock = Date.now()

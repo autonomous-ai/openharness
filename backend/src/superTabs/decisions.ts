@@ -8,9 +8,14 @@ import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { LEDGER_WEEKS } from './leaderboard/record.js'
+import { WEEK_MS } from './leaderboard/week.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
+/** Open decisions one asker may hold for one person: an asker whose question changes a little every turn would otherwise
+ *  write without end, and push real decisions out of the person's list. */
+export const MAX_OPEN_DECISIONS = 20
 
 const line = (max: number) => z.string().trim().min(1).max(max)
 /** What a question offers besides itself: 2–5 distinct options, the index of the recommended one, and what an answer unblocks. */
@@ -88,15 +93,24 @@ const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'per
   JSON.stringify([d.askerAgentId, d.assignmentId ?? null, d.personId, d.conversationId, d.question, d.options, d.recommended, d.unblocks])
 
 /** Writes the questions asked and returns the decision each one is: an open decision that this ask exactly repeats is that
- *  decision again, not a second one. Read and written in the command's transaction; two identical asks committing at the
- *  same moment can still both be written. */
+ *  decision again, not a second one. New ones beyond MAX_OPEN_DECISIONS from this asker to this person are refused, and
+ *  writing them removes the tab's decisions answered before the leaderboard's weeks. Read and written in the command's
+ *  transaction; two asks committing at the same moment can still both be written, past the cap by one batch at most. */
 export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraft[], now: number): Promise<string[]> {
   if (!drafts.length) return []
-  const open = await tx.superTabDecision.findMany({ where: { tabId, personId: drafts[0]!.personId, conversationId: drafts[0]!.conversationId,
-    askerAgentId: drafts[0]!.askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
+  const { personId, askerAgentId } = drafts[0]!
+  const open = await tx.superTabDecision.findMany({ where: { tabId, personId, conversationId: drafts[0]!.conversationId,
+    askerAgentId, question: { in: drafts.map(d => d.question) }, ...waiting } })
   const held = new Map(open.map(o => [repeatKey(o), o.id]))
   const fresh = drafts.filter(d => !held.has(repeatKey(d)))
-  if (fresh.length) await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+  if (fresh.length) {
+    const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
+    if (asked + fresh.length > MAX_OPEN_DECISIONS) {
+      fail('DECISIONS_FULL', `${asked} decisions you asked this person are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`)
+    }
+    await tx.superTabDecision.createMany({ data: fresh.map(d => ({ ...d, tabId, createdAt: new Date(now) })) })
+    await tx.superTabDecision.deleteMany({ where: { tabId, answeredAt: { lt: new Date(now - LEDGER_WEEKS * WEEK_MS) } } })
+  }
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
 }
 
