@@ -11,8 +11,8 @@ import { createWindowLimiter } from './windowLimiter.js'
  * a Redis outage must neither refuse everyone nor lift every limit.
  */
 
-/** Counts one hit on each key in a window of `windowMs`, all at once, and returns each key's count after it. */
-export type WindowCounter = (keys: string[], windowMs: number) => Promise<number[]>
+/** Counts one hit on each key, each in its own window, all at once, and returns each key's count after it. */
+export type WindowCounter = (entries: Array<{ key: string; windowMs: number }>) => Promise<number[]>
 
 let sharedCounter: WindowCounter | null = null
 let sharedFailing = false
@@ -23,11 +23,11 @@ export function useSharedRateCounter(counter: WindowCounter | null): void {
 }
 
 /** The counts after this hit on each key from the shared counter, or null when there is none or it failed. */
-export async function countShared(keys: string[], windowMs: number): Promise<number[] | null> {
+export async function countShared(entries: Array<{ key: string; windowMs: number }>): Promise<number[] | null> {
   const counter = sharedCounter
   if (!counter) return null
   try {
-    const counts = await counter(keys, windowMs)
+    const counts = await counter(entries)
     if (sharedFailing) {
       sharedFailing = false
       logger.info('[rate-limit] shared rate limits are back')
@@ -57,7 +57,7 @@ export function createRateLimiter(name: string, windowMs: number, max: number): 
   const local = createWindowLimiter(windowMs, max)
   return {
     async allows(key, now = Date.now()) {
-      const counts = await countShared([windowKey(name, key, windowMs, now)], windowMs)
+      const counts = await countShared([{ key: windowKey(name, key, windowMs, now), windowMs }])
       return counts ? counts[0] <= max : local.allows(key, now)
     },
     reset: () => local.reset(),

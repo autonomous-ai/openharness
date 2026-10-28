@@ -152,11 +152,9 @@ async function start(): Promise<void> {
   // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
   // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is
   // answered before it costs a sign-in.
-  const routeLimitShare = env.ROUTE_RATE_LIMIT_WINDOW_MS / 60_000
   const routeLimit = createRouteRateLimit({
-    perPerson: Math.ceil(env.ROUTE_RATE_LIMIT_PER_PERSON * routeLimitShare),
-    perMachine: Math.ceil(env.ROUTE_RATE_LIMIT_PER_MACHINE * routeLimitShare),
-    windowMs: env.ROUTE_RATE_LIMIT_WINDOW_MS,
+    perPersonPerMinute: env.ROUTE_RATE_LIMIT_PER_PERSON_MINUTE,
+    perCallerPerSecond: env.ROUTE_RATE_LIMIT_PER_CALLER_SECOND,
   })
   app.addHook('onRequest', routeLimit.beforeSignIn)
   registerAuthMiddleware(app)

@@ -24,18 +24,21 @@ describe.skipIf(!hasRedis)('Redis window counter', () => {
   it('counts each key in one round trip and returns the counts after this hit', async () => {
     const count = redisWindowCounter(redis)
 
-    expect(await count(['rl:t:a:1', 'rl:t:b:1'], 60_000)).toEqual([1, 1])
-    expect(await count(['rl:t:a:1', 'rl:t:b:1'], 60_000)).toEqual([2, 2])
-    expect(await count(['rl:t:a:1'], 60_000)).toEqual([3])
+    const both = [{ key: 'rl:t:a:1', windowMs: 60_000 }, { key: 'rl:t:b:1', windowMs: 1_000 }]
+    expect(await count(both)).toEqual([1, 1])
+    expect(await count(both)).toEqual([2, 2])
+    expect(await count([{ key: 'rl:t:a:1', windowMs: 60_000 }])).toEqual([3])
   })
 
-  it('lets each key expire with its window, so nothing is left behind', async () => {
+  it('lets each key expire with its own window, so nothing is left behind', async () => {
     const count = redisWindowCounter(redis)
-    await count(['rl:t:expiring:1'], 60_000)
+    await count([{ key: 'rl:t:minute:1', windowMs: 60_000 }, { key: 'rl:t:second:1', windowMs: 1_000 }])
 
-    const ttl = await redis.pttl('rl:t:expiring:1')
+    const [minute, second] = [await redis.pttl('rl:t:minute:1'), await redis.pttl('rl:t:second:1')]
 
-    expect(ttl).toBeGreaterThan(59_000)
-    expect(ttl).toBeLessThanOrEqual(60_000)
+    expect(minute).toBeGreaterThan(59_000)
+    expect(minute).toBeLessThanOrEqual(60_000)
+    expect(second).toBeGreaterThan(0)
+    expect(second).toBeLessThanOrEqual(1_000)
   })
 })

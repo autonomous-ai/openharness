@@ -25,15 +25,13 @@ const envSchema = z.object({
   // The longest one Redis command may take on the shared command connection (lib/bus.ts). Redis answers in well under a
   // millisecond; past this it is stuck, and a request should not wait on it (Stability 3.5).
   REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(1_000),
-  // Signed-in requests per route and minute, across every pod (middlewares/routeRateLimit.ts): for one person, and for
-  // one machine when the route names it. Far above what a working client sends, so only a loop meets them: the busiest is
-  // an older CLI's delivery poll, one call a second per running agent, all counted for the agents' owner on one route.
-  // 0 turns one off. Revisit with per-route counts from the ingress logs.
-  ROUTE_RATE_LIMIT_PER_PERSON: z.coerce.number().int().min(0).default(6_000),
-  ROUTE_RATE_LIMIT_PER_MACHINE: z.coerce.number().int().min(0).default(3_000),
-  // The limits above are counted in windows this long, at the same rate (a minute's limit × window / 60 s), so a loop
-  // cannot spend a whole minute's budget in its first second.
-  ROUTE_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(60_000).default(1_000),
+  // Signed-in requests per route, across every pod (middlewares/routeRateLimit.ts). Far above what a working client
+  // sends, so only a loop meets them. 0 turns one off. Revisit with per-route counts from the ingress logs.
+  // Per caller and second: the agent or machine the route names (with its person), else the person.
+  ROUTE_RATE_LIMIT_PER_CALLER_SECOND: z.coerce.number().int().min(0).default(50),
+  // Per person and minute, whatever agents or machines the calls name. The busiest working client is an older CLI's
+  // delivery poll, one call a second per running agent: 12000 is 200 agents.
+  ROUTE_RATE_LIMIT_PER_PERSON_MINUTE: z.coerce.number().int().min(0).default(12_000),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.

@@ -9,7 +9,7 @@ import { logger } from '../utils/logger.js'
 function sharedCounter(): WindowCounter & { keys: string[] } {
   const counts = new Map<string, number>()
   const keys: string[] = []
-  const counter = async (asked: string[]) => asked.map((key) => {
+  const counter = async (asked: Array<{ key: string; windowMs: number }>) => asked.map(({ key }) => {
     keys.push(key)
     const next = (counts.get(key) ?? 0) + 1
     counts.set(key, next)
@@ -65,7 +65,7 @@ describe('rate limiter', () => {
   it('while the shared counter fails, falls back to counting in this process, and says so once each way', async () => {
     let down = true
     const counter = sharedCounter()
-    useSharedRateCounter(async (keys, windowMs) => { if (down) throw new Error('redis circuit open'); return counter(keys, windowMs) })
+    useSharedRateCounter(async (entries) => { if (down) throw new Error('redis circuit open'); return counter(entries) })
     const limiter = createRateLimiter('route', 60_000, 2)
 
     expect(await allowedOf(limiter, 'user-1', 4)).toBe(2)
