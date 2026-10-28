@@ -104,7 +104,8 @@ List<InlineSpan> _marked(String text, RegExp pattern) {
 }
 
 /// A message's frame: avatar, then who wrote it, their role and [trailing]
-/// (its time) — none of it for a follow-up — then [body].
+/// (its time) — none of it for a follow-up — then [body]. With [onAvatar],
+/// the avatar and the room beside it are one thumb-sized target.
 class SwarmMessageFrame extends StatelessWidget {
   const SwarmMessageFrame({
     super.key,
@@ -112,19 +113,48 @@ class SwarmMessageFrame extends StatelessWidget {
     required this.grouped,
     required this.header,
     required this.body,
+    this.onAvatar,
+    this.avatarKey,
+    this.avatarLabel,
   });
 
   final Widget avatar;
   final bool grouped;
   final Widget header;
   final List<Widget> body;
+  final VoidCallback? onAvatar;
+  final Key? avatarKey;
+
+  /// What the avatar's target is read as.
+  final String? avatarLabel;
+
+  /// The avatar's column: the avatar and the room after it, a thumb wide.
+  static const double column = 44;
 
   @override
   Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      grouped ? const SizedBox(width: SwarmChatAvatar.size) : avatar,
-      const SizedBox(width: 10),
+      SizedBox(
+        width: column,
+        child: grouped
+            ? null
+            : onAvatar == null
+            ? Align(alignment: Alignment.topLeft, child: avatar)
+            : Semantics(
+                button: true,
+                label: avatarLabel,
+                child: GestureDetector(
+                  key: avatarKey,
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onAvatar,
+                  child: SizedBox(
+                    height: column,
+                    child: Align(alignment: Alignment.topLeft, child: avatar),
+                  ),
+                ),
+              ),
+      ),
       Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -153,6 +183,7 @@ class SwarmMessageRow extends StatelessWidget {
     required this.actions,
     required this.onTap,
     required this.onReply,
+    this.onAuthor,
   });
 
   final SuperTabMessage message;
@@ -174,6 +205,9 @@ class SwarmMessageRow extends StatelessWidget {
   /// Null where the person cannot post.
   final VoidCallback? onReply;
 
+  /// Who wrote it, in a sheet; null where nothing opens.
+  final VoidCallback? onAuthor;
+
   @override
   Widget build(BuildContext context) {
     // A row kept as it was is not built again: it follows a theme or font
@@ -186,6 +220,9 @@ class SwarmMessageRow extends StatelessWidget {
     final padding = EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7);
     final frame = SwarmMessageFrame(
       grouped: grouped,
+      onAvatar: onAuthor,
+      avatarKey: ValueKey('swarm-author-${message.id}'),
+      avatarLabel: name,
       avatar: SwarmChatAvatar(
         name: name,
         id: message.authorId,

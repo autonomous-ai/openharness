@@ -16,6 +16,7 @@ import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
 import 'swarm_inbox.dart';
 import 'swarm_pm_chat.dart';
+import 'swarm_profile_sheet.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
@@ -150,6 +151,8 @@ class _SwarmPageState extends State<SwarmPage> {
                     openSwarmConversation(context, swarmId, conversationId),
                 onHarness: widget.onHarness,
                 onSettings: widget.onSettings,
+                onProfile: (swarmId) =>
+                    unawaited(showSwarmProfile(context, swarmId: swarmId)),
               ),
             ),
       body: SafeArea(

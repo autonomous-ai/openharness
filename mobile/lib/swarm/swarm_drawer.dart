@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -5,8 +6,10 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
+import 'identity.dart';
 import 'model.dart';
 import 'swarm_conversation.dart';
+import 'swarm_face.dart';
 import 'swarm_inbox.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
@@ -31,6 +34,7 @@ class SwarmDrawer extends StatefulWidget {
     required this.onChat,
     this.onHarness,
     this.onSettings,
+    this.onProfile,
   });
 
   /// The account's Swarm; null while there is none to read.
@@ -50,6 +54,9 @@ class SwarmDrawer extends StatefulWidget {
 
   /// Settings over Swarm Home, opened from the context it is given.
   final void Function(BuildContext context)? onSettings;
+
+  /// The person's own profile in a Swarm; null offers none.
+  final void Function(String swarmId)? onProfile;
 
   @override
   State<SwarmDrawer> createState() => _SwarmDrawerState();
@@ -105,6 +112,17 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
                 children: [
+                  // Who you are in each Swarm, first: the way to your
+                  // picture and status.
+                  if (widget.onProfile case final onProfile?)
+                    for (final swarm in swarms)
+                      if (inbox!.reader(swarm.id) case final reader?)
+                        _You(
+                          key: ValueKey('swarm-drawer-you-${swarm.id}'),
+                          reader: reader,
+                          swarmName: several ? swarm.name : null,
+                          onTap: () => then(() => onProfile(swarm.id)),
+                        ),
                   SwarmDrawerRow(
                     key: const ValueKey('swarm-drawer-home'),
                     leading: const _Glyph(LucideIcons.network300),
@@ -257,6 +275,60 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
         if (!waits.contains(g.id)) chat(g, g.label),
     ];
   }
+}
+
+/// The person as a Swarm shows them: their face, and their status while it
+/// lasts; nothing until the Swarm is read with them in it.
+class _You extends StatelessWidget {
+  const _You({
+    super.key,
+    required this.reader,
+    required this.swarmName,
+    required this.onTap,
+  });
+
+  final SwarmReader reader;
+
+  /// The Swarm's name, where there are several.
+  final String? swarmName;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: reader,
+    builder: (context, _) {
+      final me = reader.snapshot?.person(reader.accountId);
+      if (me == null) return const SizedBox.shrink();
+      return SwarmUntil(
+        until: me.status?.until,
+        builder: (context) {
+          final status = me.statusAt(clock.now());
+          final name = superTabPersonName(me.email);
+          return SwarmDrawerRow(
+            leading: SwarmAvatar(
+              id: me.id,
+              name: name,
+              picture: me.avatar,
+              status: status,
+            ),
+            title: swarmName == null ? name : '$name · $swarmName',
+            detail: Text(
+              status?.label ?? 'Set a status',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: status == null
+                    ? AppPalette.textFaint
+                    : AppPalette.textSecondary,
+                fontSize: 13.5,
+              ),
+            ),
+            onTap: onTap,
+          );
+        },
+      );
+    },
+  );
 }
 
 /// A row's glyph, in a 32-point box so titles line up with a project's tile.

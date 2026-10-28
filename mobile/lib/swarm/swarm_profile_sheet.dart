@@ -398,43 +398,43 @@ class _SwarmProfileSheetState extends State<SwarmProfileSheet> {
           ],
         ),
         const SizedBox(height: 16),
-        Row(
-          children: [
-            if (status != null)
-              SwarmButton(
-                key: const ValueKey('swarm-status-clear'),
-                label: 'Clear status',
-                style: SwarmButtonStyle.link,
-                onPressed: edit
-                    ? () => _run(() async {
-                        final error = await profile.setStatus(null);
-                        if (error == null && mounted) {
-                          _text.clear();
-                          _emoji = null;
-                        }
-                        return error;
-                      })
-                    : null,
-              ),
-            const Spacer(),
-            SwarmButton(
-              key: const ValueKey('swarm-status-save'),
-              label: 'Save status',
-              style: SwarmButtonStyle.fill,
-              onPressed: edit && text.isNotEmpty
-                  ? () => _run(
-                      () => profile.setStatus(
-                        SuperTabPersonStatus(
-                          text: text,
-                          emoji: _emoji,
-                          until: _clears.from(clock.now()),
-                        ),
-                      ),
-                    )
+        SwarmButton(
+          key: const ValueKey('swarm-status-save'),
+          label: 'Save status',
+          style: SwarmButtonStyle.fill,
+          wide: true,
+          onPressed: edit && text.isNotEmpty
+              ? () => _run(
+                  () => profile.setStatus(
+                    SuperTabPersonStatus(
+                      text: text,
+                      emoji: _emoji,
+                      until: _clears.from(clock.now()),
+                    ),
+                  ),
+                )
+              : null,
+        ),
+        if (status != null) ...[
+          const SizedBox(height: 4),
+          Center(
+            child: SwarmButton(
+              key: const ValueKey('swarm-status-clear'),
+              label: 'Clear status',
+              style: SwarmButtonStyle.link,
+              onPressed: edit
+                  ? () => _run(() async {
+                      final error = await profile.setStatus(null);
+                      if (error == null && mounted) {
+                        _text.clear();
+                        _emoji = null;
+                      }
+                      return error;
+                    })
                   : null,
             ),
-          ],
-        ),
+          ),
+        ],
         if (_error case final error?)
           Padding(
             padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
@@ -565,4 +565,180 @@ class _Chip extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Who the member [personId] of the Swarm [swarmId] is, in a sheet over the
+/// page: their face, name, email, role and status while it lasts. One's own
+/// has Edit profile, which opens [showSwarmProfile].
+Future<void> showSwarmPerson(
+  BuildContext context, {
+  required String swarmId,
+  required String personId,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  backgroundColor: AppGlass.rowFill,
+  barrierColor: Colors.black.withValues(alpha: .55),
+  shape: const RoundedRectangleBorder(
+    borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+  ),
+  builder: (sheet) => SwarmPersonSheet(
+    swarmId: swarmId,
+    personId: personId,
+    onEdit: () {
+      Navigator.of(sheet).pop();
+      unawaited(showSwarmProfile(context, swarmId: swarmId));
+    },
+  ),
+);
+
+/// What [showSwarmPerson] shows.
+class SwarmPersonSheet extends StatelessWidget {
+  const SwarmPersonSheet({
+    super.key,
+    required this.swarmId,
+    required this.personId,
+    required this.onEdit,
+  });
+
+  final String swarmId, personId;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final reader = SwarmScope.of(context)?.inbox.reader(swarmId);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        key: const ValueKey('swarm-person'),
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 20),
+        child: reader == null
+            ? const SizedBox.shrink()
+            : ListenableBuilder(
+                listenable: reader,
+                builder: (context, _) => _sheet(context, reader),
+              ),
+      ),
+    );
+  }
+
+  Widget _sheet(BuildContext context, SwarmReader reader) {
+    final person = reader.snapshot?.person(personId);
+    final mine = personId == reader.accountId;
+    final name = person == null ? 'Someone' : superTabPersonName(person.email);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(
+          child: Container(
+            width: 36,
+            height: 5,
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: AppGlass.hair,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+        if (person == null)
+          _Note('They are no longer in this Swarm.')
+        else
+          SwarmUntil(
+            until: person.status?.until,
+            builder: (context) {
+              final status = person.statusAt(clock.now());
+              return Row(
+                children: [
+                  SwarmAvatar(
+                    id: person.id,
+                    name: name,
+                    size: 64,
+                    picture: person.avatar,
+                    status: status,
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppPalette.textPrimary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (status != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            status.label,
+                            style: TextStyle(
+                              color: AppPalette.textPrimary,
+                              fontSize: 15,
+                            ),
+                          ),
+                          if (status.until case final until?)
+                            Text(
+                              'Clears at ${_time(context, until)}',
+                              style: TextStyle(
+                                color: AppPalette.textFaint,
+                                fontSize: 13,
+                              ),
+                            ),
+                        ],
+                        const SizedBox(height: 4),
+                        Text(
+                          person.email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppPalette.textSecondary,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                        Text(
+                          _role(person.role),
+                          style: TextStyle(
+                            color: AppPalette.textFaint,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        if (mine && person != null && person.canWrite) ...[
+          const SizedBox(height: 18),
+          SwarmButton(
+            key: const ValueKey('swarm-person-edit'),
+            label: 'Edit profile',
+            style: SwarmButtonStyle.fill,
+            wide: true,
+            onPressed: onEdit,
+          ),
+        ],
+      ],
+    );
+  }
+
+  static String _role(String role) => switch (role) {
+    'owner' => 'Owner',
+    'collaborator' => 'Collaborator',
+    'viewer' => 'Viewer',
+    _ => role,
+  };
+
+  static String _time(BuildContext context, DateTime at) =>
+      MaterialLocalizations.of(context).formatTimeOfDay(
+        TimeOfDay.fromDateTime(at.toLocal()),
+        alwaysUse24HourFormat: MediaQuery.alwaysUse24HourFormatOf(context),
+      );
 }

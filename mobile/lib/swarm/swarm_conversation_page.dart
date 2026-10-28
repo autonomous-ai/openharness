@@ -18,6 +18,7 @@ import 'swarm_face.dart';
 import 'swarm_inbox.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
+import 'swarm_profile_sheet.dart';
 import 'swarm_session.dart';
 import 'team_glance.dart';
 
@@ -724,6 +725,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
               onTap: () =>
                   setState(() => _acting = _acting == m.id ? null : m.id),
               onReply: view.canPost ? () => _reply(c, m) : null,
+              onAuthor: m.fromAgent
+                  ? null
+                  : () => unawaited(
+                      showSwarmPerson(
+                        context,
+                        swarmId: widget.swarmId,
+                        personId: m.authorId,
+                      ),
+                    ),
             ),
           );
         case _AskEntry(:final need, :final grouped):
