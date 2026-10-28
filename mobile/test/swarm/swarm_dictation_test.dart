@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_dictation.dart';
@@ -18,7 +20,11 @@ void main() {
 
   setUp(() {
     calls = [];
-    answers = {'start': (_) => true, 'access': (_) => 'allowed'};
+    answers = {
+      'start': (_) => true,
+      'resume': (_) => true,
+      'access': (_) => 'allowed',
+    };
     messenger.setMockMethodCallHandler(channel, (call) async {
       calls.add(call);
       return answers[call.method]?.call(call);
@@ -87,7 +93,7 @@ void main() {
       await native('end', id, {'end': 'done'});
       await native('words', id, {'text': 'after the end'});
 
-      expect(heard, ['こんにちは', closeTo(35 / 45, 1e-9), SwarmDictationEnd.done]);
+      expect(heard, ['こんにちは', isA<double>(), SwarmDictationEnd.done]);
     });
 
     test(
@@ -344,16 +350,188 @@ void main() {
     );
   });
 
-  test('a level on the terminal\'s scale: -55 dB is 0, -10 dB is 1', () {
-    expect(swarmDictationLevel(0), 0);
-    expect(swarmDictationLevel(-1), 0);
-    expect(swarmDictationLevel(0.0001), 0, reason: '-80 dB');
-    expect(
-      swarmDictationLevel(0.316227766),
-      closeTo(1, 1e-6),
-      reason: '-10 dB',
+  group('a take listens until it is stopped (Tony, 10-29)', () {
+    /// What [start] heard last: every word so far.
+    String said() => heard.whereType<String>().last;
+
+    var now = DateTime(2026, 10, 29, 9);
+    late SwarmChannelDictation dictation;
+    late int id;
+
+    setUp(() async {
+      now = DateTime(2026, 10, 29, 9);
+      dictation = SwarmChannelDictation(clock: () => now);
+      await start(dictation);
+      id = take(calls.single);
+    });
+
+    Future<void> guess(
+      String text, {
+      double from = 0,
+      double to = 0,
+      bool finished = false,
+    }) => native('words', id, {
+      'text': text,
+      'final': finished,
+      'from': from,
+      'to': to,
+    });
+
+    /// The recognizer ending its session by itself, the microphone still on.
+    Future<void> paused([String end = 'done']) =>
+        native('paused', id, {'end': end});
+
+    List<MethodCall> resumes() =>
+        calls.where((call) => call.method == 'resume').toList();
+
+    test('a session the recognizer ends by itself is resumed at once, its '
+        'words kept', () async {
+      await guess('Hôm nay mình làm gì.', from: 0.3, to: 2.1, finished: true);
+      await paused();
+      expect(resumes().single.arguments, {'take': id});
+
+      // A new session's times start again from nothing.
+      await guess('Ngày', from: 0.2, to: 0.5);
+      await guess('Ngày mai', from: 0.2, to: 0.9);
+      expect(said(), 'Hôm nay mình làm gì. Ngày mai');
+      expect(heard.whereType<SwarmDictationEnd>(), isEmpty);
+    });
+
+    test('a session that ends on a guess it never finished keeps it', () async {
+      await guess('hôm nay mình', from: 0.3, to: 1.2);
+      await paused('noSpeech');
+      await guess('làm gì', from: 0.1, to: 0.6);
+      expect(said(), 'hôm nay mình làm gì');
+    });
+
+    test('a long silence, session after session, keeps listening', () async {
+      await guess('một', from: 0.3, to: 0.6);
+      for (var i = 0; i < 6; i++) {
+        now = now.add(const Duration(seconds: 20));
+        await paused('noSpeech');
+      }
+      expect(resumes(), hasLength(6));
+      expect(heard.whereType<SwarmDictationEnd>(), isEmpty);
+      await guess('hai', from: 0.2, to: 0.5);
+      expect(said(), 'một hai');
+    });
+
+    test('sessions that keep ending at once, hearing nothing, are given up: '
+        'the take ends as failed, its words kept', () async {
+      await guess('một', from: 0.3, to: 0.6);
+      await paused();
+      await paused('failed');
+      now = now.add(const Duration(milliseconds: 900));
+      await paused('failed');
+
+      expect(heard.whereType<SwarmDictationEnd>(), [SwarmDictationEnd.failed]);
+      expect(resumes(), hasLength(2));
+      expect(calls.last.method, 'cancel');
+      expect(said(), 'một');
+      await paused();
+      expect(resumes(), hasLength(2), reason: 'given up for good');
+    });
+
+    test('words between sessions that end quickly keep it going', () async {
+      for (final word in ['một', 'hai', 'ba', 'bốn']) {
+        await guess(word, from: 0.1, to: 0.3);
+        await paused();
+      }
+      expect(heard.whereType<SwarmDictationEnd>(), isEmpty);
+      expect(said(), 'một hai ba bốn');
+    });
+
+    test('a resume the phone refuses ends the take as failed', () async {
+      answers['resume'] = (_) => false;
+      await guess('một', from: 0.3, to: 0.6);
+      await paused();
+
+      expect(heard.whereType<SwarmDictationEnd>(), [SwarmDictationEnd.failed]);
+      expect(calls.last.method, 'cancel');
+    });
+
+    test('a resume that fails ends the take as failed', () async {
+      answers['resume'] = (_) => throw PlatformException(code: 'boom');
+      await paused();
+
+      expect(heard.whereType<SwarmDictationEnd>(), [SwarmDictationEnd.failed]);
+    });
+
+    test('a session ending as the take stops is not resumed', () async {
+      await guess('một hai', from: 0.3, to: 0.9);
+      await dictation.stop();
+      await paused();
+      await native('end', id, {'end': 'done'});
+
+      expect(resumes(), isEmpty);
+      expect(heard.whereType<SwarmDictationEnd>(), [SwarmDictationEnd.done]);
+      expect(said(), 'một hai');
+    });
+
+    test('an earlier take\'s session ending is not resumed', () async {
+      await dictation.cancel();
+      await start(dictation);
+      await paused();
+
+      expect(resumes(), isEmpty);
+    });
+  });
+
+  group('the level the wave follows (Tony, 10-29: "a live wave")', () {
+    late SwarmChannelDictation dictation;
+    late int id;
+
+    setUp(() async {
+      dictation = SwarmChannelDictation();
+      await start(dictation);
+      id = take(calls.single);
+    });
+
+    /// The microphone at [db] dBFS, [times] buffers of a tenth of a second.
+    Future<void> sound(double db, [int times = 1]) async {
+      for (var i = 0; i < times; i++) {
+        await native('level', id, {'rms': math.pow(10, db / 20)});
+      }
+    }
+
+    double last() => heard.whereType<double>().last;
+
+    test('a voice above the room fills the wave and the room alone leaves it '
+        'low, however loud the microphone takes them', () async {
+      for (final (room, voice) in [(-70.0, -45.0), (-40.0, -15.0)]) {
+        await dictation.cancel();
+        await start(dictation);
+        id = take(calls.last);
+        await sound(room, 30);
+        expect(last(), lessThan(0.05), reason: 'the room at $room dB');
+        await sound(voice);
+        expect(last(), greaterThan(0.6), reason: 'a voice at $voice dB');
+        await sound(room + 2);
+        expect(last(), lessThan(0.05), reason: 'the room again');
+      }
+    });
+
+    test(
+      'the click the microphone opens on is forgotten within seconds',
+      () async {
+        await sound(-95);
+        await sound(-50, 35);
+        expect(last(), lessThan(0.05));
+      },
     );
-    expect(swarmDictationLevel(1), 1);
-    expect(swarmDictationLevel(0.01), closeTo(15 / 45, 1e-9), reason: '-40 dB');
+
+    test('a room that grows louder is followed', () async {
+      await sound(-60, 30);
+      await sound(-45, 35);
+      expect(last(), lessThan(0.05));
+    });
+
+    test('near-digital silence never moves the wave', () async {
+      await sound(-100, 30);
+      await sound(-80);
+      expect(last(), 0);
+      await native('level', id, {'rms': 0});
+      expect(last(), 0);
+    });
   });
 }

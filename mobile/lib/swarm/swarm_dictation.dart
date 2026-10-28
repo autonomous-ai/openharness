@@ -20,13 +20,14 @@ enum SwarmDictationAccess {
 /// How a take with the phone's own recognizer ended ([SwarmDictation.start]'s
 /// `onEnd`).
 enum SwarmDictationEnd {
-  /// Stopped, or finished by itself, with its last words delivered.
+  /// Stopped, with its last words delivered.
   done,
 
-  /// Nothing was said in it.
+  /// Stopped, and nothing was said in its last session.
   noSpeech,
 
-  /// The recognizer failed: what it delivered so far stays, the rest is lost.
+  /// The recognizer failed, or cannot go on: what it delivered so far stays,
+  /// the rest is lost.
   failed,
 }
 
@@ -41,10 +42,11 @@ abstract interface class SwarmDictation {
   /// that, what the person answered.
   Future<SwarmDictationAccess> access();
 
-  /// Listens in [locale] (`vi-VN`). False when the phone has no recognizer
-  /// for it now. [onWords] hears every word so far each time — revised as the
-  /// recognizer changes its mind — [onLevel] how loud the microphone is
-  /// (0…1, `pcm16Level`'s scale), and [onEnd] once, when it has stopped.
+  /// Listens in [locale] (`vi-VN`) until [stop] or [cancel] (Tony, 10-29:
+  /// "until I tap"). False when the phone has no recognizer for it now.
+  /// [onWords] hears every word so far each time — revised as the recognizer
+  /// changes its mind — [onLevel] how loud the voice is over the room (0…1),
+  /// and [onEnd] once: after [stop], or when listening cannot go on.
   Future<bool> start(
     String locale, {
     required void Function(String words) onWords,
@@ -71,14 +73,6 @@ String swarmDictationLocale(String language) => switch (language) {
   _ => 'vi-VN',
 };
 
-/// An RMS (0…1 of full scale) as `pcm16Level` draws it: −55 dB is 0, −10 dB
-/// is 1.
-double swarmDictationLevel(double rms) {
-  if (rms <= 0) return 0;
-  final db = 20 * math.log(rms) / math.ln10;
-  return ((db + 55) / 45).clamp(0.0, 1.0);
-}
-
 /// [SwarmDictation] over `harness/dictation` (iOS: `DictationChannel` in
 /// `AppDelegate.swift`, `SFSpeechRecognizer`).
 ///
@@ -92,13 +86,20 @@ double swarmDictationLevel(double rms) {
 /// phone it can start over after a pause, without a word — is kept, once, in
 /// front of what it says next. Never a guess by how the words look: Tony's
 /// 'một hai ba bốn năm' came out as 'Một 2 12345' that way (10-29).
+///
+/// ⚠️ **A take outlasts the recognizer's sessions ([_resume]).** iOS ends a
+/// session by itself — after a pause, a long silence, its own minute — and
+/// the native side says so (`paused`) with the microphone still on: what it
+/// said is kept, and a new session starts at once.
 class SwarmChannelDictation implements SwarmDictation {
-  SwarmChannelDictation({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel('harness/dictation') {
+  SwarmChannelDictation({MethodChannel? channel, DateTime Function()? clock})
+    : _channel = channel ?? const MethodChannel('harness/dictation'),
+      _clock = clock ?? DateTime.now {
     _channel.setMethodCallHandler(_heard);
   }
 
   final MethodChannel _channel;
+  final DateTime Function() _clock;
   int _take = 0;
   ({
     void Function(String) words,
@@ -117,6 +118,30 @@ class SwarmChannelDictation implements SwarmDictation {
   /// How far a guess may begin before the last one ended and still be new
   /// words: the recognizer's own times overlap a little at a word's edge.
   static const _overlap = 0.05;
+
+  /// [stop] was asked: a session ending now is the take's last.
+  bool _stopping = false;
+
+  /// When sessions ended since the recognizer last said a word. [_quick] of
+  /// them within [_quickWithin] is a recognizer that cannot hear now —
+  /// offline, or broken — rather than one waiting through a silence.
+  final List<DateTime> _pauses = [];
+  static const _quick = 3;
+  static const _quickWithin = Duration(seconds: 2);
+
+  /// The microphone's last [_roomWindow] levels, in dB, a tenth of a second
+  /// each: the quietest of them is the room, and the wave shows how far the
+  /// voice is above it ([_level]) — whatever the microphone's own gain, which
+  /// the recognizer's audio session leaves low.
+  final List<double> _recent = [];
+  static const _roomWindow = 30;
+
+  /// The quietest a room is taken to be: below it, near-digital silence.
+  static const _silence = -75.0;
+
+  /// A voice [_overRoom] dB over the room starts the wave, and [_overRoom] +
+  /// [_range] fills it.
+  static const _overRoom = 3.0, _range = 25.0;
 
   @override
   Future<SwarmDictationAccess> access() async {
@@ -145,6 +170,9 @@ class SwarmChannelDictation implements SwarmDictation {
     _done = _guess = '';
     _guessTo = 0;
     _guessFinished = false;
+    _stopping = false;
+    _pauses.clear();
+    _recent.clear();
     try {
       final started = await _channel.invokeMethod<bool>('start', {
         'take': take,
@@ -160,6 +188,7 @@ class SwarmChannelDictation implements SwarmDictation {
 
   @override
   Future<void> stop() async {
+    _stopping = true;
     try {
       await _channel.invokeMethod<void>('stop', {'take': _take});
     } on PlatformException {
@@ -186,6 +215,7 @@ class SwarmChannelDictation implements SwarmDictation {
     switch (call.method) {
       case 'words':
         if (arguments['text'] case final String text) {
+          _pauses.clear();
           to.words(
             _stitched(
               text,
@@ -197,8 +227,10 @@ class SwarmChannelDictation implements SwarmDictation {
         }
       case 'level':
         if (arguments['rms'] case final num rms) {
-          to.level(swarmDictationLevel(rms.toDouble()));
+          to.level(_level(rms.toDouble()));
         }
+      case 'paused':
+        await _resume(_take);
       case 'end':
         _ended(_take, switch (arguments['end']) {
           'done' => SwarmDictationEnd.done,
@@ -206,6 +238,46 @@ class SwarmChannelDictation implements SwarmDictation {
           _ => SwarmDictationEnd.failed,
         });
     }
+  }
+
+  /// The recognizer ended its session by itself: its words are kept, and the
+  /// take listens on in a new one — unless it is stopping, or sessions keep
+  /// ending at once with nothing heard, or the phone will not start another.
+  Future<void> _resume(int take) async {
+    if (_stopping) return;
+    _done = _joined(_done, _guess);
+    _guess = '';
+    _guessTo = 0;
+    _guessFinished = false;
+    final now = _clock();
+    _pauses
+      ..removeWhere((at) => now.difference(at) > _quickWithin)
+      ..add(now);
+    if (_pauses.length >= _quick) return _giveUp(take);
+    var resumed = false;
+    try {
+      resumed =
+          await _channel.invokeMethod<bool>('resume', {'take': take}) == true;
+    } on PlatformException {
+      resumed = false;
+    }
+    if (!resumed && take == _take && !_stopping) _giveUp(take);
+  }
+
+  /// Listening cannot go on: the take ends as failed, its words kept.
+  void _giveUp(int take) {
+    _ended(take, SwarmDictationEnd.failed);
+    unawaited(cancel());
+  }
+
+  /// How far [rms] (0…1 of full scale) is above the room, for the wave.
+  double _level(double rms) {
+    if (rms <= 0) return 0;
+    final db = 20 * math.log(rms) / math.ln10;
+    _recent.add(db);
+    if (_recent.length > _roomWindow) _recent.removeAt(0);
+    final room = math.max(_recent.reduce(math.min), _silence);
+    return ((db - room - _overRoom) / _range).clamp(0.0, 1.0);
   }
 
   /// Every word of the take so far: what is [_done], then [guess], the
