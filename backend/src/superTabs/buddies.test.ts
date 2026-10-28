@@ -4,6 +4,7 @@ import { createSuperTab, visibleState, type Actor, type Conversation } from './m
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
+import { groupView } from './read/views.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -432,5 +433,17 @@ describe('Chat with PM while Buddies are on', () => {
   it('works as before while Buddies are off', () => {
     const f = setup()
     expect(f.run(say(f.pmChat), peer).messages).toHaveLength(1)
+  })
+})
+
+describe('a Buddy chat as readers get it', () => {
+  it('names its kind and owner and carries no audience, so an app from before Buddies never takes it for Chat with PM', () => {
+    const f = setup()
+    group(f, f.chat).proposals = ['ask']
+    const view = groupView(group(f, f.chat), new Set()) as unknown as Record<string, unknown>
+    expect(view).toMatchObject({ id: f.chat, kind: 'buddy', buddyOwnerId: 'peer', agentIds: ['buddy'] })
+    expect(view).not.toHaveProperty('audience')
+    expect(view).not.toHaveProperty('proposals')
+    expect(groupView(group(f, f.pmChat), new Set())).toHaveProperty('audience')
   })
 })
