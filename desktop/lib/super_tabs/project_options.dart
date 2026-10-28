@@ -59,7 +59,10 @@ Future<void> showProjectAction(
                     children: [
                       // Whether teammates' agents can push to its repository, and what to do about it.
                       if (action == 'details') ...[
-                        ProjectGitHubAccess(controller: c, projectId: project.id),
+                        ProjectGitHubAccess(
+                          controller: c,
+                          projectId: project.id,
+                        ),
                         const SizedBox(height: 16),
                       ],
                       if (action == 'rename')

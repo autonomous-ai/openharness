@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -177,4 +179,134 @@ void main() {
     },
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
+
+  Future<void> send(WidgetTester tester, String text) async {
+    await tester.tap(composer);
+    await tester.enterText(composer, text);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+  }
+
+  Finder outgoingRow(String text) => find.ancestor(
+    of: find.text(text),
+    matching: find.byKey(const ValueKey('super-outgoing')),
+  );
+
+  void composerKeepsKeyboard(WidgetTester tester) {
+    expect(composerText(tester), isEmpty);
+    expect(composerFocus(tester).hasPrimaryFocus, isTrue);
+    expect(tester.testTextInput.hasAnyClients, isTrue);
+  }
+
+  testWidgets('Enter shows the message at once as sending, in place, and '
+      'once when the server confirms it', (tester) async {
+    final server = _HeldServer()..append('Which build?');
+    await show(tester, server);
+    final post = server.holdPosts = Completer<void>();
+    await send(tester, 'The arm64 one');
+
+    expect(outgoingRow('The arm64 one'), findsOneWidget);
+    expect(find.text('Sending…'), findsOneWidget);
+    composerKeepsKeyboard(tester);
+
+    post.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('The arm64 one'), findsOneWidget);
+    expect(outgoingRow('The arm64 one'), findsNothing);
+    expect(find.text('Sending…'), findsNothing);
+    composerKeepsKeyboard(tester);
+    await tester.pump(const Duration(seconds: 1));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('a send with no answer reads Not sent with Retry, which shows '
+      'it once', (tester) async {
+    final server = ConversationServer()..loseReply = true;
+    await show(tester, server);
+    await send(tester, 'Did this arrive?');
+    await tester.pumpAndSettle();
+
+    expect(outgoingRow('Did this arrive?'), findsOneWidget);
+    expect(find.text('Not sent'), findsOneWidget);
+    // The row says it; the line under the chat does not repeat it.
+    expect(
+      find.text('The action is not confirmed. Retry to check it.'),
+      findsNothing,
+    );
+    expect(find.text('Edit'), findsNothing);
+    composerKeepsKeyboard(tester);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(server.messages, hasLength(1));
+    expect(find.text('Did this arrive?'), findsOneWidget);
+    expect(outgoingRow('Did this arrive?'), findsNothing);
+    expect(find.text('Not sent'), findsNothing);
+    await tester.pump(const Duration(seconds: 1));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('a refused send reads Not sent with its reason; Edit puts it '
+      'back in the composer with its reply', (tester) async {
+    final server = ConversationServer()..append('Which build?');
+    await show(tester, server);
+    await tester.tap(find.byTooltip('Reply'));
+    await tester.pumpAndSettle();
+    server.reject = true;
+    await send(tester, 'The arm64 one');
+    await tester.pumpAndSettle();
+
+    expect(outgoingRow('The arm64 one'), findsOneWidget);
+    expect(find.text('Not sent'), findsOneWidget);
+    expect(find.text('Choose an agent in this conversation.'), findsOneWidget);
+    expect(find.text('Retry'), findsNothing);
+    // The reply went with the message: the composer holds none.
+    expect(find.byTooltip('Cancel reply'), findsNothing);
+
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(outgoingRow('The arm64 one'), findsNothing);
+    expect(composerText(tester), 'The arm64 one');
+    expect(find.byTooltip('Cancel reply'), findsOneWidget);
+    expect(composerFocus(tester).hasPrimaryFocus, isTrue);
+    expect(tester.testTextInput.hasAnyClients, isTrue);
+    await tester.pump(const Duration(seconds: 1));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  for (final failure in ['refused', 'unanswered']) {
+    testWidgets('Delete removes a $failure message from the chat', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      await show(tester, server);
+      if (failure == 'refused') {
+        server.reject = true;
+      } else {
+        server.loseReply = true;
+      }
+      await send(tester, 'Never mind');
+      await tester.pumpAndSettle();
+      expect(outgoingRow('Never mind'), findsOneWidget);
+
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      expect(outgoingRow('Never mind'), findsNothing);
+      expect(find.text('Not sent'), findsNothing);
+      await tester.pump(const Duration(seconds: 1));
+    }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+  }
+}
+
+/// A server whose commands wait for [holdPosts] while it is set.
+class _HeldServer extends ConversationServer {
+  Completer<void>? holdPosts;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    if (method == 'POST') await holdPosts?.future;
+    return super.request(method, path, body: body);
+  }
 }

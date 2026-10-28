@@ -410,12 +410,18 @@ class _SuperTabViewState extends State<SuperTabView>
     // From here a zip still running belongs to neither this message, which
     // took its files already, nor the next.
     final dropped = _droppedFolders.remove(id);
-    final result = await c.send(replyTo: _replies[id]?.id);
+    final result = await c.send(
+      replyTo: _replies[id]?.id,
+      // The reply goes with the message, which shows at the end at once.
+      onSending: () {
+        if (!mounted) return;
+        setState(() => _replies.remove(id));
+        _followEnd(id);
+      },
+    );
     if (!mounted) return;
     setState(() {
-      if (result != null) {
-        _replies.remove(id);
-      } else if (dropped != null) {
+      if (result == null && dropped != null) {
         // Not sent: its paths are still offered as zips, in a new record
         // so the zip that was running is still let go.
         final now = _droppedFolders.putIfAbsent(id, () => []);
@@ -1724,6 +1730,64 @@ class _SuperTabViewState extends State<SuperTabView>
         ?.showSnackBar(SnackBar(content: Text(failure)));
   }
 
+  /// [sent], drawn as the reader's own message will be once the transcript
+  /// holds it, with where it stands under it.
+  Widget _outgoingRow(
+    SuperTabOutgoing sent,
+    List<SuperTabMessage> messages,
+    Map<String, SuperTabMessage> byId,
+  ) {
+    final id = sent.conversationId;
+    final person = c.snapshot?.people
+        .where((p) => p.id == c.accountId)
+        .firstOrNull;
+    final message = SuperTabMessage.fromJson({
+      'id': 'outgoing',
+      'conversationId': id,
+      'text': sent.text,
+      'replyTo': sent.replyTo,
+      'sequence': 0,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'author': {
+        'kind': 'person',
+        'id': c.accountId,
+        'name': person?.email ?? '',
+      },
+    });
+    final reply = byId[sent.replyTo];
+    return KeyedSubtree(
+      key: const ValueKey('super-outgoing'),
+      child: SuperTabMessageRow(
+        message: message,
+        author: _shownAuthor(c, message),
+        person: person,
+        grouped: SuperTabMessageRow.groupsWith(message, messages.lastOrNull),
+        reply: reply,
+        replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+        onReturnToComposer: _focus.requestFocus,
+        readerId: c.accountId,
+        receipts: [
+          SuperTabOutgoingReceipt(
+            message: sent,
+            onRetry: c.saving ? null : () => unawaited(c.retry()),
+            onEdit: () => _editRefused(id),
+            onDelete: () => c.discardOutgoing(id),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Puts the message refused in [id] back in the composer, its reply too.
+  void _editRefused(String id) {
+    final replyTo = c.editRefused(id);
+    final original = c.messages(id).where((m) => m.id == replyTo).firstOrNull;
+    setState(() {
+      if (original != null) _replies[id] = original;
+    });
+    _focus.requestFocus();
+  }
+
   Widget _message(
     SuperTabMessage message,
     bool grouped,
@@ -1947,6 +2011,15 @@ class _SuperTabViewState extends State<SuperTabView>
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
     final reply = _replies[c.selectedId];
+    final outgoing = c.outgoing(c.selectedId);
+    // A failed message says so in its own row, with what can be done.
+    final errorInRow = outgoing.any(
+      (sent) => switch (sent.state) {
+        SuperTabOutgoingState.sending => false,
+        SuperTabOutgoingState.unconfirmed => c.hasPendingAction,
+        SuperTabOutgoingState.refused => sent.error == c.operationError,
+      },
+    );
     final finding = _finding?.conversationId == c.selectedId ? _finding : null;
     final back = finding == null && _back?.conversationId == c.selectedId;
     final choices = _completionChoices;
@@ -1983,7 +2056,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ? const Center(child: CircularProgressIndicator())
               : unread && c.error != null
               ? _firstReadFailed(c.error!)
-              : messages.isEmpty
+              : messages.isEmpty && outgoing.isEmpty
               ? Center(
                   child: Text(
                     c.accessRevoked
@@ -2034,8 +2107,15 @@ class _SuperTabViewState extends State<SuperTabView>
                             'super-messages-${c.tabId}-${c.selectedId}',
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: entries.length + 1,
+                          itemCount: entries.length + 1 + outgoing.length,
                           itemBuilder: (context, index) {
+                            if (index > entries.length) {
+                              return _outgoingRow(
+                                outgoing[index - 1 - entries.length],
+                                messages,
+                                byId,
+                              );
+                            }
                             if (index == 0) {
                               final id = c.selectedId;
                               if (!c.hasOlder(id)) {
@@ -2213,7 +2293,7 @@ class _SuperTabViewState extends State<SuperTabView>
                   ],
                 ),
         ),
-        if (c.operationError != null)
+        if (c.operationError != null && !errorInRow)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(

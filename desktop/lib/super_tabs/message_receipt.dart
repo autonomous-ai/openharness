@@ -218,10 +218,7 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       sending = true;
     }
     _clock(fresh || working || (delivery?.pending == true && offline));
-    final style = DesktopChrome.metadata(color: color).copyWith(
-      fontSize: 12,
-      fontFeatures: const [FontFeature.tabularFigures()],
-    );
+    final style = superTabReceiptStyle(color);
     final motion = !MediaQuery.disableAnimationsOf(context);
     final parts = <Widget>[
       if (sending && motion)
@@ -267,20 +264,61 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
       ],
       for (final (label, action) in actions) ...[
         Text('·', style: style),
-        TextButton(
-          onPressed: action,
-          style: TextButton.styleFrom(
-            foregroundColor: DesktopChrome.accent,
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            minimumSize: const Size(0, 32),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: style,
-          ),
-          child: Text(label),
-        ),
+        _receiptAction(label, action, style),
       ],
     ];
-    return Padding(
+    return _receiptLine(
+      parts,
+      below: [
+        if (note != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: .09),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Text(
+                  note,
+                  style: DesktopChrome.metadata().copyWith(
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// A receipt line's text: small metadata in [color], with figures that keep
+/// their width as a clock counts.
+TextStyle superTabReceiptStyle(Color color) => DesktopChrome.metadata(
+  color: color,
+).copyWith(fontSize: 12, fontFeatures: const [FontFeature.tabularFigures()]);
+
+/// An action on a receipt line, read as a link in the line's text.
+Widget _receiptAction(String label, VoidCallback? onPressed, TextStyle style) =>
+    TextButton(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: DesktopChrome.accent,
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        minimumSize: const Size(0, 32),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: style,
+      ),
+      child: Text(label),
+    );
+
+/// The line under a message: [parts] in a row that wraps, announced as it
+/// changes, with [below] under it.
+Widget _receiptLine(List<Widget> parts, {List<Widget> below = const []}) =>
+    Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -294,31 +332,63 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               children: parts,
             ),
           ),
-          if (note != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: .09),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  child: Text(
-                    note,
-                    style: DesktopChrome.metadata().copyWith(
-                      fontSize: 12,
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          ...below,
         ],
       ),
     );
+
+/// The line under a message the transcript does not hold yet: Sending…, or
+/// Not sent with what can be done about it (design: Ken, 10-28).
+class SuperTabOutgoingReceipt extends StatelessWidget {
+  const SuperTabOutgoingReceipt({
+    super.key,
+    required this.message,
+    required this.onDelete,
+    this.onRetry,
+    this.onEdit,
+  });
+  final SuperTabOutgoing message;
+
+  /// Null while it cannot be done now, as during another send.
+  final VoidCallback? onRetry, onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    if (message.state == SuperTabOutgoingState.sending) {
+      final style = superTabReceiptStyle(DesktopChrome.muted);
+      return _receiptLine([
+        if (MediaQuery.disableAnimationsOf(context))
+          Icon(AppIcons.loaderCircle, size: 14, color: DesktopChrome.muted)
+        else
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.5,
+              color: DesktopChrome.muted,
+            ),
+          ),
+        Text('Sending…', style: style),
+      ]);
+    }
+    final color = Theme.of(context).colorScheme.error;
+    final style = superTabReceiptStyle(color);
+    final refused = message.state == SuperTabOutgoingState.refused;
+    return _receiptLine([
+      Icon(AppIcons.triangleAlert, size: 14, color: color),
+      Text('Not sent', style: style),
+      if (refused && message.error != null) ...[
+        Text('·', style: style),
+        Text(message.error!, style: style),
+      ],
+      Text('·', style: style),
+      if (refused)
+        _receiptAction('Edit', onEdit, style)
+      else
+        _receiptAction('Retry', onRetry, style),
+      Text('·', style: style),
+      _receiptAction('Delete', onDelete, style),
+    ]);
   }
 }

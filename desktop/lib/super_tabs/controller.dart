@@ -2013,9 +2013,12 @@ class SuperTabController extends ChangeNotifier {
           command['type'] == 'member.remove' &&
           command['userId'] == accountId);
 
+  /// Sends the selected conversation's draft. [onSending] is told when the
+  /// message is on its way and shows in [outgoing].
   Future<Map<String, dynamic>?> send({
     String? replyTo,
     List<String> recipients = const [],
+    VoidCallback? onSending,
   }) async {
     final text = draft(selectedId).trim();
     final files = attachments(selectedId).files;
@@ -2061,6 +2064,7 @@ class SuperTabController extends ChangeNotifier {
         _drafts.remove(conversationId);
         _mentions.remove(conversationId);
       }
+      onSending?.call();
       _changed();
     }
     final result = await sending;

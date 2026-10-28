@@ -91,15 +91,19 @@ void main() {
           );
 
   /// Lets files be read and the zip's isolate answer, a frame at a time,
-  /// until [done].
-  Future<void> settle(WidgetTester tester, bool Function() done) async {
+  /// until [done]. While a message is [sending] its spinner never settles.
+  Future<void> settle(
+    WidgetTester tester,
+    bool Function() done, {
+    bool sending = false,
+  }) async {
     for (var i = 0; i < 200 && !done(); i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
       await tester.pump();
     }
-    await tester.pumpAndSettle();
+    if (!sending) await tester.pumpAndSettle();
   }
 
   /// Drops on the composer: [method] and [arguments] as the platform sends
@@ -360,7 +364,7 @@ void main() {
     await tester.tap(find.byTooltip('Send message'));
     await tester.pump();
     // The zip has its answer while the send still waits on the server.
-    await settle(tester, () => names(controller).isNotEmpty);
+    await settle(tester, () => names(controller).isNotEmpty, sending: true);
     server.holdReads!.complete();
     server.holdReads = null;
     await tester.pumpAndSettle();
@@ -373,8 +377,8 @@ void main() {
     await close(tester, controller);
   });
 
-  testWidgets('a message that fails to send keeps offering its folder as a '
-      'zip', (tester) async {
+  testWidgets('a message that fails to send offers its folder as a zip '
+      'again once edited', (tester) async {
     final controller = await open(tester, machineId: 'studio');
     await drop(tester, [
       folder('src').path,
@@ -382,6 +386,9 @@ void main() {
 
     server.refuse = {'code': 'CONFLICT', 'message': 'Try again.'};
     await tester.tap(find.byTooltip('Send message'));
+    await tester.pumpAndSettle();
+    // The refused message waits in the chat; Edit brings it back here.
+    await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
 
     expect(hint, findsOneWidget);
