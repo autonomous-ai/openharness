@@ -404,7 +404,9 @@ describe('a teammate\'s work and the machines that take it', () => {
     await expect(hostRun(f.tab, { type: 'agent.startDispatch', startId: queued })).rejects.toMatchObject({ code: 'PRIVACY_CHECK_FAILED' })
     const failed = (await store.read(owner, f.tab)).state.starts!.find(s => s.id === queued)!
     expect(failed).toMatchObject({ dispatched: false, error: expect.stringContaining('is not private (gitconfig') })
-    expect((await store.messages(owner, f.tab, f.teamGroup, {})).messages.at(-1)!.text).toMatch(/^Could not start Builder: The Harness Team account on MacBook Pro · Team is not private/)
+    // The group reads a generic reason: the check's detail names the machine and files on it (review of #1847).
+    expect((await store.messages(owner, f.tab, f.teamGroup, {})).messages.at(-1)!.text)
+      .toBe('Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.')
     expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.starts.map(s => s.id)).not.toContain(queued)
     // A stale check may pass again by itself: that start keeps waiting for it.
     const passedAgain = { ...PASSED, checkedAt: Date.now() + 1 }

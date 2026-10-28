@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { downSince, expireRemovals } from './machines.js'
+import { publicReason, readsRawReason } from './startFailure.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
 
 export type Role = 'owner' | 'collaborator' | 'viewer'
@@ -39,6 +40,9 @@ export interface Agent {
   releaseId?: string
   /** Captured from the original Swarm launch, never inferred from a later live session with the same id. */
   startedSession?: { creationId: string; sessionId: string; createdAt: string }
+  /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
+   *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
+  gridModel?: string
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -536,6 +540,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     else delete target.roleId
   }
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
+  for (const start of visible.starts ?? []) {
+    if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
+  }
   const seen = seenMachineIds(visible)
   visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))
   return visible
