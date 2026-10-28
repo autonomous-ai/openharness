@@ -137,6 +137,13 @@ jobs:
           GIT_CONFIG_KEY_0: maintenance.auto
           GIT_CONFIG_VALUE_0: "false"
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+      - name: Style allowlists only shrink (desktop/design/desktop-design-system.md)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --quiet --depth=1 --no-tags origin "$BASE_SHA"
+          python3 scripts/check-ui-style.py --against "$BASE_SHA"
       - name: Record source inputs for CI evidence reuse
         run: python3 scripts/ci-source-inputs.py process --record "$RUNNER_TEMP/ci-source-inputs.json"
       - uses: actions/upload-artifact@v4

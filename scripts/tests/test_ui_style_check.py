@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -20,16 +21,30 @@ class Repo:
     def __init__(self):
         self._dir = tempfile.TemporaryDirectory()
         self.root = Path(self._dir.name)
-        self.allowlist = self.root / "scripts" / "ui-style-allowlist.json"
+        self.lists = self.root / "scripts" / "ui-style-allowlist"
 
     def write(self, path, text):
         target = self.root / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text)
 
-    def allow(self, entries):
-        self.allowlist.parent.mkdir(parents=True, exist_ok=True)
-        self.allowlist.write_text(json.dumps(entries))
+    def allow(self, entries, areas=("desktop", "mobile")):
+        """Writes each area's allowlist with the entries under its folder."""
+        self.lists.mkdir(parents=True, exist_ok=True)
+        for area, prefix in (("desktop", DESKTOP), ("mobile", MOBILE)):
+            if area in areas:
+                mine = {k: v for k, v in entries.items() if k.startswith(prefix + "/")}
+                (self.lists / f"{area}.json").write_text(json.dumps(mine))
+
+    def allowed(self):
+        """Every area's allowlist entries, merged."""
+        merged = {}
+        for path in sorted(self.lists.glob("*.json")):
+            merged.update(json.loads(path.read_text()))
+        return merged
+
+    def git(self, *args):
+        subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True)
 
     def run(self, *args):
         out, err = io.StringIO(), io.StringIO()
@@ -155,7 +170,7 @@ class StyleCheckTest(unittest.TestCase):
         self.assertEqual(self.repo.run(), (0, ""))
         self.assertEqual(self.repo.run("--only", MOBILE), (0, ""))
         self.assertEqual(self.repo.run("--update")[0], 0)
-        self.assertEqual(json.loads(self.repo.allowlist.read_text()), entries)
+        self.assertEqual(self.repo.allowed(), entries)
 
     def test_update_lowers_counts_and_drops_clean_files(self):
         self.repo.write(f"{DESKTOP}/a.dart", "final a = Colors.red;\n")
@@ -163,7 +178,7 @@ class StyleCheckTest(unittest.TestCase):
                          f"{DESKTOP}/gone.dart": {"hex-color": 1}})
         code, _ = self.repo.run("--update")
         self.assertEqual(code, 0)
-        self.assertEqual(json.loads(self.repo.allowlist.read_text()),
+        self.assertEqual(self.repo.allowed(),
                          {f"{DESKTOP}/a.dart": {"material-color": 1}})
         self.assertEqual(self.repo.run(), (0, ""))
 
@@ -176,23 +191,76 @@ class StyleCheckTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn(f"{DESKTOP}/a.dart: material-color 2, allowed 1", output)
         self.assertIn(f"{DESKTOP}/new.dart: hex-color 1, allowed 0", output)
-        self.assertEqual(json.loads(self.repo.allowlist.read_text()), before)
+        self.assertEqual(self.repo.allowed(), before)
 
-    def test_init_records_today_offenders_once(self):
+    def test_init_records_today_offenders_once_per_area(self):
         self.repo.write(f"{DESKTOP}/a.dart", "final a = Colors.red;\n")
         self.repo.write(f"{MOBILE}/b.dart", "final b = TextStyle(fontSize: 17);\n")
         self.assertEqual(self.repo.run("--init")[0], 0)
-        self.assertEqual(json.loads(self.repo.allowlist.read_text()),
-                         {f"{DESKTOP}/a.dart": {"material-color": 1}, f"{MOBILE}/b.dart": {"font-size": 1}})
+        self.assertEqual(json.loads((self.repo.lists / "desktop.json").read_text()),
+                         {f"{DESKTOP}/a.dart": {"material-color": 1}})
+        self.assertEqual(json.loads((self.repo.lists / "mobile.json").read_text()),
+                         {f"{MOBILE}/b.dart": {"font-size": 1}})
         code, output = self.repo.run("--init")
         self.assertEqual(code, 1)
         self.assertIn("already exists", output)
+
+    def test_one_area_can_start_its_list_while_the_other_has_none(self):
+        self.repo.write(f"{DESKTOP}/a.dart", "final a = Colors.red;\n")
+        self.repo.write(f"{MOBILE}/b.dart", "final b = TextStyle(fontSize: 17);\n")
+        self.assertEqual(self.repo.run("--init", "--only", MOBILE)[0], 0)
+        self.assertFalse((self.repo.lists / "desktop.json").exists())
+        self.assertEqual(self.repo.run("--only", MOBILE), (0, ""))
 
     def test_a_missing_allowlist_fails_instead_of_passing_everything(self):
         self.repo.write(f"{DESKTOP}/a.dart", "final a = AppPalette.accent;\n")
         code, output = self.repo.run()
         self.assertEqual(code, 1)
         self.assertIn("--init", output)
+
+
+class AgainstBaseTest(unittest.TestCase):
+    """--against: an allowlist may only record less than on the base branch."""
+
+    def setUp(self):
+        self.repo = Repo()
+        self.addCleanup(self.repo.close)
+        self.repo.git("init", "-q")
+        self.repo.git("config", "user.email", "t@example.com")
+        self.repo.git("config", "user.name", "t")
+        self.repo.git("config", "commit.gpgsign", "false")
+
+    def base(self, entries, areas=("desktop",)):
+        self.repo.allow(entries, areas)
+        self.repo.write("README", "base\n")
+        self.repo.git("add", "-A")
+        self.repo.git("commit", "-q", "-m", "base")
+
+    def test_a_raised_count_fails_naming_the_file_and_rule(self):
+        self.base({f"{DESKTOP}/a.dart": {"material-color": 2}})
+        self.repo.allow({f"{DESKTOP}/a.dart": {"material-color": 3}}, ("desktop",))
+        code, output = self.repo.run("--against", "HEAD")
+        self.assertEqual(code, 1)
+        self.assertIn(f"scripts/ui-style-allowlist/desktop.json: {DESKTOP}/a.dart: material-color 3, base 2", output)
+
+    def test_a_file_or_rule_the_base_did_not_list_fails(self):
+        self.base({f"{DESKTOP}/a.dart": {"material-color": 2}})
+        self.repo.allow({f"{DESKTOP}/a.dart": {"material-color": 2, "font-size": 1},
+                         f"{DESKTOP}/new.dart": {"hex-color": 1}}, ("desktop",))
+        code, output = self.repo.run("--against", "HEAD")
+        self.assertEqual(code, 1)
+        self.assertIn(f"{DESKTOP}/a.dart: font-size 1, base 0", output)
+        self.assertIn(f"{DESKTOP}/new.dart: hex-color 1, base 0", output)
+
+    def test_equal_or_lower_counts_pass(self):
+        self.base({f"{DESKTOP}/a.dart": {"material-color": 2}, f"{DESKTOP}/b.dart": {"hex-color": 1}})
+        self.repo.allow({f"{DESKTOP}/a.dart": {"material-color": 1}}, ("desktop",))
+        self.assertEqual(self.repo.run("--against", "HEAD"), (0, ""))
+
+    def test_an_areas_first_list_passes(self):
+        self.base({f"{DESKTOP}/a.dart": {"material-color": 2}})
+        self.repo.allow({f"{MOBILE}/b.dart": {"font-size": 9}}, ("mobile",))
+        self.assertEqual(self.repo.run("--against", "HEAD"), (0, ""))
 
 
 if __name__ == "__main__":

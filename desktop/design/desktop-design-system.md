@@ -328,7 +328,7 @@ Deliberate differences from Desktop, and only these:
   card radius (12).
 
 The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
-with the same rules and allowlist as Desktop's Swarm code.
+with the same rules as Desktop's Swarm code and an allowlist of its own.
 
 ## Surface families
 
@@ -583,7 +583,9 @@ UI checklist (desktop/design/desktop-design-system.md)
 than transparent, numeric `fontSize`, `EdgeInsets` with a number, or numeric
 `BorderRadius.circular` outside theme folders. Fix the call site with a role;
 when a count falls, run `python3 scripts/check-ui-style.py --update` and commit
-the smaller allowlist. The update never raises a count.
+the smaller allowlist. Each area keeps its list in
+`scripts/ui-style-allowlist/<area>.json`. The update never raises a count, and a
+pull request whose allowlist records more than its base branch fails.
 
 ## Standard of finish
 

@@ -7,18 +7,22 @@ a Color(0x…) literal, a Material Colors.<name> other than transparent, a
 numeric fontSize, an EdgeInsets with a number in it, and a numeric
 BorderRadius.circular. Theme folders own those numbers and are not scanned.
 
-scripts/ui-style-allowlist.json holds the offenders that existed when the check
-began, as counts per file and rule. A count above its allowance fails; one below
-it fails too, until --update writes the smaller list, so the list only shrinks.
+scripts/ui-style-allowlist/<area>.json holds the offenders that existed when an
+area's check began, as counts per file and rule. A count above its allowance
+fails; one below it fails too, until --update writes the smaller list. --against
+fails when an allowlist records more than the same file on the base branch, so
+the lists only shrink.
 """
 import argparse
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
-ROOTS = ("desktop/lib/super_tabs", "mobile/lib/swarm")
-ALLOWLIST = Path("scripts/ui-style-allowlist.json")
+# Each scanned folder and the allowlist file of its area.
+ROOTS = {"desktop/lib/super_tabs": "desktop", "mobile/lib/swarm": "mobile"}
+ALLOWLISTS = Path("scripts/ui-style-allowlist")
 RULES = ("hex-color", "material-color", "font-size", "edge-insets", "border-radius")
 
 NUMBER = r"\d+(?:\.\d+)?"
@@ -151,19 +155,23 @@ def scan(root, roots, lines=None):
     return counts
 
 
-def within(name, roots):
-    return any(name.startswith(prefix.rstrip("/") + "/") for prefix in roots)
+def within(name, root):
+    return name.startswith(root.rstrip("/") + "/")
 
 
-def differences(counts, allowed, roots):
-    """(file, rule, count, allowance) wherever the two disagree, for files under roots."""
+def differences(counts, allowed):
+    """(file, rule, count, allowance) wherever the two disagree."""
     out = []
-    for name in sorted(set(counts) | {name for name in allowed if within(name, roots)}):
+    for name in sorted(set(counts) | set(allowed)):
         have, limit = counts.get(name, {}), allowed.get(name, {})
         for rule in RULES:
             if have.get(rule, 0) != limit.get(rule, 0):
                 out.append((name, rule, have.get(rule, 0), limit.get(rule, 0)))
     return out
+
+
+def allowlist_file(name):
+    return ALLOWLISTS / f"{ROOTS[name]}.json"
 
 
 def write_allowlist(path, counts):
@@ -173,32 +181,73 @@ def write_allowlist(path, counts):
     path.write_text(json.dumps(ordered, indent=2) + "\n")
 
 
+def raised_since(root, ref):
+    """(allowlist, file, rule, count, base count) where an allowlist records more than at ref."""
+    raised = []
+    for name in ROOTS:
+        relative = allowlist_file(name)
+        path = root / relative
+        if not path.exists():
+            continue
+        shown = subprocess.run(["git", "show", f"{ref}:{relative.as_posix()}"], cwd=root,
+                               capture_output=True, text=True)
+        if shown.returncode != 0:
+            # The area's first allowlist: today's offenders, recorded once.
+            continue
+        now, base = json.loads(path.read_text()), json.loads(shown.stdout)
+        for file in sorted(now):
+            for rule in RULES:
+                count, before = now[file].get(rule, 0), base.get(file, {}).get(rule, 0)
+                if count > before:
+                    raised.append((relative.as_posix(), file, rule, count, before))
+    return raised
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1], help="repository root")
-    parser.add_argument("--only", action="append", choices=ROOTS, help="check only this folder (repeatable)")
-    parser.add_argument("--update", action="store_true", help="shrink the allowlist to today's counts; never raises one")
-    parser.add_argument("--init", action="store_true", help="write the first allowlist from today's offenders")
+    parser.add_argument("--only", action="append", choices=list(ROOTS), help="check only this folder (repeatable)")
+    parser.add_argument("--update", action="store_true", help="shrink the allowlists to today's counts; never raises one")
+    parser.add_argument("--init", action="store_true", help="write a folder's first allowlist from today's offenders")
+    parser.add_argument("--against", metavar="REF", help="fail if an allowlist records more than at this base revision")
     args = parser.parse_args(argv)
-    # A folder this branch does not have yet keeps its entries for the branch that does.
+
+    if args.against:
+        raised = raised_since(args.root, args.against)
+        if raised:
+            print(f"An allowlist grew since {args.against}; fix the call sites instead:", file=sys.stderr)
+            for allowlist, file, rule, count, before in raised:
+                print(f"  {allowlist}: {file}: {rule} {count}, base {before}", file=sys.stderr)
+            return 1
+        return 0
+
+    # A folder this branch does not have is not checked; its area's list waits for it.
     roots = [name for name in args.only or ROOTS if (args.root / name).is_dir()]
-    allowlist = args.root / ALLOWLIST
     lines = []
     counts = scan(args.root, roots, lines)
 
     if args.init:
-        if allowlist.exists():
-            print(f"{ALLOWLIST} already exists; use --update to shrink it", file=sys.stderr)
-            return 1
-        write_allowlist(allowlist, counts)
-        print(f"wrote {ALLOWLIST}: {sum(sum(c.values()) for c in counts.values())} offenders in {len(counts)} files")
+        for name in roots:
+            path = args.root / allowlist_file(name)
+            if path.exists():
+                print(f"{allowlist_file(name)} already exists; use --update to shrink it", file=sys.stderr)
+                return 1
+            mine = {file: rules for file, rules in counts.items() if within(file, name)}
+            write_allowlist(path, mine)
+            print(f"wrote {allowlist_file(name)}: {sum(sum(c.values()) for c in mine.values())} offenders "
+                  f"in {len(mine)} files")
         return 0
-    if not allowlist.exists():
-        print(f"{ALLOWLIST} is missing; create it once with scripts/check-ui-style.py --init", file=sys.stderr)
-        return 1
 
-    allowed = json.loads(allowlist.read_text())
-    diffs = differences(counts, allowed, roots)
+    allowed = {}
+    for name in roots:
+        path = args.root / allowlist_file(name)
+        if not path.exists():
+            print(f"{allowlist_file(name)} is missing; create it once with "
+                  f"scripts/check-ui-style.py --init --only {name}", file=sys.stderr)
+            return 1
+        allowed.update({file: rules for file, rules in json.loads(path.read_text()).items() if within(file, name)})
+
+    diffs = differences(counts, allowed)
     grown = [diff for diff in diffs if diff[2] > diff[3]]
     shrunk = [diff for diff in diffs if diff[2] < diff[3]]
     if grown:
@@ -214,10 +263,10 @@ def main(argv=None):
             print("--update never raises an allowance; nothing was written.", file=sys.stderr)
         return 1
     if shrunk and args.update:
-        kept = {name: dict(rules) for name, rules in allowed.items() if not within(name, roots)}
-        kept.update(counts)
-        write_allowlist(allowlist, kept)
-        print(f"shrank {ALLOWLIST}: " + ", ".join(f"{name} {rule} {limit}→{have}" for name, rule, have, limit in shrunk))
+        for name in roots:
+            write_allowlist(args.root / allowlist_file(name),
+                            {file: rules for file, rules in counts.items() if within(file, name)})
+        print("shrank: " + ", ".join(f"{name} {rule} {limit}→{have}" for name, rule, have, limit in shrunk))
         return 0
     if shrunk:
         print("Fewer hard-coded styles than the allowlist records. Shrink it with "
