@@ -167,6 +167,13 @@ class SuperTabGlanceMachine {
   int get busy => agents.where((a) => a.$2.busy).length;
 }
 
+/// One thing that looks wrong, and the agents it is about, which the glance folds under it.
+class SuperTabGlanceWarning {
+  const SuperTabGlanceWarning(this.text, [this.names = const []]);
+  final String text;
+  final List<String> names;
+}
+
 class SuperTabTeamGlance {
   SuperTabTeamGlance._(this.machines, this.models, this.warnings);
 
@@ -174,7 +181,7 @@ class SuperTabTeamGlance {
 
   /// "opus high" and how many agents run it, most first.
   final List<(String, int)> models;
-  final List<String> warnings;
+  final List<SuperTabGlanceWarning> warnings;
 
   factory SuperTabTeamGlance.of(
     SuperTabController c,
@@ -215,7 +222,8 @@ class SuperTabTeamGlance {
       );
     }
     final models = <String, int>{};
-    final warnings = <String>[];
+    final warnings = <SuperTabGlanceWarning>[];
+    final efforts = <(String, String, String)>[];
     for (final agent in snapshot.agents) {
       final info = SuperTabAgentInfo(c, app, agent);
       final glance = superTabAgentGlance(info, now: at);
@@ -233,19 +241,51 @@ class SuperTabTeamGlance {
       if (glance.recordedEffort case final recorded?
           when glance.requestedEffort != null &&
               recorded != glance.requestedEffort) {
+        efforts.add((name, recorded, glance.requestedEffort!));
+      }
+    }
+    // One line per offline machine and one for every effort that differs, not one per agent (Ken, 2026-10-28).
+    for (final machine in machines.values) {
+      if (machine.status != SuperTabMachineStatus.offline) continue;
+      final busy = [
+        for (final (name, agent) in machine.agents)
+          if (agent.busy) name,
+      ];
+      if (busy.length == 1) {
         warnings.add(
-          '$name runs effort $recorded; its start asked for ${glance.requestedEffort}.',
+          SuperTabGlanceWarning(
+            '${busy.single} is busy on ${machine.name}, which is offline.',
+          ),
+        );
+      } else if (busy.isNotEmpty) {
+        warnings.add(
+          SuperTabGlanceWarning(
+            '${busy.length} agents are busy on ${machine.name}, which is offline.',
+            busy,
+          ),
         );
       }
     }
-    for (final machine in machines.values) {
-      if (machine.status != SuperTabMachineStatus.offline) continue;
-      for (final (name, _) in machine.agents.where((a) => a.$2.busy)) {
-        warnings.add('$name is busy on ${machine.name}, which is offline.');
-      }
+    if (efforts.length == 1) {
+      final (name, recorded, requested) = efforts.single;
+      warnings.add(
+        SuperTabGlanceWarning(
+          '$name runs at $recorded effort; it was started at $requested.',
+        ),
+      );
+    } else if (efforts.isNotEmpty) {
+      warnings.add(
+        SuperTabGlanceWarning(
+          '${efforts.length} agents run at another effort than they were started with.',
+          [
+            for (final (name, recorded, requested) in efforts)
+              '$name ($recorded, started at $requested)',
+          ],
+        ),
+      );
     }
     if (_pileUp(machines.values.toList()) case final warning?) {
-      warnings.insert(0, warning);
+      warnings.insert(0, SuperTabGlanceWarning(warning));
     }
     return SuperTabTeamGlance._(
       machines.values.toList(),
