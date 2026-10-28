@@ -32,6 +32,7 @@ const EXPIRY: Array<[string, string, Record<string, number>, number]> = [
   ...['user_daily_presence', 'user_daily_client_presence', 'user_daily_remote_usage', 'user_daily_device_presence', 'machine_daily_presence',
     'agent_daily_presence', 'analytics_daily_buckets', 'analytics_daily_machines'].map(c => [c, 'product_usage_expiry', { dayUtc: 1 }, 35 * DAY] as [string, string, Record<string, number>, number]),
   ['product_usage_activity', 'product_usage_expiry', { expiresAt: 1 }, 0],
+  ['harness_sessions', 'harness_session_expiry', { expiresAt: 1 }, 30 * DAY],
 ]
 
 type Profiled = { ts: Date; ns: string; errCode?: number; command?: Record<string, unknown>; locks?: Record<string, { acquireCount?: Record<string, number> }> }

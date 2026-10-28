@@ -25,6 +25,7 @@ import { digestDue, digestMessageId, digestRequest, digestSince } from './digest
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
+import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
@@ -142,15 +143,24 @@ export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {})
  */
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
+  let hintless = false, staleIndex: unknown = null
   return retryTransient(async () => {
     let committed: Array<() => void> = []
-    // The cache's stamps are bumped, and awaited, once the attempt commits (cache.ts); after-commit work runs after them.
-    const result = await swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
-    for (const callback of committed) {
-      try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
+    const drops = listingDrops()
+    try {
+      // The cache's stamps are bumped, and awaited, once the attempt commits (cache.ts); after-commit work runs after them.
+      const run = () => swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
+      const result = await (hintless ? withoutHints(run) : run())
+      for (const callback of committed) {
+        try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
+      }
+      return result
+    } catch (error) {
+      // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next attempts name none.
+      if (listingDrops() !== drops) { hintless = true; staleIndex = error }
+      throw error
     }
-    return result
-  }, sleep)
+  }, sleep, error => error === staleIndex)
 }
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
 /** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
@@ -1652,7 +1662,8 @@ export class SuperTabStore {
   /** The caller's own tags in this Swarm, newest first: still waiting, or answered and marked done. */
   async mentions(user: AuthUser, tabId: string, state: 'waiting' | 'earlier') {
     this.personOnly(user)
-    const { state: tab } = await this.readLoad(user, tabId, { allGroups: true })
+    // Not every quiet conversation: listMentions reads the quiet ones its tags are in by id (mentions.ts readable).
+    const { state: tab } = await this.readLoad(user, tabId)
     await this.actor(this.db, user, tab)
     return { mentions: await listMentions(this.db, tabId, tab, { kind: 'person', userId: user.sub, email: user.email }, this.now(), state === 'waiting') }
   }
@@ -1927,8 +1938,8 @@ export class SuperTabStore {
       // out: it only gets marked, or every poll would read for it again and fail on the duplicate (prod slow log, 2026-10-28).
       const sentAlready = !!due && !!await tx.superTabMessage.findUnique({ where: { id: digestMessageId(tabId, led!.id, due) }, select: { id: true } })
       if (led && due && !sentAlready) {
-        const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
-          OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
+        const finished = await groupsBy(tx, 'project', [{ $match: quietSince(tabId, led.id, digestSince(led, this.now())) },
+          { $project: { _id: 0, key: 1 } }]) as unknown as Array<{ key: string }>
         // A decision waits in its conversation even once that conversation went quiet.
         asked = await waitingInProject(tx, tabId, led.id)
         const groupIds = [...new Set([...finished.map(g => g.key), ...asked.map(d => d.conversationId)])]
@@ -1945,8 +1956,8 @@ export class SuperTabStore {
       const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
       // The Lead's poll stops its project's idle workers too (tidy.ts): it is where what waits for each agent is known.
       const reviewers = led ? state.agents.filter(a => agentRole(a) === 'reviewer' && a.workDecision !== 'stop' && agentProjectId(state, a) === led.id).map(a => a.id) : []
-      const asleep = reviewers.length ? (await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, agentIds: { hasSome: reviewers } },
-        select: { data: true } })).map(row => row.data as unknown as Conversation) : []
+      const asleep = reviewers.length ? (await groupsBy(tx, 'agents', [{ $match: { tabId, deleted: false, dormant: true, agentIds: { $in: reviewers } } },
+        { $project: { _id: 0, data: 1 } }])).map(row => row.data as unknown as Conversation) : []
       const idle = led ? stopIdleWorkers(state, led.id, this.now(), new Set((await tx.superTabDelivery.findMany({
         where: { tabId, status: { in: [...OPEN_DELIVERY] } }, select: { agentId: true }, distinct: ['agentId'] })).map(d => d.agentId)), asleep) : []
       written.push(...idle)

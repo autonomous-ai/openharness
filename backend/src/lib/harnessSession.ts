@@ -7,6 +7,15 @@ import { TEAM_CONVERTED_FRAME } from './teamSession.js'
 import { userService } from '../services/UserService.js'
 import { storedAutonomousEnvironment, type AutonomousEnvironment } from './autonomousEnvironment.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
+import type { SsoClientId } from './sso.js'
+import {
+  endedSessionData,
+  recheckSsoSession,
+  ssoSessionData,
+  ssoSignInAgainError,
+  type SsoGrant,
+  type SsoSessionRequest,
+} from './ssoSession.js'
 import {
   HARNESS_ACCESS_PREFIX,
   HARNESS_HANDOFF_PREFIX,
@@ -195,8 +204,25 @@ async function computerHeldByAnotherSignIn(userId: string, computerId: string): 
   return rows.some((row) => row.sessionKind !== 'team')
 }
 
+/**
+ * A session for [userId] that their SSO sign-in [grant] backs (lib/ssoSession.ts): what the CLI and Desktop trade an SSO
+ * sign-in for. It names no computer, whatever its kind. Null when the account is gone; throws when it cannot be stored.
+ */
+export async function createSsoSession(
+  userId: string,
+  { kind, label }: SsoSessionRequest,
+  grant: SsoGrant,
+  autonomousEnv: AutonomousEnvironment,
+  clientId?: SsoClientId,
+): Promise<HarnessTokens | null> {
+  return createSession(userId, label, kind, undefined, undefined, ssoSessionData(grant, autonomousEnv, clientId))
+}
+
 /** A new session for [userId]: a refresh token (stored hashed) and its first access token. */
-async function createSession(userId: string, label: string, kind: HarnessSessionKind, computerId?: string, hostMachineId?: string): Promise<HarnessTokens | null> {
+async function createSession(
+  userId: string, label: string, kind: HarnessSessionKind, computerId?: string, hostMachineId?: string,
+  sso?: ReturnType<typeof ssoSessionData>,
+): Promise<HarnessTokens | null> {
   const user = await userService.get(userId)
   if (!user) return null
   const refreshToken = newHarnessToken(kind === 'team' ? HARNESS_TEAM_REFRESH_PREFIX : HARNESS_REFRESH_PREFIX)
@@ -210,6 +236,7 @@ async function createSession(userId: string, label: string, kind: HarnessSession
       ...(kind !== 'viewer' && computerId ? { computerId } : {}),
       // A team session's Mac, which its machine records (MachineService.resolveForTeamComputer).
       ...(kind === 'team' && hostMachineId ? { hostMachineId } : {}),
+      ...(sso ?? {}),
       expiresAt: sessionExpiry(),
     },
   })
@@ -224,7 +251,9 @@ async function createSession(userId: string, label: string, kind: HarnessSession
 
 /**
  * A new access token for the session [refreshToken] belongs to, or null when that session is gone
- * (unknown, revoked, idle past its lifetime, or its user deleted) — the caller's 401.
+ * (unknown, revoked, idle past its lifetime, its user deleted, or its SSO sign-in ended) — the caller's 401.
+ * A session an SSO sign-in backs is re-checked with SSO first (lib/ssoSession.ts); one SSO has not confirmed
+ * within its grace throws `SIGN_IN_AGAIN` — shown as "Sign in again", the session itself kept.
  *
  * The refresh token is not rotated. Rotation is only as good as its reuse detection, and a phone
  * that loses the response to a refresh would then present the old token and be signed out for a
@@ -240,10 +269,15 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
   if ((session.kind === 'team') !== isTeamRefreshToken(refreshToken)) return null
   const user = await userService.get(session.userId)
   if (!user) return null
-  await prisma.harnessSession.update({
-    where: { id: session.id },
+  const sso = await recheckSsoSession(session)
+  if (sso === 'ended') return null
+  if (sso === 'sign-in-again') throw ssoSignInAgainError()
+  // Only a session still live moves on: one signed out meanwhile stays ended, and gets no new access token.
+  const { count } = await prisma.harnessSession.updateMany({
+    where: { id: session.id, ...notRevoked },
     data: { lastUsedAt: new Date(), expiresAt: sessionExpiry() },
   })
+  if (count === 0) return null
   return {
     token: await issueAccess(session.id, session.userId, session.kind === 'team' ? 'team' : 'viewer'),
     expiresIn: HARNESS_ACCESS_TTL_SEC,
@@ -251,12 +285,13 @@ export async function refreshHarnessSession(refreshToken: string): Promise<Harne
   }
 }
 
-/** Sign out: the session's refresh token stops working, and so, at once, does its access token. */
+/** Sign out: the session's refresh token stops working, and so, at once, does its access token. Any SSO
+ *  tokens it held are deleted. */
 export async function revokeHarnessSession(refreshToken: string): Promise<void> {
   if (!isHarnessRefreshToken(refreshToken)) return
   await prisma.harnessSession.updateMany({
     where: { refreshHash: harnessTokenHash(refreshToken), ...notRevoked },
-    data: { revokedAt: new Date() },
+    data: endedSessionData(),
   })
 }
 
@@ -321,7 +356,7 @@ export async function authenticateHarnessAccessToken(token: string): Promise<Aut
 
 /** Revoke the session with this id (a device removed from the account's device key log). */
 export async function revokeHarnessSessionById(sessionId: string, userId: string): Promise<void> {
-  await prisma.harnessSession.updateMany({ where: { id: sessionId, userId, ...notRevoked }, data: { revokedAt: new Date() } })
+  await prisma.harnessSession.updateMany({ where: { id: sessionId, userId, ...notRevoked }, data: endedSessionData() })
 }
 
 // ── Sign in a computer by scanning its QR with a signed-in phone ──────────────────────────────────

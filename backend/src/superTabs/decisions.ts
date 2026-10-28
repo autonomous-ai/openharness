@@ -11,6 +11,7 @@ import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, t
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
+import { groupsBy } from './parts/indexed.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
@@ -200,10 +201,9 @@ async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids:
   const found = new Map(state.conversations.filter(c => named.has(c.id)).map(c => [c.id, c]))
   const missing = [...named].filter(id => !found.has(id))
   if (!missing.length) return found
-  const rows = only
-    ? await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: missing } } },
-      { $project: { _id: 0, key: 1, ...Object.fromEntries(only.map(field => [`data.${field}`, 1])) } }] }) as unknown as Array<{ key: string; data: unknown }>
-    : await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })
+  // By id through its index (parts/indexed.ts): a person's read counts these on each poll.
+  const rows = await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } },
+    { $project: { _id: 0, key: 1, ...only ? Object.fromEntries(only.map(field => [`data.${field}`, 1])) : { data: 1 } } }]) as unknown as Array<{ key: string; data: unknown }>
   for (const row of rows) found.set(row.key, row.data as Conversation)
   return found
 }

@@ -44,6 +44,7 @@ const HAND_MADE: Array<[string, Record<string, unknown>]> = [
     .map(c => [c, { key: { dayUtc: 1 }, name: 'product_usage_expiry', expireAfterSeconds: 35 * DAY }] as [string, Record<string, unknown>]),
   ['product_usage_activity', { key: { expiresAt: 1 }, name: 'product_usage_expiry', expireAfterSeconds: 0 }],
   ['product_usage_activity', { key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true }],
+  ['harness_sessions', { key: { expiresAt: 1 }, name: 'harness_session_expiry', expireAfterSeconds: 30 * DAY }],
   ['SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: 120 }],
   ['SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: 30 * DAY }],
   ...['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress'].map(c => [c, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] as [string, Record<string, unknown>]),
@@ -173,7 +174,7 @@ try {
   const undeclared = join(folder, 'undeclared.prisma')
   const declared = /^ *\/\/\/[^\n]*Declared so db push keeps[^\n]*\n *@@index\(\[\w+\], map: "\w+"\)\n/gm
   const target = await readFile(values.to, 'utf8')
-  if ((target.match(declared) ?? []).length !== 21) throw new Error(`--to declares ${(target.match(declared) ?? []).length} expiry indexes, not 21`)
+  if ((target.match(declared) ?? []).length !== 22) throw new Error(`--to declares ${(target.match(declared) ?? []).length} expiry indexes, not 22`)
   await writeFile(undeclared, target.replace(declared, ''))
   const reports = [
     `# Schema step under Swarm reads: ${GROUPS} groups, ${STARTS} starts in ${SWARMS} Swarms, ${READERS} readers` +
