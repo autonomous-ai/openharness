@@ -138,6 +138,7 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work
@@ -255,8 +256,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       return page(`You can't push to ${named.fullName}`, 'So you can\'t approve it for this Swarm. Someone who can push to it can.', 403)
     }
     await approvals.approve(request, seen.login)
-    return page(`${named.fullName} approved`, request.scope === 'swarm'
-      ? 'Every project in this Swarm can now use it. You can go back to Harness.' : 'This project can now use it. You can go back to Harness.')
+    // Named, so the person knows which project it was for (local Team account run, 2026-10-28: 'This project can now use it').
+    const where = request.scope === 'swarm' ? 'every project in this Swarm'
+      : await store.projectNameFor(request.userId, request.autonomousEnv as AuthUser['autonomousEnv'], request.tabId, request.projectId).catch(() => null) ?? 'this project'
+    return page(`${named.fullName} approved`, `Teammates' agents in ${where} can now push to it. You can go back to Harness.`)
   })
   app.get<{ Params: z.infer<typeof machineParams> }>('/api/super-tabs/:tabId/machines/:machineId/removal', { preHandler: validateParams(machineParams) },
     (req, reply) => respond(reply, () => store.machineRemoval(req.user!, req.params.tabId, req.params.machineId)))

@@ -56,7 +56,8 @@ async function fresh(options: { github?: boolean; approveAll?: boolean; signIn?:
   const log = { warn: vi.fn() }
   const tokens = new GitHubTokens(fakeApp(key.privateKey, github), new MemoryTokenCache(), { log, secret: randomBytes(32) })
   const releases: Promise<void>[] = []
-  const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) } })
+  const store = new SuperTabStore(db, Date.now, null, { workEnded: (tab, ended) => { releases.push(tokens.release(tab, ended)) },
+    workStarted: (tab, started) => { releases.push(tokens.resume(tab, started)) } })
   const app: FastifyInstance = Fastify()
   app.setErrorHandler(errorHandler)
   app.addHook('onRequest', async (request, reply) => {
@@ -312,6 +313,11 @@ describe('a queued start\'s preparation token', () => {
     const { authorizeUrl, installUrl } = asked.json().data as { authorizeUrl: string; installUrl: string }
     expect(installUrl).toMatch(/\/installations\/new\?state=/)
     const state = new URL(authorizeUrl).searchParams.get('state')!
+    // The state is signed, not sealed, and goes to GitHub in the address: ids and the repository only, never the project's
+    // name (privacy review of #1980).
+    const carried = JSON.parse(Buffer.from(state.split('.')[0]!, 'base64url').toString())
+    expect(Object.keys(carried).sort()).toEqual(['autonomousEnv', 'exp', 'projectId', 'repository', 'scope', 'tabId', 'userId'])
+    expect(decodeURIComponent(authorizeUrl + installUrl)).not.toContain('Pool')
     // Someone who cannot push is told so, and nothing is approved.
     push = false
     const refused = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
@@ -321,6 +327,8 @@ describe('a queued start\'s preparation token', () => {
     const done = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })
     expect(done.statusCode).toBe(200)
     expect(done.body).toContain('example/app approved')
+    // The page names the project it was approved for (local Team account run, 2026-10-28: 'This project can now use it').
+    expect(done.body).toContain('Teammates&#39; agents in Pool can now push to it.')
     expect(env.approved).toEqual([expect.objectContaining({ tabId: tab, projectId: 'lead', repository: 'example/app', scope: 'project', login: 'olive' })])
     expect((await prepare(env, tab, startId)).statusCode).toBe(200)
     // A forged or missing state, or an installation without a sign-in, approves nothing.
@@ -380,6 +388,27 @@ describe('a queued start\'s preparation token', () => {
     expect(await read(host, docs)).toMatchObject({ state: 'not-approved', approvedFor: ['Pilot'] })
     // An approved project says nothing of the others.
     expect(await read(owner, 'lead')).not.toHaveProperty('approvedFor')
+  })
+
+  // Security re-check of #1976: a task lost to a usage limit keeps its id when it resumes, and its loss marked it ended,
+  // so after resuming it was refused GitHub tokens for 70 minutes.
+  it('gives a task resumed after a usage limit a fresh token, while the one from before the loss stays revoked', async () => {
+    const env = await fresh()
+    const { tab, group, worker, assignmentId } = await working(env)
+    const before = await ask(env, tab, worker)
+    expect(before.statusCode, before.body).toBe(200)
+    const resetAt = new Date(Date.now() + 1500).toISOString()
+    await env.run(tab, { type: 'agent.alert', agentId: worker, alert: 'limit', active: true, resetAt } as Command, host, worker)
+    await env.settled()
+    expect(env.github.revoked).toContain(before.json().data.token)
+    const lostAt = (await env.store.read(owner, tab)).state.conversations.find(c => c.id === group)!.assignment!.lost!.at
+    await new Promise(done => setTimeout(done, Date.parse(resetAt) - Date.now() + 50))
+    await env.run(tab, { type: 'work.resume', conversationId: group, assignmentId, lostAt } as Command, host, worker)
+    await env.settled()
+    const after = await ask(env, tab, worker)
+    expect(after.statusCode, after.body).toBe(200)
+    expect(after.json().data.token).not.toBe(before.json().data.token)
+    expect(env.github.issued.has(before.json().data.token)).toBe(false)
   })
 
   it('says when the server cannot approve, and refuses a project not on GitHub', async () => {
