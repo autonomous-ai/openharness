@@ -222,6 +222,8 @@ describe('the harness shares list as permissions change', () => {
       const alone = new Set<string>()
       for (const share of rows) if (await store.mayOpenShare(as, share)) alone.add(share.id)
       expect(mine.filter(id => listed.has(id)).sort(), `${as.email}: the list and each share alone`).toEqual([...alone].sort())
+      // The store's answer too, before the route's own machine filter could hide a share it let through.
+      expect((await store.openableShares(as, rows)).map(share => share.id).sort(), `${as.email}: the store's batch and each share alone`).toEqual([...alone].sort())
       return mine.filter(id => listed.has(id)).map(id => shares[id]!.name).sort().join('')
     }
     return { tab, run, agents, sees, shared }
