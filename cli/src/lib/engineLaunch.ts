@@ -12,7 +12,7 @@ import { env } from '../config/env.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { screenArgs, screenEnvPrefix, screenPrelude, screenVariables } from '../engines/kit/launchScreen.js'
-import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { isTerminalEngine, PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { windowsEngineArgv } from './windows/launch.js'
@@ -20,7 +20,7 @@ import { nativeLaunchConfirmed, windowsHeldPaneArgv, windowsStartupArgs } from '
 import { defaultWindowsShell } from './windows/shell.js'
 import { engineBin } from './engineBin.js'
 import { launchModelArgs, type LaunchModel } from './launchModel.js'
-import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
+import { engineInstallPaths, engineInstallRecipe, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
 import { engineLabel } from './agentNames.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
@@ -129,7 +129,10 @@ export const MAX_FIRST_PROMPT_CHARS = 2000
 export class FirstPromptUnsupportedError extends Error {
   readonly code = 'PROMPT_UNSUPPORTED' as const
   constructor(readonly engine: AgentEngine) {
-    super(`${engine} has no documented way to start with a first prompt, so the agent was not created.`)
+    // What to do instead, not only what is missing (prompt_unsupported, Oct 21–27).
+    const takers = PROCESS_ENGINES.filter(supportsFirstPrompt).map(engineLabel)
+    super(`${engineLabel(engine)} cannot start with a first message. Start it without one and type the message once it opens, `
+      + `or choose ${takers.slice(0, -1).join(', ')} or ${takers.at(-1)} to start with one.`)
     this.name = 'FirstPromptUnsupportedError'
   }
 }
@@ -1560,10 +1563,13 @@ export async function refusePermissionFlagIfUnsupported(
   }
   const flag = native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
   if (!flag) return null
+  const update = engineInstallRecipe(engine)?.command
   return {
     error: 'CODEX_CLI_TOO_OLD',
     detail: `The ${engine} CLI on this machine does not support ${flag}, which Harness uses for this permission mode. `
-      + `Update ${engine} and try again${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
+      // How to update, not only that it is needed (codex_cli_too_old, 2–4 a day). The install line fetches the latest.
+      + `Update ${engine}${update ? ` by running ${update}, then try again` : ' and try again'}`
+      + `${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
   }
 }
 
