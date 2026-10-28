@@ -511,6 +511,49 @@ void main() {
       expect(store.reviews['autonomous/marp']!.mine!.id, 'mine');
       expect(store.reviewsLoading, isEmpty);
     });
+
+    test('remove re-reads reviews while a load is pending', () async {
+      final api = _Held();
+      final store = StoreController(api);
+      addTearDown(store.dispose);
+      final opened = store.loadReviews('autonomous/marp');
+
+      final removed = store.remove('autonomous/marp');
+      await pumpEventQueue();
+      // Asked before the delete, the first read still has the review.
+      api.reads.first.complete(api.page(mine: api.posted));
+      await pumpEventQueue();
+      expect(api.reads, hasLength(2), reason: 'the delete is read back');
+      expect(store.reviews['autonomous/marp'], isNull);
+
+      api.reads.last.complete(api.page());
+      expect(await removed, isNull);
+      await opened;
+      expect(store.reviews['autonomous/marp']!.mine, isNull);
+      expect(store.reviewsLoading, isEmpty);
+    });
+
+    test(
+      'a failed read from before the post gives way to the read-back',
+      () async {
+        final api = _Held();
+        final store = StoreController(api);
+        addTearDown(store.dispose);
+        final opened = store.loadReviews('autonomous/marp');
+
+        final posted = store.submit('autonomous/marp', rating: 5);
+        await pumpEventQueue();
+        api.reads.first.completeError(StateError('socket closed'));
+        await pumpEventQueue();
+        expect(api.reads, hasLength(2), reason: 'a failure is no read-back');
+
+        api.reads.last.complete(api.page(mine: api.posted));
+        expect(await posted, isNull);
+        await opened;
+        expect(store.reviewsError, isEmpty);
+        expect(store.reviews['autonomous/marp']!.mine!.id, 'mine');
+      },
+    );
   });
 }
 
