@@ -832,7 +832,10 @@ export class SuperTabStore {
         : hostMachineId && 'startId' in command
           ? await this.poolHostActor(tx, user, original, hostMachineId, command.startId)
           : await this.actor(tx, user, original, asAgentId, workspaceLeave && command.type === 'member.remove' && command.userId === user.sub && !asAgentId)
-      const receiptId = stableId(tabId, actorKey(actor), operationId)
+      // A Mac and its Harness Team account leave under one removal, and each host confirms its cleanup as the same person
+      // with the same operation (cli/src/superTabs/machines.ts runCleanup): each machine's confirmation is its own receipt.
+      const receiptId = command.type === 'machine.cleaned' ? stableId(tabId, actorKey(actor), operationId, command.machineId)
+        : stableId(tabId, actorKey(actor), operationId)
       const requestHash = hash(command)
       const prior = await tx.superTabOperation.findUnique({ where: { id: receiptId } })
       if (prior) {

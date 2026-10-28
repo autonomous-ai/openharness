@@ -543,4 +543,35 @@ describe('one machine: a Mac and its Harness Team account', () => {
       await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } })
     }
   })
+
+  // Diego's Mac, 2026-10-28: the Mac and its team account leave under one removal, and each host confirms its own cleanup
+  // as the same person with the same operation (cli/src/superTabs/machines.ts runCleanup). The Mac's confirmation, second,
+  // was refused as a reused operation on every retry, so the Mac stayed 'Cleaning up' for the day-long fallback.
+  it('leaves with its team account once both hosts confirmed their cleanup, the team account first', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: 'personal-mac' } })
+    onTestFinished(() => db.machine.update({ where: { machineId: 'team-mac' }, data: { hostMachineId: null } }).then(() => undefined))
+    const tab = (await store.create(owner, randomUUID(), 'Removed')).id
+    const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
+    await run(tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 3 }, person)
+    await run(tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'],
+      maxAgents: 1, ifMissing: true }, person)
+    // Both online, so both stay listed while their hosts clean up.
+    for (const [user, machineId] of [[person, 'personal-mac'], [team, 'team-mac']] as const) {
+      await store.observeMachine(user, tab, machineId, reading((await poolRows(store, user, machineId)).find(p => p.tabId === tab)!.machine.generation))
+    }
+    const removalId = String((await run(tab, { type: 'machine.remove', machineId: 'personal-mac' }, person)).result.removalId)
+    const listed = async () => (await store.read(person, tab)).state.machines!.filter(m => ['personal-mac', 'team-mac'].includes(m.machineId))
+      .map(m => [m.machineId, m.removal?.state])
+    expect(await listed()).toEqual([['personal-mac', 'cleaning'], ['team-mac', 'cleaning']])
+    const cleaned = (user: AuthUser, machineId: string) => store.execute(user, tab, { operationId: `machine-cleaned-${removalId}`,
+      command: { type: 'machine.cleaned', machineId, removalId } })
+    await cleaned(team, 'team-mac')
+    expect(await listed()).toEqual([['personal-mac', 'cleaning']])
+    await cleaned(person, 'personal-mac')
+    expect(await listed()).toEqual([])
+    // A host repeating its confirmation gets its own receipt back.
+    await expect(cleaned(person, 'personal-mac')).resolves.toBeDefined()
+    await expect(cleaned(team, 'team-mac')).resolves.toBeDefined()
+  })
 })
