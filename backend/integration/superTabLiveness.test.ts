@@ -7,7 +7,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
+import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/superTabs/store.js'
+import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
 import { stableId } from '../src/superTabs/model.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
@@ -592,7 +593,7 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     counted.ops.length = 0
     f.clock.now += 29_999
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
-    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
     counted.ops.length = 0
     f.clock.now += 1
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
@@ -623,15 +624,15 @@ describe('the delivery poll of an agent with nothing waiting', () => {
   // own full polls, so the one-row answer held only as often as a host met the same pod twice (stability roadmap 2.4).
   it('answers from one indexed read on another server once any server ran the full poll, when they share the memory', async () => {
     const counted = counting()
-    const shared = new Map<string, number>()
-    const polls = { get: async (key: string) => shared.get(key), set: async (key: string, at: number) => { shared.set(key, at) } }
+    const shared = new Map<string, Polled>()
+    const polls = { get: async (key: string) => shared.get(key), set: async (key: string, polled: Polled) => { shared.set(key, polled) } }
     const f = await swarm({ client: counted.client, hooks: { polls } })
     const other = new SuperTabStore(counted.client, () => f.clock.now, null, { polls })
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
     counted.ops.length = 0
     f.clock.now += 1_000
     expect(await other.deliveries(host, f.tab, f.lead)).toEqual([])
-    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
   })
 
   it('runs the full checked poll each time while the shared memory cannot be read or written, and still answers', async () => {
@@ -655,6 +656,122 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       await expect(f.timed.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
     }
+  })
+})
+
+// A delivery its host cannot type yet (a permission prompt, a draft, an idle wait) stays claimed and held, possibly for hours,
+// while the host polls each second (Diego, 10-28): the poll answers it from one indexed read while nothing it relied on moved.
+describe('the delivery poll of an agent with a held delivery', () => {
+  /** A person's message to the Lead, read by a full poll, claimed and held by its host. */
+  const held = async (f: Awaited<ReturnType<typeof swarm>>) => {
+    const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
+    const [row] = await f.timed.deliveries(host, f.tab, f.lead)
+    expect(row!.messageId).toBe(sent.result.messageId)
+    await f.timed.delivery(host, f.tab, f.lead, row!.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, f.lead, row!.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_user' })
+    return row!
+  }
+
+  it('answers the next poll from one indexed read, without loading the Swarm, and returns the held row', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const row = await held(f)
+    f.clock.now += 1_000
+    await f.timed.deliveries(host, f.tab, f.lead)
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    const rows = await f.timed.deliveries(host, f.tab, f.lead)
+    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
+    expect(rows.map(r => [r.id, r.status, r.holdReason])).toEqual([[row.id, 'claimed', 'team_waiting_user']])
+  })
+
+  it('answers a worker\'s held delivery from the same one read', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
+    const full = await f.timed.deliveries(host, f.tab, f.worker)
+    const row = full.find(r => r.messageId === sent.result.messageId)!
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, f.worker, row.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_draft' })
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    const rows = await f.timed.deliveries(host, f.tab, f.worker)
+    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
+    // Its assignment's delivery is open beside it, as the full poll found.
+    expect(rows.map(r => r.id)).toEqual(full.map(r => r.id))
+    expect(rows.find(r => r.id === row.id)!.holdReason).toBe('team_waiting_draft')
+  })
+
+  it('reads in full once another delivery arrives, and returns both', async () => {
+    const f = await swarm()
+    const row = await held(f)
+    f.clock.now += 1_000
+    const next = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And now?', replyTo: null, recipientIds: [] })
+    f.clock.now += 1_000
+    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.messageId)).toEqual([row.messageId, next.result.messageId])
+  })
+
+  // A Swarm write is what revokes a member, an agent or a conversation's audience: it moves the stamp the held answer was read at.
+  it('stops returning an agent\'s held delivery on the next poll once it leaves the conversation', async () => {
+    const f = await swarm()
+    const helper = await f.add(f.group, 'test-host', f.harness.other, 'Helper')
+    await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [helper] })
+    const [row] = await f.timed.deliveries(host, f.tab, helper)
+    await f.timed.delivery(host, f.tab, helper, row!.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, helper, row!.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_draft' })
+    f.clock.now += 1_000
+    await f.execute({ type: 'conversation.agent', conversationId: f.group, agentId: helper, present: false, lead: false })
+    f.clock.now += 1_000
+    expect(await f.timed.deliveries(host, f.tab, helper)).toEqual([])
+  })
+
+  it('reads in full after any Swarm write, even one that sends the agent nothing', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const row = await held(f)
+    f.clock.now += 1_000
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    counted.ops.length = 0
+    f.clock.now += 1_000
+    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).toEqual([row.id])
+    expect(counted.ops).toContain('SwarmGroup.aggregateRaw')
+  })
+
+  // What no Swarm write records (a machine share revoked, a machine gone, a Workspace left) is read again within 30 s.
+  it('checks its host\'s authority again 30 seconds after the last full poll', async () => {
+    const f = await swarm()
+    await held(f)
+    const lastFull = f.clock.now
+    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'lead-host' } })
+    await db.machineShare.update({ where: { machineId: 'lead-host' }, data: { emails: [] } })
+    try {
+      f.clock.now = lastFull + SWEEP_EVERY_MS
+      await expect(f.timed.deliveries(host, f.tab, f.lead)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
+    } finally {
+      await db.machineShare.update({ where: { machineId: 'lead-host' }, data: { emails: share.emails } })
+    }
+  })
+
+  it('never answers a team session from its person\'s held answer: the team session meets its own checks', async () => {
+    const f = await swarm()
+    await held(f)
+    f.clock.now += 1_000
+    const team: AuthUser = { ...host, harnessSessionId: 'team-elsewhere', harnessSessionKind: 'team', harnessComputerId: 'elsewhere' }
+    await expect(f.timed.deliveries(team, f.tab, f.lead)).rejects.toMatchObject({ code: 'TEAM_SESSION_LIMITED' })
+  })
+
+  it('still runs the Lead\'s time checks: the five-minute update request arrives beside the held delivery', async () => {
+    const f = await swarm()
+    const row = await held(f)
+    for (let second = 0; second < 5 * 60; second++) {
+      f.clock.now += 1_000
+      await f.timed.deliveries(host, f.tab, f.lead)
+    }
+    const rows = await f.timed.deliveries(host, f.tab, f.lead)
+    expect(rows[0]!.id).toBe(row.id)
+    const kinds = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
+    expect(kinds.map(m => (m.source as { kind?: string } | null)?.kind)).toContain('update-request')
   })
 })
 

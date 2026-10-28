@@ -184,6 +184,17 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
   pending.push(callback)
 }
 /** Logged, never thrown: without the memory the delivery poll just runs in full. */
+/** An agent's open deliveries, oldest first: one indexed read. */
+const openDeliveries = (tx: Transaction, tabId: string, agentId: string) => tx.superTabDelivery.findMany({
+  where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 })
+
+const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids.length && rows.every(r => ids.includes(r.id))
+
+/** Whose full poll `deliveries` remembers: the caller, and a team session apart, as it may act only for its own machine's
+ *  agents (teamHost) while its person may act for any of theirs. */
+const pollKey = (user: AuthUser, tabId: string, agentId: string) =>
+  `${tabId}:${agentId}:${user.sub}${user.harnessSessionKind === 'team' ? `:team:${user.harnessComputerId ?? ''}` : ''}`
+
 const pollMemoryFailed = (error: unknown): void => {
   logger.warn('[super-tab] delivery poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
 }
@@ -252,21 +263,29 @@ export interface SuperTabStoreHooks {
 /** Which agent, of which Swarm, on which machine, has a delivery to read. */
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
 
+/** A caller's last full delivery poll: when it succeeded and, when it found deliveries open, what it found. */
+export interface Polled {
+  at: number
+  /** The open deliveries it read, those of them it let reach the agent, and the Swarm's main stamp (cache.ts) read before
+   *  it loaded: while all three are unchanged, a held delivery is answered from one indexed read (deliveries). */
+  open?: { stamp: number; seen: string[]; allowed: string[] }
+}
+
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
 export interface PollMemory {
-  get(key: string): Promise<number | undefined>
+  get(key: string): Promise<Polled | undefined>
   /** Remembered for SWEEP_EVERY_MS at least; an older entry is never read. */
-  set(key: string, at: number): Promise<void>
+  set(key: string, polled: Polled): Promise<void>
 }
 
 /** One server's own memory: with several servers behind a load balancer, each runs its own full polls. */
 export function localPollMemory(now: () => number): PollMemory {
-  const polled = new Map<string, number>()
+  const polled = new Map<string, Polled>()
   return {
     get: async key => polled.get(key),
-    set: async (key, at) => {
-      polled.set(key, at)
-      if (polled.size > POLLED_CAP) for (const [k, last] of polled) if (now() - last >= SWEEP_EVERY_MS) polled.delete(k)
+    set: async (key, value) => {
+      polled.set(key, value)
+      if (polled.size > POLLED_CAP) for (const [k, last] of polled) if (now() - last.at >= SWEEP_EVERY_MS) polled.delete(k)
     },
   }
 }
@@ -1962,20 +1981,29 @@ export class SuperTabStore {
    * succeeded is ever answered this way, so a stranger or a revoked host meets the authority checks every time.
    */
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
-    const key = `${tabId}:${agentId}:${user.sub}`
+    const key = pollKey(user, tabId, agentId)
     const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
-    if (last !== undefined && this.now() - last < SWEEP_EVERY_MS
-      && !await this.db.superTabDelivery.findFirst({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, select: { id: true } })) return []
-    const rows = await this.fullDeliveries(user, tabId, agentId)
-    await this.polls.set(key, this.now()).catch(pollMemoryFailed)
-    return rows
+    if (last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
+      const open = await openDeliveries(this.db, tabId, agentId)
+      if (!open.length) return []
+      // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
+      // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
+      // revokes moves the stamp; anything else (a machine, a share, a Workspace) is checked again within SWEEP_EVERY_MS.
+      const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
+      if (seen && stamp === seen.stamp && sameIds(open, seen.seen)) return open.filter(d => seen.allowed.includes(d.id))
+    }
+    const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
+    const { open, allowed } = await this.fullDeliveries(user, tabId, agentId, view)
+    await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
+      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id) } } : {} }).catch(pollMemoryFailed)
+    return allowed
   }
 
-  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string) {
+  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string, view: CacheView) {
     // Every write below is the Lead's: its time checks, idle stops, update request, digest and stale runs. Any other agent's
     // poll only reads, through the read cache with no transaction (Diego's review of 10-28, item 1: 20 workers were 40
     // whole-Swarm loads, clones and empty commits a minute). The authority checks are the same; a claim checks them again.
-    const read = await this.readLoad(user, tabId)
+    const read = await this.readLoad(user, tabId, {}, view)
     if (!ledProject(read.state, agentId)) {
       author(read.state, await this.actor(this.db, user, read.state, agentId), true)
       return this.allowedDeliveries(this.db, read.state, tabId, agentId)
@@ -2054,15 +2082,14 @@ export class SuperTabStore {
     })
   }
 
-  /** The agent's open deliveries, oldest first, that its Swarm still lets reach it. */
+  /** The agent's open deliveries, and those of them its Swarm still lets reach it. */
   private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
-    const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
-      orderBy: { createdAt: 'asc' }, take: 100 })
+    const open = await openDeliveries(tx, tabId, agentId)
     const allowed: SuperTabDelivery[] = []
-    for (const delivery of rows) {
+    for (const delivery of open) {
       if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
     }
-    return allowed
+    return { open, allowed }
   }
 
   /** A withdrawn host can retire its own journal without regaining shared

@@ -1,10 +1,28 @@
+import { z } from 'zod'
 import { SWEEP_EVERY_MS } from './liveness.js'
-import type { PollMemory } from './store.js'
+import type { PollMemory, Polled } from './store.js'
 
 /** The Redis commands the memory needs: the bus' fail-fast connection (lib/bus.ts `pub`) in production. */
 export interface PollRedis {
   get(key: string): Promise<string | null>
   set(key: string, value: string, mode: 'PX', ms: number): Promise<unknown>
+}
+
+const polled = z.object({
+  at: z.number().finite(),
+  open: z.object({ stamp: z.number().finite(), seen: z.array(z.string()), allowed: z.array(z.string()) }).optional(),
+})
+
+/** A remembered poll as stored: JSON, or the bare time an older server wrote. Anything else was never remembered. */
+function parse(value: string | null): Polled | undefined {
+  if (value === null) return undefined
+  if (/^\d+$/.test(value)) return { at: Number(value) }
+  try {
+    const read = polled.safeParse(JSON.parse(value))
+    return read.success ? read.data : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -14,10 +32,7 @@ export interface PollRedis {
 export function redisPollMemory(redis: PollRedis): PollMemory {
   const key = (k: string) => `swarm:polled:${k}`
   return {
-    async get(k) {
-      const value = Number(await redis.get(key(k)) ?? NaN)
-      return Number.isFinite(value) ? value : undefined
-    },
-    async set(k, at) { await redis.set(key(k), String(at), 'PX', SWEEP_EVERY_MS) },
+    get: async k => parse(await redis.get(key(k))),
+    async set(k, value) { await redis.set(key(k), JSON.stringify(value), 'PX', SWEEP_EVERY_MS) },
   }
 }
