@@ -204,9 +204,19 @@ export interface SuperTabStoreHooks {
   teamAccountsIdle?: boolean
   /** A terminal request was answered or refused, after the commit (lib/bus.ts tells every instance). It must not throw. */
   terminalAnswered?: (requestId: string) => void
+  /** Who may watch an agent's terminal in this Swarm may have narrowed, after the commit: its observer sockets check again
+   *  at once (lib/observerWs.ts). It must not throw. */
+  accessChanged?: (tabId: string) => void
   /** Calls `onChange` when that request is answered or refused on any instance; resolves to the call that stops listening. */
   watchTerminal?: (requestId: string, onChange: () => void) => Promise<() => void>
 }
+
+/** The commands after which someone may no longer watch an agent's terminal (`mayObserve`): a person, agent, machine or
+ *  project leaves, a project's sharing changes, or a session turns confidential (a Lead, a private conversation's member). */
+const NARROWING = new Set<Command['type']>(['member.remove', 'project.sharing', 'project.delete', 'agent.remove', 'agent.rebind',
+  'agent.add', 'machine.remove', 'machine.pause', 'conversation.audience', 'conversation.agent'])
+const narrowsWatching = (command: Command): boolean => NARROWING.has(command.type)
+  || command.type === 'conversation.create' && !!command.audience
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 /** The routing decision a command names. `decision.answer` names a person's decision instead (decisions.ts). */
@@ -1045,6 +1055,10 @@ export class SuperTabStore {
       }
       if (command.type === 'project.delete' || command.type.startsWith('project.role')) await this.writeRoleTexts(tx, tabId, effects.state, command)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
+      if (narrowsWatching(command) && this.hooks.accessChanged) {
+        const told = this.hooks.accessChanged
+        afterCommit(tx, () => told(tabId))
+      }
       if (command.type === 'work.cancel') {
         await closeAssignment(tx, tabId, command.assignmentId, 'cancelled', context.now)
       }

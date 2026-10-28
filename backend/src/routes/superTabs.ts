@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
-import { publishTerminalAnswered, subscribeTerminalAnswered } from '../lib/bus.js'
+import { publishSwarmAccessChanged, publishTerminalAnswered, subscribeTerminalAnswered } from '../lib/bus.js'
 import { env } from '../config/env.js'
 import multipart from '@fastify/multipart'
 import { attachmentsFromEnv, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES } from '../superTabs/attachments.js'
@@ -106,7 +106,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       teamAccountsIdle: !github,
       // The host's answer often lands on another instance than the sender's wait.
       terminalAnswered: requestId => { void publishTerminalAnswered(requestId) },
-      watchTerminal: (requestId, onChange) => subscribeTerminalAnswered(requestId, onChange) })
+      watchTerminal: (requestId, onChange) => subscribeTerminalAnswered(requestId, onChange),
+      // Its observer sockets may be on any instance.
+      accessChanged: tabId => { void publishSwarmAccessChanged(tabId) } })
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))
