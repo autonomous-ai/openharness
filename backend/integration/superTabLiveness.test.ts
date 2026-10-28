@@ -5,9 +5,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
+import { stableId } from '../src/superTabs/model.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -799,6 +800,34 @@ describe('the morning digest', () => {
     f.clock.now += 30_000
     await f.leadInbox()
     expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
+  })
+
+  // Prod slow log, 2026-10-28: a day's digest stored without its project marked sent (its time moved later that day, on a
+  // server before this fix) stayed due, and every Lead poll read the dormant groups again, then failed on the duplicate.
+  it('counts a due digest whose message is already stored as sent: the polls succeed and read nothing for it', async () => {
+    const queries: Array<{ model?: string; args: { where?: Record<string, unknown> } }> = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, args, query }) {
+      queries.push({ model, args: args as { where?: Record<string, unknown> } })
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const f = await swarm({ client })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    f.clock.now = 3 * 60 * 60_000
+    await f.leadInbox()
+    const sent = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    // The next day's digest, already stored.
+    const nextDay = { ...sent, id: stableId('digest', f.tab, projectId, '1970-01-02'), sequence: sent.sequence + 1_000,
+      source: { kind: 'digest-request', projectId, on: '1970-01-02' } } as Prisma.SuperTabMessageUncheckedCreateInput
+    await db.superTabMessage.create({ data: nextDay })
+    f.clock.now += 24 * 60 * 60_000
+    queries.length = 0
+    await f.leadInbox()
+    f.clock.now += 30_000
+    await f.leadInbox()
+    expect(queries.filter(q => q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt)).toEqual([])
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(2)
+    expect((await f.timed.read(owner, f.tab)).state.projects![0]!.digest).toMatchObject({ lastOn: '1970-01-02' })
   })
 
   it('is sent once when two of the Lead\'s polls run at the same moment', async () => {
