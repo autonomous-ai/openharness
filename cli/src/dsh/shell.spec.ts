@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import type { ChildProcess } from 'node:child_process'
+import { dirname, join, win32 } from 'node:path'
+import { spawnSync, type ChildProcess } from 'node:child_process'
 
 // Two switches, both off by default: `sh` makes commands run under plain `/bin/sh -c` (as when no user
 // shell is known) so output is exactly the command's; `fakeChild` hands runDshCommand a scripted child.
@@ -42,6 +42,43 @@ describe('dshShellArgv', () => {
     } finally {
       seams.sh = false
     }
+  })
+})
+
+describe('dshShellArgv on Windows', () => {
+  const gitBash = () => 'C:\\Program Files\\Git\\bin\\bash.exe'
+
+  it('runs setup and doctor through Git Bash as a login shell, never /bin/sh, which Windows has not', () => {
+    const { path, args } = dshShellArgv('./doctor.sh', { platform: 'win32', gitBash })
+    expect(path).toBe('C:\\Program Files\\Git\\bin\\bash.exe')
+    expect(args).toHaveLength(2)
+    expect(args[0]).toBe('-lic')
+    expect(args[1].endsWith('\n./doctor.sh')).toBe(true)
+  })
+
+  it('says to install Git for Windows when there is no Git Bash, instead of trying a shell that is not there', () => {
+    expect(() => dshShellArgv('./doctor.sh', { platform: 'win32', gitBash: () => null }))
+      .toThrow('Setup and doctor scripts need Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+  })
+
+  describe('the script it runs, in a real bash', () => {
+    let dir: string
+    beforeEach(() => { dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-gitbash-'))) })
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+    it('ignores a profile\'s `node` alias and finds Harness\'s Node through cygpath when PATH has none', () => {
+      // Git Bash profiles can say `alias node='winpty node.exe'`, and winpty fails without a terminal ("stdin is not a
+      // tty"). Harness's Node is a C:\ folder, which Git Bash's PATH cannot hold until cygpath writes it as /c/....
+      const home = join(dir, 'home'); const stubs = join(dir, 'stubs'); const runtime = join(dir, 'runtime')
+      for (const folder of [home, stubs, runtime]) mkdirSync(folder)
+      writeFileSync(join(home, '.bash_profile'), "alias node='echo winpty-node'\n")
+      writeFileSync(join(runtime, 'node'), '#!/bin/sh\necho harness-node\n', { mode: 0o755 })
+      writeFileSync(join(stubs, 'cygpath'), `#!/bin/sh\n[ "$1" = -u ] && [ "$2" = -- ] || exit 9\nprintf '%s\\n' "$3" > '${join(dir, 'asked')}'\nprintf '%s\\n' '${runtime}'\n`, { mode: 0o755 })
+      const { args } = dshShellArgv('node', { platform: 'win32', gitBash: () => '/bin/bash' })
+      const ran = spawnSync('/bin/bash', args, { cwd: dir, encoding: 'utf8', env: { HOME: home, PATH: stubs } })
+      expect(ran.stdout).toBe('harness-node\n')
+      expect(readFileSync(join(dir, 'asked'), 'utf8')).toBe(`${win32.dirname(managedNodePath())}\n`)
+    })
   })
 })
 

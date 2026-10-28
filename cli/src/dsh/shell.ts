@@ -5,8 +5,11 @@
  * same shell selection) `engineLaunch.ts` uses to exec an engine in a pane.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { win32 } from 'node:path'
 import { harnessNodePrelude, interactiveEngineShell } from '../lib/engineLaunch.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
+import { shellSingleQuote } from '../lib/shellQuote.js'
+import { findGitBash, INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 
 export interface DshCommandOptions {
   cwd: string
@@ -49,7 +52,8 @@ export function isKilledJobReport(line: string): boolean {
 }
 
 /**
- * `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known.
+ * `[path, ...args]` that runs `script` through the user's shell, or `/bin/sh -c` when none is known; on Windows,
+ * which has neither, through Git Bash (`gitBashArgv`).
  *
  * AS A LOGIN SHELL, whatever the shell. interactiveEngineShell gives bash `-ic` on purpose for a pane
  * (see tmuxOnPath.ts on why), but a bash user's PATH conventionally lives in `.bash_profile`, which
@@ -59,7 +63,8 @@ export function isKilledJobReport(line: string): boolean {
  * is sourced from `.bash_profile`. A setup or a doctor is one process, so the reason bash panes avoid
  * `-l` (a PATH built in .bashrc compounding across subshells) does not apply here.
  */
-export function dshShellArgv(script: string): { path: string; args: string[] } {
+export function dshShellArgv(script: string, host: DshShellHost = {}): { path: string; args: string[] } {
+  if ((host.platform ?? process.platform) === 'win32') return gitBashArgv(script, (host.gitBash ?? findGitBash)())
   const shell = interactiveEngineShell()
   const body = `${dshNodeFallback()}\n${script}`
   if (shell) {
@@ -67,6 +72,33 @@ export function dshShellArgv(script: string): { path: string; args: string[] } {
     return { path: shell.path, args: [...args, body] }
   }
   return { path: '/bin/sh', args: ['-c', body] }
+}
+
+/** The platform and the Git Bash lookup `dshShellArgv` uses; a test gives Windows' on any computer. */
+export interface DshShellHost {
+  platform?: NodeJS.Platform
+  gitBash?: () => string | null
+}
+
+/**
+ * Windows: Git Bash, as a login shell like the user's shell elsewhere, so its profile builds PATH (and puts cygpath
+ * on it). Thrown when there is none, and runDshCommand reports that as the command's one line: the doctor or setup
+ * says what to install, where `spawn /bin/sh ENOENT` said nothing a person could act on.
+ *
+ * Two lines go before the command. `unalias node`: Git Bash profiles can say `alias node='winpty node.exe'`, and winpty
+ * fails with "stdin is not a tty" here, where the command's output is a pipe. And Harness's Node at the end of a PATH
+ * with none, as `dshNodeFallback` does elsewhere, but written by cygpath: its folder is a `C:\...` path, whose colon
+ * would split a Git Bash PATH in two. Both were found, and checked on Windows 11, by an outside contribution (#1511).
+ */
+function gitBashArgv(script: string, bash: string | null): { path: string; args: string[] } {
+  if (!bash) throw new Error(`Setup and doctor scripts need Git Bash on Windows, and it was not found. ${INSTALL_GIT_FOR_WINDOWS}`)
+  const runtimeDir = shellSingleQuote(win32.dirname(managedNodePath()))
+  const body = [
+    'unalias node 2>/dev/null || true',
+    `if ! command -v node >/dev/null 2>&1; then PATH="\${PATH:+$PATH:}$(cygpath -u -- ${runtimeDir})"; export PATH; fi`,
+    script,
+  ].join('\n')
+  return { path: bash, args: ['-lic', body] }
 }
 
 /**
