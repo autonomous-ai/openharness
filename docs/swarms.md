@@ -270,13 +270,27 @@ after four hours or at the end of the day. It shows next to their name and as
 a small emoji on their avatar, and disappears at its time even on a page where
 nothing else changes.
 
-Avatars and status reach only the Swarm's members. Uploaded pictures are kept
-in a private bucket that nobody can read directly. Each member's read of the
-Swarm carries signed links to the pictures it shows. A link stays the same for
-half an hour, so pictures are not fetched on every poll, and stops opening
-within an hour. A copied link expires, and someone removed from the Swarm gets
-no new links. A server without the private bucket (`SUPER_TAB_AVATARS_BUCKET`)
-refuses uploads; the eight pictures still work.
+Avatars and status reach only the Swarm's members: only a member's read of
+the Swarm carries the link to a picture. Where the link points depends on the
+server:
+
+- With a private avatar bucket (`SUPER_TAB_AVATARS_BUCKET`), nobody can read a
+  picture directly. Each read carries signed links. A link stays the same for
+  half an hour, so pictures are not fetched on every poll, and stops opening
+  within an hour. A copied link expires, and someone removed from the Swarm
+  gets no new links.
+- Without one (production today, by the owner's choice on 2026-10-28),
+  pictures are kept in the chat files' bucket, in a folder of their own
+  (`avatars/`), and linked on the same public CDN. **They work like chat files:
+  a picture's link never expires.** Anyone who once had it, including someone
+  later removed from the Swarm or anyone they pass it to, can still open that
+  picture. Only the 128 random bits in its address keep it from being guessed.
+  A new picture gets a new address; the old one stays reachable. Chat files
+  never go in the avatar folder, and the server makes avatar links for that
+  folder alone.
+
+A server with no attachments bucket refuses uploads; the eight pictures still
+work.
 
 People and agents react to a message with a small set: 👍 🎉 ❤️ 😄 👀 🚀.
 Counts show under the message, with the reader's own highlighted and the names

@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
-import { agentProjectId, isConfidential, ownSession, projectOf, readAgent } from './projects.js'
+import { agentProjectId, isConfidential, ledProject, ownSession, projectOf, readAgent } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -36,6 +36,10 @@ export interface TerminalRequest { id: string; agentId: string; harnessId: strin
 export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
+    // Members may watch a Lead, but only its machine's owner drives it, whether or not its session counts as private (Ken, 2026-10-28).
+    if (ledProject(state, target.id) && !ownSession(actor, target)) {
+      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in a Product Manager’s terminal.', 403)
+    }
     if (isConfidential(state, target, elsewhere) && !ownSession(actor, target)) {
       fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
     }

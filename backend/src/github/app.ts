@@ -97,6 +97,7 @@ export class GitHubApp {
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
   private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
+  private readonly shownNames = new Map<string, { name: string; until: number }>()
   /** When each repository's "not installed" was last forgotten on request ([forget]). */
   private readonly forgotten = new Map<string, number>()
 
@@ -116,8 +117,10 @@ export class GitHubApp {
    * so a commit made with the app's token shows the app, not the made-up address of the machine account that ran git. A Harness
    * Team account has no git identity of its own, so its commits read "Harness Team <harnessteam@<host>.local>", unverified and
    * linked to nobody (PR #1934, 2026-10-28). Read once and kept; null while GitHub cannot say, asked again ten minutes later.
+   * [token]: a token to ask with. Asked without one, from a server's shared address, GitHub's limit for unsigned
+   * requests could refuse it, and a Team account's commits stayed the machine's (PR #1948): the token just issued is used.
    */
-  async commitIdentity(): Promise<CommitIdentity | null> {
+  async commitIdentity(token?: string): Promise<CommitIdentity | null> {
     if (this.identity && (this.identity.value || this.identity.until > this.now())) return this.identity.value
     let value: CommitIdentity | null = null
     try {
@@ -129,12 +132,12 @@ export class GitHubApp {
       }
       if (slug) {
         const login = `${slug}[bot]`
-        // Public: the app's own JWT is not accepted here, and the bot's id is no secret.
-        const user = await this.call('GET', `/users/${encodeURIComponent(login)}`, null)
+        // The app's own JWT is not accepted here; any installation token is, and the bot's id is no secret.
+        const user = await this.call('GET', `/users/${encodeURIComponent(login)}`, token ? `Bearer ${token}` : null)
         const id = (user.body as { id?: unknown }).id
         if (user.status === 200 && typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
           value = { name: login, email: `${id}+${login}@users.noreply.github.com` }
-        }
+        } else console.warn(`[github] the app's bot account ${login} was not read: HTTP ${user.status}`)
       }
     } catch (error) {
       if (!(error instanceof GitHubAppError)) throw error
@@ -216,6 +219,21 @@ export class GitHubApp {
     if (!current) return null
     const renamed = await this.installation(current)
     return renamed === null ? null : { installation: renamed, repository: current }
+  }
+
+  /**
+   * [repository]'s name as GitHub shows it now, for people to read: a project keeps the address it was given, and GitHub
+   * answers an old name by redirect, so a renamed repository was shown by the name it no longer has (autonomous-harness
+   * for autonomous-ai/openharness, 2026-10-28). Its own name when GitHub cannot say. Kept ten minutes either way, so a
+   * status read costs at most one lookup per repository in that time.
+   */
+  async currentFullName(repository: GitHubRepository): Promise<string> {
+    const key = repository.fullName.toLowerCase()
+    const known = this.shownNames.get(key)
+    if (known && known.until > this.now()) return known.name
+    const name = (await this.currentName(repository))?.fullName ?? repository.fullName
+    this.shownNames.set(key, { name, until: this.now() + INSTALLATION_TTL_MS })
+    return name
   }
 
   /** [repository]'s name now when it was renamed, else null: read with a read-only token of its owner's installation of

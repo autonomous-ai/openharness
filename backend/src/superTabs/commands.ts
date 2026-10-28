@@ -277,6 +277,9 @@ export interface CommandContext {
   /** For a worker's needs_human that asks: the decisions it has open for that person when its question would pass the cap,
    *  read by the store (decisions.ts fullFor). */
   openDecisions?: number | null
+  /** For a worker's needs_human that asks: the open decision its question exactly repeats, which it asks again rather than
+   *  anew, read by the store (decisions.ts repeatOf). */
+  repeatedDecision?: string | null
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
@@ -897,8 +900,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const stored = projectOf(state, project.id)
       if (command.time === null) delete stored.digest
       else {
-        // Set after today's time, the first digest comes tomorrow rather than at once.
-        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now)
+        // Set after today's time, the first digest comes tomorrow rather than at once; moved later on a day its digest went
+        // out, it stays sent for today.
+        const lastOn = digestStartsAfter(command.time, command.timeZone, context.now, stored.digest?.lastOn)
         stored.digest = { time: command.time, timeZone: command.timeZone, ...lastOn ? { lastOn } : {} }
       }
       break
@@ -1754,6 +1758,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.status === 'done' && (!command.result || !group.checks.every(c => c.passedBy && c.evidence))) {
         fail('CHECKS_PENDING', 'Completion needs a result and evidence for every acceptance check.')
       }
+      let asked: string | undefined
       if (command.ask) {
         if (command.status !== 'needs_human' || !command.result || actor.kind !== 'agent') {
           fail('INVALID_DECISION', 'An agent asks a person for a decision only when its work needs a human, with the question as its result.', 400)
@@ -1762,13 +1767,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const drafts = askDecisions(state, group, personId, [{ question: command.result, ...choices }],
           { operationId, askerAgentId: actor.agentId, assignmentId: assignment.id })
         // At the cap the status still counts, reaches the Lead and renews the lease; only the question waits (review of #1859).
-        if (context.openDecisions == null) effects.decisions = drafts
+        if (context.openDecisions == null) {
+          effects.decisions = drafts
+          asked = context.repeatedDecision ?? drafts[0]!.id
+        }
         else effects.result.notAsked = `Not asked ${person(state, personId).email}: ${context.openDecisions} decisions you asked them are still open, and at most ${MAX_OPEN_DECISIONS} can be. Wait for answers before asking more.`
       }
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
-      recordStatus(group, assignment, previous, context.now, changed ? operationId : null)
+      recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
       // Finished work shows the worker recovered from a task it lost before.
       if (command.status === 'done') delete state.agents.find(a => a.id === assignment.agentId)?.lostTask

@@ -167,6 +167,8 @@ export const TEAM_COPY = [
   // `codex login` in a terminal on its machine would not start. ~/.local/bin is last on a login shell's PATH: a Node the
   // system has wins.
   'ln -sfn "$rt/$node_name/bin/node" "$bin/node"',
+  // And its npm and npx, so a teammate's Builder can install a project's packages and run its tests (team/nodeTools.ts).
+  'for tool in npm npx; do [ ! -e "$rt/$node_name/bin/$tool" ] || ln -sfn "$rt/$node_name/bin/$tool" "$bin/$tool"; done',
   'if [ -n "$tmux_name" ]; then',
   '  put_dir "$stage/tmux" "$rt/$tmux_name"',
   `  printf '%s\\n' "$rt/$tmux_name/bin/tmux" > "$rt/current-tmux.next" && mv -f "$rt/current-tmux.next" "$rt/current-tmux"`,

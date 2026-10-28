@@ -231,7 +231,7 @@ describe('reconcileGridAttach — a hand-off grid refuses', () => {
 
 /**
  * The coordination half: when a reconcile runs — on demand, one at a time, never twice for what is
- * already done, and never as a remembered failure.
+ * already done, and a failure not asked again for a while.
  */
 describe('createGridAccess — grid set up when a feature asks', () => {
   const result = (status: GridAttachResult['status'], ownGrid?: GridAttachResult['ownGrid']): GridAttachResult =>
@@ -273,11 +273,47 @@ describe('createGridAccess — grid set up when a feature asks', () => {
     expect(attempt).toHaveBeenCalledTimes(1)
   })
 
-  it('does not remember a failure: the next ask is a person acting again, so it tries again', async () => {
-    const { attempt, grid } = access([result('handoff-failed'), result('signed-in')])
-    expect((await grid.ensure()).status).toBe('handoff-failed')
+  it('holds a failure for a minute, then tries again', async () => {
+    let now = 0
+    const attempt = vi.fn(async () => (attempt.mock.calls.length === 1 ? result('no-cli') : result('signed-in')))
+    const grid = createGridAccess({ attempt, signedIn: () => true, log: () => {}, now: () => now })
+    expect((await grid.ensure()).status).toBe('no-cli')
+    now = 59_000
+    expect((await grid.ensure()).status).toBe('no-cli')
+    expect(attempt).toHaveBeenCalledTimes(1)
+    now = 60_000
     expect((await grid.ensure()).status).toBe('signed-in')
     expect(attempt).toHaveBeenCalledTimes(2)
+  })
+
+  it('waits twice as long after each failure in a row, never more than ten minutes', async () => {
+    // DESKTOP-0TFH0OJ, 2026-10-26: a held Swarm start asked every 2 seconds (core/agents/pendingLaunches.ts) and each
+    // ask ran grid's installer again, which failed the same way 13,658 times in two days.
+    let now = 0
+    const attempt = vi.fn(async () => result('no-cli'))
+    const grid = createGridAccess({ attempt, signedIn: () => true, log: () => {}, now: () => now })
+    const asked: number[] = []
+    for (now = 0; now <= 40 * 60_000; now += 2_000) {
+      const before = attempt.mock.calls.length
+      await grid.ensure()
+      if (attempt.mock.calls.length > before) asked.push(now / 60_000)
+    }
+    expect(asked).toEqual([0, 1, 3, 7, 15, 25, 35])
+  })
+
+  it('a success clears the wait: the next failure waits a minute again', async () => {
+    let now = 0
+    let signedIn = true
+    const answers = [result('no-cli'), result('no-cli'), result('signed-in'), result('no-cli'), result('signed-in')]
+    const attempt = vi.fn(async () => answers.shift()!)
+    const grid = createGridAccess({ attempt, signedIn: () => signedIn, log: () => {}, now: () => now })
+    await grid.ensure()
+    now = 60_000; await grid.ensure()
+    now = 180_000; expect((await grid.ensure()).status).toBe('signed-in')
+    signedIn = false
+    now = 181_000; expect((await grid.ensure()).status).toBe('no-cli')
+    now = 241_000; expect((await grid.ensure()).status).toBe('signed-in')
+    expect(attempt).toHaveBeenCalledTimes(5)
   })
 
   it('an own grid that could not be made is asked for again next time', async () => {
