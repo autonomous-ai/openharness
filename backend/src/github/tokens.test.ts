@@ -169,6 +169,31 @@ describe('revoking when a task ends', () => {
     expect((await tokens.issue(request('attempt-2', 'agent-2'))).token).toBe(two.token)
   })
 
+  // Lead, 2026-10-28 (local Team account run): a renewal leaves the replaced token to its last ten minutes so a push in
+  // progress is not broken, but the task's end takes every token it held, replaced ones too.
+  it('revokes the replaced tokens of a renewed task with its current one when the task ends', async () => {
+    const { tokens, github, advance } = setup()
+    const first = await tokens.issue(request())
+    advance(60 * 60_000 - REUSE_MARGIN_MS + 1000)
+    const second = await tokens.issue(request())
+    advance(60 * 60_000 - REUSE_MARGIN_MS + 1000)
+    const third = await tokens.issue(request())
+    expect(github.revoked).toEqual([])
+    await tokens.release('tab-1', [{ agentId: 'agent-1', assignmentId: 'attempt-1' }])
+    // The first had expired by then: GitHub is not asked about it.
+    expect(github.revoked.sort()).toEqual([second.token, third.token].sort())
+    expect(github.revoked).not.toContain(first.token)
+  })
+
+  it('revokes a replaced token too when another task takes the agent', async () => {
+    const { tokens, github, advance } = setup()
+    const first = await tokens.issue(request('attempt-1'))
+    advance(60 * 60_000 - REUSE_MARGIN_MS + 1000)
+    const second = await tokens.issue(request('attempt-1'))
+    await tokens.issue(request('attempt-2'))
+    expect(github.revoked.sort()).toEqual([first.token, second.token].sort())
+  })
+
   it('logs a failed revoke without the token, drops it anyway and never throws', async () => {
     const { tokens, github, log } = setup()
     const issued = await tokens.issue(request())

@@ -52,7 +52,8 @@ export interface IssuedToken {
   defaultBranchProtected: boolean
   defaultBranchProtection: BranchProtection
 }
-interface Entry { token: string; expiresAt: string; repository: string; assignmentId: string }
+/** `replaced`: the task's earlier tokens a renewal replaced and left to their last minutes, revoked with it when the task ends. */
+interface Entry { token: string; expiresAt: string; repository: string; assignmentId: string; replaced?: Array<{ token: string; expiresAt: string }> }
 
 /** A token is handed out again until this long before it expires, so whoever holds it has at least that long. */
 export const REUSE_MARGIN_MS = 10 * 60_000
@@ -123,9 +124,12 @@ export class GitHubTokens {
     let actual = request.repository
     const cached = await this.read(key)
     let entry: Entry | null = null
+    let replaced: Entry['replaced'] = []
     if (cached && cached.assignmentId === request.assignmentId && cached.repository === repository) {
       if (Date.parse(cached.expiresAt) - this.now() > REUSE_MARGIN_MS) entry = cached
-      // Close to its end, it is left to expire: the agent may still be using it.
+      // Close to its end, it is left to expire: the agent may still be using it, in a push that took it before this renewal.
+      // It is kept with the new one, so the task's end revokes it too (Lead, 2026-10-28).
+      else replaced = [...cached.replaced ?? [], { token: cached.token, expiresAt: cached.expiresAt }].filter(t => Date.parse(t.expiresAt) > this.now())
     } else if (cached) {
       await this.revoke(request.tabId, request.agentId, cached, 'replaced')
       await this.forget(key)
@@ -137,7 +141,7 @@ export class GitHubTokens {
       if (resolved === null) throw this.app.notInstalled(request.repository)
       actual = resolved.repository
       const minted = await this.app.createToken(resolved.installation, actual)
-      entry = { ...minted, repository, assignmentId: request.assignmentId }
+      entry = { ...minted, repository, assignmentId: request.assignmentId, ...(replaced.length ? { replaced } : {}) }
       const ttl = Date.parse(minted.expiresAt) - this.now()
       if (ttl > 0) {
         try { await this.cache.set(key, this.seal(entry), ttl) } catch (error) {
@@ -164,10 +168,14 @@ export class GitHubTokens {
     return { ...minted, repository: repository.fullName }
   }
 
+  /** Revokes the entry's token and every unexpired one it replaced. */
   private async revoke(tabId: string, agentId: string, entry: Entry, why: string): Promise<void> {
-    try { await this.app.revoke(entry.token) } catch (error) {
-      this.log.warn('[github] token revoke failed', { tabId, agentId, repository: entry.repository, why,
-        code: error instanceof GitHubAppError ? error.code : 'ERROR' })
+    const live = (entry.replaced ?? []).filter(t => Date.parse(t.expiresAt) > this.now()).map(t => t.token)
+    for (const token of [entry.token, ...live]) {
+      try { await this.app.revoke(token) } catch (error) {
+        this.log.warn('[github] token revoke failed', { tabId, agentId, repository: entry.repository, why,
+          code: error instanceof GitHubAppError ? error.code : 'ERROR' })
+      }
     }
   }
 
