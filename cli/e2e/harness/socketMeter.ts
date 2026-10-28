@@ -2,8 +2,8 @@
  * A recording proxy in front of a local backend: every client in a socket scenario dials this instead
  * of the backend, so what it records is what the backend was asked, whatever the backend logs.
  *
- * Per WebSocket it keeps the endpoint, the client kind and version the client declared on the URL
- * (`client=`, `v=` or mobile's `release=`), when it opened and closed and with which code, and each
+ * Per WebSocket it keeps the endpoint, the client kind and version the client declared on the URL, read as
+ * the backend reads them (`declaredKind`), when it opened and closed and with which code, and each
  * `machine_select` it sent with the backend's answer (`connected` → accepted, `machine_select_error` →
  * its code). An upgrade the backend refused is a refusal, never a socket. HTTP requests are counted by
  * method and route, ids folded to `:id`.
@@ -21,7 +21,8 @@ export interface SelectRecord { machineId: string; at: number; outcome: string |
 
 export interface SocketRecord {
   endpoint: string
-  client: string | null
+  /** One of `CLIENT_KINDS`, or `unknown`. */
+  client: string
   version: string | null
   openedAt: number
   closedAt: number | null
@@ -49,6 +50,8 @@ export interface EndpointReport {
   closedWithoutSelect: number
   /** The share of connects that named both a client kind and a version. */
   attributed: number
+  /** The same share for each client kind seen, `unknown` included. */
+  attributedByClient: Record<string, number>
   closeCodes: Record<string, number>
   selectOutcomes: Record<string, number>
   deletedMachineSelects: number
@@ -61,6 +64,21 @@ export interface MeterReport {
   durationMs: number
   endpoints: Record<string, EndpointReport>
   http: Record<string, number>
+}
+
+/** The kinds the backend tells apart (backend/src/lib/wsAttribution.ts `WS_CLIENT_KINDS`, #2029). */
+export const CLIENT_KINDS = ['web', 'mobile', 'desktop', 'relay', 'group-sync', 'link', 'daemon']
+const VERSION = /^[0-9A-Za-z.+-]{1,40}$/
+
+/**
+ * What a socket's query declares, by #2029's rule (wsAttribution.ts `declaredKind`): a kind it does not know is
+ * `unknown`; the version is `v=` (the phone's `release=`) when it is a short plain token. The adapter's socket is
+ * the daemon's whatever it declares, as the backend tracks it.
+ */
+export function declaredKind(endpoint: string, query: URLSearchParams): { client: string; version: string | null } {
+  const declared = endpoint === '/api/adapter-ws' ? 'daemon' : query.get('client') ?? ''
+  const version = query.get('v') ?? query.get('release')
+  return { client: CLIENT_KINDS.includes(declared) ? declared : 'unknown', version: version && VERSION.test(version) ? version : null }
 }
 
 /** Hex ids (machine ids, share ids), UUIDs and numbers in a path, folded so a route counts as one. */
@@ -81,12 +99,15 @@ function median(values: number[]): number {
 
 const count = (into: Record<string, number>, key: string): void => { into[key] = (into[key] ?? 0) + 1 }
 
-/** The headers a client's upgrade carries that the backend reads; the rest belong to this hop. */
-function forwardedHeaders(req: IncomingMessage): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const name of ['x-api-key', 'authorization', 'origin', 'user-agent', 'x-autonomous-env', 'x-forwarded-for']) {
-    const value = req.headers[name]
-    if (typeof value === 'string') out[name] = value
+/** Hop-by-hop headers, and the handshake's own, which the meter's dial to the backend makes afresh. */
+const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding',
+  'upgrade', 'host', 'content-length', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-extensions', 'sec-websocket-protocol'])
+
+/** Everything the client's upgrade carried but this hop's own, so the backend reads what the client sent. */
+function forwardedHeaders(req: IncomingMessage): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {}
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value !== undefined && !HOP.has(name)) out[name] = value
   }
   return out
 }
@@ -95,7 +116,7 @@ export class SocketMeter {
   readonly sockets: SocketRecord[]
   readonly refused: RefusalRecord[]
   private readonly http: Record<string, number>
-  private readonly startedAt: number
+  private startedAt: number
   private server: Server | null = null
   private readonly live = new Set<WebSocket>()
   url = ''
@@ -106,6 +127,11 @@ export class SocketMeter {
     this.sockets = records.sockets
     this.refused = records.refused
     this.http = records.http
+  }
+
+  /** Start the report's window now: sockets opened before (the daemons' own start) are left out of it. */
+  startClock(): void {
+    this.startedAt = Date.now()
   }
 
   /** A meter over records already taken, for reporting alone. */
@@ -141,6 +167,7 @@ export class SocketMeter {
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, upstream: URL, wss: WebSocketServer): void {
     const query = new URL(req.url ?? '/', 'http://meter').searchParams
     const endpoint = (req.url ?? '/').split('?')[0]
+    let attached = false
     const protocols = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((p) => p.trim()).filter(Boolean)
     const backend = new WebSocket(`ws://${upstream.host}${req.url ?? '/'}`, protocols, {
       headers: forwardedHeaders(req), perMessageDeflate: false })
@@ -153,20 +180,34 @@ export class SocketMeter {
     backend.once('unexpected-response', (_r, res) => { opened = true; refuse(res.statusCode ?? 0); backend.terminate() })
     backend.once('error', () => { if (!opened) { opened = true; refuse(0) } })
     socket.once('error', () => backend.terminate())
+    // A client that gave up before the backend answered: the backend's side must not outlive it. The upgrade's
+    // socket is paused, so its end is only seen by reading it; a client sends nothing before the 101, and anything
+    // it did send goes back where `ws` finds it.
+    const quit = (): void => { if (!attached) backend.terminate() }
+    const watch = (): void => {
+      const early = socket.read()
+      if (early) { socket.off('readable', watch); socket.unshift(early) }
+    }
+    socket.on('readable', watch)
+    socket.once('end', quit)
+    socket.once('close', quit)
     backend.once('open', () => {
       opened = true
       // Frames the backend sends before the client side is up wait here, in order.
       const early: Array<[RawData, boolean]> = []
       const hold = (data: RawData, binary: boolean): void => { early.push([data, binary]) }
       backend.on('message', hold)
+      socket.off('readable', watch)
+      if (socket.destroyed || socket.readableEnded) { backend.terminate(); return }
+      attached = true
       wss.handleUpgrade(req, socket, head, (client) => this.attach(client, backend, endpoint, query, early, hold))
     })
   }
 
   private attach(client: WebSocket, backend: WebSocket, endpoint: string, query: URLSearchParams,
     early: Array<[RawData, boolean]>, hold: (data: RawData, binary: boolean) => void): void {
-    const record: SocketRecord = { endpoint, client: query.get('client'), version: query.get('v') ?? query.get('release'),
-      openedAt: Date.now(), closedAt: null, closeCode: null, closeReason: '', selects: [] }
+    const record: SocketRecord = { endpoint, ...declaredKind(endpoint, query), openedAt: Date.now(), closedAt: null, closeCode: null,
+      closeReason: '', selects: [] }
     this.sockets.push(record)
     this.live.add(client)
     const pending = new Map<string, SelectRecord>()
@@ -230,9 +271,11 @@ export class SocketMeter {
     const deleted = new Set(options.deletedMachineIds ?? [])
     const durationMs = now - this.startedAt
     const endpoints: Record<string, EndpointReport> = {}
-    const names = new Set([...this.sockets.map((s) => s.endpoint), ...this.refused.map((r) => r.endpoint)])
+    const inWindow = this.sockets.filter((s) => s.openedAt >= this.startedAt)
+    const refused = this.refused.filter((r) => r.at >= this.startedAt)
+    const names = new Set([...inWindow.map((s) => s.endpoint), ...refused.map((r) => r.endpoint)])
     for (const name of names) {
-      const sockets = this.sockets.filter((s) => s.endpoint === name)
+      const sockets = inWindow.filter((s) => s.endpoint === name)
       const lifetimes = sockets.map((s) => (s.closedAt ?? now) - s.openedAt)
       const closeCodes: Record<string, number> = {}
       const selectOutcomes: Record<string, number> = {}
@@ -247,11 +290,13 @@ export class SocketMeter {
       endpoints[name] = {
         connects: sockets.length,
         connectsPerMinute: durationMs > 0 ? sockets.length / (durationMs / 60_000) : 0,
-        refused: this.refused.filter((r) => r.endpoint === name).length,
+        refused: refused.filter((r) => r.endpoint === name).length,
         medianLifetimeMs: median(lifetimes),
         livedUnder2s: lifetimes.filter((ms) => ms < 2_000).length,
         closedWithoutSelect: sockets.filter((s) => s.closedAt !== null && s.selects.length === 0).length,
-        attributed: sockets.length ? sockets.filter((s) => s.client && s.version).length / sockets.length : 1,
+        attributed: attributedShare(sockets),
+        attributedByClient: Object.fromEntries([...new Set(sockets.map((s) => s.client))]
+          .map((kind) => [kind, attributedShare(sockets.filter((s) => s.client === kind))])),
         closeCodes,
         selectOutcomes,
         deletedMachineSelects: sockets.reduce((n, s) => n + s.selects.filter((select) => deleted.has(select.machineId)).length, 0),
@@ -270,6 +315,11 @@ export class SocketMeter {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
   }
+}
+
+/** Attributed: a known kind and a version, as #2029 counts its 95%. */
+function attributedShare(sockets: SocketRecord[]): number {
+  return sockets.length ? sockets.filter((s) => s.client !== 'unknown' && s.version).length / sockets.length : 1
 }
 
 function parse(data: RawData): { type?: string; payload?: Record<string, any> } | null {

@@ -3,7 +3,8 @@
  * WebSocket phases' Done criteria are judged on (socketChurn.e2e.ts), so it is checked here on its own,
  * with no Mongo, Redis or daemon. The stand-in answers the way the real web-ws does: `connected` on
  * open, then `connected {machineId}` or `machine_select_error {error}` for a `machine_select`, and it
- * refuses a bad credential before the upgrade.
+ * refuses a bad credential before the upgrade. `slow-token` holds the upgrade for a moment, long enough
+ * for a client to give up first.
  */
 import { createServer, type Server } from 'node:http'
 import { once } from 'node:events'
@@ -13,8 +14,20 @@ import { SocketMeter } from './harness/socketMeter.js'
 
 const KNOWN = 'aa'.repeat(16), DELETED = 'dd'.repeat(16)
 
-async function standIn(): Promise<{ server: Server; url: string; protocols: string[] }> {
+interface StandIn {
+  server: Server
+  url: string
+  protocols: string[]
+  /** Each upgrade's request headers, as the backend got them. */
+  headers: Array<Record<string, string | string[] | undefined>>
+  /** Upgraded sockets not closed yet. */
+  open: Set<WebSocket>
+}
+
+async function standIn(): Promise<StandIn> {
   const protocols: string[] = []
+  const headers: StandIn['headers'] = []
+  const open = new Set<WebSocket>()
   const wss = new WebSocketServer({ noServer: true, handleProtocols: (set) => [...set][0] ?? false })
   const server = createServer((req, res) => {
     res.setHeader('content-type', 'application/json')
@@ -22,12 +35,15 @@ async function standIn(): Promise<{ server: Server; url: string; protocols: stri
   })
   server.on('upgrade', (req, socket, head) => {
     const token = String(req.headers['sec-websocket-protocol'] ?? '')
-    if (token !== 'good-token') {
+    if (token !== 'good-token' && token !== 'slow-token') {
       socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
       return
     }
     protocols.push(token)
-    wss.handleUpgrade(req, socket, head, (ws) => {
+    headers.push(req.headers)
+    const upgrade = () => wss.handleUpgrade(req, socket, head, (ws) => {
+      open.add(ws)
+      ws.on('close', () => open.delete(ws))
       ws.send(JSON.stringify({ type: 'connected', payload: { userId: 'u1' } }))
       ws.on('message', (raw, binary) => {
         if (binary) { ws.send(raw, { binary: true }); return }
@@ -40,14 +56,16 @@ async function standIn(): Promise<{ server: Server; url: string; protocols: stri
         }
       })
     })
+    if (token === 'slow-token') setTimeout(upgrade, 300)
+    else upgrade()
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
-  return { server, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, protocols }
+  return { server, url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, protocols, headers, open }
 }
 
-async function dial(url: string, protocol = 'good-token'): Promise<{ ws: WebSocket; frames: any[]; closed: Promise<number> }> {
-  const ws = new WebSocket(url, [protocol])
+async function dial(url: string, protocol = 'good-token', headers: Record<string, string> = {}): Promise<{ ws: WebSocket; frames: any[]; closed: Promise<number> }> {
+  const ws = new WebSocket(url, [protocol], { headers })
   const frames: any[] = []
   ws.on('message', (raw, binary) => { if (!binary) frames.push(JSON.parse(raw.toString())) })
   const closed = new Promise<number>((resolve) => ws.once('close', (code) => resolve(code)))
@@ -73,7 +91,7 @@ describe('socket meter', () => {
     const meter = await SocketMeter.start(backend.url)
     stops.push(() => meter.close())
 
-    const web = await dial(`${meter.wsUrl}/api/web-ws?autonomousEnv=prod&client=web`)
+    const web = await dial(`${meter.wsUrl}/api/web-ws?autonomousEnv=prod&client=web`, 'good-token', { 'x-harness-probe': 'kept', cookie: 'c=1' })
     await until('the backend hello', () => web.frames.length === 1)
     web.ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: KNOWN } }))
     await until('the select answer', () => web.frames.length === 2)
@@ -91,18 +109,47 @@ describe('socket meter', () => {
     idle.ws.close(1000)
     expect(await idle.closed).toBe(1000)
 
-    await until('the two closes recorded', () => meter.sockets.filter((s) => s.closedAt !== null).length === 2)
-    // The credential reaches the backend as the subprotocol, as clients send it.
-    expect(backend.protocols).toEqual(['good-token', 'good-token', 'good-token'])
+    // As the backend reads them (#2029 wsAttribution.ts declaredKind): a kind it does not know is `unknown`, a
+    // version that is not a short plain token is none, and the adapter is the daemon.
+    const odd = await dial(`${meter.wsUrl}/api/web-ws?client=bogus&v=${encodeURIComponent('1 <b>')}`)
+    odd.ws.close(1000)
+    await odd.closed
+    const adapter = await dial(`${meter.wsUrl}/api/adapter-ws?v=2.1.0`)
+    adapter.ws.close(1000)
+    await adapter.closed
 
-    const [first, second, third] = meter.sockets
+    await until('the four closes recorded', () => meter.sockets.filter((s) => s.closedAt !== null).length === 4)
+    // The credential reaches the backend as the subprotocol, as clients send it, and the client's own headers
+    // with it; the handshake's are the meter's own.
+    expect(backend.protocols).toEqual(Array(5).fill('good-token'))
+    expect(backend.headers[0]).toMatchObject({ 'x-harness-probe': 'kept', cookie: 'c=1' })
+
+    const [first, second, third, fourth, fifth] = meter.sockets
     expect(first).toMatchObject({ endpoint: '/api/web-ws', client: 'web', version: null, closedAt: null,
       selects: [{ machineId: KNOWN, outcome: 'accepted' }] })
     expect(second).toMatchObject({ endpoint: '/api/web-ws', client: 'relay', version: '1.2.3', closeCode: 4404,
       selects: [{ machineId: DELETED, outcome: 'NOT_YOUR_MACHINE' }] })
-    expect(third).toMatchObject({ endpoint: '/api/web-ws', client: null, version: null, closeCode: 1000, selects: [] })
+    expect(third).toMatchObject({ endpoint: '/api/web-ws', client: 'unknown', version: null, closeCode: 1000, selects: [] })
+    expect(fourth).toMatchObject({ client: 'unknown', version: null })
+    expect(fifth).toMatchObject({ endpoint: '/api/adapter-ws', client: 'daemon', version: '2.1.0' })
     web.ws.close()
     await web.closed
+  })
+
+  it('closes its side to the backend when the client gives up before the upgrade completes', async () => {
+    const backend = await standIn()
+    stops.push(() => { backend.server.closeAllConnections(); backend.server.close() })
+    const meter = await SocketMeter.start(backend.url)
+    stops.push(() => meter.close())
+
+    const quitter = new WebSocket(`${meter.wsUrl}/api/web-ws?client=web`, ['slow-token'])
+    quitter.on('error', () => {})
+    await until('the backend holding the upgrade', () => backend.protocols.length === 1)
+    quitter.terminate()
+    // The backend's upgrade completes after the client left; the meter must not keep that socket.
+    await new Promise((r) => setTimeout(r, 600))
+    await until('the backend side closed', () => backend.open.size === 0)
+    expect(meter.sockets).toEqual([])
   })
 
   it('counts a refused upgrade apart from the sockets, and HTTP requests by route', async () => {
@@ -152,8 +199,11 @@ describe('socket meter', () => {
         { endpoint: '/api/web-ws', client: 'web', version: '2.0.0', openedAt: at + 20_000, closedAt: at + 50_000, closeCode: 1006, closeReason: '',
           selects: [{ machineId: KNOWN, at: at + 20_000, outcome: 'accepted' }] },
         // A daemon relay that never selected, 90 s.
-        { endpoint: '/api/web-ws', client: null, version: null, openedAt: at, closedAt: at + 90_000, closeCode: 1000, closeReason: '', selects: [] },
-        { endpoint: '/api/adapter-ws', client: null, version: '1.0.0', openedAt: at, closedAt: null, closeCode: null, closeReason: '', selects: [] },
+        { endpoint: '/api/web-ws', client: 'unknown', version: null, openedAt: at, closedAt: at + 90_000, closeCode: 1000, closeReason: '', selects: [] },
+        { endpoint: '/api/adapter-ws', client: 'daemon', version: '1.0.0', openedAt: at, closedAt: null, closeCode: null, closeReason: '', selects: [] },
+        // Opened before the clock started (the daemons' own start): outside the report.
+        { endpoint: '/api/web-ws', client: 'relay', version: '1.0.0', openedAt: at - 5_000, closedAt: at - 4_000, closeCode: 1011, closeReason: '',
+          selects: [{ machineId: DELETED, at: at - 5_000, outcome: 'NOT_YOUR_MACHINE' }] },
       ],
       refused: [{ endpoint: '/api/web-ws', status: 401, at }],
       http: {},
@@ -170,6 +220,8 @@ describe('socket meter', () => {
     expect(web.closedWithoutSelect).toBe(1)
     // Attributed: a client kind and a version. The two relays and the second tab.
     expect(web.attributed).toBe(0.6)
+    // And by kind, so many attributed relays cannot hide a kind that never is.
+    expect(web.attributedByClient).toEqual({ relay: 1, web: 0.5, unknown: 0 })
     expect(web.closeCodes).toEqual({ 1011: 2, 1000: 1, 1006: 1 })
     expect(web.selectOutcomes).toEqual({ NOT_YOUR_MACHINE: 2, accepted: 2 })
     expect(web.deletedMachineSelects).toBe(2)
