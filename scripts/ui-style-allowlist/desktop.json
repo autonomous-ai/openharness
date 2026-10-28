@@ -105,7 +105,7 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/view.dart": {
-    "edge-insets": 24,
+    "edge-insets": 23,
     "border-radius": 1
   }
 }
