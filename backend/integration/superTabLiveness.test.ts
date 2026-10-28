@@ -218,6 +218,41 @@ describe('work that loses its owner', () => {
     expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
   })
 
+  // 2026-10-28: a resumed task keeps its id. When its session then stopped, the second loss wrote the first loss's notice
+  // ids again: the machine's report and the Lead's poll each failed on the duplicate from then on, so the machine looked
+  // offline and nothing reached the Lead.
+  it('is lost again after it resumed, and its machine\'s report and its Lead\'s poll still go through', async () => {
+    const f = await swarm()
+    const lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    f.clock.now += 30 * MINUTE
+    await f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
+    await f.leadInbox()
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped', at: f.clock.now } })
+    expect((await f.lostRows()).filter(m => m.recipientIds.includes(f.lead))).toHaveLength(2)
+    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost').at(-1)!.text)
+      .toContain('lost its task "Ship the parser": its session on Worker Mac stopped.')
+  })
+
+  // The stuck Swarm of that day: its first loss's notices were written under the old ids, named by the task alone. Its next
+  // check writes the loss under new ids, and the Lead and the worker each receive their notice.
+  it('heals a resumed task whose first loss was written under the old notice ids', async () => {
+    const f = await swarm()
+    for (const id of [stableId('work-lost', f.assignmentId), stableId('work-lost', f.assignmentId, 'agent')]) {
+      await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: f.group, sequence: 1, author: { kind: 'agent', id: f.lead },
+        text: 'The first loss', replyTo: null, recipientIds: [], mentions: [] } })
+    }
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} lost its task "Ship the parser": its session on Worker Mac stopped. `
+      + 'Last progress 1 minute ago. Last result: none. Assign it to another agent now, or cancel it.')
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker,
+      messageId: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') } })).toBe(1)
+  })
+
   // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
   // rows do (cli superTabs/limitResume.ts reads them before typing).
   it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
@@ -606,6 +641,51 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     f.clock.now += 5 * MINUTE
     const told = await f.leadInbox()
     expect(told.map(m => (m.source as { kind?: string }).kind)).toEqual(['update-request'])
+  })
+
+  // Prod, 2026-10-28: a Lead's host received an update request on 26 Oct and the Lead never answered it. Every later poll
+  // took it as still pending, so the project was never asked again, its reports were never summarized, and 372 archived
+  // conversations could not go quiet for two days.
+  it('asks again once an update request the Lead\'s host received goes unanswered for two hours, and not before', async () => {
+    const f = await swarm()
+    await f.leadInbox()
+    f.clock.now += 5 * MINUTE
+    const requests = async () => {
+      const rows = await f.timed.deliveries(host, f.tab, f.lead)
+      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
+      return rows.filter(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind === 'update-request')
+    }
+    const [first] = await requests()
+    expect(first).toBeDefined()
+    // Typed into the Lead's terminal, never answered.
+    await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, first!.id, { type: 'ack', claimId: 'claim', receipt: 'typed', uncertain: false })
+    // New reports keep coming.
+    f.clock.now += MINUTE
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
+    f.clock.now += 59 * MINUTE
+    expect(await requests()).toEqual([])
+    f.clock.now += 61 * MINUTE
+    const again = await requests()
+    expect(again).toHaveLength(1)
+    expect(again[0]!.messageId).not.toBe(first!.messageId)
+  })
+
+  it('keeps holding later update requests while the first never reached the Lead\'s host, however long', async () => {
+    const f = await swarm()
+    await f.leadInbox()
+    f.clock.now += 5 * MINUTE
+    const kinds = async () => {
+      const rows = await f.timed.deliveries(host, f.tab, f.lead)
+      const messages = await db.superTabMessage.findMany({ where: { id: { in: rows.map(r => r.messageId) } } })
+      return rows.map(r => (messages.find(m => m.id === r.messageId)!.source as { kind?: string }).kind)
+    }
+    expect(await kinds()).toContain('update-request')
+    // Never claimed: the host is offline. New reports keep coming.
+    f.clock.now += MINUTE
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Halfway' }, host, f.worker)
+    f.clock.now += 3 * 60 * MINUTE
+    expect((await kinds()).filter(kind => kind === 'update-request')).toHaveLength(1)
   })
 
   it('delivers a message on the very next poll, within a second of the last one', async () => {
