@@ -2619,6 +2619,18 @@ describe('lost work (liveness.ts)', () => {
     expect(task().lostAttempt).toEqual({ id: task().assignment!.id, agentId: worker, machineId: 'host', engine: config.engine })
   })
 
+  it('refuses to archive a group whose task is lost, by its Lead or an owner, until the work is cancelled', () => {
+    const { f, lead, group, as, task, limit } = lostFixture()
+    limit()
+    expect(task().assignment!.status).toBe('lost')
+    expect(() => f.run({ type: 'conversation.archive', conversationId: group, archived: true }, as(lead))).toThrow('unfinished')
+    expect(() => f.run({ type: 'conversation.archive', conversationId: group, archived: true })).toThrow('unfinished')
+    expect(task().archived).toBeFalsy()
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: task().assignment!.id, reason: 'Nobody needs it now.' }, as(lead))
+    f.run({ type: 'conversation.archive', conversationId: group, archived: true }, as(lead))
+    expect(task().archived).toBe(true)
+  })
+
   it('lets the Lead hand lost work to another agent without first deciding about the lost one', () => {
     const { f, lead, group, other, as, task, limit } = lostFixture()
     limit()

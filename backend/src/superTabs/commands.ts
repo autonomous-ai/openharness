@@ -1154,6 +1154,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = conversation(state, command.conversationId)
       if (group.id === groupProject(state, group).leadConversationId) fail('LEAD_CONVERSATION', 'The Lead conversation stays available.')
       if (command.archived && activeWork(group)) fail('WORK_ACTIVE', 'Resolve the active assignment before archiving this conversation.')
+      // Lost work is unfinished: archiving it would hide it from whoever asked for it (group #369). A stop is a host-confirmed
+      // choice of the Lead or a person, and cannot be cancelled, so a stopped group may still be archived.
+      if (command.archived && group.assignment?.status === 'lost') {
+        fail('WORK_UNFINISHED', 'This work is unfinished. Hand it to another agent, or cancel it, before archiving this conversation.')
+      }
       group.archived = command.archived
       // Archived by hand, it leaves the active set until it is reopened (spec, Archive), once its reports are acknowledged:
       // until then the sweep leaves it in the active set, where the report check sees it (design section 3.6).
