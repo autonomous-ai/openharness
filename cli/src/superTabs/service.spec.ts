@@ -858,6 +858,25 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'later' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
   })
 
+  it('offers nothing for a Swarm joined or added to that the team account is not tried in yet', async () => {
+    const offer = vi.fn(async () => ({ state: 'wanted' as const }))
+    const tabs: Record<string, Record<string, unknown>> = { elsewhere: { people: [{ id: 'me' }], teamAccounts: false }, mine: { people: [{ id: 'me' }] } }
+    const backend = vi.fn<CoreApi['account']['backend']>(async (_method, path) => {
+      const tab = tabs[path.split('/')[3]!]
+      return tab ? { status: 200, body: { success: true, data: swarmReply(path, tab) } } : { status: 503, body: { success: false } }
+    })
+    const service = superTabService(fakeCore({ account: { backend } }), { teamSetup: async () => ({ offer, decline: vi.fn() }) })
+    for (const reason of ['join', 'contribute']) {
+      expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason, tabId: 'elsewhere' }, owner)).toEqual({ ok: true, state: 'not-used' })
+    }
+    expect(offer).not.toHaveBeenCalled()
+    // Its own Swarm, one the server cannot read now, and an older Desktop that names none are offered, as before.
+    for (const tabId of ['mine', 'unreadable', undefined]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'join', tabId }, owner)).toEqual({ ok: true, state: 'wanted' })
+    }
+    expect(offer).toHaveBeenCalledTimes(3)
+  })
+
   it('tries again to make its setup when making it failed', async () => {
     const make = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValueOnce({ offer: async () => ({ state: 'exists' }), decline: vi.fn() })
     const service = superTabService(fakeCore(), { teamSetup: make })
@@ -879,6 +898,8 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const shared = answers([{ tabId: 'solo' }, { tabId: 'gone' }, { tabId: 'team' }],
       { solo: { people: [{ id: 'me' }] }, team: { people: [{ id: 'me' }, { id: 'kim' }] } })
     expect(await sharedSwarm(sources(shared))).toBe(true)
+    // A Swarm the team account is not tried in yet (backend machines.ts teamAccountSwarm) does not count.
+    expect(await sharedSwarm(sources(answers([{ tabId: 'team' }], { team: { people: [{ id: 'me' }, { id: 'kim' }], teamAccounts: false } })))).toBe(false)
     expect(shared.mock.calls.map(c => c[1])).toEqual(['/api/super-tabs/hosts/machine-1/changes?full=1',
       '/api/super-tabs/solo/parts', '/api/super-tabs/gone/parts', '/api/super-tabs/team/parts'])
     expect(await sharedSwarm(sources(answers([{ tabId: 'solo' }, { tabId: '../x' }], { solo: { people: [{ id: 'me' }] } })))).toBe(false)

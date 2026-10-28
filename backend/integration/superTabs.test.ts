@@ -2817,6 +2817,40 @@ describe('Lead mentions', () => {
   })
 })
 
+describe('leaderboard credits written by the store (leaderboard/record.ts)', () => {
+  const unblocks = async (tab: string, group: string) => (await storedState(tab)).conversations.find(c => c.id === group)!.ledger?.unblocks ?? []
+
+  it('credits a reply to a Lead\'s tag once, as a tag reply', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const group = (await run(tab, { type: 'conversation.create', title: 'Copy review', brief: '', checks: [] })).result.conversationId as string
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    const tag = (await run(tab, { type: 'message.send', conversationId: group, text: 'Confirm the copy?', replyTo: null, recipientIds: [], mentions: [peer.sub] },
+      host, lead)).result.messageId as string
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Confirmed.', replyTo: null, recipientIds: [] }, peer)
+    await run(tab, { type: 'message.send', conversationId: group, text: 'One more thing.', replyTo: null, recipientIds: [] }, peer)
+    expect(await unblocks(tab, group)).toEqual([{ personId: peer.sub, at: expect.any(Number), waitedMs: expect.any(Number), kind: 'tag_reply', item: tag }])
+  })
+
+  it('credits "Duyệt" in reply to the Lead\'s ask as an approval, in the Lead conversation', async () => {
+    const { tab, lead } = await fixture()
+    const ask = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Plan: three steps. GO?', replyTo: null, recipientIds: [] }, host, lead))
+      .result.messageId as string
+    await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Duyệt nhé', replyTo: ask, recipientIds: [] })
+    expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: owner.sub, kind: 'approval', item: ask })])
+  })
+
+  it('credits the person asked for their decision answer', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const asked = await run(tab, { type: 'decision.ask', conversationId: 'lead', personId: peer.sub,
+      questions: [{ question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] }, host, lead)
+    const decisionId = (asked.result.decisionIds as string[])[0]!
+    await run(tab, { type: 'decision.answer', decisionId, choice: 1 }, peer)
+    expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decisionId })])
+  })
+})
+
 describe('credentials in Swarm chat', () => {
   // Assembled at run time from obviously fake parts, never a credential-shaped literal.
   const jwt = [{ alg: 'HS256', typ: 'JWT' }, { sub: 'fixture-user' }].map(part => Buffer.from(JSON.stringify(part)).toString('base64url'))

@@ -56,6 +56,43 @@ void main() {
     expect(row(announces(f).last)['projectId'], 'design');
   });
 
+  test('a Swarm tab restored on its project chat names that project once the Swarm loads', () async {
+    // Diego's dial, 2026-10-28: the app came back on the Swarm's project
+    // chat (`project-<id>`), the dial was told the tab before the Swarm had
+    // loaded, and nothing told it again once it had.
+    final f = SuperTabLaunchFixture(local: true);
+    final server = f.connection.server;
+    server.state['projects'] = [
+      projectFixture('lead', 'Lamp OS', 'lead'),
+      projectFixture('design', 'Design', 'project-design'),
+    ];
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('project-design', 'Lead'),
+      'projectId': 'design',
+    });
+    await f.store.write(
+      'super_tab.owner.$tabId',
+      '{"tabId":"$tabId","accountId":"owner","selectedId":"project-design"}',
+    );
+    f.app.adoptPoolConnectionForTest('m', f.connection);
+    final hold = server.holdReads = Completer<void>();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    expect(c.selectedId, 'project-design');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last).containsKey('projectId'), isFalse);
+    final before = announces(f).length;
+    server.holdReads = null;
+    hold.complete();
+    await c.refresh();
+    await settle();
+    expect(c.snapshot, isNotNull);
+    final after = announces(f).skip(before).toList();
+    expect(after, isNotEmpty);
+    expect(row(after.last)['projectId'], 'design');
+  });
+
   test('a draft tab has no tab id', () async {
     final (f, _) = await open();
     f.app.newSwarm(newTabPage: true);

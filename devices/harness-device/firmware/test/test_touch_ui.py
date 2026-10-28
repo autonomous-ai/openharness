@@ -1638,6 +1638,28 @@ static void swarm_pane_checks(const char *dir) {
     // The Swarm gone from the list: back to TABS.
     { const char ids[2][ID_MAX] = {"s3", "s2"}; ui_supertabs_ids(ids, 2); }
     assert(!swarm_mode() && s.view == TABS);
+    // Diego's dial, 2026-10-28: the window on a Swarm tab with no project open (its Chat with PM, a DM) names no Lead.
+    // The dial still goes into that Swarm, on the Lead the desktop last showed there, else the first by order; a dial
+    // already in it keeps its face.
+    swarm_setup(); COPY(s.selected_tab, "t1"); s.view = HOME; ui_supertab_focus("s1", "");
+    assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L0") && !wire_has(0, "select s1 L0"));
+    ui_supertab_focus("s1", "L2"); ui_supertab_focus("s1", ""); assert(!strcmp(sw.lead, "L2"));
+    swarm_leave(); ui_supertab_focus("s1", ""); assert(swarm_mode() && !strcmp(sw.lead, "L2"));
+    swarm_leave(); s.voice_open = true; ui_supertab_focus("s1", ""); assert(!swarm_mode()); s.voice_open = false;
+    // A focus that arrives just before the `swarms` frame that selects its desk tab enters when that frame lands…
+    {
+        swarm_setup(); s.view = HOME; ui_supertab_focus("s1", "L2"); assert(!swarm_mode());
+        cable_swarm_t rows[3]; memcpy(rows, desk_rows, sizeof rows);
+        ui_swarms_replace(rows, 3, "t1"); assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L2"));
+        // …once: leaving and coming back to the tab by itself does not replay it.
+        swarm_leave(); ui_swarms_replace(rows, 3, "t0"); ui_swarms_replace(rows, 3, "t1"); assert(!swarm_mode());
+        // One with no Lead waits the same way.
+        ui_swarms_replace(rows, 3, "t0"); ui_supertab_focus("s1", ""); assert(!swarm_mode());
+        ui_swarms_replace(rows, 3, "t1"); assert(swarm_mode() && !strcmp(sw.lead, "L2"));
+        // The window going to another tab first spends it.
+        swarm_leave(); ui_swarms_replace(rows, 3, "t0"); ui_supertab_focus("s1", "L3");
+        ui_swarms_replace(rows, 3, "t2"); ui_swarms_replace(rows, 3, "t1"); assert(!swarm_mode());
+    }
     // The side button: STOP for a busy Lead on this computer (its harness id), HOME for a remote one.
     swarm_setup(); enter_at("s1", "L0"); ui_boot_pressed(); assert(s.view == STOP && !strcmp(s.stop_agent, "h0"));
     dispatch((action_t){.kind = A_STOP_YES}); assert(!strcmp(stopped_agent, "h0") && s.view == HOME);

@@ -735,7 +735,8 @@ export function subscribeDeviceStatus(userId: string, cb: (msg: DeviceStatusMsg)
 // create/delete/rename happens on normal REST workers, while device/web sockets may live on another
 // worker, so Redis fans out "re-query the DB now".
 export interface DeviceMachineListChangedMsg {
-  reason: 'created' | 'deleted' | 'renamed' | 'updated' | 'environment_changed'
+  /** `harness_shares`: a harness shared with the account was invited or taken back (routes/harnessShares.ts). */
+  reason: 'created' | 'deleted' | 'renamed' | 'updated' | 'harness_shares' | 'environment_changed'
   autonomousEnv?: 'prod' | 'stag'
 }
 
@@ -745,6 +746,20 @@ export function publishDeviceMachineListChanged(userId: string, msg: DeviceMachi
 
 export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: DeviceMachineListChangedMsg) => void): Promise<() => void> {
   return addSub(deviceMachineListChannel(userId), cb as Cb)
+}
+
+// Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
+// on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
+export interface SwarmDeliveriesMsg { tabId: string; agentId: string }
+
+const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
+
+export function publishSwarmDeliveries(machineId: string, msg: SwarmDeliveriesMsg): Promise<number> {
+  return safePublish(swarmDeliveriesChannel(machineId), JSON.stringify(msg))
+}
+
+export function subscribeSwarmDeliveries(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(swarmDeliveriesChannel(machineId), cb)
 }
 
 // Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every

@@ -35,6 +35,8 @@ export interface Derived {
   otherProjectsWork?: Json[]
   /** A person only. */
   mentionsWaiting?: number
+  /** False only in a Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm). */
+  teamAccounts?: false
 }
 
 interface ReadMeta {

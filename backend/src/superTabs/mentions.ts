@@ -51,6 +51,14 @@ export async function resolveByReply(tx: Tx, tabId: string, conversationId: stri
     data: { resolvedAt: new Date(now), resolvedBy: 'reply' } })
 }
 
+/** The tags a person's post in this conversation is about to answer (resolveByReply), for the leaderboard's credit
+ *  (leaderboard/record.ts recordPost): only which message and when. */
+export async function openTags(tx: Tx, tabId: string, conversationId: string, personId: string, now: number): Promise<Array<{ messageId: string; createdAt: number }>> {
+  const rows = await tx.superTabMention.findMany({ where: { tabId, conversationId, personId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS), lte: new Date(now) },
+    ...waiting }, select: { messageId: true, createdAt: true } })
+  return rows.map(row => ({ messageId: row.messageId, createdAt: row.createdAt.getTime() }))
+}
+
 export async function readMention(tx: Tx, tabId: string, id: string): Promise<MentionTarget | undefined> {
   return await tx.superTabMention.findFirst({ where: { id, tabId }, select: { id: true, personId: true, conversationId: true } }) ?? undefined
 }

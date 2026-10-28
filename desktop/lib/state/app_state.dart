@@ -1122,6 +1122,8 @@ class AppNotifier extends ChangeNotifier {
   // independently, with capped backoff and the same in-flight request as a manual retry.
   Timer? _machineRecoveryTimer;
   Timer? _sharingDiscoveryTimer;
+  // A `machines_changed` push waiting for its copies from the other machines ([machinesPushCollapse]).
+  Timer? _machinesPushTimer;
   // A viewer with no machine socket open hears no push at all — a machine that joins the account is
   // only found by this. See [_rereadMachinesWhileDeaf].
   late final _deafMachineListWatch = MachineListWatch(
@@ -1826,6 +1828,15 @@ class AppNotifier extends ChangeNotifier {
         }
       }
       if (shown) _persistLayout();
+      // The dial is told the project open in a Swarm tab only once the Swarm
+      // has loaded: a tab shown (or restored) before that went out with no
+      // project, and nothing told the dial again, so it stayed on an empty
+      // tab (Diego, 2026-10-28). Said again when that project changes, not on
+      // every read.
+      if (_dialProjects.containsKey(controller.tabId) &&
+          _dialProjects[controller.tabId] != _dialProject(controller)) {
+        _announceOpenPanesToDial();
+      }
       notifyListeners();
     },
     transport: (method, path, {body}) async {
@@ -1986,15 +1997,19 @@ class AppNotifier extends ChangeNotifier {
   /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
   /// for another machine, where nobody may be at it.
   ///
+  /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
+  /// try team accounts in yet asks nothing (the daemon reads it).
+  ///
   /// True when the daemon answered, whatever it decided; false when it was not
   /// asked or could not say.
-  Future<bool> offerTeamAccount(String reason) async {
+  Future<bool> offerTeamAccount(String reason, {String? tabId}) async {
     final here = _teamAccountHere();
     if (here == null) return false;
     try {
       final answer = await superTabMachineRequest(here, {
         'action': 'teamSetupCheck',
         'reason': reason,
+        'tabId': ?tabId,
       });
       appLog.info('super-tabs', 'team account offer ($reason): ${answer['state']}');
       if (answer['state'] == 'wanted') {
@@ -2453,6 +2468,7 @@ class AppNotifier extends ChangeNotifier {
           '${add.machineId}\u0000${add.agentId}',
         );
         if (!known && _sharedRereadAsked.add(add.machineId)) {
+          api.sharesChanged();
           unawaited(_rereadMachinesInBackground(pushed: true));
         }
         continue;
@@ -2591,6 +2607,7 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) {
       if (_foreignRosterEntry(pane.machineId, agentId) != null &&
           _sharedRereadAsked.add(pane.machineId)) {
+        api.sharesChanged();
         unawaited(_rereadMachinesInBackground(pushed: true));
       }
       return;
@@ -4850,6 +4867,11 @@ class AppNotifier extends ChangeNotifier {
   /// was most of the backend's traffic.
   static const machineListSafetyNetInterval = Duration(minutes: 5);
 
+  /// How long a `machines_changed` push waits for the same push from the other machines. The backend
+  /// tells every daemon socket of the account, and each relays it, so it reaches a window once per
+  /// connected machine: four at once on Diego's app (2026-10-28), each a read of its own.
+  static const machinesPushCollapse = Duration(seconds: 2);
+
   /// How often a viewer that has no machine socket open re-reads the machine list. Every push
   /// (`machines_changed`, `device_keys_changed`) reaches a browser over the web socket of a machine
   /// it is connected to; with none connected — the person signed in on the web first and is now
@@ -5612,6 +5634,20 @@ class AppNotifier extends ChangeNotifier {
   bool _announceFromDevice = false;
   int _devicePick = 0;
 
+  /// The project each Swarm tab's row last told the dial, by backend tab id;
+  /// null while its Swarm had not loaded. See `onSnapshot`.
+  final _dialProjects = <String, String?>{};
+
+  String? _dialProject(SuperTabController controller) =>
+      controller.snapshot?.projectFor(controller.selectedId)?.id;
+
+  /// The project open in this Swarm tab for its dial row, kept as told.
+  String? _rememberDialProject(String tabId) =>
+      _dialProjects[tabId] = switch (superTabs.peek(tabId)) {
+        final controller? => _dialProject(controller),
+        null => null,
+      };
+
   /// The tile roster and the tabs, to every daemon this window reaches over
   /// its loopback ([_deskConnection]) — never a relayed machine's.
   void _announceOpenPanesToDial() {
@@ -5678,10 +5714,7 @@ class AppNotifier extends ChangeNotifier {
           // while the tab has not loaded: a project is not guessed.
           if (swarm.superTabId case final tabId?) ...{
             'superTabId': tabId,
-            if (superTabs.peek(tabId) case final controller?)
-              if (controller.snapshot?.projectFor(controller.selectedId)
-                  case final project?)
-                'projectId': project.id,
+            'projectId': ?_rememberDialProject(tabId),
           },
           'agentIds': [
             for (final pane in swarm.panes)
@@ -7465,6 +7498,8 @@ class AppNotifier extends ChangeNotifier {
     _daemonSupervisionTimer = null;
     _sharingDiscoveryTimer?.cancel();
     _sharingDiscoveryTimer = null;
+    _machinesPushTimer?.cancel();
+    _machinesPushTimer = null;
     _deafMachineListWatch.stop();
     _groupSyncedAt.clear();
     _sharingDiscoveryBusy = false;
@@ -21120,8 +21155,14 @@ class AppNotifier extends ChangeNotifier {
       case 'machines_changed':
         // The account's machine list changed somewhere: a machine created,
         // renamed or deleted, or a shared harness invited or taken back. The
-        // payload is only a reason; the list itself is re-read.
-        unawaited(_rereadMachinesInBackground(pushed: true));
+        // payload is only a reason; the list itself is re-read, once for the
+        // copies every connected machine relays. Only `harness_shares` has it
+        // read the shares too, which take seconds (ApiClient.sharesChanged).
+        if (payload['reason'] == 'harness_shares') api.sharesChanged();
+        _machinesPushTimer ??= Timer(machinesPushCollapse, () {
+          _machinesPushTimer = null;
+          unawaited(_rereadMachinesInBackground(pushed: true));
+        });
         break;
       case 'device_keys_changed':
         // The account's device key log grew. A viewer re-reads and verifies it itself; a desktop
@@ -21751,6 +21792,7 @@ class AppNotifier extends ChangeNotifier {
     _disposed = true;
     _closeAttachmentSessions();
     _sharingDiscoveryTimer?.cancel();
+    _machinesPushTimer?.cancel();
     _deafMachineListWatch.stop();
     _stopMachineRecovery();
     if (signingIn) cliLogin.cancel();

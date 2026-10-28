@@ -14,6 +14,7 @@ vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof impor
 import { harnessShareRoutes, recipientShare } from './harnessShares.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
+import { logger } from '../utils/logger.js'
 
 const owner = { sub: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' as const }
 const ken = { sub: 'ken', email: ' Ken@Example.com ', role: 'user', autonomousEnv: 'prod' as const }
@@ -36,7 +37,7 @@ describe('account-bound harness invitations', () => {
     app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
     await app.register(harnessShareRoutes); await app.ready()
   })
-  afterEach(async () => { await app.close() })
+  afterEach(async () => { await app.close(); vi.restoreAllMocks() })
   const auth = { authorization: 'Bearer fixture' }
   function put(payload: unknown = input(), id: string = randomUUID()) {
     return app.inject({ method: 'PUT', url: `/api/harness-shares/${id}`, headers: auth, payload: payload as any })
@@ -102,6 +103,12 @@ describe('account-bound harness invitations', () => {
     const earlier = await put()
     expect(earlier.statusCode).toBe(409)
     expect(earlier.json().error).not.toHaveProperty('id')
+    // Any other failure to save is not a conflict: it stays a 500, and nobody is told of an invitation not saved.
+    mocks.prisma.harnessShare.upsert.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('Transaction conflict', { code: 'P2034', clientVersion: 'test' }))
+    expect((await put()).statusCode).toBe(500)
+    mocks.prisma.harnessShare.upsert.mockRejectedValue(new Error('db down'))
+    expect((await put()).statusCode).toBe(500)
+    expect(mocks.changed).not.toHaveBeenCalled()
   })
   it('discovers only active invitations for the signed-in email and environment, without machine secrets', async () => {
     mocks.auth.mockResolvedValue(ken)
@@ -164,20 +171,23 @@ describe('account-bound harness invitations', () => {
     expect(mocks.changed).toHaveBeenCalledTimes(4)
   })
   it('tells the invited account that its list changed, so its apps need not poll for invitations', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => logger)
     const id = randomUUID()
     // First read is the "may this grant be changed" check (no row yet); the second is the saved invitation.
     mocks.prisma.harnessShare.findUnique.mockResolvedValueOnce(null).mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await put(input(), id)).statusCode).toBe(200)
     expect(mocks.prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'ken@example.com' }, select: { id: true } })
-    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
+    // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the invitation behind it.
+    expect(info).toHaveBeenCalledWith('harness share: told the recipient it changed', { shareId: id, recipientId: 'ken' })
   })
   it('tells the invited account when the owner takes the invitation back', async () => {
     const id = randomUUID()
     mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
-    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
   })
   it('invites an address with no account yet, and survives the lookup failing, without telling anyone', async () => {
     const id = randomUUID(), remove = () => app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })

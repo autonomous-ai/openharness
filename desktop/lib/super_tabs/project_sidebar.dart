@@ -18,6 +18,7 @@ import 'model.dart';
 import 'pm_chat_rows.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
+import 'project_github.dart';
 
 /// The Swarm's Product Managers' conversation, listed as a channel among the projects.
 const kProductManagersChannel = 'product-managers';
@@ -254,11 +255,25 @@ class ProjectSidebar extends StatelessWidget {
                                               group,
                                               style: style,
                                             )
-                                          : Text(
-                                              label ?? project!.name,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: style,
+                                          : Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  label ?? project!.name,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: style,
+                                                ),
+                                                // Teammates' agents cannot push to its repository yet (project_github.dart).
+                                                if (project != null)
+                                                  ProjectGitHubLine(
+                                                    controller: controller,
+                                                    project: project,
+                                                  ),
+                                              ],
                                             ),
                                     ),
                                     if (project?.isPrivate == true) ...[

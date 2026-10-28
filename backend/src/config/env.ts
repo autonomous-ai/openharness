@@ -267,6 +267,10 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(''),
   // The app's name in github.com/apps/NAME, for the install link a refusal gives. Optional.
   GITHUB_APP_SLUG: z.string().default(''),
+  // The app's own GitHub sign-in (its Client ID and a client secret), with which a person who can push to a repository
+  // approves it for a Swarm (github/approvals.ts). Unset, no repository can be approved and the app gives no token.
+  GITHUB_APP_CLIENT_ID: z.string().default(''),
+  GITHUB_APP_CLIENT_SECRET: z.string().default(''),
 
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.

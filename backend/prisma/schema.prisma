@@ -1200,6 +1200,8 @@ model SuperTabDelivery {
 
   @@index([tabId, agentId, status, createdAt])
   @@index([machineId, status])
+  // A page of messages reads its deliveries by message (pageReads.ts).
+  @@index([tabId, messageId])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.
@@ -1773,4 +1775,23 @@ model ConnectorApp {
   updatedAt    DateTime @updatedAt
 
   @@map("connector_apps")
+}
+
+/// A Swarm's approval to use a GitHub repository for teammates' work (docs/plans/2026-10-28-swarm-project-github-access.md):
+/// someone GitHub says can push to it approved it, signed in to GitHub through the Harness GitHub App. Without one, the
+/// app gives no token for the repository, so a project cannot name a repository its people cannot push to and borrow the
+/// app's access to it. `projectId` "*": every project of the Swarm.
+model GitHubRepositoryApproval {
+  id            String   @id @map("_id")
+  autonomousEnv String
+  tabId         String
+  projectId     String
+  /// owner/name, lower case, as the project names it.
+  repository    String
+  approvedBy    String
+  githubLogin   String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, tabId, repository, projectId])
+  @@index([tabId])
 }

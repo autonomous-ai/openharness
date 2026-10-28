@@ -174,10 +174,17 @@ export async function sharedSwarm(sources: SwarmSources): Promise<boolean> {
   const pools = await sources.feed.current(POOLS_FRESH_MS).then(read => read.pools, () => [])
   for (const row of pools) {
     if (!identifier(row.tabId)) continue
-    const people = await sources.reads.read(row.tabId).then(read => read.state.people, () => null)
-    if (Array.isArray(people) && people.length > 1) return true
+    // A Swarm Harness Team accounts are not tried in yet (backend machines.ts teamAccountSwarm) asks for none.
+    const read = await sources.reads.read(row.tabId).catch(() => null)
+    if (read?.teamAccounts && Array.isArray(read.state.people) && read.state.people.length > 1) return true
   }
   return false
+}
+
+/** Whether the Swarm a person just joined or added this Mac to uses Harness Team accounts: false only when its server
+ *  says it does not, so a read that fails still offers, as before. */
+export async function teamAccountsIn(sources: SwarmSources, tabId: string): Promise<boolean> {
+  return sources.reads.read(tabId).then(read => read.teamAccounts, () => true)
 }
 
 export interface SuperTabServiceOptions {
@@ -314,6 +321,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.reason === 'startup' && !(identifier(core.daemon.machineId()) && existsSync(hostJournalFile(core.dataDir, core.daemon.machineId())))) {
             return { ok: true, state: 'not-shared' }
           }
+          // Joined or added to a Swarm Harness Team accounts are not tried in yet: nothing asked (2026-10-28). An older
+          // Desktop names no Swarm and is offered as before.
+          if ((payload.reason === 'join' || payload.reason === 'contribute') && identifier(payload.tabId)
+            && !await teamAccountsIn(sources(), payload.tabId)) return { ok: true, state: 'not-used' }
           return { ok: true, ...await (await setup()).offer(payload.reason as AutoSetupReason, () => sharedSwarm(sources()),
             payload.action === 'teamSetupCheck') }
         }
