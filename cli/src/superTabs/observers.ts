@@ -26,12 +26,16 @@ export const OBSERVER_VALID_MS = OBSERVER_REFRESH_MS + OBSERVER_SLOW_READ_MS
  * Confidential sessions are the exception: a session a roster marked confidential keeps refusing every share, ordinary ones
  * too, until it closes on this machine (`live` says it no longer runs), whatever later rosters from any Swarm say (final
  * review, Critical 1). Without `live` nothing is cleared. The one opening is a Swarm's current Lead (`membersWatch`): the
- * members that Swarm's roster lists watch it through its shares, view only, while that roster is in force. */
-export function publishObservers(dataDir: string, machineId: string, rows: unknown[], until: number, live?: (harnessId: string) => boolean) {
-  const wanted: Wanted[] = [], open: Open[] = []
+ * members that Swarm's roster lists watch it through its shares, view only, while that roster is in force.
+ * `rows` null is no roster: the host stopped (superTabs/host.ts stop). The openings are then kept as the marks are, so a
+ * member watching the Lead is told to retry, not refused for good, until the next roster replaces them; they admit nobody
+ * meanwhile (`allows` needs a roster in force). An empty roster wrote none, so every such viewer was refused for good at
+ * each restart (review of #1945, 2026-10-28). */
+export function publishObservers(dataDir: string, machineId: string, rows: unknown[] | null, until: number, live?: (harnessId: string) => boolean) {
   const dir = join(dataDir, 'super-tabs'), file = observerSnapshotFile(dataDir, machineId)
+  const wanted: Wanted[] = [], open: Open[] = rows ? [] : savedOpen(file, machineId).filter(o => !live || live(o.agentId))
   const confidential = new Set(savedConfidential(file, machineId).filter(id => !live || live(id)))
-  for (const value of rows) {
+  for (const value of rows ?? []) {
     const row = object(value), agent = object(row.agent)
     if (identifier(agent.harnessId) && agent.machineId === machineId && row.confidential === true) confidential.add(agent.harnessId)
     if (!identifier(row.tabId) || !identifier(agent.harnessId) || agent.machineId !== machineId || !Array.isArray(row.observers)) continue
@@ -46,6 +50,13 @@ export function publishObservers(dataDir: string, machineId: string, rows: unkno
   writeFileSync(`${file}.next`, JSON.stringify({ machineId, until, wanted, confidential: [...confidential], open }), { mode: 0o600 })
   renameSync(`${file}.next`, file)
 }
+/** The current Leads a snapshot opened to their Swarm's members (publishObservers). */
+const openings = (saved: Record<string, unknown>, machineId: string): Open[] =>
+  saved.machineId === machineId && Array.isArray(saved.open) ? saved.open.map(object)
+    .filter(o => typeof o.tab === 'string' && o.tab.startsWith(PREFIX) && identifier(o.agentId)).map(o => ({ tab: o.tab, agentId: o.agentId }) as Open) : []
+function savedOpen(file: string, machineId: string): Open[] {
+  try { return openings(object(JSON.parse(readFileSync(file, 'utf8'))), machineId) } catch { return [] }
+}
 export function observerSource(dataDir: string, machine: () => string, now = Date.now) {
   let readAt = -Infinity, id = '', until = 0, wanted: Wanted[] = [], confidential: string[] = [], open: Open[] = []
   const read = (): Wanted[] => {
@@ -59,8 +70,7 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
           // Kept whatever the snapshot's age: a lapsed roster must not reopen a confidential session.
           confidential = saved.machineId === machineId && Array.isArray(saved.confidential) ? saved.confidential.filter(identifier) : confidential
           // Read whatever the snapshot's age too, so a lapsed roster's member waits for the next one; it admits only while in force.
-          open = saved.machineId === machineId && Array.isArray(saved.open) ? saved.open.map(object)
-            .filter(o => typeof o.tab === 'string' && o.tab.startsWith(PREFIX) && identifier(o.agentId)) as Open[] : []
+          open = openings(saved, machineId)
           if (saved.machineId === machineId && typeof saved.until === 'number' && saved.until <= time + OBSERVER_VALID_MS + 500 && Array.isArray(saved.wanted)) {
             until = saved.until
             wanted = saved.wanted.filter(w => {
