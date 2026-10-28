@@ -980,7 +980,7 @@ describe('Swarm cards', () => {
     ])
   })
 
-  it('says which Swarm project the window has open: only on a Swarm tab that names one, with the device mark', () => {
+  it('says which Swarm project the window has open: only on a Swarm tab, with the device mark, and no project as none', () => {
     const host = new DaemonCableHost(wiring())
     expect(host.activeSwarmProject()).toBeNull()   // no window
     const swarms = [
@@ -994,8 +994,10 @@ describe('Swarm cards', () => {
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: false })
     host.setSwarms({ active: 't2', swarms, tiles: [], fromDevice: true })
     expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: 'p1', fromDevice: true })
+    // The Swarm tab on its Chat with PM or a DM: still that Swarm, with no project of its own (Diego, 2026-10-28:
+    // the dial sat on "Nothing on this tab" while the window showed the Swarm).
     host.setSwarms({ active: 't3', swarms, tiles: [] })
-    expect(host.activeSwarmProject()).toBeNull()
+    expect(host.activeSwarmProject()).toEqual({ superTabId: 'st1', projectId: '', fromDevice: false })
   })
 
   it('hands the wiring what a device asks, and answers nothing when the wiring has none', async () => {
