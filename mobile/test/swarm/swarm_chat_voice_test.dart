@@ -505,6 +505,119 @@ void main() {
     expect(box(tester), 'held over the limit');
   });
 
+  // Review of #2014 at 61a2bce93: the reviewer's probe, in its order — the
+  // pause ends the take in front, and a system prompt comes up while the
+  // microphone is still closing.
+  testWidgets('a take whose microphone closes under a system prompt is sent '
+      'to be transcribed only once the app is back', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    stt.replies.add('said just before Control Center');
+    recorder.heldStop = Completer();
+    await tapMic(tester);
+    recorder.meter.value = 0.8;
+    await tester.pump(const Duration(milliseconds: 500));
+    recorder.meter.value = 0.02;
+    await tester.pump(const Duration(seconds: 4));
+    await frames(tester);
+    expect(recorder.stops, 1);
+    expect(stt.calls, isEmpty);
+
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    recorder.heldStop!.complete(recorder.captured);
+    await frames(tester);
+    await tester.pump(const Duration(seconds: 10));
+    expect(
+      stt.calls,
+      isEmpty,
+      reason: 'checked again once the microphone has closed',
+    );
+    expect(box(tester), isEmpty);
+
+    await lifecycle(tester, [AppLifecycleState.resumed]);
+    expect(stt.calls, hasLength(1));
+    expect(box(tester), 'said just before Control Center');
+    expect(fake.commands, isEmpty);
+  });
+
+  testWidgets('a take that reaches its limit as a system prompt comes up '
+      'waits for the app too', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    stt.replies.add('five minutes, then Control Center');
+    recorder.heldStop = Completer();
+    await tapMic(tester);
+    await tester.pump(const Duration(minutes: 5));
+    await frames(tester);
+    expect(recorder.stops, 1);
+
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    recorder.heldStop!.complete(recorder.captured);
+    await frames(tester);
+    expect(stt.calls, isEmpty);
+
+    await lifecycle(tester, [AppLifecycleState.resumed]);
+    expect(box(tester), 'five minutes, then Control Center');
+  });
+
+  testWidgets('a take held under a system prompt is thrown away if the app '
+      'goes away', (tester) async {
+    addTearDown(
+      () => tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      ),
+    );
+    await pump(tester);
+    stt.replies.add('never heard');
+    recorder.heldStop = Completer();
+    await tapMic(tester);
+    await tapMic(tester);
+    expect(recorder.stops, 1);
+
+    await lifecycle(tester, [AppLifecycleState.inactive]);
+    recorder.heldStop!.complete(recorder.captured);
+    await frames(tester);
+    await lifecycle(tester, [
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+    ]);
+    await lifecycle(tester, [
+      AppLifecycleState.hidden,
+      AppLifecycleState.inactive,
+      AppLifecycleState.resumed,
+    ]);
+    await tester.pump(const Duration(seconds: 5));
+
+    expect(stt.calls, isEmpty);
+    expect(box(tester), isEmpty);
+    expect(find.byType(VoiceMicCore), findsNothing, reason: 'back at rest');
+  });
+
+  testWidgets('a take whose microphone closes after the chat was covered is '
+      'not transcribed', (tester) async {
+    await pump(tester);
+    stt.replies.add('said behind another screen');
+    recorder.heldStop = Completer();
+    await tapMic(tester);
+    await tapMic(tester);
+
+    await cover(tester);
+    recorder.heldStop!.complete(recorder.captured);
+    await frames(tester);
+    await uncover(tester);
+
+    expect(stt.calls, isEmpty);
+    expect(box(tester), isEmpty);
+  });
+
   testWidgets('back on the chat, the mic starts a fresh take', (tester) async {
     await pump(tester);
     stt.replies.add('second try');
@@ -564,6 +677,16 @@ void main() {
 class _MeteredRecorder extends FakeVoiceRecorder implements VoiceLevelMeter {
   final meter = ValueNotifier<double>(0);
 
+  /// Holds [stop] open until the test completes it: a microphone that takes
+  /// its time to close, as a real one does.
+  Completer<VoiceTake?>? heldStop;
+
   @override
   ValueListenable<double> get level => meter;
+
+  @override
+  Future<VoiceTake?> stop() async {
+    final take = await super.stop();
+    return heldStop?.future ?? take;
+  }
 }

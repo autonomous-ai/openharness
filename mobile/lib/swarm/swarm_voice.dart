@@ -23,7 +23,8 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// covered by another screen ([hide]) or the app sent to the background — so
 /// nothing is recorded, or sent to be transcribed, behind the person's back.
 /// Behind a system prompt the take is kept, but nothing ends it by itself
-/// until the app is back: neither its pause nor its time limit.
+/// until the app is back: neither its pause nor its time limit. A take that
+/// ended just before goes to be transcribed only then, too.
 class SwarmVoice extends ChangeNotifier {
   SwarmVoice({required this.create, required this.insert});
 
@@ -61,6 +62,10 @@ class SwarmVoice extends ChangeNotifier {
   /// in front: it ends as the app comes back.
   bool _limitReached = false;
 
+  /// A take whose microphone closed while the app was not in front, waiting
+  /// for it to come back ([_mayTranscribe]).
+  Completer<bool>? _held;
+
   /// The voice input, from the first tap: a recorder opens a platform
   /// channel, and a chat nobody talks to should not.
   VoiceInputController? get voice => _voice;
@@ -95,6 +100,7 @@ class SwarmVoice extends ChangeNotifier {
   /// take, and a take nobody can see must not leave the phone.
   void hide() {
     _stopPause();
+    _release(false);
     final voice = _voice;
     if (voice == null || voice.isIdle) return;
     voice.clear();
@@ -105,6 +111,7 @@ class SwarmVoice extends ChangeNotifier {
     voice.addListener(_changed);
     voice.level.addListener(_heard);
     voice.onTakeLimit = () async => _limit(voice);
+    voice.mayTranscribe = _mayTranscribe;
     final state = WidgetsBinding.instance.lifecycleState;
     _inFront = state == null || state == AppLifecycleState.resumed;
     _lifecycle = AppLifecycleListener(onStateChange: _lifecycleChanged);
@@ -115,6 +122,7 @@ class SwarmVoice extends ChangeNotifier {
     switch (state) {
       case AppLifecycleState.resumed:
         _inFront = true;
+        _release(true);
         _back();
       // ⚠️ Kept, not thrown away: the microphone permission prompt itself
       // leaves the app inactive, and so do Control Center and a call's banner,
@@ -151,6 +159,26 @@ class SwarmVoice extends ChangeNotifier {
     } else {
       _limitReached = true;
     }
+  }
+
+  /// Whether a take may go to be transcribed, asked once its microphone has
+  /// closed: at once in front; behind a system prompt, once the app is back —
+  /// and never if it goes away instead ([hide]).
+  ///
+  /// ⚠️ Asked again here, not only as the take ends: the microphone takes a
+  /// moment to close, and Control Center can come down in it.
+  Future<bool> _mayTranscribe() async {
+    while (!_inFront) {
+      if (!await (_held ??= Completer()).future) return false;
+    }
+    return true;
+  }
+
+  /// Lets a take held by [_mayTranscribe] go to be transcribed, or drops it.
+  void _release(bool go) {
+    final held = _held;
+    _held = null;
+    held?.complete(go);
   }
 
   /// Ends the take, its words into the draft. A take that fails keeps the
@@ -204,6 +232,7 @@ class SwarmVoice extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _stopPause();
+    _release(false);
     _lifecycle?.dispose();
     if (_voice case final voice?) {
       voice.removeListener(_changed);
