@@ -208,6 +208,21 @@ describe('runDshCommand', () => {
     expect(Date.now() - started).toBeLessThan(10_000)
   })
 
+  it('on Windows, ends the whole tree of a Git Bash run that outlives its timeout, not the shell alone', async () => {
+    // Windows has no process groups: a signal to the group reached nothing, and the one to the shell ended Git Bash's
+    // launcher alone, leaving what the doctor started running (review of #2025). Here a real bash stands in for Git
+    // Bash, and the stand-in for the tree killer ends its group, as TerminateProcess down the tree does there.
+    const ended: number[] = []
+    const endTree = async (pid: number): Promise<void> => { ended.push(pid); process.kill(-pid, 'SIGKILL') }
+    const result = await runDshCommand('echo "shell $$"; sleep 30 & wait', {
+      cwd: dir, timeoutMs: 300, env: { HOME: dir, PATH: '/usr/bin:/bin' },
+      host: { platform: 'win32', gitBash: () => '/bin/bash', endTree },
+    })
+    expect(result.timedOut).toBe(true)
+    const shell = result.lines.find((line) => line.startsWith('shell '))
+    expect(ended).toEqual([Number(shell?.slice('shell '.length))])
+  })
+
   it('does not take the shell\'s report of the job its stop ended for the command\'s output', async () => {
     // The shell outlives its job here on purpose: it ignores SIGTERM, so it is in `wait` when the job the stop
     // ended dies, and reports it, as it did under load when the job's death reached it first.

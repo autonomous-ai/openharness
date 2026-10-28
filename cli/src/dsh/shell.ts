@@ -10,6 +10,7 @@ import { harnessNodePrelude, interactiveEngineShell } from '../lib/engineLaunch.
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
 import { findGitBash, INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
+import { endProcessTree, processTreeKillDeps } from '../lib/windows/treeKill.js'
 
 export interface DshCommandOptions {
   cwd: string
@@ -90,10 +91,13 @@ export function dshShellArgv(
   return { path: '/bin/sh', args: ['-c', body] }
 }
 
-/** The platform and the Git Bash lookup `dshShellArgv` uses; a test gives Windows' on any computer. */
+/** The platform, the Git Bash lookup `dshShellArgv` uses and how a stop ends a run there; a test gives Windows' on
+ *  any computer. */
 export interface DshShellHost {
   platform?: NodeJS.Platform
   gitBash?: () => string | null
+  /** Windows: end [pid] and everything it started (`endWindowsTree` by default). */
+  endTree?: (pid: number) => Promise<unknown>
 }
 
 /** What a person is told when a package's setup or doctor cannot run here: a Windows computer without Git Bash, as an
@@ -211,7 +215,7 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
     const timer = opts.timeoutMs
       ? setTimeout(() => {
         timedOut = true
-        killProcessGroup(child)
+        killProcessGroup(child, undefined, opts.host)
       }, opts.timeoutMs)
       : null
     timer?.unref?.()
@@ -225,19 +229,31 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
   })
 }
 
-/** SIGTERM the child's whole group, then SIGKILL what is left a moment later. */
-export function killProcessGroup(child: ChildProcess, graceMs = 3_000): void {
+/** SIGTERM the child's whole group, then SIGKILL what is left a moment later; on Windows, end its tree. */
+export function killProcessGroup(child: ChildProcess, graceMs = 3_000, host: DshShellHost = {}): void {
   const pid = child.pid
   if (!pid) return
-  const timer = killPidGroup(pid, graceMs)
+  const timer = killPidGroup(pid, graceMs, host)
   child.once('exit', () => clearTimeout(timer))
+}
+
+/** [pid] and everything under it, from the pty host's process table, the furthest first (lib/windows/treeKill.ts). */
+function endWindowsTree(pid: number): Promise<unknown> {
+  return endProcessTree(pid, processTreeKillDeps(null))
 }
 
 /** The same, for a group this process did not spawn (a viewer left over from an earlier daemon —
  *  see viewerLedger.ts): nothing to wait on, so the SIGKILL follow-up fires unconditionally. */
-export function killPidGroup(pid: number, graceMs = 3_000): NodeJS.Timeout {
+export function killPidGroup(pid: number, graceMs = 3_000, host: DshShellHost = {}): NodeJS.Timeout {
   // pid 1 would make `-pid` "every process in my session"; nothing this daemon reaps is init.
   if (!Number.isInteger(pid) || pid <= 1) return setTimeout(() => {}, 0)
+  // Windows has no process groups, so `-pid` names nothing, and a signal is TerminateProcess of that one process: Git
+  // Bash's bin\bash.exe is a launcher, and ending it alone left the real bash, and what the setup or doctor started,
+  // running after a timeout (review of #2025). Its whole tree is ended instead, at once: nothing there gets a SIGTERM.
+  if ((host.platform ?? process.platform) === 'win32') {
+    void (host.endTree ?? endWindowsTree)(pid).catch(() => undefined)
+    return setTimeout(() => {}, 0)
+  }
   const signalGroup = (signal: NodeJS.Signals): void => {
     try { process.kill(-pid, signal) } catch { /* already gone */ }
     try { process.kill(pid, signal) } catch { /* already gone */ }
