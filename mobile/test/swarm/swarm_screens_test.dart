@@ -15,6 +15,7 @@ import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
+import '../theme/sheet_shape.dart';
 
 /// Half a second of frames, for a screen that cannot settle.
 Future<void> frames(WidgetTester tester) async {
@@ -660,6 +661,7 @@ void main() {
       read.complete();
       await tester.pumpAndSettle();
       expect(key('swarm-team-loading'), findsNothing);
+      expect(sheetTopRadius(tester), 12);
       expect(key('swarm-agent-agent-builder'), findsOneWidget);
     });
 

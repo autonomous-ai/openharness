@@ -1,0 +1,87 @@
+{
+  "mobile/lib/swarm/swarm_attachment.dart": {
+    "edge-insets": 1,
+    "border-radius": 1
+  },
+  "mobile/lib/swarm/swarm_conversation_page.dart": {
+    "hex-color": 2,
+    "material-color": 3,
+    "edge-insets": 25,
+    "border-radius": 4
+  },
+  "mobile/lib/swarm/swarm_devices_page.dart": {
+    "edge-insets": 2
+  },
+  "mobile/lib/swarm/swarm_drawer.dart": {
+    "font-size": 4,
+    "edge-insets": 5,
+    "border-radius": 1
+  },
+  "mobile/lib/swarm/swarm_leaderboard.dart": {
+    "hex-color": 2,
+    "material-color": 3,
+    "font-size": 15,
+    "edge-insets": 14,
+    "border-radius": 6
+  },
+  "mobile/lib/swarm/swarm_mark.dart": {
+    "edge-insets": 1
+  },
+  "mobile/lib/swarm/swarm_message_row.dart": {
+    "hex-color": 8,
+    "material-color": 1,
+    "edge-insets": 9,
+    "border-radius": 4
+  },
+  "mobile/lib/swarm/swarm_models_page.dart": {
+    "edge-insets": 2
+  },
+  "mobile/lib/swarm/swarm_need_rows.dart": {
+    "font-size": 6,
+    "edge-insets": 3,
+    "border-radius": 1
+  },
+  "mobile/lib/swarm/swarm_page.dart": {
+    "font-size": 1,
+    "edge-insets": 5
+  },
+  "mobile/lib/swarm/swarm_profile_sheet.dart": {
+    "material-color": 2,
+    "font-size": 14,
+    "edge-insets": 10,
+    "border-radius": 3
+  },
+  "mobile/lib/swarm/swarm_project_page.dart": {
+    "material-color": 1,
+    "font-size": 8,
+    "edge-insets": 17,
+    "border-radius": 3
+  },
+  "mobile/lib/swarm/swarm_reactions.dart": {
+    "material-color": 1,
+    "font-size": 1,
+    "edge-insets": 4,
+    "border-radius": 2
+  },
+  "mobile/lib/swarm/swarm_row.dart": {
+    "font-size": 2,
+    "edge-insets": 1
+  },
+  "mobile/lib/swarm/swarm_ship_row.dart": {
+    "hex-color": 6,
+    "font-size": 1,
+    "edge-insets": 5,
+    "border-radius": 2
+  },
+  "mobile/lib/swarm/swarm_start.dart": {
+    "edge-insets": 6,
+    "border-radius": 1
+  },
+  "mobile/lib/swarm/swarm_style.dart": {
+    "hex-color": 1,
+    "material-color": 3,
+    "font-size": 4,
+    "edge-insets": 6,
+    "border-radius": 4
+  }
+}

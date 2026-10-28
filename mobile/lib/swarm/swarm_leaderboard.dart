@@ -289,9 +289,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
       context: context,
       backgroundColor: AppGlass.rowFill,
       barrierColor: Colors.black.withValues(alpha: .55),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
+      shape: AppControl.sheetShape,
       builder: (context) => _Sheet(
         title: 'Week',
         closeKey: 'swarm-leaderboard-week-close',
@@ -322,9 +320,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     isScrollControlled: true,
     backgroundColor: AppGlass.rowFill,
     barrierColor: Colors.black.withValues(alpha: .55),
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-    ),
+    shape: AppControl.sheetShape,
     builder: (context) => _Sheet(
       key: const ValueKey('swarm-leaderboard-sheet'),
       title: name,
