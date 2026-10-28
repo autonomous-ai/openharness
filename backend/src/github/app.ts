@@ -74,6 +74,10 @@ const NOT_INSTALLED_TTL_MS = 60_000
 const REFRESH_MS = 15_000
 const BRANCH_TTL_MS = 10 * 60_000
 const REQUEST_TIMEOUT_MS = 10_000
+const IDENTITY_RETRY_MS = 10 * 60_000
+
+/** A git author and committer. */
+export interface CommitIdentity { name: string; email: string }
 
 export interface GitHubAppOptions {
   fetch?: typeof fetch
@@ -87,6 +91,8 @@ export class GitHubApp {
   private readonly now: () => number
   private readonly apiUrl: string
   private signed: { jwt: string; until: number } | null = null
+  /** The app's commit identity once read; a failed read is asked again after [IDENTITY_RETRY_MS]. */
+  private identity: { value: CommitIdentity | null; until: number } | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
   /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
@@ -105,6 +111,38 @@ export class GitHubApp {
     return this.config.slug ? `https://github.com/apps/${this.config.slug}/installations/new` : null
   }
 
+  /**
+   * Who the app's commits are by: its bot account as GitHub names it (`<slug>[bot]`, `<id>+<slug>[bot]@users.noreply.github.com`),
+   * so a commit made with the app's token shows the app, not the made-up address of the machine account that ran git. A Harness
+   * Team account has no git identity of its own, so its commits read "Harness Team <harnessteam@<host>.local>", unverified and
+   * linked to nobody (PR #1934, 2026-10-28). Read once and kept; null while GitHub cannot say, asked again ten minutes later.
+   */
+  async commitIdentity(): Promise<CommitIdentity | null> {
+    if (this.identity && (this.identity.value || this.identity.until > this.now())) return this.identity.value
+    let value: CommitIdentity | null = null
+    try {
+      let slug = this.config.slug
+      if (!slug) {
+        const app = await this.call('GET', '/app', `Bearer ${this.jwt()}`)
+        const named = (app.body as { slug?: unknown }).slug
+        slug = app.status === 200 && typeof named === 'string' && /^[a-z0-9-]{1,100}$/.test(named) ? named : null
+      }
+      if (slug) {
+        const login = `${slug}[bot]`
+        // Public: the app's own JWT is not accepted here, and the bot's id is no secret.
+        const user = await this.call('GET', `/users/${encodeURIComponent(login)}`, null)
+        const id = (user.body as { id?: unknown }).id
+        if (user.status === 200 && typeof id === 'number' && Number.isSafeInteger(id) && id > 0) {
+          value = { name: login, email: `${id}+${login}@users.noreply.github.com` }
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof GitHubAppError)) throw error
+    }
+    this.identity = { value, until: this.now() + IDENTITY_RETRY_MS }
+    return value
+  }
+
   /** The app's own JWT (RS256, ten minutes at most): issued a minute back against clock drift, valid nine minutes, and
    *  reused until a minute before it ends. */
   jwt(): string {
@@ -118,13 +156,13 @@ export class GitHubApp {
     return jwt
   }
 
-  private async call(method: string, path: string, auth: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
+  private async call(method: string, path: string, auth: string | null, body?: unknown): Promise<{ status: number; body: Record<string, unknown> | unknown[] }> {
     let response: Response
     try {
       response = await this.fetch(`${this.apiUrl}${path}`, {
         method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness-backend',
-          Authorization: auth, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+          ...(auth ? { Authorization: auth } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
     } catch {

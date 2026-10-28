@@ -71,13 +71,17 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
   const current = (): Wanted[] => { const rows = read(); return live() ? rows : [] }
   return {
     current,
-    /** What the host's last roster wants, or null when no roster is in force (its host stalled, or the file cannot be
-     *  read): that says nothing about who is a member, so Share keeps the invitations it holds rather than withdrawing
-     *  and sending them all again. Viewing is still withheld meanwhile (`allows`). A host that stops publishes an
-     *  empty roster that is in force, which does withdraw them. */
+    /** What the host's last roster wants, or null when no roster is in force (its host stalled or stopped, or the file
+     *  cannot be read): that says nothing about who is a member, so Share keeps the invitations it holds rather than
+     *  withdrawing and sending them all again. Viewing is still withheld meanwhile (`allows`). The next roster in force
+     *  withdraws those of members it no longer lists. */
     known: (): Wanted[] | null => { const rows = read(); return live() ? rows : null },
     /** A confidential session refuses every share, Swarm or ordinary; another Swarm share needs the roster in force. */
     allows: (grant: HarnessGrant): boolean => { read(); return !confidential.includes(grant.agentId) && (!superTabOf(grant) || current().some(w =>
       w.tab === grant.tab && w.agentId === grant.agentId && w.email === grant.recipientEmail)) },
+    /** A Swarm share withheld only because no roster is in force (its host is starting, or restarting for an update): the
+     *  next roster decides it, so its viewer is told to try again rather than that sharing ended. A confidential session's
+     *  is refused for good. */
+    paused: (grant: HarnessGrant): boolean => { read(); return !!superTabOf(grant) && !confidential.includes(grant.agentId) && !live() },
   }
 }

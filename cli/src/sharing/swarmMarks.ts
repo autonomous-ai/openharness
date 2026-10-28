@@ -41,5 +41,7 @@ export function withoutSwarm(dataDir: string, machine: () => string) {
     known: (): null => null,
     allows: (grant: HarnessGrant): boolean => !superTabOf(grant)
       && !savedConfidential(observerSnapshotFile(dataDir, machine()), machine()).includes(grant.agentId),
+    /** The Swarm off is no restart: no roster is coming, so a refused viewer is not told to retry. */
+    paused: (_grant: HarnessGrant): boolean => false,
   }
 }

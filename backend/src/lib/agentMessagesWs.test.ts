@@ -202,12 +202,15 @@ describe('blind shared-tab relay WebSocket', () => {
     expect(m.publish).toHaveBeenCalledTimes(1)
   })
 
-  it('closes 4403 when a share change or the 5 second re-check finds the socket no longer admitted', async () => {
+  it('closes 4403 when a share change or the 60 second re-check finds the socket no longer admitted', async () => {
     await connect(); m.admits.mockResolvedValue(false); changed(); await flush()
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
     m.admits.mockResolvedValue(true); ws = new Socket(); await connect()
-    await vi.advanceTimersByTimeAsync(5000); expect(ws.close).not.toHaveBeenCalled()
-    m.admits.mockResolvedValue(false); await vi.advanceTimersByTimeAsync(5000)
+    const checks = m.admits.mock.calls.length
+    await vi.advanceTimersByTimeAsync(60_000); expect(ws.close).not.toHaveBeenCalled()
+    expect(m.admits.mock.calls.length).toBe(checks + 1)
+    m.admits.mockResolvedValue(false); await vi.advanceTimersByTimeAsync(59_999); expect(ws.close).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
   })
 

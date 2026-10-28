@@ -1580,12 +1580,15 @@ describe('the members a host lets watch its agents', () => {
     clock += 1_000; await read(); clock += 201
     expect(source.allows(peer)).toBe(false)
     expect(source.known()).toEqual([])
-    // A host that stops publishes nobody, in force: Share withdraws the invitations rather than keeping them.
+    // A host that stops (its backend link dropped, or the daemon restarting for an update) pauses viewing at once, but no
+    // roster is in force: Share keeps the invitations. Withdrawing them took the computer out of every member's machine
+    // list until their app next read it, up to 5 minutes later (Ken, 2026-10-28).
     rows = [member]
     clock += 1_000; await read(); clock += 201
     expect(source.known()).toHaveLength(1)
     host.stop(); clock += 201
-    expect(source.known()).toEqual([])
+    expect(source.known()).toBeNull()
+    expect(source.allows(peer)).toBe(false)
     expect(superTabs.shareObservers).toHaveBeenCalledOnce()
   })
 })
