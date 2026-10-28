@@ -385,7 +385,11 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   deps.out(`  sign-in     ${!signIn ? '? not reported yet' : signIn.state === 'signed-in' ? `✓ signed in (${ago(now, signIn.at)})` : `✗ ${signIn.state}${signIn.detail ? `: ${signIn.detail}` : ''}`}`)
   const privacy = report?.privacy
   deps.out(`  privacy     ${!privacy ? '? not checked yet' : privacy.passed ? `Private ✓ (checked ${ago(now, privacy.checkedAt)})` : `✗ ${privacy.item}: ${privacy.detail} (checked ${ago(now, privacy.checkedAt)})`}`)
-  deps.out(`  your home   ${ownerHome} · mode ${homeMode === null ? 'unknown' : homeMode.toString(8)}${homeMode === 0o700 ? ' ✓' : ' ✗ should be 700: harness team setup makes it private again'}`)
+  // On Linux a home with ACL entries (a guest's) shows their mask as its group bits, 710: setup keeps that mask
+  // (script.ts), so there the privacy check is what says it is private, with nothing open to others.
+  const homePrivate = homeMode === 0o700
+    || (deps.platform === 'linux' && homeMode !== null && (homeMode & 0o007) === 0 && privacy?.passed === true)
+  deps.out(`  your home   ${ownerHome} · mode ${homeMode === null ? 'unknown' : homeMode.toString(8)}${homePrivate ? ' ✓' : ' ✗ should be 700: harness team setup makes it private again'}`)
   for (const line of engineLines(report?.engines, (at) => ago(now, at))) deps.out(line)
   deps.out('')
   deps.out('  What setup made:')

@@ -253,6 +253,22 @@ describe('harness team status', () => {
     expect(JSON.parse(json.out[0]!).engines).toEqual({ checkedAt: 5, claude: { installed: true, signedIn: true }, codex: { installed: true, signedIn: true } })
   })
 
+  it('on Linux, a home whose group bits are an ACL mask (a guest\'s entry) is private when the check passed', async () => {
+    // setfacl -n keeps the mask a guest's `u:<guest>:x` needs, and `stat` then shows the mask as the group bits (710).
+    const shown = async (mode: number, passed: boolean) => {
+      const f = fake({ platform: 'linux', readConfig: () => config, accountExists: vi.fn(async () => true), mode: () => mode })
+      f.status.set(STATUS, { version: 1, privacy: passed
+        ? { passed: true, checkedAt: 1_000_000 - 60_000 }
+        : { passed: false, item: 'home-listing', detail: 'The team account could list it.', checkedAt: 1_000_000 - 60_000 } })
+      await teamCommand(['status'], f.deps)
+      return f.out.join('\n')
+    }
+    expect(await shown(0o710, true)).toContain('mode 710 ✓')
+    expect(await shown(0o710, false)).toContain('mode 710 ✗')
+    expect(await shown(0o715, true)).toContain('mode 715 ✗')
+    expect(await shown(0o700, true)).toContain('mode 700 ✓')
+  })
+
   it('shows what is wrong: a failed check, an open home, a stopped daemon', async () => {
     const f = fake({ readConfig: () => config, accountExists: vi.fn(async () => true), mode: () => 0o750,
       jobState: vi.fn(async () => ({ loaded: false, pid: null, state: null })), exists: (p) => p !== config.plist })

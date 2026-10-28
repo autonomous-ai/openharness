@@ -615,12 +615,17 @@ describe('Linux', () => {
       const script = buildLinuxSetupScript(linuxInput())
       expect(script).toContain('die "an account named $TEAM already exists and is not the Harness Team account; nothing was changed" 4')
       expect(at(script, 'is not the Harness Team account; nothing was changed" 4')).toBeLessThan(at(script, 'useradd -m'))
-      expect(at(script, 'is not the Harness Team account; nothing was changed" 4')).toBeLessThan(at(script, 'chmod 700 "$OWNER_HOME"'))
+      expect(at(script, 'is not the Harness Team account; nothing was changed" 4')).toBeLessThan(at(script, OWNER_HOME_PRIVATE))
     })
 
-    it('makes the owner\'s home 0700 and writes the sentinel as the owner', () => {
+    // `chmod 700` on a home with ACL entries sets their mask to ---, and turns off the `u:<guest>:x` entries the guest
+    // helper gives machine sharing's guests (guest-helper.sh). Setting the three base entries with -n keeps the mask.
+    const OWNER_HOME_PRIVATE = 'setfacl -n -m u::rwx,g::---,o::--- "$OWNER_HOME"'
+
+    it('makes the owner\'s home private without turning off a guest\'s ACL entry, and writes the sentinel as the owner', () => {
       const script = buildLinuxSetupScript(linuxInput())
-      expect(script).toContain('chmod 700 "$OWNER_HOME"')
+      expect(script).toContain(OWNER_HOME_PRIVATE)
+      expect(script).not.toContain('chmod 700 "$OWNER_HOME"')
       expect(script).toContain(`| as_owner /bin/sh -c ${sh(WRITE_PUBLIC)} sh "$SENTINEL"`)
       expect(script).toContain('as_owner() { runuser -u "$OWNER" -- "$@"; }')
       expect(script).toContain('as_team() { runuser -u "$TEAM" -- "$@"; }')
@@ -658,7 +663,7 @@ describe('Linux', () => {
     it('runs its steps in order: account, homes, stop, runtime, config, relay folder, sign-in, daemon', () => {
       const script = buildLinuxSetupScript(linuxInput())
       const order = [
-        'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', 'chmod 700 "$OWNER_HOME"',
+        'owned_by_root "$dir"', 'useradd -m', 'passwd -l "$TEAM"', 'chmod 700 "$TEAM_HOME"', OWNER_HOME_PRIVATE,
         'as_owner /bin/sh -c', 'systemctl stop "$UNIT_NAME"', 'mktemp -d /var/tmp/harness-team.XXXXXX', 'as_team /bin/sh -c',
         'npm" install --global --prefix "$home/.local"', 'install -o 0 -g 0 -m 0644 "$STAGE/team.json" "$CONFIG"',
         'chown "$TEAM:$TEAM_GROUP" "$STATUS_DIR"', 'chmod 700 "$RELAY_DIR"', 'team __handoff', 'as_team /bin/sh -c \'umask 077',
