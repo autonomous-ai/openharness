@@ -29,6 +29,26 @@ export function parseLaunchctlPrint(code: number | null, stdout: string): JobSta
   return { loaded: true, pid: pid ? Number(pid[1]) : null, state: state ? state[1]! : null }
 }
 
+/** Whether a local account by [user] exists: the account database itself on Linux (`getent passwd`, through NSS), `id`
+ *  on a Mac. */
+export const teamAccountExists = (runner: GuestRunner, platform: NodeJS.Platform = process.platform) => async (user: string): Promise<boolean> =>
+  (platform === 'linux'
+    ? await runner('getent', ['passwd', user], { timeoutMs: 10_000 })
+    : await runner('id', ['-u', user], { timeoutMs: 10_000 })).code === 0
+
+/** What `systemctl show -p LoadState,ActiveState,MainPID <unit>` says of the team daemon; not loaded when systemd
+ *  does not know it. Readable without root. */
+export function parseSystemctlShow(code: number | null, stdout: string): JobState {
+  if (code !== 0) return { loaded: false, pid: null, state: null }
+  const values = new Map(stdout.split('\n').filter((line) => line.includes('=')).map((line) => {
+    const at = line.indexOf('=')
+    return [line.slice(0, at).trim(), line.slice(at + 1).trim()] as const
+  }))
+  if (values.get('LoadState') !== 'loaded') return { loaded: false, pid: null, state: null }
+  const pid = Number(values.get('MainPID'))
+  return { loaded: true, pid: Number.isInteger(pid) && pid > 0 ? pid : null, state: values.get('ActiveState') || null }
+}
+
 export function teamCommandDeps(options: {
   stopDaemon: () => Promise<boolean>
   startDaemon: () => Promise<void>
@@ -78,12 +98,16 @@ export function teamCommandDeps(options: {
     },
     exists: existsSync,
     mode: (path) => { try { return statSync(path).mode & 0o777 } catch { return null } },
-    admin: adminRunner({ runner }),
+    admin: adminRunner({ runner, platform: process.platform }),
     readConfig: () => readTeamConfig(),
     readStatus: (path) => readTeamStatus(path),
     writeStatus: writeTeamStatus,
-    accountExists: async (user) => (await runner('id', ['-u', user], { timeoutMs: 10_000 })).code === 0,
+    accountExists: teamAccountExists(runner),
     jobState: async (label) => {
+      if (process.platform === 'linux') {
+        const result = await runner('systemctl', ['show', '-p', 'LoadState,ActiveState,MainPID', label], { timeoutMs: 10_000 })
+        return parseSystemctlShow(result.code, result.stdout)
+      }
       const result = await runner('launchctl', ['print', `system/${label}`], { timeoutMs: 10_000 })
       return parseLaunchctlPrint(result.code, result.stdout)
     },

@@ -102,6 +102,14 @@ describe('the Harness Team account, set up on its own', () => {
     expect(unreadable.log.join('\n')).toContain('could not remember')
   })
 
+  it('remembers a setup Linux refused before it made anything as failed: no systemd, no tmux, no prompt to show', async () => {
+    for (const code of ['NO_SYSTEMD', 'NO_TMUX', 'NO_PROMPT']) {
+      const f = fake({ setup: vi.fn(async () => ({ code: 1, result: { ok: false, code, message: `refused: ${code}` } })) })
+      await f.auto.offer('join'); await f.auto.settled()
+      expect(f.decision(), code).toEqual({ state: 'failed', at: 1_000_000, detail: `refused: ${code}` })
+    }
+  })
+
   it('at app start, asks only while this Mac is in a Swarm with other people in it', async () => {
     const alone = fake()
     expect(await alone.auto.offer('startup', async () => false)).toEqual({ state: 'not-shared' })

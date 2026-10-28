@@ -73,8 +73,10 @@ export interface AutoSetupDeps {
   log(line: string): void
 }
 
-/** What a setup that made nothing answers: not cancelled, and not an account that exists but did not report in time. */
-const MADE_NOTHING = new Set(['SETUP_FAILED', 'NOT_INSTALLED', 'NOT_SIGNED_IN', 'RUN_AS_YOURSELF', 'INVALID_INPUT', 'BACKEND', 'EXPIRED', 'NOT_TEAM'])
+/** What a setup that made nothing answers: not cancelled, and not an account that exists but did not report in time.
+ *  Linux's own: no systemd or no tmux every account can run (the script stopped first), and no prompt to show. */
+const MADE_NOTHING = new Set(['SETUP_FAILED', 'NOT_INSTALLED', 'NOT_SIGNED_IN', 'RUN_AS_YOURSELF', 'INVALID_INPUT', 'BACKEND', 'EXPIRED', 'NOT_TEAM',
+  'NO_SYSTEMD', 'NO_TMUX', 'NO_PROMPT'])
 
 export class TeamAutoSetup {
   private running: Promise<void> | null = null

@@ -1,9 +1,10 @@
 /**
  * `harness team setup | status | remove | on | off` (docs/plans/2026-10-24-swarm-team-account.md, Task 2).
  *
- * On a Mac, Swarm work from teammates runs in the Harness Team account: a separate standard user with its own Harness
- * daemon, which cannot read the owner's files. A computer used only for agents (a Mac mini, a Linux or Windows box)
- * needs no second user: `harness team on` signs that computer in for team work only.
+ * On a Mac or a Linux computer, Swarm work from teammates runs in the Harness Team account: a separate standard user with
+ * its own Harness daemon, which cannot read the owner's files (Linux: docs/superpowers/plans/2026-10-28-harness-team-account-linux.md).
+ * A computer used only for agents (a Mac mini, a Linux or Windows box) needs no second user: `harness team on` signs that
+ * computer in for team work only.
  *
  * Internal verbs, run by the scripts and the team daemon's job, not by people:
  *   __handoff          (as the owner, from setup's script) print a fresh team sign-in code
@@ -14,25 +15,54 @@
  */
 import type { AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, type SignOutAsked } from '../lib/signOut.js'
-import type { RunAdmin } from './admin.js'
+import type { AdminVia, RunAdmin } from './admin.js'
 import { teamConfigJson, type TeamConfig } from './config.js'
 import { engineLines, type TeamEngines } from './engines.js'
 import { mintTeamConversion, mintTeamHandoff, redeemTeamHandoff, revokeHarnessRefresh, teamSession, TeamSignInError, type Delete, type Get, type Post } from './handoff.js'
 import {
-  SENTINEL_NAME, TEAM_CONFIG_FILE, TEAM_HOME, TEAM_LABEL, TEAM_PLIST, TEAM_PORT, TEAM_REAL_NAME, TEAM_SHARED_DIR, TEAM_SHARED_MARK,
-  TEAM_STATUS_DIR, TEAM_STATUS_FILE,
-  TEAM_USER, TeamInputError, carriedBackendEnv, checkPath, checkUser, teamPaths,
+  SENTINEL_NAME, TEAM_PORT, TEAM_REAL_NAME, TEAM_STATUS_FILE,
+  TEAM_USER, TeamInputError, carriedBackendEnv, checkPath, checkUser, teamLayout, teamPaths, type TeamLayout, type TeamPlatform,
 } from './layout.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
-import { REMOVE_REFUSED, TEAM_COMPUTER_LINE, buildRemoveScript, buildSetupScript, teamLaunchdPlist } from './script.js'
+import {
+  LINUX_NO_SYSTEMD, LINUX_NO_TMUX, REMOVE_REFUSED, TEAM_COMPUTER_LINE, buildLinuxRemoveScript, buildLinuxSetupScript, buildRemoveScript,
+  buildSetupScript, teamLaunchdPlist, teamSystemdUnit, type RemoveScriptInput, type SetupScriptInput, type TeamPlistInput,
+} from './script.js'
+
+/** How a platform with a Harness Team account makes and removes it. Windows has its own plan
+ *  (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md) and none yet. */
+interface TeamScripts {
+  setup(input: SetupScriptInput): string
+  remove(input: RemoveScriptInput): string
+  /** The team daemon's service definition. */
+  service(input: TeamPlistInput): string
+  /** Its name in the staging folder, where the setup script installs it from. */
+  serviceFile: string
+}
+
+const SCRIPTS: Partial<Record<TeamPlatform, TeamScripts>> = {
+  darwin: { setup: buildSetupScript, remove: buildRemoveScript, service: teamLaunchdPlist, serviceFile: 'team.plist' },
+  linux: { setup: buildLinuxSetupScript, remove: buildLinuxRemoveScript, service: teamSystemdUnit, serviceFile: 'team.service' },
+}
+
+interface TeamHere { layout: TeamLayout; scripts: TeamScripts; mac: boolean; where: string }
+
+/** This computer's layout and scripts, or null where `harness team setup` makes no account. */
+function teamHere(platform: NodeJS.Platform): TeamHere | null {
+  const layout = teamLayout(platform)
+  const scripts = layout ? SCRIPTS[layout.platform] : undefined
+  if (!layout || !scripts) return null
+  const mac = layout.platform === 'darwin'
+  return { layout, scripts, mac, where: mac ? 'this Mac' : 'this computer' }
+}
 
 export const TEAM_USAGE = [
   'Usage: harness team <setup | status | remove | on | off> [--json]',
   '',
-  '  setup     make the Harness Team account on this Mac for Swarm work: a separate standard user, "Harness Team"',
-  `            (${TEAM_USER}), whose own Harness daemon runs teammates' agents so they cannot read your files. macOS asks`,
-  '            for an administrator password once. It installs the account\'s own Claude Code and Codex, which you sign in',
-  '            once in a terminal on its machine. Running it again repairs it (--sign-in-again: a new sign-in for it)',
+  '  setup     make the Harness Team account on this Mac or Linux computer for Swarm work: a separate standard user,',
+  `            "Harness Team" (${TEAM_USER}), whose own Harness daemon runs teammates' agents so they cannot read your files.`,
+  '            The system asks for an administrator password once. It installs the account\'s own Claude Code and Codex,',
+  '            which you sign in once in a terminal on its machine. Running it again repairs it (--sign-in-again: a new sign-in)',
   '  status    whether the account exists and runs, its sign-in, privacy check and engines, and everything setup made',
   '  remove    delete the account, its home folder and its daemon; your home stays private. Run it in Terminal: sudo',
   '            asks for your password, and macOS asks once to let Terminal administer your computer, which it needs',
@@ -41,11 +71,17 @@ export const TEAM_USAGE = [
   '  off       sign this computer out of team work, then sign it in as your own computer again',
 ].join('\n')
 
-export const SETUP_PROMPT = 'Harness wants to create a separate account, Harness Team, for Swarm work on this Mac, so teammates\' agents cannot read your files.'
+/** What the administrator prompt says (sudo's prompt on Linux; pkexec shows polkit's own words). */
+const prompts = (where: string) => ({
+  setup: `Harness wants to create a separate account, Harness Team, for Swarm work on ${where}, so teammates' agents cannot read your files.`,
+  repair: `Harness wants to repair the Harness Team account, which runs Swarm work on ${where} so teammates' agents cannot read your files.`,
+  remove: `Harness wants to remove the Harness Team account, its home folder and its daemon from ${where}.`,
+})
+export const SETUP_PROMPT = prompts('this Mac').setup
 /** The same script on a Mac that has the account: it repairs what is there. (The dialog's title, "osascript", is the
  *  process that asks, and osascript cannot change it.) */
-export const REPAIR_PROMPT = 'Harness wants to repair the Harness Team account, which runs Swarm work on this Mac so teammates\' agents cannot read your files.'
-export const REMOVE_PROMPT = 'Harness wants to remove the Harness Team account, its home folder and its daemon from this Mac.'
+export const REPAIR_PROMPT = prompts('this Mac').repair
+export const REMOVE_PROMPT = prompts('this Mac').remove
 
 /** How long setup waits for the team daemon to sign in and report its privacy check. */
 export const SETUP_REPORT_WAIT_MS = 90_000
@@ -157,39 +193,64 @@ function fail(deps: TeamCommandDeps, json: boolean, code: string, message: strin
   return 1
 }
 
-/** What setup makes, said plainly so anyone can audit it or take it off the Mac by hand. */
-function madeLines(ownerHome: string): string[] {
-  const team = teamPaths()
+/** The folder above the status folder on Linux (/var/lib/harness), which setup also made and marked. */
+const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/'))
+
+/** What setup makes, said plainly so anyone can audit it or take it off the computer by hand. */
+function madeLines({ layout, mac }: TeamHere, owner: string, ownerHome: string): string[] {
+  const team = teamPaths(layout.home)
+  const { label, file } = layout.service
   return [
-    `  account   ${TEAM_REAL_NAME} (${TEAM_USER}): a standard user with a random password nobody knows, listed in Users & Groups`,
-    `  home      ${TEAM_HOME}`,
-    `  daemon    ${TEAM_LABEL}, a LaunchDaemon at ${TEAM_PLIST}, running as ${TEAM_USER} on port ${TEAM_PORT}`,
+    mac
+      ? `  account   ${TEAM_REAL_NAME} (${TEAM_USER}): a standard user with a random password nobody knows, listed in Users & Groups`
+      : `  account   ${TEAM_REAL_NAME} (${TEAM_USER}): a standard user with a locked password, never an administrator`,
+    `  home      ${layout.home}`,
+    `  daemon    ${label}, ${mac ? 'a LaunchDaemon' : 'a systemd unit'} at ${file}, running as ${TEAM_USER} on port ${TEAM_PORT}`,
     `  log       ${team.log} (inside the account's home)`,
-    `  setup     ${TEAM_CONFIG_FILE} and ${TEAM_STATUS_DIR}/`,
+    `  setup     ${layout.configFile} and ${layout.statusDir}/`,
+    ...mac ? [] : [`  relay     ${layout.relayDir(owner)}, yours, which the account may read to use your subscriptions`],
     `  check     ${ownerHome}/${SENTINEL_NAME}, a file the account must not be able to read`,
-    `  engines   Claude Code and Codex in ${TEAM_HOME}/.local, installed by the account itself`,
+    `  engines   Claude Code and Codex in ${layout.home}/.local, installed by the account itself`,
     `  your home ${ownerHome}, made private (mode 700)`,
   ]
 }
 
-function byHandLines(ownerHome: string): string[] {
+function byHandLines({ layout, mac }: TeamHere, owner: string, ownerHome: string): string[] {
+  const { label, file } = layout.service
+  if (!mac) {
+    const state = parentOf(layout.statusDir)
+    const stateMark = `${state}/${layout.sharedMark.slice(layout.sharedMark.lastIndexOf('/') + 1)}`
+    return [
+      '  To remove it by hand, in a terminal:',
+      `    sudo systemctl disable --now ${label}; sudo pkill -KILL -u ${TEAM_USER}; sudo userdel -r ${TEAM_USER}`,
+      `    sudo rm ${file}; sudo rm -rf ${layout.configFile} ${layout.statusDir} ${layout.relayDir(owner)} ${layout.sharedMark} ${stateMark}`,
+      `    rm ${ownerHome}/${SENTINEL_NAME}; sudo rmdir ${layout.sharedDir} ${state}   (only when they are empty)`,
+    ]
+  }
   return [
     '  To remove it by hand, in Terminal (macOS asks to let Terminal administer your computer for the first line):',
     `    sudo dscl . -delete /Users/${TEAM_USER}`,
-    `    sudo launchctl bootout system/${TEAM_LABEL}; sudo rm ${TEAM_PLIST}; sudo rm -rf ${TEAM_HOME}`,
-    `    sudo rm -rf '${TEAM_CONFIG_FILE}' '${TEAM_STATUS_DIR}' '${TEAM_SHARED_MARK}'; rm ${ownerHome}/${SENTINEL_NAME}`,
-    `    sudo rmdir '${TEAM_SHARED_DIR}'   (only when it is empty)`,
+    `    sudo launchctl bootout system/${label}; sudo rm ${file}; sudo rm -rf ${layout.home}`,
+    `    sudo rm -rf '${layout.configFile}' '${layout.statusDir}' '${layout.sharedMark}'; rm ${ownerHome}/${SENTINEL_NAME}`,
+    `    sudo rmdir '${layout.sharedDir}'   (only when it is empty)`,
   ]
 }
 
-const notMac = 'The Harness Team account is made on a Mac. On a computer used only for agents, run `harness team on`.'
+const notMac = 'The Harness Team account is made on a Mac or a Linux computer. On a computer used only for agents, run `harness team on`.'
+
+/** Why the Linux setup script stopped before it made anything, by the code `harness team setup --json` answers. */
+const LINUX_REFUSALS: ReadonlyMap<string, string> = new Map([[LINUX_NO_SYSTEMD, 'NO_SYSTEMD'], [LINUX_NO_TMUX, 'NO_TMUX']])
 
 /** A script's reason as a sentence, so the one after it does not run on: the scripts' own reasons end without a stop. */
 const sentence = (text: string): string => /[.!?]$/.test(text) ? text : `${text}.`
 
 async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean): Promise<number> {
-  if (deps.platform !== 'darwin') return fail(deps, json, 'UNSUPPORTED', notMac)
-  if (deps.uid() === 0) return fail(deps, json, 'RUN_AS_YOURSELF', 'Run this as yourself, not with sudo: macOS asks for an administrator password itself.')
+  const here = teamHere(deps.platform)
+  if (!here) return fail(deps, json, 'UNSUPPORTED', notMac)
+  const { layout, scripts, mac } = here
+  if (deps.uid() === 0) {
+    return fail(deps, json, 'RUN_AS_YOURSELF', `Run this as yourself, not with sudo: ${mac ? 'macOS' : 'Harness'} asks for an administrator password itself.`)
+  }
   const session = deps.session()
   if (!session) return fail(deps, json, 'NOT_SIGNED_IN', 'Sign this computer in first (harness login): the team account is signed in from your sign-in.')
   if (session.kind === 'team') return fail(deps, json, 'TEAM_SESSION', 'This computer already runs team work only (harness team on): it needs no Harness Team account.')
@@ -204,33 +265,41 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   const mintEnv: Record<string, string> = { ...carried }
   if (deps.env.HARNESS_AUTH_DIR?.trim()) mintEnv.HARNESS_AUTH_DIR = checkPath(deps.env.HARNESS_AUTH_DIR.trim(), 'HARNESS_AUTH_DIR')
   delete mintEnv.ADAPTER_UPDATE_DISABLE
-  const team = teamPaths()
+  const team = teamPaths(layout.home)
   const nodeName = installed.nodeRuntimeDir.slice(installed.nodeRuntimeDir.lastIndexOf('/') + 1)
   const teamNode = `${team.runtime}/${nodeName}/bin/node`
   const config: TeamConfig = {
-    version: 1, user: TEAM_USER, realName: TEAM_REAL_NAME, home: TEAM_HOME, owner, ownerHome,
-    sentinel: `${ownerHome}/${SENTINEL_NAME}`, port: TEAM_PORT, label: TEAM_LABEL, plist: TEAM_PLIST,
-    statusFile: TEAM_STATUS_FILE, node: teamNode, cli: team.cliJs, env: carried, createdAt: new Date(deps.now()).toISOString(),
+    version: 1, user: TEAM_USER, realName: TEAM_REAL_NAME, home: layout.home, owner, ownerHome,
+    sentinel: `${ownerHome}/${SENTINEL_NAME}`, port: TEAM_PORT, label: layout.service.label, plist: layout.service.file,
+    statusFile: layout.statusFile, node: teamNode, cli: team.cliJs, env: carried, createdAt: new Date(deps.now()).toISOString(),
   }
-  const plist = teamLaunchdPlist({ user: TEAM_USER, home: TEAM_HOME, node: teamNode, cli: team.cliJs, port: TEAM_PORT, env: carried })
+  const service = scripts.service({ user: TEAM_USER, home: layout.home, node: teamNode, cli: team.cliJs, port: TEAM_PORT, env: carried })
   const repair = deps.readConfig() !== null || await deps.accountExists(TEAM_USER)
+  // Linux: sudo in a terminal, which works over SSH too; polkit's dialog otherwise (Desktop's offer), when there is a desktop.
+  const via: AdminVia | undefined = mac ? undefined : deps.interactive ? 'sudo' : 'prompt'
   if (!json) {
+    const asks = mac ? 'macOS asks for an administrator password once.'
+      : via === 'sudo' ? 'sudo asks for your password here.' : 'Your system asks for your password once.'
     deps.out(repair
-      ? 'Harness will repair the Harness Team account on this Mac. macOS asks for an administrator password once.'
-      : 'Harness will set up a separate account for Swarm work on this Mac. macOS asks for an administrator password once.')
-    for (const line of madeLines(ownerHome)) deps.out(line)
+      ? `Harness will repair the Harness Team account on ${here.where}. ${asks}`
+      : `Harness will set up a separate account for Swarm work on ${here.where}. ${asks}`)
+    for (const line of madeLines(here, owner, ownerHome)) deps.out(line)
   }
   const startedAt = deps.now()
+  const asked = prompts(here.where)
   const result = await deps.admin((stageDir) => ({
-    script: buildSetupScript({
-      user: TEAM_USER, realName: TEAM_REAL_NAME, home: TEAM_HOME, owner, ownerHome, stageDir,
+    script: scripts.setup({
+      user: TEAM_USER, realName: TEAM_REAL_NAME, home: layout.home, owner, ownerHome, stageDir,
       nodeRuntimeDir: installed.nodeRuntimeDir!, tmuxRuntimeDir: installed.tmuxRuntimeDir, cliDir: installed.cliDir,
       ownerNode: installed.node, ownerCli: installed.cliJs, mintEnv, signIn: signInAgain ? 'always' : 'missing',
     }),
-    files: { 'team.json': teamConfigJson(config), 'team.plist': plist },
-  }), repair ? REPAIR_PROMPT : SETUP_PROMPT)
+    files: { 'team.json': teamConfigJson(config), [scripts.serviceFile]: service },
+  }), repair ? asked.repair : asked.setup, ...via ? [via] : [])
   if (!result.ok) {
     if (result.code === 'CANCELLED') return fail(deps, json, 'CANCELLED', 'Nothing was changed: the administrator prompt was cancelled.')
+    if (result.code === 'NO_PROMPT') return fail(deps, json, 'NO_PROMPT', result.message)
+    const refusal = result.status === 3 ? LINUX_REFUSALS.get(result.message) : undefined
+    if (refusal) return fail(deps, json, refusal, `The Harness Team account was not set up: ${sentence(result.message)} Nothing was changed.`)
     return fail(deps, json, 'SETUP_FAILED', `The Harness Team account was not finished: ${sentence(result.message)} Run \`harness team setup\` again; it repairs what is there.`)
   }
   try { deps.setupDecision?.clear() } catch { /* only Desktop's offer reads it */ }
@@ -241,7 +310,7 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   // From now, not from before the prompt: a person may take longer than this to answer it.
   const deadline = deps.now() + SETUP_REPORT_WAIT_MS
   for (;;) {
-    report = deps.readStatus(TEAM_STATUS_FILE)
+    report = deps.readStatus(layout.statusFile)
     const checked = (report?.privacy?.checkedAt ?? 0) >= startedAt
     const signed = !handedOver || (report?.signIn?.at ?? 0) >= startedAt
     if ((checked && signed) || deps.now() >= deadline) break
@@ -252,7 +321,8 @@ async function setup(deps: TeamCommandDeps, json: boolean, signInAgain: boolean)
   const engines = report?.engines && report.engines.checkedAt >= startedAt ? report.engines : undefined
   if (json) {
     const ok = privacy?.passed === true && (!handedOver || signIn?.state === 'signed-in')
-    deps.out(JSON.stringify({ ok, user: TEAM_USER, home: TEAM_HOME, label: TEAM_LABEL, plist: TEAM_PLIST, privacy, signIn, engines: engines ?? null }))
+    deps.out(JSON.stringify({ ok, user: TEAM_USER, home: layout.home, label: layout.service.label, plist: layout.service.file, privacy, signIn,
+      engines: engines ?? null }))
     return ok ? 0 : 1
   }
   let code = 0
@@ -278,26 +348,31 @@ function ago(now: number, at: number): string {
 async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   const session = deps.session()
   const dedicated = session?.kind === 'team'
-  const config = deps.platform === 'darwin' ? deps.readConfig() : null
-  const exists = deps.platform === 'darwin' ? await deps.accountExists(config?.user ?? TEAM_USER) : false
-  if (!config && !exists) {
+  const here = teamHere(deps.platform)
+  const config = here ? deps.readConfig() : null
+  const exists = here ? await deps.accountExists(config?.user ?? TEAM_USER) : false
+  if (!here || (!config && !exists)) {
     if (json) deps.out(JSON.stringify({ account: false, dedicated }))
     else if (dedicated) deps.out('This computer runs team work only (harness team on): Swarm agents run here, and it reaches none of your other computers.\n  undo: harness team off')
-    else deps.out(`No Harness Team account on this computer.${deps.platform === 'darwin' ? ' harness team setup makes one.' : ' On a computer used only for agents: harness team on.'}`)
+    else deps.out(`No Harness Team account on this computer.${here ? ' harness team setup makes one.' : ' On a computer used only for agents: harness team on.'}`)
     return 0
   }
+  const { layout } = here
   const user = config?.user ?? TEAM_USER
-  const home = config?.home ?? TEAM_HOME
+  const home = config?.home ?? layout.home
+  const owner = config?.owner ?? deps.user()
   const ownerHome = config?.ownerHome ?? deps.home()
-  const job = await deps.jobState(config?.label ?? TEAM_LABEL)
-  const report = deps.readStatus(config?.statusFile ?? TEAM_STATUS_FILE)
+  const label = config?.label ?? layout.service.label
+  const serviceFile = config?.plist ?? layout.service.file
+  const job = await deps.jobState(label)
+  const report = deps.readStatus(config?.statusFile ?? layout.statusFile)
   const homeMode = deps.mode(ownerHome)
-  const plistPresent = deps.exists(config?.plist ?? TEAM_PLIST)
+  const plistPresent = deps.exists(serviceFile)
   if (json) {
     deps.out(JSON.stringify({
       account: exists, user, realName: config?.realName ?? TEAM_REAL_NAME, home, homePresent: deps.exists(home),
-      label: config?.label ?? TEAM_LABEL, plist: config?.plist ?? TEAM_PLIST, plistPresent, job, port: config?.port ?? TEAM_PORT,
-      config: config ? TEAM_CONFIG_FILE : null, ownerHomeMode: homeMode === null ? null : homeMode.toString(8),
+      label, plist: serviceFile, plistPresent, job, port: config?.port ?? TEAM_PORT,
+      config: config ? layout.configFile : null, ownerHomeMode: homeMode === null ? null : homeMode.toString(8),
       signIn: report?.signIn ?? null, privacy: report?.privacy ?? null, engines: report?.engines ?? null, dedicated,
     }))
     return 0
@@ -314,10 +389,10 @@ async function status(deps: TeamCommandDeps, json: boolean): Promise<number> {
   for (const line of engineLines(report?.engines, (at) => ago(now, at))) deps.out(line)
   deps.out('')
   deps.out('  What setup made:')
-  for (const line of madeLines(ownerHome)) deps.out(`  ${line}`)
+  for (const line of madeLines(here, owner, ownerHome)) deps.out(`  ${line}`)
   deps.out('')
   deps.out('  undo: harness team remove')
-  for (const line of byHandLines(ownerHome)) deps.out(line)
+  for (const line of byHandLines(here, owner, ownerHome)) deps.out(line)
   return 0
 }
 
@@ -369,30 +444,38 @@ async function forgetTeamComputer(deps: TeamCommandDeps, computerId: string): Pr
 }
 
 async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
-  if (deps.platform !== 'darwin') return fail(deps, json, 'UNSUPPORTED', 'The Harness Team account is made on a Mac; this computer has none. To stop team work here: harness team off.')
+  const here = teamHere(deps.platform)
+  if (!here) return fail(deps, json, 'UNSUPPORTED', 'The Harness Team account is made on a Mac or a Linux computer; this computer has none. To stop team work here: harness team off.')
+  const { layout, scripts, mac } = here
   if (deps.uid() === 0) return fail(deps, json, 'RUN_AS_YOURSELF', 'Run this as yourself, not with sudo: Harness asks for an administrator password itself.')
   const config = deps.readConfig()
   const ownerHome = checkPath(config?.ownerHome ?? deps.home(), 'home folder')
-  if (!config && !await deps.accountExists(TEAM_USER) && !deps.exists(TEAM_PLIST) && !deps.exists(TEAM_HOME)) {
+  if (!config && !await deps.accountExists(TEAM_USER) && !deps.exists(layout.service.file) && !deps.exists(layout.home)) {
     if (json) deps.out(JSON.stringify({ ok: true, removed: false }))
-    else deps.out('No Harness Team account on this Mac; nothing to remove.')
+    else deps.out(`No Harness Team account on ${here.where}; nothing to remove.`)
     return 0
   }
   // In a terminal, with sudo there: macOS then asks to let the terminal app administer the Mac, which deleting an account
   // needs (./admin.ts). Elsewhere (Desktop, a script), the administrator prompt, which macOS 26 refuses it.
   const inTerminal = deps.interactive
-  if (inTerminal && !json) deps.out('Harness will remove the Harness Team account. sudo asks for your password here; macOS may then ask to let this terminal administer your computer.')
+  if (inTerminal && !json) {
+    deps.out(mac ? 'Harness will remove the Harness Team account. sudo asks for your password here; macOS may then ask to let this terminal administer your computer.'
+      : 'Harness will remove the Harness Team account. sudo asks for your password here.')
+  }
   const result = await deps.admin(() => ({
-    script: buildRemoveScript({ user: config?.user ?? TEAM_USER, home: config?.home ?? TEAM_HOME, ownerHome }),
-  }), REMOVE_PROMPT, inTerminal ? 'sudo' : 'prompt')
+    script: scripts.remove({ user: config?.user ?? TEAM_USER, home: config?.home ?? layout.home, ownerHome,
+      owner: checkUser(config?.owner ?? deps.user(), 'owner account') }),
+  }), prompts(here.where).remove, inTerminal ? 'sudo' : 'prompt')
   if (!result.ok) {
     if (result.code === 'CANCELLED') {
       return fail(deps, json, 'CANCELLED', `Nothing was removed: ${inTerminal ? 'sudo did not get an administrator password' : 'the administrator prompt was cancelled'}.`)
     }
+    if (result.code === 'NO_PROMPT') return fail(deps, json, 'NO_PROMPT', 'No administrator prompt here: run harness team remove in a terminal.')
     if (result.status === REMOVE_REFUSED) {
-      const next = refusedLines(deps, inTerminal)
+      // Linux: userdel keeps a user something still runs as, which the removal stopped first; a restart ends it for certain.
+      const next = mac ? refusedLines(deps, inTerminal) : ['  Something on this computer still runs as the account. Restart it, then run harness team remove again.']
       if (json) return fail(deps, json, 'DELETE_REFUSED', sentence(result.message), { next: next.map((line) => line.trim()) })
-      fail(deps, json, 'DELETE_REFUSED', `macOS kept the Harness Team account: ${sentence(result.message)}`)
+      fail(deps, json, 'DELETE_REFUSED', `${mac ? 'macOS' : 'Linux'} kept the Harness Team account: ${sentence(result.message)}`)
       for (const line of next) deps.err(line)
       return 1
     }
@@ -405,7 +488,7 @@ async function remove(deps: TeamCommandDeps, json: boolean): Promise<number> {
     deps.out(JSON.stringify({ ok: true, removed: true, computer: forgotten }))
     return 0
   }
-  deps.out(`✓ Removed the Harness Team account (${TEAM_USER}), ${TEAM_HOME} and the daemon ${TEAM_LABEL}.`)
+  deps.out(`✓ Removed the Harness Team account (${TEAM_USER}), ${layout.home} and the daemon ${layout.service.label}.`)
   const teamMachine = `"${deps.hostname().slice(0, 60)} · Team"`
   if (forgotten && 'removed' in forgotten && forgotten.removed > 0) deps.out('✓ Took its computer off your Harness account, which signs it out.')
   else if (forgotten && 'error' in forgotten) deps.out(`! Its computer is still on your Harness account (${forgotten.error}). Remove ${teamMachine}: harness machines`)
@@ -423,8 +506,9 @@ async function teamOn(deps: TeamCommandDeps, json: boolean, yes: boolean): Promi
     else deps.out('This computer already runs team work only. undo: harness team off')
     return 0
   }
-  if (deps.platform === 'darwin' && deps.readConfig()) {
-    return fail(deps, json, 'TEAM_ACCOUNT', 'This Mac has a Harness Team account, which runs its team work. `harness team on` is for a computer used only for agents.')
+  const here = teamHere(deps.platform)
+  if (here && deps.readConfig()) {
+    return fail(deps, json, 'TEAM_ACCOUNT', `This ${here.mac ? 'Mac' : 'computer'} has a Harness Team account, which runs its team work. \`harness team on\` is for a computer used only for agents.`)
   }
   if (!yes) {
     if (!deps.interactive || json) return fail(deps, json, 'CONFIRM', 'Add --yes to sign this computer in for team work only.')

@@ -4,12 +4,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from '../lib/authSession.js'
 import { SIGN_OUT_BUTTON_FLAG, signOutAsked } from '../lib/signOut.js'
-import type { AdminScript, RunAdmin } from './admin.js'
+import { NO_PROMPT_MESSAGE, type AdminScript, type RunAdmin } from './admin.js'
 import { REPAIR_PROMPT, SETUP_PROMPT, teamCommand, type TeamCommandDeps } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { PrivacyResult, TeamStatus } from './privacy.js'
 import type { TeamEngines } from './engines.js'
-import { parseLaunchctlPrint } from './deps.js'
+import { parseLaunchctlPrint, parseSystemctlShow } from './deps.js'
+import { LINUX_NO_SYSTEMD, LINUX_NO_TMUX } from './script.js'
 
 const OWNER_HOME = '/Users/owner-placeholder'
 const CODE = `hnh_${'b'.repeat(43)}`
@@ -205,7 +206,7 @@ describe('harness team setup', () => {
 
   it('refuses where it cannot help, before any prompt', async () => {
     const cases: Array<[Partial<TeamCommandDeps>, string]> = [
-      [{ platform: 'linux' }, 'harness team on'],
+      [{ platform: 'win32' }, 'harness team on'],
       [{ uid: () => 0 }, 'not with sudo'],
       [{ session: () => null }, 'Sign this computer in first'],
       [{ session: () => ({ ...computer, kind: 'team' }) }, 'already runs team work only'],
@@ -617,6 +618,121 @@ describe('internal verbs', () => {
     await teamCommand(['__start'], owner.deps)
     expect(owner.deps.writeStatus).not.toHaveBeenCalled()
     expect(owner.deps.privacy).not.toHaveBeenCalled()
+  })
+})
+
+describe('on Linux', () => {
+  const LINUX_HOME = '/home/owner-placeholder'
+  const LINUX_STATUS = '/var/lib/harness/team/status.json'
+  const linuxConfig: TeamConfig = {
+    ...config, home: '/home/harnessteam', ownerHome: LINUX_HOME, sentinel: `${LINUX_HOME}/.harness-team-privacy`, label: 'harness-team.service',
+    plist: '/etc/systemd/system/harness-team.service', statusFile: LINUX_STATUS,
+    node: '/home/harnessteam/.harness/runtime/node-v1/bin/node', cli: '/home/harnessteam/.harness/cli/cli.js',
+  }
+  const onLinux = (over: Parameters<typeof fake>[0] = {}) => fake({
+    platform: 'linux', home: () => LINUX_HOME, hostname: () => 'linux-placeholder',
+    installed: () => ({ cliDir: `${LINUX_HOME}/.harness/cli`, cliJs: `${LINUX_HOME}/.harness/cli/cli.js`,
+      node: `${LINUX_HOME}/.harness/runtime/node-v1/bin/node`, nodeRuntimeDir: `${LINUX_HOME}/.harness/runtime/node-v1`, tmuxRuntimeDir: null }),
+    ...over,
+  })
+
+  it('setup runs the Linux script through the administrator prompt and waits for the team daemon\'s status file', async () => {
+    const seen: string[] = []
+    const f = onLinux({ statusAfter: reported, readStatus: (path) => { seen.push(path); return reported(1_000_000) } })
+    expect(await teamCommand(['setup'], f.deps)).toBe(0)
+    expect(f.vias[0]).toBe('prompt')
+    expect(seen).toContain(LINUX_STATUS)
+    const { script, files } = f.built[0]!
+    expect(script).toContain('useradd -m -d "$TEAM_HOME"')
+    expect(script).toContain("TEAM_HOME='/home/harnessteam'")
+    expect(script).toContain(`OWNER_HOME='${LINUX_HOME}'`)
+    expect(Object.keys(files!).sort()).toEqual(['team.json', 'team.service'])
+    expect(files!['team.service']).toContain('\nUser=harnessteam\n')
+    expect(JSON.parse(files!['team.json']!)).toMatchObject({ home: '/home/harnessteam', ownerHome: LINUX_HOME, label: 'harness-team.service',
+      plist: '/etc/systemd/system/harness-team.service', statusFile: LINUX_STATUS, node: '/home/harnessteam/.harness/runtime/node-v1/bin/node' })
+    const text = f.out.join('\n')
+    expect(text).toContain('on this computer')
+    expect(text).not.toMatch(/Mac|macOS|LaunchDaemon|Users & Groups/)
+    expect(text).toContain('harness-team.service, a systemd unit at /etc/systemd/system/harness-team.service, running as harnessteam on port 18493')
+    expect(text).toContain('✓ Private')
+  })
+
+  it('setup asks with sudo in a terminal, which works without a desktop session', async () => {
+    const f = onLinux({ statusAfter: reported, interactive: true })
+    expect(await teamCommand(['setup'], f.deps)).toBe(0)
+    expect(f.vias[0]).toBe('sudo')
+    expect(f.prompts[0]).toBe('Harness wants to create a separate account, Harness Team, for Swarm work on this computer, so teammates\' agents cannot read your files.')
+    expect(f.out[0]).toContain('sudo asks for your password here')
+  })
+
+  it('setup passes on why Linux refused: no systemd, no tmux, no prompt', async () => {
+    const cases: Array<[Awaited<ReturnType<RunAdmin>>, string, string]> = [
+      [{ ok: false, code: 'FAILED', status: 3, message: LINUX_NO_SYSTEMD }, 'NO_SYSTEMD', 'systemd'],
+      [{ ok: false, code: 'FAILED', status: 3, message: LINUX_NO_TMUX }, 'NO_TMUX', 'apt install tmux'],
+      [{ ok: false, code: 'NO_PROMPT', message: NO_PROMPT_MESSAGE }, 'NO_PROMPT', 'run harness team setup in a terminal'],
+    ]
+    for (const [adminResult, code, says] of cases) {
+      const f = onLinux({ adminResult })
+      expect(await teamCommand(['setup', '--json'], f.deps), code).toBe(1)
+      const answer = JSON.parse(f.out.at(-1)!) as { code: string; message: string }
+      expect(answer.code).toBe(code)
+      expect(answer.message).toContain(says)
+    }
+    // Another stop with exit 3 is a failed setup, as on a Mac.
+    const other = onLinux({ adminResult: { ok: false, code: 'FAILED', status: 3, message: 'setfacl is missing on this computer: the Harness Team account needs it' } })
+    await teamCommand(['setup', '--json'], other.deps)
+    expect(JSON.parse(other.out.at(-1)!)).toMatchObject({ code: 'SETUP_FAILED' })
+  })
+
+  it('status reads systemd and prints what Linux setup made, and how to remove it by hand', async () => {
+    const f = onLinux({ readConfig: () => linuxConfig, accountExists: vi.fn(async () => true) })
+    f.status.set(LINUX_STATUS, { version: 1, signIn: { state: 'signed-in', at: 1_000_000 - 30_000 }, privacy: { passed: true, checkedAt: 1_000_000 - 60_000 } })
+    expect(await teamCommand(['status'], f.deps)).toBe(0)
+    expect(f.deps.jobState).toHaveBeenCalledWith('harness-team.service')
+    const text = f.out.join('\n')
+    for (const needle of ['● running (pid 4242)', '✓ signed in (30s ago)', 'Private ✓', `${LINUX_HOME} · mode 700 ✓`, '/home/harnessteam',
+      'a standard user with a locked password, never an administrator', '/etc/harness/team.json and /var/lib/harness/team/',
+      'sudo systemctl disable --now harness-team.service', 'sudo userdel -r harnessteam', 'sudo rm /etc/systemd/system/harness-team.service',
+      '/var/lib/harness/team-relay-owner-placeholder', `rm ${LINUX_HOME}/.harness-team-privacy`]) {
+      expect(text, needle).toContain(needle)
+    }
+    expect(text).not.toMatch(/dscl|launchctl|LaunchDaemon|Users & Groups/)
+  })
+
+  it('remove runs the Linux removal with sudo in a terminal and takes the team computer off the owner\'s account', async () => {
+    const f = onLinux({ readConfig: () => linuxConfig, interactive: true,
+      adminResult: { ok: true, stdout: `harness: deleted the account harnessteam\nharness: team computer ${TEAM_COMPUTER}\n` } })
+    expect(await teamCommand(['remove'], f.deps)).toBe(0)
+    expect(f.vias[0]).toBe('sudo')
+    expect(f.built[0]!.script).toContain('userdel -r "$TEAM"')
+    expect(f.built[0]!.script).toContain("RELAY_DIR='/var/lib/harness/team-relay-owner-placeholder'")
+    expect(f.deps.delete).toHaveBeenCalledWith('/api/machines/m-team', { authorization: 'Bearer x' })
+    const text = f.out.join('\n')
+    expect(text).toContain('✓ Removed the Harness Team account (harnessteam), /home/harnessteam and the daemon harness-team.service.')
+    expect(text).not.toMatch(/Mac|macOS/)
+  })
+
+  it('remove, when Linux keeps the account, says nothing was removed', async () => {
+    const f = onLinux({ readConfig: () => linuxConfig, interactive: true,
+      adminResult: { ok: false, code: 'FAILED', status: 9, message: 'could not delete the account harnessteam: userdel: user harnessteam is currently used by process 4242. Nothing was removed: the Harness Team account and its daemon run as before' } })
+    expect(await teamCommand(['remove'], f.deps)).toBe(1)
+    const text = f.err.join('\n')
+    expect(text).toContain('Linux kept the Harness Team account')
+    expect(text).not.toMatch(/macOS|Users & Groups|tccutil/)
+  })
+
+  it('team on refuses on a Linux computer that has the account, which runs its team work', async () => {
+    const f = onLinux({ readConfig: () => linuxConfig })
+    expect(await teamCommand(['on', '--yes'], f.deps)).toBe(1)
+    expect(f.err[0]).toContain('This computer has a Harness Team account')
+    expect(f.post).not.toHaveBeenCalled()
+  })
+
+  it('reads systemd\'s answer for the team daemon', () => {
+    expect(parseSystemctlShow(0, 'LoadState=loaded\nActiveState=active\nMainPID=812\n')).toEqual({ loaded: true, pid: 812, state: 'active' })
+    expect(parseSystemctlShow(0, 'MainPID=0\nActiveState=failed\nLoadState=loaded\n')).toEqual({ loaded: true, pid: null, state: 'failed' })
+    expect(parseSystemctlShow(0, 'LoadState=not-found\nActiveState=inactive\nMainPID=0\n')).toEqual({ loaded: false, pid: null, state: null })
+    expect(parseSystemctlShow(1, '')).toEqual({ loaded: false, pid: null, state: null })
   })
 })
 

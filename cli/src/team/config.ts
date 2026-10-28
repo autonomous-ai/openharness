@@ -1,9 +1,10 @@
 /**
- * What setup made, written root-owned to /Library/Application Support/Harness/team.json and read by the team
- * daemon (its privacy check) and by the owner's `harness team status`. Nothing in it is secret: names and paths.
+ * What setup made, written root-owned to /Library/Application Support/Harness/team.json (on Linux /etc/harness/team.json)
+ * and read by the team daemon (its privacy check) and by the owner's `harness team status`. Nothing in it is secret:
+ * names and paths. On Linux `label` and `plist` name the systemd unit and its file.
  */
 import { readFileSync } from 'node:fs'
-import { TEAM_CONFIG_FILE, carriedBackendEnv, checkPath, checkPort, checkUser } from './layout.js'
+import { TEAM_CONFIG_FILE, carriedBackendEnv, checkPath, checkPort, checkUser, teamLayout } from './layout.js'
 import { userInfo } from 'node:os'
 
 export interface TeamConfig {
@@ -34,8 +35,10 @@ export function teamConfigJson(config: TeamConfig): string {
   return `${JSON.stringify(config, null, 2)}\n`
 }
 
-/** The config at [path], every field checked; null when there is none or it is not one setup wrote. */
-export function readTeamConfig(path: string = TEAM_CONFIG_FILE, read: (path: string) => string = (p) => readFileSync(p, 'utf8')): TeamConfig | null {
+/** The config at [path] (this platform's, by default), every field checked; null when there is none or it is not one
+ *  setup wrote. */
+export function readTeamConfig(path: string = teamLayout(process.platform)?.configFile ?? TEAM_CONFIG_FILE,
+  read: (path: string) => string = (p) => readFileSync(p, 'utf8')): TeamConfig | null {
   let raw: unknown
   try { raw = JSON.parse(read(path)) } catch { return null }
   if (!raw || typeof raw !== 'object') return null
