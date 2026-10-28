@@ -18,6 +18,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/machine_icon.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/pm_chat.dart';
 import 'package:harness/super_tabs/pm_chat_shortcut.dart';
@@ -739,10 +740,11 @@ void main() {
       expect(name('m2'), "Diego's Mac");
       expect(name('studio'), 'Studio');
       final row = find.byKey(const ValueKey('super-machine-m2'));
-      expect(find.descendant(of: row, matching: find.text('~')), findsOne);
+      // Its type's icon leads the row, not a "~".
+      expect(find.descendant(of: row, matching: find.text('~')), findsNothing);
       expect(
-        find.descendant(of: row, matching: find.byIcon(AppIcons.monitor)),
-        findsNothing,
+        find.descendant(of: row, matching: find.byType(SuperTabMachineIcon)),
+        findsOne,
       );
       expect(
         find.descendant(of: row, matching: find.byType(SuperTabMachineDot)),

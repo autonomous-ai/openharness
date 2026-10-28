@@ -557,7 +557,7 @@ describe('local models on the Swarm\'s grid', () => {
     expect(ok(choose([opus, api], policy, a({ model: 'Claude Opus' }), NOW)).shown.map(s => s.model)).toEqual(['opus'])
     expect(ok(choose([older], policy, a({ difficulty: 'low' }), NOW)).shown[0]!.title).toContain('(shared)')
     expect(choose([opus], policy, a({ model: 'gpt 9' }), NOW)).toEqual({ error: 'NO_CANDIDATE',
-      excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Manage models), or check its name.' }] })
+      excluded: [{ title: 'Named model', reason: 'No candidate runs "gpt 9". Share it with the Swarm (Your models), or check its name.' }] })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: ' deepseek 4.1 flash ' })).toMatchObject({ model: 'deepseek 4.1 flash' })
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: '...' })).toContain('model')
     expect(parseAssessment({ difficulty: 'low', risk: 'low', why: 'x', model: 7 })).toContain('model')
@@ -586,7 +586,7 @@ describe('local models on the Swarm\'s grid', () => {
     expect(choose([probe()], policy, a({ model: 'gpt 9' }), NOW, [], [], [qwen])).toMatchObject({ excluded: [{ reason: expect.stringContaining('No candidate runs "gpt 9"') }] })
     expect(choose([probe()], policy, a({ local: true }), NOW, [], [], [qwen])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models',
       reason: '"Qwen 3 4B" is shared with the Swarm, but Builder Faye is on it: a local model serves one Builder at a time. Assign the work to that Builder once it is free, or stop it to free the model.' }] })
-    expect(LOCAL_NONE).toContain('Manage models')
+    expect(LOCAL_NONE).toContain('Your models')
   })
 
   describe('first for simple work (roadmap, Dec: about 30% of work on cheaper models)', () => {
@@ -618,7 +618,7 @@ describe('local models on the Swarm\'s grid', () => {
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {
     const llama = { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local' as const, holders: [],
       refused: 'llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more).' }
-    const reason = '"llama3.2:3b" is shared with the Swarm, but Builders are not offered it: llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more). Ask a member to run a larger model, or share an API (Manage models).'
+    const reason = '"llama3.2:3b" is shared with the Swarm, but Builders are not offered it: llama3.2:3b is too small for a coding agent (about 3B parameters; Builders need 7B or more). Ask a member to run a larger model, or share an API (Your models).'
     expect(choose([probe()], policy, a({ model: 'llama 3.2 3b' }), NOW, [], [], [llama])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Named model', reason }] })
     expect(choose([probe()], policy, a({ local: true }), NOW, [], [], [llama])).toEqual({ error: 'NO_CANDIDATE', excluded: [{ title: 'Local models', reason }] })
   })

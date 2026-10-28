@@ -1758,6 +1758,7 @@ class AppNotifier extends ChangeNotifier {
     avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
+    onNotices: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
     onTabs: (tabs, hidden) {
       // Discovery can finish while an already signed-in machine is re-seating
