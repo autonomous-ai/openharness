@@ -764,18 +764,39 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(counted.ops).toContain('SwarmGroup.aggregateRaw')
   })
 
-  // What no Swarm write records (a machine share revoked, a machine gone, a Workspace left) is read again within 30 s.
-  it('checks its host\'s authority again 30 seconds after the last full poll', async () => {
+  // What no Swarm write records (a machine share revoked, a machine gone, a Workspace left) is read on every poll.
+  it('refuses on the next poll once its host\'s machine share is revoked', async () => {
     const f = await swarm()
     await held(f)
-    const lastFull = f.clock.now
     const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'lead-host' } })
     await db.machineShare.update({ where: { machineId: 'lead-host' }, data: { emails: [] } })
     try {
-      f.clock.now = lastFull + SWEEP_EVERY_MS
+      f.clock.now += 1_000
       await expect(f.timed.deliveries(host, f.tab, f.lead)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
     } finally {
       await db.machineShare.update({ where: { machineId: 'lead-host' }, data: { emails: share.emails } })
+    }
+  })
+
+  // A turn typed into a terminal reaches the Lead only while its typist may still use that terminal's machine
+  // (native.ts allowsDelivery), which no Swarm write records either (review of #2055).
+  it('withholds a held terminal turn on the next poll once its typist\'s share of the machine is revoked', async () => {
+    const f = await swarm()
+    const { contextId } = await f.timed.native.open(owner, f.tab, { operationId: randomUUID(), conversationId: f.group, agentId: f.worker })
+    await f.timed.native.append(host, f.tab, contextId, { turnId: 'turn_1', kind: 'prompt', previousEventId: null, text: 'Typed by hand',
+      truncated: false, interrupted: false })
+    const turn = (await f.timed.deliveries(host, f.tab, f.lead)).find(r => r.nativeContextId === contextId)!
+    await f.timed.delivery(host, f.tab, f.lead, turn.id, { type: 'claim', claimId: 'claim-1' })
+    await f.timed.delivery(host, f.tab, f.lead, turn.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_user' })
+    f.clock.now += 1_000
+    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).toContain(turn.id)
+    const share = await db.machineShare.findUniqueOrThrow({ where: { machineId: 'test-host' } })
+    await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: [] } })
+    try {
+      f.clock.now += 1_000
+      expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).not.toContain(turn.id)
+    } finally {
+      await db.machineShare.update({ where: { machineId: 'test-host' }, data: { emails: share.emails } })
     }
   })
 

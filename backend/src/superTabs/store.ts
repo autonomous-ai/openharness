@@ -2012,8 +2012,11 @@ export class SuperTabStore {
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
       // revokes moves the stamp; what no Swarm write records (a Workspace, a machine, a share) is checked again each time.
+      // A turn typed into a terminal rests on its typist's access too (native.ts allowsDelivery): it takes the full poll.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
-      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen)) return this.heldDeliveries(user, agentId, open, seen)
+      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen) && !open.some(d => d.nativeContextId)) {
+        return this.heldDeliveries(user, agentId, open, seen)
+      }
     }
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
     const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view)
