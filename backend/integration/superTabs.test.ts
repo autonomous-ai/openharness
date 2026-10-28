@@ -2850,6 +2850,25 @@ describe('leaderboard credits written by the store (leaderboard/record.ts)', () 
     await run(tab, { type: 'decision.answer', decisionId, choice: 1 }, peer)
     expect(await unblocks(tab, 'lead')).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decisionId })])
   })
+
+  it('credits a worker\'s question asked again after it moved on once, when its decision is answered', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const group = (await run(tab, { type: 'conversation.create', title: 'Release', brief: 'Ship it.', checks: [{ description: 'Shipped.', independent: false }] })).result.conversationId as string
+    const worker = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Builder', configuration: config, lead: false })).result.agentId as string
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId as string
+    const ask = { type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } } as Command
+    await run(tab, ask, host, worker)
+    await run(tab, { type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null } as Command, host, worker)
+    await run(tab, ask, host, worker)
+    const [decision] = await db.superTabDecision.findMany({ where: { tabId: tab } })
+    await run(tab, { type: 'decision.answer', decisionId: decision!.id, choice: 0 }, peer)
+    // The requester's next post answers nothing more: the repeated question was that decision again.
+    await run(tab, { type: 'message.send', conversationId: group, text: 'Behind a flag, then.', replyTo: null, recipientIds: [] })
+    expect(await unblocks(tab, group)).toEqual([expect.objectContaining({ personId: peer.sub, kind: 'decision', item: decision!.id })])
+  })
 })
 
 describe('credentials in Swarm chat', () => {
