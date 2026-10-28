@@ -79,5 +79,9 @@ export function observerSource(dataDir: string, machine: () => string, now = Dat
     /** A confidential session refuses every share, Swarm or ordinary; another Swarm share needs the roster in force. */
     allows: (grant: HarnessGrant): boolean => { read(); return !confidential.includes(grant.agentId) && (!superTabOf(grant) || current().some(w =>
       w.tab === grant.tab && w.agentId === grant.agentId && w.email === grant.recipientEmail)) },
+    /** A Swarm share withheld only because no roster is in force (its host is starting, or restarting for an update): the
+     *  next roster decides it, so its viewer is told to try again rather than that sharing ended. A confidential session's
+     *  is refused for good. */
+    paused: (grant: HarnessGrant): boolean => { read(); return !!superTabOf(grant) && !confidential.includes(grant.agentId) && !live() },
   }
 }
