@@ -126,7 +126,8 @@ class SuperTabController extends ChangeNotifier {
   SuperTabSnapshot? snapshot;
   String selectedId = 'lead';
 
-  /// Counts [select] calls, so a slow one cannot land over a newer one.
+  /// Counts [select] and [selectDevices] calls, so a slow select cannot land
+  /// over a newer choice.
   int _selectRequest = 0;
 
   /// The newest change of the Swarm this tab has read, in epoch milliseconds: what tells the app and the tag list
@@ -271,6 +272,7 @@ class SuperTabController extends ChangeNotifier {
   /// its draft and terminal choice stay available when the person returns.
   void selectDevices() {
     if (_disposed || accessRevoked || devicesSelected) return;
+    _selectRequest++;
     devicesSelected = true;
     _saveSoon();
     _changed();

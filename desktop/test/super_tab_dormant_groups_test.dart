@@ -148,6 +148,27 @@ void main() {
     expect(c.selectedId, 'offline');
   });
 
+  test('late loadGroup does not leave a newer Devices view', () async {
+    final hold = Completer<void>();
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      request: (method, path, {body}) async {
+        if (path.endsWith('/groups/finished')) await hold.future;
+        return server.request(method, path, body: body);
+      },
+      save: server.save,
+      pollInterval: Duration.zero,
+    );
+    await c.refresh();
+    final slow = c.select('finished');
+    c.selectDevices();
+    hold.complete();
+    expect(await slow, isFalse);
+    expect(c.devicesSelected, isTrue);
+    expect(c.selectedId, 'lead');
+  });
+
   test(
     'read marks and drafts of a closed group survive opening again',
     () async {
