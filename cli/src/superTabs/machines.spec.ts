@@ -1298,6 +1298,36 @@ describe('contributed machine executor', () => {
       launched(); await pass
     })
 
+    it('never lets a re-send land after a newer reading: the pass waits for one in flight, and none starts while it sends', async () => {
+      const f = fixture(); f.pool.starts.length = 0
+      await f.machine.tick()
+      expect(posts(f)).toHaveLength(1)
+      // The next pass is slow to measure, and a re-send goes meanwhile; the backend holds it.
+      let measured!: () => void
+      f.capabilities.mockImplementationOnce(() => new Promise(resolve => { measured = () => resolve({ ok: true, resources: {}, tools: { git: true } }) }) as never)
+      let answer!: (value: unknown) => void
+      f.step(16_000); const pass = f.machine.tick()
+      await vi.waitFor(() => expect(f.capabilities).toHaveBeenCalledTimes(2))
+      f.backend.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      f.machine.beat()
+      expect(posts(f)).toHaveLength(2)
+      measured()
+      await new Promise(done => setTimeout(done, 10))
+      expect(posts(f)).toHaveLength(2)
+      answer({ revision: 2 })
+      await pass
+      expect(posts(f)).toHaveLength(3)
+      // While the pass sends its reading, no re-send starts.
+      let taken!: (value: unknown) => void
+      f.backend.mockImplementation(async (_core, method, path) => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
+        : method === 'POST' ? new Promise(resolve => { taken = resolve }) : { revision: 1 })
+      f.step(16_000); const sending = f.machine.tick()
+      await vi.waitFor(() => expect(posts(f)).toHaveLength(4))
+      f.step(15_000); f.machine.beat()
+      expect(posts(f)).toHaveLength(4)
+      taken({ revision: 3 }); await sending
+    })
+
     it('re-sends nothing for a Swarm that no longer lists this machine', async () => {
       const f = fixture(); f.pool.starts.length = 0
       await f.machine.tick()

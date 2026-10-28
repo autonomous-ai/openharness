@@ -143,7 +143,11 @@ export class ContributedMachines {
   private readonly lastSent = new Map<string, { path: string; body: Record<string, unknown>; at: number }>()
   /** When the pass in flight began, or null between passes. */
   private passBegan: number | null = null
-  private beating = false
+  /** The re-sends in flight, which a pass waits for before it sends a newer reading: a re-send that landed after it would
+   *  put the older one back. */
+  private beating: Promise<void> | null = null
+  /** The tabs whose new reading the pass is sending: no re-send of the older one starts meanwhile. */
+  private readonly sending = new Set<string>()
   /** Shell tool availability belongs to this machine, not a tab. Resource readings still refresh every heartbeat. */
   private readonly toolCache = new Map<string, { value: boolean | null; detail?: string; until: number }>()
   /** Per waiting start, why it was last not started, so the log says it once per reason, not every pass. */
@@ -271,17 +275,16 @@ export class ContributedMachines {
     if (this.stopped || this.beating || began === null) return
     const now = this.deps.now()
     if (now - began >= BEAT_LIMIT_MS) return
-    const due = [...this.lastSent.values()].filter(sent => now - sent.at >= MACHINE_HEARTBEAT_MS)
+    const due = [...this.lastSent].filter(([tab, sent]) => !this.sending.has(tab) && now - sent.at >= MACHINE_HEARTBEAT_MS)
     if (!due.length) return
-    this.beating = true
-    void (async () => {
-      for (const sent of due) {
+    this.beating = (async () => {
+      for (const [, sent] of due) {
         // A failed one waits a whole beat too, rather than being asked again every second.
         sent.at = now
         try { await this.deps.backend(this.core, 'POST', sent.path, sent.body) }
         catch (error) { this.log(`Could not send this machine's reading again: ${error instanceof Error ? error.message : String(error)}`) }
       }
-    })().finally(() => { this.beating = false })
+    })().finally(() => { this.beating = null })
   }
   private async poll(began: number) {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
@@ -404,7 +407,9 @@ export class ContributedMachines {
           }), runningHarnessIds: running, stoppedHarnessIds: stopped,
           ...(Array.isArray(row.reservations) ? { stoppedReservations: list(row.reservations).filter(r => stopped.includes(String(r.harnessId))
             && identifier(r.harnessId) && identifier(r.generation)).map(r => ({ harnessId: r.harnessId, generation: r.generation })) } : {}) }
+        this.sending.add(String(row.tabId))
         try {
+          await this.beating
           const path = `/api/super-tabs/${row.tabId}/machines/${this.machineId}`
           const refused = (error: unknown) => error instanceof SuperTabHostError && error.status === 400 && error.code === 'VALIDATION_ERROR'
           // Older backends reject the additive fields. The newest go alone first (the starts it is preparing, uncommitted work,
@@ -441,6 +446,7 @@ export class ContributedMachines {
           }
           this.published.set(String(row.tabId), { at: began, signature, starting: !!localModels?.some(m => m.starting) })
         } catch (error) { this.failed = true; throw error }
+        finally { this.sending.delete(String(row.tabId)) }
         }
         this.repairTrust ??= createSwarmCloneTrustRepair(this.core, this.deps.now)
         try { await this.repairTrust(row) }
