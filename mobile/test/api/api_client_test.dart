@@ -9,6 +9,7 @@ import 'package:harness_mobile/api/access_token_source.dart';
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/viewer/direct_auth.dart';
 import 'package:harness_mobile/viewer/direct_auth_api.dart';
 import 'package:harness_mobile/viewer/email_code_api.dart';
@@ -361,6 +362,148 @@ void main() {
       expect(
         await client(_Tokens(['t'])).transcribeVoice(Uint8List(4), lang: 'en'),
         '',
+      );
+    });
+  });
+
+  group('a Swarm chat file', () {
+    Future<Map<String, dynamic>> upload(
+      ApiClient api, {
+      String name = 'shot.jpg',
+      String mime = 'image/jpeg',
+      Uint8List? bytes,
+      void Function(double sent)? onProgress,
+    }) => api.uploadSwarmAttachment(
+      tabId: 'tab-1',
+      conversationId: 'conv-1',
+      name: name,
+      mime: mime,
+      bytes: bytes ?? Uint8List.fromList([1, 2, 3]),
+      cancel: CancelToken(),
+      onProgress: onProgress ?? (_) {},
+    );
+
+    test(
+      'goes straight to the backend as the conversation, then one file',
+      () async {
+        final attachment = {
+          'id': 'att-1',
+          'name': 'shot.jpg',
+          'mime': 'image/jpeg',
+          'size': 3,
+          'url': 'https://cdn.harness.autonomous.ai/x/shot.jpg',
+        };
+        backend.answer = (_, _) =>
+            (status: 200, body: ok({'attachment': attachment}));
+
+        final answer = await upload(client(_Tokens(['t1'])));
+
+        expect(answer, {'attachment': attachment});
+        final sent = backend.requests.single;
+        expect(sent.method, 'POST');
+        expect(sent.path, '/api/super-tabs/tab-1/attachments');
+        expect(sent.headers.value('authorization'), 'Bearer t1');
+        expect(sent.headers.contentType!.mimeType, 'multipart/form-data');
+        final boundary = sent.headers.contentType!.parameters['boundary']!;
+        expect(
+          sent.body,
+          [
+            ...utf8.encode(
+              '--$boundary\r\n'
+              'Content-Disposition: form-data; name="conversationId"\r\n\r\n'
+              'conv-1\r\n'
+              '--$boundary\r\n'
+              'Content-Disposition: form-data; name="file"; filename="shot.jpg"\r\n'
+              'Content-Type: image/jpeg\r\n\r\n',
+            ),
+            1, 2, 3,
+            ...utf8.encode('\r\n--$boundary--\r\n'),
+          ],
+        );
+      },
+    );
+
+    test('a name cannot break out of its header', () async {
+      backend.answer = (_, _) =>
+          (status: 200, body: ok({'attachment': <String, Object?>{}}));
+
+      await upload(client(_Tokens(['t'])), name: 'a"b\r\nc.jpg');
+
+      expect(
+        utf8.decode(backend.requests.single.body, allowMalformed: true),
+        contains('filename="a%22b%0D%0Ac.jpg"'),
+      );
+    });
+
+    test('says how much has gone up, up to all of it', () async {
+      backend.answer = (_, _) =>
+          (status: 200, body: ok({'attachment': <String, Object?>{}}));
+      final told = <double>[];
+
+      await upload(
+        client(_Tokens(['t'])),
+        bytes: Uint8List(200 * 1024),
+        onProgress: told.add,
+      );
+
+      expect(told, isNotEmpty);
+      expect(told.last, 1.0);
+    });
+
+    test('a refusal carries the backend\'s code and words', () async {
+      backend.answer = (_, _) => (
+        status: 403,
+        body: {
+          'success': false,
+          'error': {'code': 'FORBIDDEN', 'message': 'Not a writer here.'},
+        },
+      );
+
+      await expectLater(
+        upload(client(_Tokens(['t']))),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'FORBIDDEN')
+              .having((f) => f.message, 'message', 'Not a writer here.')
+              .having((f) => f.statusCode, 'status', 403),
+        ),
+      );
+    });
+
+    test('a refusal without words says the desktop\'s', () async {
+      backend.answer = (_, _) => (
+        status: 413,
+        body: {
+          'success': false,
+          'error': {'code': 'ATTACHMENT_TOO_LARGE'},
+        },
+      );
+
+      await expectLater(
+        upload(client(_Tokens(['t']))),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'ATTACHMENT_TOO_LARGE')
+              .having((f) => f.message, 'message', 'That file is over 10 MB.'),
+        ),
+      );
+    });
+
+    test('an answer that is no envelope is a failed upload', () async {
+      backend.answer = (_, _) => (status: 502, body: 'Bad Gateway');
+
+      await expectLater(
+        upload(client(_Tokens(['t']))),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'UPLOAD_FAILED')
+              .having(
+                (f) => f.message,
+                'message',
+                'Could not upload the file. Try again.',
+              )
+              .having((f) => f.statusCode, 'status', 502),
+        ),
       );
     });
   });
