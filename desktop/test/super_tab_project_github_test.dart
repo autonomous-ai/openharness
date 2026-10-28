@@ -12,6 +12,22 @@ import 'package:harness/super_tabs/project_github.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  // Local Team account run, 2026-10-28 (group #646, item 8): the server names the reader's other projects the
+  // repository is approved for; nothing else is read from it.
+  test('reads the other projects a repository is approved for', () {
+    final access = SuperTabProjectGitHub.fromJson({
+      'state': 'not-approved',
+      'repository': 'tuan-dev/notes-app',
+      'canApprove': true,
+      'approvedFor': ['Notes', 3, 'Docs'],
+    });
+    expect(access.approvedFor, ['Notes', 'Docs']);
+    expect(
+      SuperTabProjectGitHub.fromJson({'state': 'covered'}).approvedFor,
+      isEmpty,
+    );
+  });
+
   late ConversationServer server;
   late List<String> asked;
   late Map<String, dynamic> answer;
@@ -262,37 +278,47 @@ void main() {
 
   // 2026-10-28, a new Swarm: Project details showed no GitHub access at all while it was read, and after an approval
   // the sidebar kept saying teammates could not push for 5 minutes.
-  testWidgets('says it is checking while it reads, and that it could not when it fails, asking again soon', (
-    tester,
-  ) async {
-    hold = Completer<void>();
-    final c = controllerFor();
-    await c.refresh();
-    final project = c.snapshot!.projects.first;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: ProjectGitHubAccess(controller: c, projectId: project.id),
+  testWidgets(
+    'says it is checking while it reads, and that it could not when it fails, asking again soon',
+    (tester) async {
+      hold = Completer<void>();
+      final c = controllerFor();
+      await c.refresh();
+      final project = c.snapshot!.projects.first;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ProjectGitHubAccess(controller: c, projectId: project.id),
+          ),
         ),
-      ),
-    );
-    await tester.pump();
-    expect(find.text('Checking…'), findsOneWidget);
-    failure = const SuperTabFailure('NETWORK', 'offline');
-    hold!.complete();
-    await tester.pumpAndSettle();
-    expect(find.text("Couldn't check GitHub access just now."), findsOneWidget);
-    expect(find.byKey(const Key('super-project-github-check')), findsOneWidget);
-    // Asked again after 30 seconds, not 5 minutes.
-    final before = asked.length;
-    await c.readGitHubAccess(project.id);
-    expect(asked, hasLength(before));
-    failure = null;
-    await tester.tap(find.byKey(const Key('super-project-github-check')));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Install Harness on GitHub there'), findsOneWidget);
-    c.dispose();
-  });
+      );
+      await tester.pump();
+      expect(find.text('Checking…'), findsOneWidget);
+      failure = const SuperTabFailure('NETWORK', 'offline');
+      hold!.complete();
+      await tester.pumpAndSettle();
+      expect(
+        find.text("Couldn't check GitHub access just now."),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('super-project-github-check')),
+        findsOneWidget,
+      );
+      // Asked again after 30 seconds, not 5 minutes.
+      final before = asked.length;
+      await c.readGitHubAccess(project.id);
+      expect(asked, hasLength(before));
+      failure = null;
+      await tester.tap(find.byKey(const Key('super-project-github-check')));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Install Harness on GitHub there'),
+        findsOneWidget,
+      );
+      c.dispose();
+    },
+  );
 
   testWidgets('shows nothing on a server without the route', (tester) async {
     failure = const SuperTabFailure('NOT_FOUND', 'Not found', statusCode: 404);
@@ -305,32 +331,46 @@ void main() {
     c.dispose();
   });
 
-  testWidgets('says to finish in the browser, and the sidebar asks again when the person is back', (
-    tester,
-  ) async {
-    answer = {'state': 'not-approved', 'repository': 'acme/app', 'canApprove': true};
-    final c = await mount(
-      tester,
-      (c, p) => Column(
-        children: [
-          ProjectGitHubLine(controller: c, project: p),
-          ProjectGitHubAccess(controller: c, projectId: p.id),
-        ],
-      ),
-    );
-    expect(find.byKey(const Key('super-project-github-waiting')), findsNothing);
-    await tester.tap(find.byKey(const Key('super-project-github-approve')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('super-project-github-waiting')), findsOneWidget);
-    // Approved in the browser; back in the app, both ask again at once.
-    answer = {'state': 'covered', 'repository': 'acme/app'};
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(asked.last, endsWith('/github?refresh=1'));
-    expect(find.text("Teammates can't push here yet"), findsNothing);
-    expect(find.textContaining('GitHub ✓'), findsOneWidget);
-    expect(find.byKey(const Key('super-project-github-waiting')), findsNothing);
-    c.dispose();
-  });
+  testWidgets(
+    'says to finish in the browser, and the sidebar asks again when the person is back',
+    (tester) async {
+      answer = {
+        'state': 'not-approved',
+        'repository': 'acme/app',
+        'canApprove': true,
+      };
+      final c = await mount(
+        tester,
+        (c, p) => Column(
+          children: [
+            ProjectGitHubLine(controller: c, project: p),
+            ProjectGitHubAccess(controller: c, projectId: p.id),
+          ],
+        ),
+      );
+      expect(
+        find.byKey(const Key('super-project-github-waiting')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-approve')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('super-project-github-waiting')),
+        findsOneWidget,
+      );
+      // Approved in the browser; back in the app, both ask again at once.
+      answer = {'state': 'covered', 'repository': 'acme/app'};
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(asked.last, endsWith('/github?refresh=1'));
+      expect(find.text("Teammates can't push here yet"), findsNothing);
+      expect(find.textContaining('GitHub ✓'), findsOneWidget);
+      expect(
+        find.byKey(const Key('super-project-github-waiting')),
+        findsNothing,
+      );
+      c.dispose();
+    },
+  );
 }

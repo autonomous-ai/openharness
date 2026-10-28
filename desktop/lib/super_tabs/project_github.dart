@@ -20,7 +20,11 @@ class SuperTabProjectGitHub {
       installUrl = row['installUrl'] is String
           ? row['installUrl'] as String
           : null,
-      canApprove = row['canApprove'] == true;
+      canApprove = row['canApprove'] == true,
+      approvedFor = [
+        for (final name in row['approvedFor'] as List? ?? const [])
+          if (name is String) name,
+      ];
 
   /// `covered`, `not-installed`, `not-approved` (installed, but nobody who can push to it approved it for this project:
   /// backend github/approvals.ts), `not-github`, `no-repository`, `unknown` (GitHub did not answer), `unread` (this
@@ -31,6 +35,10 @@ class SuperTabProjectGitHub {
 
   /// This server has the app's GitHub sign-in to approve a repository with.
   final bool canApprove;
+
+  /// The reader's other projects the repository is approved for, when it is not approved for this one (backend
+  /// github/projectAccess.ts): approving is per project, so a second one asks again.
+  final List<String> approvedFor;
 
   /// What stops teammates' agents here, in the sidebar's one line; null when nothing does or it cannot be said.
   String? get problem => switch (state) {
@@ -128,9 +136,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
               const SizedBox(height: 4),
               Text(
                 'Checking…',
-                key: ValueKey(
-                  'super-project-github-text-${widget.projectId}',
-                ),
+                key: ValueKey('super-project-github-text-${widget.projectId}'),
                 style: DesktopChrome.text().copyWith(
                   color: DesktopChrome.muted,
                 ),
