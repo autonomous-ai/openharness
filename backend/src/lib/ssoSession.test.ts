@@ -139,7 +139,7 @@ vi.mock('./sso.js', async (importOriginal) => {
   }
 })
 
-import { clearSsoProfileCache, authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
+import { clearSsoProfileCache, authenticateAccessToken, resetSsoBreakers, SsoAuthError } from './ssoAuth.js'
 import { refreshHarnessSession, revokeHarnessSession } from './harnessSession.js'
 import { decryptMachineCredential } from './machineCredential.js'
 import { SSO_OUTAGE_GRACE_MS, SSO_RECHECK_MS, ensureHarnessSessionExpiry, ssoAccessTokenFor } from './ssoSession.js'
@@ -169,6 +169,8 @@ beforeEach(async () => {
   fakes.sso.live.clear(); fakes.sso.rotate = true; fakes.sso.down = false; fakes.sso.calls = 0; fakes.sso.counter = 0; fakes.sso.gate = null
   fakes.setFailCreate(false)
   clearSsoProfileCache()
+  // The profile service's circuit (lib/ssoAuth.ts) is shared: tests that fail it on purpose must not open it for the next.
+  resetSsoBreakers()
   vi.clearAllMocks()
   stubProfileService()
   app = Fastify()
