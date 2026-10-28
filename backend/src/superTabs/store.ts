@@ -1,5 +1,6 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
@@ -1647,12 +1648,22 @@ export class SuperTabStore {
     return rows.map(r => r.assignmentId).filter(id => !id.startsWith('release-') && !active.has(id))
   }
 
-  /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
-  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
+  /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. The time
+   *  checks of a machine's report and of a Lead's poll pass `keepStored`: a notice of theirs already stored as that same
+   *  notice (its Swarm, its conversation and its whole source: the kind, and for a loss its worker, task and reason) is
+   *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
+   *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
+  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
+    keepStored = false) {
+    const stored = keepStored && messages.length ? await tx.superTabMessage.findMany({ where: { id: { in: messages.map(m => m.id) } },
+      select: { id: true, tabId: true, conversationId: true, source: true } }) : []
+    const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
+      && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
+    if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []
-    const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
+    let deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     for (const message of messages) {
-      rows.push({ id: message.id, tabId, conversationId: message.conversationId,
+      if (!kept.has(message.id)) rows.push({ id: message.id, tabId, conversationId: message.conversationId,
         sequence: sequences.get(message.id)!, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
         text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] })
@@ -1668,6 +1679,10 @@ export class SuperTabStore {
       }
     }
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    if (kept.size) {
+      const have = new Set((await tx.superTabDelivery.findMany({ where: { messageId: { in: [...kept] } }, select: { id: true } })).map(d => d.id))
+      deliveries = deliveries.filter(d => !have.has(d.id))
+    }
     if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
     for (const delivery of deliveries) this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
   }
@@ -1885,7 +1900,7 @@ export class SuperTabStore {
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
-        await this.writeMessages(tx, tabId, state, rows, sequences)
+        await this.writeMessages(tx, tabId, state, rows, sequences, true)
         return { version }
       }
       if (!state.machines?.includes(pool)) return saved()
@@ -2067,7 +2082,7 @@ export class SuperTabStore {
       // A loss, a start's failure or a stop was judged from a machine's report: a newer report makes this write retry.
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written), ...stoppedMachines(state, idle),
         ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
-      await this.writeMessages(tx, tabId, state, written, sequences)
+      await this.writeMessages(tx, tabId, state, written, sequences, true)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
       const allowed: SuperTabDelivery[] = []
