@@ -6,7 +6,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DOCTOR_TIMEOUT_MS, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
+import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
@@ -366,6 +366,15 @@ describe('installDsh, every way it can go', () => {
       const result = await installDsh({ source: 'https://example.com/thing.git' })
       expect(result).toMatchObject({ ok: false, error: 'CLONE_FAILED' })
       expect(!result.ok && result.detail).toContain('ENOENT')
+    })
+
+    it('on Windows, where git does not come with the system, no git says to install Git for Windows', () => {
+      const missing = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })
+      expect(gitStartFailure(missing, 'win32')).toBe('Git is not installed on this computer, and harnesses are installed with it. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+      // Elsewhere, and for any other failure to start, what Node said, as before.
+      expect(gitStartFailure(missing, 'darwin')).toBe('spawn git ENOENT')
+      expect(gitStartFailure(missing, 'linux')).toBe('spawn git ENOENT')
+      expect(gitStartFailure(Object.assign(new Error('spawn git EACCES'), { code: 'EACCES' }), 'win32')).toBe('spawn git EACCES')
     })
 
     it('a clone still running after ten minutes is stopped, and said to have been', async () => {

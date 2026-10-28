@@ -24,6 +24,7 @@ import { resolveDshCommand } from './materialize.js'
 import { runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
+import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -270,7 +271,7 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
         if (tail.length > 20) tail.shift()
       }
     })
-    child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, detail: error.message }) })
+    child.on('error', (error) => { clearTimeout(timer); resolve({ ok: false, detail: gitStartFailure(error) }) })
     // Exit may precede the last stderr data. Classify the failure only once
     // the pipe closes, so a retryable Git error cannot become an empty one.
     child.on('close', (code, signal) => {
@@ -283,6 +284,17 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
       resolve({ ok: false, detail: said ? `${how}: ${said}` : how })
     })
   })
+}
+
+/**
+ * What a git that could not start is reported as. On Windows, git is not part of the system and the installer does
+ * not bring it, so a missing git is the usual case there, and `spawn git ENOENT` was all a person saw (0 of 25 Windows
+ * Store installs succeeded, 2026-10-28). A Mac offers its own git and Linux has a package for it: what Node said, as
+ * before.
+ */
+export function gitStartFailure(error: NodeJS.ErrnoException, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32' && error.code === 'ENOENT') return `Git is not installed on this computer, and harnesses are installed with it. ${INSTALL_GIT_FOR_WINDOWS}`
+  return error.message
 }
 
 /** Put the clone (or the link) at its final path, replacing whatever an earlier install left there. */
