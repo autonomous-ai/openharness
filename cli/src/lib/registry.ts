@@ -1,4 +1,4 @@
-import { parseSwarmSkill, type SwarmSkill } from './swarmSkills.js'
+import { parseSwarmSkill, type SwarmSkill } from './savedSkill.js'
 /**
  * Registry of process-owned AGENTS — one per supported top-level engine process in a tmux pane.
  *

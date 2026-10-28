@@ -41,10 +41,7 @@ import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
-import { syncSwarmGrid } from '../lib/swarmGrid.js'
-import { SwarmApiShares } from '../lib/swarmApiShares.js'
-import { liveModels, SwarmHeal } from '../lib/swarmHeal.js'
-import { SwarmOffers } from '../lib/swarmOffers.js'
+import type * as SwarmServicesEntry from '../superTabs/inServices.js'
 import { internalOnThrow } from './requestErrors.js'
 
 /** The requests models answers for the apps, declared in core/api.ts for the core to route. */
@@ -58,7 +55,12 @@ interface GridSetUp {
   setUp(): boolean
 }
 
-export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
+/** What models runs of the Swarm while it is on (superTabs/inServices.ts, docs/plans/2026-10-23-swarm-local-models.md):
+ *  a Swarm's grid, the APIs and models shared with it, and the check that keeps them there. Absent while the Swarm is
+ *  off (`HARNESS_SWARM`): none of it is loaded, no API is served to a Swarm, and its requests are answered unavailable. */
+export type SwarmModels = Pick<typeof SwarmServicesEntry, 'syncSwarmGrid' | 'SwarmApiShares' | 'SwarmHeal' | 'liveModels' | 'SwarmOffers'>
+
+export function startModels(core: CoreApi, ports: CorePorts, swarm?: SwarmModels): ServiceRequests {
   // A managed grid already here follows its pin on EVERY start of this service — the daemon's, and the
   // restart a self-update ends in — not only on `--repair`: the pin is expected to move, and a machine
   // installed last month has to notice. A machine with none gets none from a start: grid is an add-on,
@@ -179,7 +181,7 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
     // The web-tools cache lives exactly as long as the sign-in.
     signedOut: () => clearGridMcpUrlCache(),
   }
-  return modelsRequests(core, grid, privateGridName)
+  return modelsRequests(core, grid, privateGridName, swarm)
 }
 
 /**
@@ -242,9 +244,9 @@ async function moveTarget(
 const MAX_WAKES_PER_ASK = 8
 
 /** The APIs this computer shares with Swarms: one set for the process, since each holds a live endpoint. */
-function swarmApiShares(dataDir: string): SwarmApiShares {
+function swarmApiShares(dataDir: string, swarm: SwarmModels): InstanceType<SwarmModels['SwarmApiShares']> {
   const saved = new ApiConnections(dataDir)
-  const shares = new SwarmApiShares({ access: (id) => saved.modelAccess(id), exec: (args) => gridExec(args), stateFile: join(dataDir, 'swarm-api-shares.json') })
+  const shares = new swarm.SwarmApiShares({ access: (id) => saved.modelAccess(id), exec: (args) => gridExec(args), stateFile: join(dataDir, 'swarm-api-shares.json') })
   void shares.restore().catch(() => {})
   return shares
 }
@@ -261,7 +263,7 @@ type LocalModelRequest = 'grid_fleet_models_list' | 'grid_fleet_model_download' 
  * answered them itself. A failure is answered as the socket answered it, sentences included: the apps
  * show them.
  */
-function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => Promise<string | null>): ServiceRequests {
+function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => Promise<string | null>, swarm?: SwarmModels): ServiceRequests {
   // The Model Manager reads the grid it runs on through the same credential-less reader as every picker
   // (never `grid engines`, which carries the grid credential and so wakes a sleeping grid on every tick),
   // and a start or stop it finishes makes every list read again — pushed to the window when it changes.
@@ -277,17 +279,8 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     appEngines: appEngineOps(process.env),
     gpuProcesses: nvidiaComputeApps,
   })
-  // One set of shared APIs for the process, and the check that keeps them and the local models on each Swarm's grid
-  // (lib/swarmHeal.ts).
-  const shares = swarmApiShares(core.dataDir)
-  const heal = new SwarmHeal({
-    live: async (name) => {
-      const answer = await gridExec(['--remote', 'models', name, '--json'])
-      return answer.code === 'OK' ? liveModels(answer.stdout) : null
-    },
-    shares: { list: (name) => shares.list(name), rejoin: (name, connectionId, model) => shares.rejoin(name, connectionId, model) },
-    apps: { served: (name) => localModels.servedApps(name), rejoin: (name) => localModels.rejoinApp(name) },
-  })
+  // A Swarm's grid, the APIs and models shared with it and the check that keeps them there, while the Swarm is on.
+  const swarmSide = swarm ? swarmGridRequests(grid, core.dataDir, swarm, localModels) : null
   /** The grid listing currently out, shared by every `grid_models_list` for the same own grid that lands
    *  meanwhile. */
   let listing: { gridName: string | null; grids: Promise<GridSection[]> } | null = null
@@ -398,40 +391,40 @@ function modelsRequests(core: CoreApi, grid: GridSetUp, privateGridName: () => P
     grid_fleet_model_download: localModel('grid_fleet_model_download'),
     grid_fleet_model_start: localModel('grid_fleet_model_start'),
     grid_fleet_model_stop: localModel('grid_fleet_model_stop'),
+    ...gridCommands(),
+    ...(swarmSide?.requests ?? SWARM_OFF_REQUESTS),
+    ...launchTargetRequests(core, async (id) => { await swarmSide?.shares.stopConnection(id) }),
+  }
+}
+
+/** The Swarm's requests to models (core/api.ts `MODELS_REQUESTS`), answered while it is off as its own service's are. */
+const SWARM_MODELS_REQUESTS = ['grid_swarm_sync', 'grid_swarm_api_share', 'grid_swarm_api_shares', 'grid_swarm_offer', 'grid_swarm_offers', 'grid_swarm_heal'] as const
+const SWARM_OFF_REQUESTS: ServiceRequests = Object.fromEntries(SWARM_MODELS_REQUESTS.map((type) =>
+  [type, () => ({ error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: false })]))
+
+/**
+ * What models answers a Swarm while it is on: its own grid, kept in step with its people (lib/swarmGrid.ts), a saved API
+ * or a model shared with it (lib/swarmApiShares.ts, lib/swarmOffers.ts), and what this computer serves there, checked
+ * against what the grid lists (lib/swarmHeal.ts). One set of shared APIs for the process, since each holds a live
+ * endpoint; its `stopConnection` takes a deleted API off every Swarm first.
+ */
+function swarmGridRequests(grid: GridSetUp, dataDir: string, swarm: SwarmModels, localModels: Pick<LocalModels, 'servedApps' | 'rejoinApp'>) {
+  const shares = swarmApiShares(dataDir, swarm)
+  const offers = new swarm.SwarmOffers(join(dataDir, 'swarm-offers.json'))
+  const heal = new swarm.SwarmHeal({
+    live: async (name) => {
+      const answer = await gridExec(['--remote', 'models', name, '--json'])
+      return answer.code === 'OK' ? swarm.liveModels(answer.stdout) : null
+    },
+    shares: { list: (name) => shares.list(name), rejoin: (name, connectionId, model) => shares.rejoin(name, connectionId, model) },
+    apps: { served: (name) => localModels.servedApps(name), rejoin: (name) => localModels.rejoinApp(name) },
+  })
+  const requests: ServiceRequests = {
     // What this computer serves on a Swarm's grid that the grid really lists, joined again when it lost them: read by
     // every machine reading (superTabs/machines.ts).
     grid_swarm_heal: async (payload) => {
       if (typeof payload.grid !== 'string' || !SWARM_GRID.test(payload.grid)) return { error: 'INVALID_REQUEST' }
       return { ...await heal.check(payload.grid) }
-    },
-    ...gridCommands(grid, core.dataDir, shares),
-    ...launchTargetRequests(core, (id) => shares.stopConnection(id)),
-  }
-}
-
-/**
- * The Model Manager's grid commands: grid's own argv, run here (`lib/gridFleetRpc.ts`). A command is a job
- * of the connection that started it, keyed by that connection and the id it was asked under (`Asker`),
- * and a cancel stops only that connection's own. Run against grid AS IT STANDS — never set up first: a
- * Grid harness session issues these on its own the moment its viewer comes up (every open one, on every
- * daemon start), so setting grid up here signed a machine in to grid right after a Harness-only sign-in,
- * with nobody asking. Grid is set up by the picker's Set up, by making or opening a Model Manager, and by
- * that harness's own `harness grid setup`; until then grid answers these in its own words. Their
- * handshake, `grid_fleet_capabilities`, is the socket's (core/api.ts `MODELS_REQUESTS`).
- */
-function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares = swarmApiShares(dataDir),
-  offers: SwarmOffers = new SwarmOffers(join(dataDir, 'swarm-offers.json'))): ServiceRequests {
-  const fleet = new GridFleetRpc()
-  return {
-    // Pulls and builds can take minutes; the host answers when it is done and holds nothing else for it.
-    grid_fleet_run: async (payload, asker) => {
-      const request = parseGridFleetRequest(payload)
-      if (!request || !asker.connection || !asker.requestId) return { error: 'INVALID_GRID_COMMAND' }
-      try {
-        return { ...await fleet.run(asker.connection, asker.requestId, request) }
-      } catch {
-        return { ok: false, code: 1, error: 'Grid command failed unexpectedly.' }
-      }
     },
     // A Swarm's own grid, created and kept in step with its people by the owner's computer (lib/swarmGrid.ts).
     grid_swarm_sync: async (payload, asker) => {
@@ -441,7 +434,7 @@ function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares =
       // Signed in first: the owner may never have used grid on this computer before turning the add-on on.
       const unready = await notReady(grid, false)
       if (unready) return { ready: false, error: unready, added: [], removed: [] }
-      return { ...await syncSwarmGrid(payload.grid, members) }
+      return { ...await swarm.syncSwarmGrid(payload.grid, members) }
     },
     // A saved API shared with a Swarm's grid, on this computer's key (lib/swarmApiShares.ts). This computer's own person
     // alone: the key is theirs, and so are the credits every Builder in the Swarm then spends.
@@ -476,6 +469,33 @@ function gridCommands(grid: GridSetUp, dataDir: string, shares: SwarmApiShares =
     grid_swarm_offers: (payload) => ({
       offers: offers.list(typeof payload.grid === 'string' ? payload.grid : undefined),
     }),
+  }
+  return { requests, shares }
+}
+
+/**
+ * The Model Manager's grid commands: grid's own argv, run here (`lib/gridFleetRpc.ts`). A command is a job
+ * of the connection that started it, keyed by that connection and the id it was asked under (`Asker`),
+ * and a cancel stops only that connection's own. Run against grid AS IT STANDS — never set up first: a
+ * Grid harness session issues these on its own the moment its viewer comes up (every open one, on every
+ * daemon start), so setting grid up here signed a machine in to grid right after a Harness-only sign-in,
+ * with nobody asking. Grid is set up by the picker's Set up, by making or opening a Model Manager, and by
+ * that harness's own `harness grid setup`; until then grid answers these in its own words. Their
+ * handshake, `grid_fleet_capabilities`, is the socket's (core/api.ts `MODELS_REQUESTS`).
+ */
+function gridCommands(): ServiceRequests {
+  const fleet = new GridFleetRpc()
+  return {
+    // Pulls and builds can take minutes; the host answers when it is done and holds nothing else for it.
+    grid_fleet_run: async (payload, asker) => {
+      const request = parseGridFleetRequest(payload)
+      if (!request || !asker.connection || !asker.requestId) return { error: 'INVALID_GRID_COMMAND' }
+      try {
+        return { ...await fleet.run(asker.connection, asker.requestId, request) }
+      } catch {
+        return { ok: false, code: 1, error: 'Grid command failed unexpectedly.' }
+      }
+    },
     grid_fleet_cancel: (payload, asker) => ({
       cancelled: !!asker.connection && typeof payload.commandId === 'string' && fleet.cancel(asker.connection, payload.commandId),
     }),

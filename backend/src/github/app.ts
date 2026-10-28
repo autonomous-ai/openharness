@@ -14,6 +14,8 @@ import { githubRepository, type GitHubRepository } from './repository.js'
 export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
 /** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
 export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
+/** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
+export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */
@@ -243,6 +245,20 @@ export class GitHubApp {
     const answer = await this.call('DELETE', '/installation/token', `Bearer ${token}`)
     if (answer.status === 204 || answer.status === 401) return
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not revoke the token (HTTP ${answer.status}).`, 502)
+  }
+
+  /** Whether pull request [number] is open, merged or closed (GET /repos/{owner}/{repo}/pulls/{number}); null when GitHub
+   *  cannot say, which a caller must read as possibly open. */
+  async pullRequestState(repository: GitHubRepository, number: number, token: string): Promise<'open' | 'merged' | 'closed' | null> {
+    try {
+      const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
+      const body = answer.body as Record<string, unknown>
+      if (answer.status !== 200 || !['open', 'closed'].includes(String(body.state))) return null
+      return body.state === 'open' ? 'open' : typeof body.merged_at === 'string' ? 'merged' : 'closed'
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
   }
 
   /** The default branch and whether pushing to it straight needs a pull request, read with the agent's own token

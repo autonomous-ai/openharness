@@ -32,6 +32,8 @@ export interface ReadExtras {
   mentionsWaiting?: number
   /** A person's open decisions (decisions.ts). */
   decisionsWaiting?: number
+  /** Which ones they are, as a digest (decisions.ts). */
+  decisionsDigest?: string
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -106,5 +108,6 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(visible.otherProjectsWork ? { otherProjectsWork: visible.otherProjectsWork } : {}),
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
+    ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
   }
 }
