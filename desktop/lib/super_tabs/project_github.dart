@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
@@ -128,9 +129,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
               const SizedBox(height: 4),
               Text(
                 'Checking…',
-                key: ValueKey(
-                  'super-project-github-text-${widget.projectId}',
-                ),
+                key: ValueKey('super-project-github-text-${widget.projectId}'),
                 style: DesktopChrome.text().copyWith(
                   color: DesktopChrome.muted,
                 ),
@@ -141,7 +140,7 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
         final repository = access.repository ?? 'its repository';
         final text = switch (access.state) {
           'covered' =>
-            "GitHub ✓ Teammates' agents can push and open pull requests on $repository.",
+            "Teammates' agents can push and open pull requests on $repository.",
           'not-installed' =>
             "Teammates' agents can't push to $repository yet. Install Harness on GitHub there: "
                 "an owner of ${repository.split('/').first}, or the repository's owner, can.",
@@ -168,10 +167,30 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
           children: [
             Text('GitHub access', style: DesktopChrome.control(medium: true)),
             const SizedBox(height: 4),
-            Text(
-              text,
-              key: ValueKey('super-project-github-text-${widget.projectId}'),
-              style: DesktopChrome.text(),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Covered: the status icon, not a ✓ in the sentence (group #646, item 6).
+                if (access.state == 'covered')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, right: 6),
+                    child: Icon(
+                      AppIcons.circleCheck,
+                      key: const Key('super-project-github-covered'),
+                      size: 16,
+                      color: grid.AppPalette.online,
+                    ),
+                  ),
+                Expanded(
+                  child: Text(
+                    text,
+                    key: ValueKey(
+                      'super-project-github-text-${widget.projectId}',
+                    ),
+                    style: DesktopChrome.text(),
+                  ),
+                ),
+              ],
             ),
             if (waiting)
               Padding(

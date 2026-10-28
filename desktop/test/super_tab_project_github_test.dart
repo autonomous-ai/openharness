@@ -5,6 +5,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_icons.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_github.dart';
@@ -163,7 +165,10 @@ void main() {
       await tester.tap(find.byKey(const Key('super-project-github-check')));
       await tester.pumpAndSettle();
       expect(asked.last, endsWith('/github?refresh=1'));
-      expect(find.textContaining("GitHub ✓"), findsOneWidget);
+      expect(
+        find.byKey(const Key('super-project-github-covered')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const Key('super-project-github-install')),
         findsNothing,
@@ -240,6 +245,31 @@ void main() {
     },
   );
 
+  // Local Team account run, 2026-10-28 (group #646, item 6): 'GitHub access' then 'GitHub ✓ …' said GitHub twice, with a
+  // text character for a status icon.
+  testWidgets('covered reads as the success icon and one sentence', (
+    tester,
+  ) async {
+    answer = {'state': 'covered', 'repository': 'acme/app'};
+    final c = await mount(
+      tester,
+      (c, p) => ProjectGitHubAccess(controller: c, projectId: p.id),
+    );
+    final icon = tester.widget<Icon>(
+      find.byKey(const Key('super-project-github-covered')),
+    );
+    expect(icon.icon, AppIcons.circleCheck);
+    expect(icon.color, grid.AppPalette.online);
+    expect(
+      find.text(
+        "Teammates' agents can push and open pull requests on acme/app.",
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('✓'), findsNothing);
+    c.dispose();
+  });
+
   testWidgets('says so when the server cannot approve, without the buttons', (
     tester,
   ) async {
@@ -262,37 +292,47 @@ void main() {
 
   // 2026-10-28, a new Swarm: Project details showed no GitHub access at all while it was read, and after an approval
   // the sidebar kept saying teammates could not push for 5 minutes.
-  testWidgets('says it is checking while it reads, and that it could not when it fails, asking again soon', (
-    tester,
-  ) async {
-    hold = Completer<void>();
-    final c = controllerFor();
-    await c.refresh();
-    final project = c.snapshot!.projects.first;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: ProjectGitHubAccess(controller: c, projectId: project.id),
+  testWidgets(
+    'says it is checking while it reads, and that it could not when it fails, asking again soon',
+    (tester) async {
+      hold = Completer<void>();
+      final c = controllerFor();
+      await c.refresh();
+      final project = c.snapshot!.projects.first;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ProjectGitHubAccess(controller: c, projectId: project.id),
+          ),
         ),
-      ),
-    );
-    await tester.pump();
-    expect(find.text('Checking…'), findsOneWidget);
-    failure = const SuperTabFailure('NETWORK', 'offline');
-    hold!.complete();
-    await tester.pumpAndSettle();
-    expect(find.text("Couldn't check GitHub access just now."), findsOneWidget);
-    expect(find.byKey(const Key('super-project-github-check')), findsOneWidget);
-    // Asked again after 30 seconds, not 5 minutes.
-    final before = asked.length;
-    await c.readGitHubAccess(project.id);
-    expect(asked, hasLength(before));
-    failure = null;
-    await tester.tap(find.byKey(const Key('super-project-github-check')));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('Install Harness on GitHub there'), findsOneWidget);
-    c.dispose();
-  });
+      );
+      await tester.pump();
+      expect(find.text('Checking…'), findsOneWidget);
+      failure = const SuperTabFailure('NETWORK', 'offline');
+      hold!.complete();
+      await tester.pumpAndSettle();
+      expect(
+        find.text("Couldn't check GitHub access just now."),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('super-project-github-check')),
+        findsOneWidget,
+      );
+      // Asked again after 30 seconds, not 5 minutes.
+      final before = asked.length;
+      await c.readGitHubAccess(project.id);
+      expect(asked, hasLength(before));
+      failure = null;
+      await tester.tap(find.byKey(const Key('super-project-github-check')));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Install Harness on GitHub there'),
+        findsOneWidget,
+      );
+      c.dispose();
+    },
+  );
 
   testWidgets('shows nothing on a server without the route', (tester) async {
     failure = const SuperTabFailure('NOT_FOUND', 'Not found', statusCode: 404);
@@ -305,32 +345,49 @@ void main() {
     c.dispose();
   });
 
-  testWidgets('says to finish in the browser, and the sidebar asks again when the person is back', (
-    tester,
-  ) async {
-    answer = {'state': 'not-approved', 'repository': 'acme/app', 'canApprove': true};
-    final c = await mount(
-      tester,
-      (c, p) => Column(
-        children: [
-          ProjectGitHubLine(controller: c, project: p),
-          ProjectGitHubAccess(controller: c, projectId: p.id),
-        ],
-      ),
-    );
-    expect(find.byKey(const Key('super-project-github-waiting')), findsNothing);
-    await tester.tap(find.byKey(const Key('super-project-github-approve')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('super-project-github-waiting')), findsOneWidget);
-    // Approved in the browser; back in the app, both ask again at once.
-    answer = {'state': 'covered', 'repository': 'acme/app'};
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pumpAndSettle();
-    expect(asked.last, endsWith('/github?refresh=1'));
-    expect(find.text("Teammates can't push here yet"), findsNothing);
-    expect(find.textContaining('GitHub ✓'), findsOneWidget);
-    expect(find.byKey(const Key('super-project-github-waiting')), findsNothing);
-    c.dispose();
-  });
+  testWidgets(
+    'says to finish in the browser, and the sidebar asks again when the person is back',
+    (tester) async {
+      answer = {
+        'state': 'not-approved',
+        'repository': 'acme/app',
+        'canApprove': true,
+      };
+      final c = await mount(
+        tester,
+        (c, p) => Column(
+          children: [
+            ProjectGitHubLine(controller: c, project: p),
+            ProjectGitHubAccess(controller: c, projectId: p.id),
+          ],
+        ),
+      );
+      expect(
+        find.byKey(const Key('super-project-github-waiting')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('super-project-github-approve')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('super-project-github-waiting')),
+        findsOneWidget,
+      );
+      // Approved in the browser; back in the app, both ask again at once.
+      answer = {'state': 'covered', 'repository': 'acme/app'};
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(asked.last, endsWith('/github?refresh=1'));
+      expect(find.text("Teammates can't push here yet"), findsNothing);
+      expect(
+        find.byKey(const Key('super-project-github-covered')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('super-project-github-waiting')),
+        findsNothing,
+      );
+      c.dispose();
+    },
+  );
 }
