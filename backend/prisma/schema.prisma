@@ -1021,7 +1021,8 @@ model SuperTab {
 
   @@index([autonomousEnv, workspaceId])
   @@index([autonomousEnv, memberIds])
-  @@index([autonomousEnv, invitedEmails])
+  /// By id within an address: the invitation list reads the first 100 in id order (superTabs/invitedSwarms.ts).
+  @@index([autonomousEnv, invitedEmails, id])
   @@index([autonomousEnv, machineIds])
   @@index([autonomousEnv, cleanupMachineIds])
 }
