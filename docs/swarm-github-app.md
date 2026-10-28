@@ -214,6 +214,13 @@ address. The `commit-msg` hook adds any missing trailers to a message written in
 editor. Trailers already in the message are not added again, so an amend keeps one
 of each. An empty message still aborts the commit.
 
+In a Harness Team account, the commits themselves are by the app's bot account
+(`<app>[bot] <id+<app>[bot]@users.noreply.github.com>`), as its pull requests are: the
+account has no git identity of its own, and its commits read `Harness Team
+<harnessteam@<host>.local>` before. The token response names it as `commitAs` for a
+team account only; the daemon writes it to the session's `gitconfig`, which the
+session's git includes. A person's machine keeps its owner's git identity.
+
 The `prepare-commit-msg` hook runs even with `--no-verify`. Two things leave a commit
 without trailers: plumbing such as `git commit-tree`, and a command that sets its own
 `-c core.hooksPath`.
@@ -283,6 +290,9 @@ The server never logs a token.
 - On a personal computer, startup files that export `GITHUB_TOKEN` reach Claude
   Code's and Codex's commands again. gh then uses that token. The team account has
   no such files.
+- The team account has gh of its own: a Homebrew it cannot read leaves it none, so its
+  daemon installs GitHub's release of gh (pinned by checksum in `cli/src/team/gh.ts`)
+  in its home and links it from `~/.local/bin`.
 - If Redis is unavailable, Harness still issues tokens but cannot revoke them when
   the task ends. They expire within the hour.
 - In the first minute of a task, gh can be without a token until the daemon's next

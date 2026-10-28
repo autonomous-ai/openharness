@@ -351,7 +351,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       }
       await requireApproval(req.user!, grant, repository)
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
-      return { ...issued, ...attribution(grant) }
+      // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
+      // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
+      const commitAs = isTeamSession(req.user) ? await github.app.commitIdentity(issued.token) : null
+      return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
     }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
     { preHandler: [validateParams(tabParams), validateBody(operation, { named: true })] },

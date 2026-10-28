@@ -67,8 +67,9 @@ export function startModels(core: CoreApi, ports: CorePorts, swarm?: SwarmModels
   // installed the first time a grid feature is used (`ensure`, below). Not awaited, and asynchronous
   // throughout (`runtimeInstall.ts`): every grid call resolves the binary afresh (`gridBinaryPath`), so
   // whatever lands is picked up as it lands. It keeps following it while this runs: a pin moved after
-  // the start reaches it within ten minutes rather than at the next restart (`startGridPinRecheck`).
-  const followGridPin = (): Promise<unknown> => managedGridPath()
+  // the start reaches it within ten minutes rather than at the next restart (`startGridPinRecheck`). Windows has no
+  // managed grid: there the grid installed already follows the pin (`lib/gridWindowsPin.ts`).
+  const followGridPin = (): Promise<unknown> => managedGridPath() || (process.platform === 'win32' && gridAvailable())
     ? ensureManagedGrid((m) => console.log(`[grid-runtime] ${m}`))
     : Promise.resolve(null)
   void followGridPin()

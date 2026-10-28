@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -42,7 +42,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -746,7 +746,7 @@ export class SuperTabStore {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
-      const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state), otherWorkspace.includes(pool.machineId))
+      const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
       return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
     }) } }
@@ -927,8 +927,10 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
-        context.openDecisions = await fullFor(tx, tabId, { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId,
-          conversationId: command.conversationId, question: command.result })
+        const ask = { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId, conversationId: command.conversationId,
+          question: command.result }
+        context.repeatedDecision = await repeatOf(tx, tabId, ask) ?? null
+        context.openDecisions = context.repeatedDecision ? null : await fullFor(tx, tabId, ask)
       }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
