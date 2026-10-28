@@ -4,7 +4,7 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { env } from '../config/env.js'
-import { readAuthSession, writeAuthSession } from '../lib/authSession.js'
+import { readAuthSession, updateAuthSession, writeAuthSession } from '../lib/authSession.js'
 import { controlPlaneAuth, postJson, requestJson } from '../lib/controlPlane.js'
 import { computerId } from '../lib/daemonState.js'
 import { peekIdentity } from '../lib/e2ee/store.js'
@@ -56,6 +56,7 @@ export function teamCommandDeps(options: {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     session: readAuthSession,
     writeSession: writeAuthSession,
+    updateSession: updateAuthSession,
     signOutAsked: (flags) => signOutAsked({ interactive: process.stdin.isTTY === true, flags, ancestors: chain }),
     removeSignIn: (asked) => removeSignIn('team off', asked, chain),
     auth: controlPlaneAuth,
