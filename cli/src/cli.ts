@@ -48,7 +48,7 @@ import { serviceCommand, serviceCommandDeps } from './lib/serviceCommand.js'
 import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
-import { ancestors, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
+import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
@@ -1328,7 +1328,7 @@ async function updateCommand(force: boolean): Promise<void> {
  * on this box first, while the token that makes their deregistration authoritative still exists.
  */
 async function logout(): Promise<void> {
-  const chain = ancestors()
+  const chain = ancestorsOnce()
   const asked = personAsked('logout', chain)
   // Through the lock-taking stop, not an inline kill: a logout that lands mid-handoff would otherwise
   // SIGTERM the OLD daemon, leave the new one coming up, and then delete the session under it.
@@ -1759,7 +1759,7 @@ function signedOutWaiting(): 'pending-refresh' | 'waiting-for-sign-in' | null {
  * nothing says one did. 10-27: a desktop test ran the real `harness logout`, with no person anywhere near it,
  * and signed the whole Mac out, every agent on it with it (lib/signOut.ts).
  */
-function personAsked(command: string, chain: readonly Asker[]): SignOutAsked {
+function personAsked(command: string, chain: () => readonly Asker[]): SignOutAsked {
   const asked = signOutAsked({ interactive: process.stdin.isTTY === true, flags: process.argv.slice(2), ancestors: chain })
   if (asked) return asked
   console.error(`\n✗ \`harness ${command}\` signs this computer out, and nothing says a person asked: it has no terminal, `
@@ -1769,7 +1769,7 @@ function personAsked(command: string, chain: readonly Asker[]): SignOutAsked {
 
 /** Stop the daemon and clear local state so the next login starts fresh. */
 async function resetCommand(): Promise<void> {
-  const chain = ancestors()
+  const chain = ancestorsOnce()
   const asked = personAsked('reset', chain)
   // Before anything is cleared: a pid file removed under a Harness still running leaves nothing able to stop it.
   const r = await stopDaemonOrExit()

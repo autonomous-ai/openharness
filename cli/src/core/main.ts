@@ -3137,12 +3137,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // only a person deletes it (lib/signOut.ts).
   backend.onRevoked = () => {
     console.log('[cli] this computer\'s sign-in was revoked or refused — signed out, keeping it until a new sign-in, and stopping')
-    markSignedOut('revoked')
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
     ports.models?.signedOut()
     swarmDoors?.cards.reset()
-    void shutdown('revoked')
+    // Marked before the stop: the core that comes back must read it as signed out. The mark waits for a
+    // refresh another process has under way, so that refresh's save cannot write over it.
+    void markSignedOut('revoked')
+      .catch((error: unknown) => console.log(`[cli] could not mark the sign-in signed out (${error instanceof Error ? error.message : String(error)})`))
+      .finally(() => void shutdown('revoked'))
   }
 
   // Mirror the machine's display name to disk so `harness status` (a separate process) can print it.

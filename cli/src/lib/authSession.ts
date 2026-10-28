@@ -115,8 +115,12 @@ export function signInOf(epoch: string | undefined | null, acct?: string | null)
   return { epoch, adopted, at: at ? Number(at[1]) : null, ...(acct && !adopted ? { acct } : {}) }
 }
 
+/** A sign-in's signed-out mark ([markSignedOut]): why and since when, and for a refused refresh, when it
+ *  may be tried again and how long the last wait was ([AuthSessionManager.retrySignedOut]). */
+export interface SignedOutMark { at: number; reason: SignedOutReason; retryAt?: number; retryWait?: number }
+
 /** The session on disk, and its signed-out mark when it has one ([markSignedOut]). */
-function readStored(): { session: AuthSession; signedOut: { at: number; reason: SignedOutReason } | null } | null {
+function readStored(): { session: AuthSession; signedOut: SignedOutMark | null } | null {
   let raw: string
   try { raw = readFileSync(AUTH_SESSION_FILE, 'utf8') } catch { return null }
   const session = parse(raw)
@@ -125,7 +129,12 @@ function readStored(): { session: AuthSession; signedOut: { at: number; reason: 
   try { mark = (JSON.parse(raw) as { signedOut?: unknown }).signedOut } catch { mark = undefined }
   const signedOut = typeof mark === 'object' && mark !== null
     && ((mark as { reason?: unknown }).reason === 'refresh-refused' || (mark as { reason?: unknown }).reason === 'revoked')
-    ? { at: Number((mark as { at?: unknown }).at) || 0, reason: (mark as { reason: SignedOutReason }).reason }
+    ? {
+        at: Number((mark as { at?: unknown }).at) || 0,
+        reason: (mark as { reason: SignedOutReason }).reason,
+        ...(typeof (mark as { retryAt?: unknown }).retryAt === 'number' ? { retryAt: (mark as { retryAt: number }).retryAt } : {}),
+        ...(typeof (mark as { retryWait?: unknown }).retryWait === 'number' ? { retryWait: (mark as { retryWait: number }).retryWait } : {}),
+      }
     : null
   return { session, signedOut }
 }
@@ -167,14 +176,29 @@ export type SignedOutReason = 'refresh-refused' | 'revoked'
  * it. Only a person deletes it (lib/signOut.ts `removeSignIn`). A refused refresh is tried again
  * ([AuthSessionManager.retrySignedOut]); a revoked one is not.
  */
-export function markSignedOut(reason: SignedOutReason, at = Date.now()): void {
+export function markSignedOut(reason: SignedOutReason, at = Date.now()): Promise<void> {
+  // Under the refresh lock: a refresh another process has under way saves its session when it is done, and a
+  // mark written before that save was written over by it, and the revoked sign-in used again (review of #1866).
+  return withLock(async () => markSignedOutHeld(reason, at))
+}
+
+/** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
+ *  and each ask must not be a refresh request. */
+const RETRY_FIRST_MS = 60_000
+const RETRY_LONGEST_MS = 60 * 60_000
+
+/** [markSignedOut], by a caller that holds the refresh lock already: the refresh that was refused. */
+function markSignedOutHeld(reason: SignedOutReason, at: number): void {
   const stored = readStored()
   if (!stored || stored.signedOut) return
-  writeAuthSession({ ...stored.session, signedOut: { at, reason } } as AuthSession)
+  const mark: SignedOutMark = reason === 'refresh-refused'
+    ? { at, reason, retryAt: at + RETRY_FIRST_MS, retryWait: RETRY_FIRST_MS }
+    : { at, reason }
+  writeAuthSession({ ...stored.session, signedOut: mark } as AuthSession)
 }
 
 /** Why and since when this computer's sign-in is signed out, kept on disk; null when it is not. */
-export function readSignedOut(): { at: number; reason: SignedOutReason } | null {
+export function readSignedOut(): SignedOutMark | null {
   return readStored()?.signedOut ?? null
 }
 
@@ -340,7 +364,7 @@ export class AuthSessionManager {
         writeAuthSession(next)
         return next.accessToken
       } catch (err) {
-        if (err instanceof AuthSessionError && err.code === 'INVALID_REFRESH') markSignedOut('refresh-refused')
+        if (err instanceof AuthSessionError && err.code === 'INVALID_REFRESH') markSignedOutHeld('refresh-refused', Date.now())
         throw err
       }
     })
@@ -353,11 +377,15 @@ export class AuthSessionManager {
    * signs this computer back in. A revoked sign-in is never tried: it waits for a new one. True when the
    * computer is signed in again.
    */
-  async retrySignedOut(): Promise<boolean> {
-    if (readStored()?.signedOut?.reason !== 'refresh-refused') return false
+  async retrySignedOut(now = Date.now()): Promise<boolean> {
+    const due = (mark: SignedOutMark | null | undefined): boolean =>
+      mark?.reason === 'refresh-refused' && now >= (mark.retryAt ?? 0)
+    if (!due(readStored()?.signedOut)) return false
     return withLock(async () => {
       const stored = readStored()
-      if (!stored || stored.signedOut?.reason !== 'refresh-refused') return stored !== null && !stored.signedOut
+      if (!stored || !stored.signedOut) return stored !== null
+      const mark = stored.signedOut
+      if (!due(mark)) return false
       try {
         const refreshed = await refreshRequest(this.backendBaseUrl, stored.session, this.opts.refreshTimeoutMs)
         writeAuthSession({
@@ -369,6 +397,9 @@ export class AuthSessionManager {
         })
         return true
       } catch {
+        // Not yet: tried again after twice the last wait, at most an hour on.
+        const wait = Math.min((mark.retryWait ?? RETRY_FIRST_MS) * 2, RETRY_LONGEST_MS)
+        writeAuthSession({ ...stored.session, signedOut: { ...mark, retryAt: now + wait, retryWait: wait } } as AuthSession)
         return false
       }
     })

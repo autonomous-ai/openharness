@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { isDesktopApp, removalLine, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker } from './signOut.js'
 
 // 10-27: a desktop test ran the real `harness logout` and signed the whole Mac out. Only a person asks.
@@ -8,28 +8,40 @@ describe('who asked for the sign-in to go', () => {
   const app: Asker = { pid: 12, command: '/Applications/Harness.app/Contents/MacOS/Harness' }
   const never = (): boolean => false
 
+  // Review of #1866: on Windows the processes above come from PowerShell, which takes a while; a terminal or
+  // the button's flag decides without them.
+  it('reads the processes above only when a terminal or the flag does not decide', () => {
+    const above = vi.fn((): Asker[] => [tester])
+    expect(signOutAsked({ interactive: false, flags: [SIGN_OUT_BUTTON_FLAG], ancestors: above, isApp: never })).toBe('sign-out button')
+    expect(signOutAsked({ interactive: true, flags: [], ancestors: above, isApp: never })).toBe('terminal')
+    expect(above).not.toHaveBeenCalled()
+
+    expect(signOutAsked({ interactive: false, flags: [], ancestors: above, isApp: never })).toBeNull()
+    expect(above).toHaveBeenCalledTimes(1)
+  })
+
   it('a terminal is a person', () => {
-    expect(signOutAsked({ interactive: true, flags: [], ancestors: [shell], isApp: never })).toBe('terminal')
+    expect(signOutAsked({ interactive: true, flags: [], ancestors: () => [shell], isApp: never })).toBe('terminal')
   })
 
   it("the desktop app's Sign out button says so", () => {
-    expect(signOutAsked({ interactive: false, flags: [SIGN_OUT_BUTTON_FLAG], ancestors: [], isApp: never })).toBe('sign-out button')
+    expect(signOutAsked({ interactive: false, flags: [SIGN_OUT_BUTTON_FLAG], ancestors: () => [], isApp: never })).toBe('sign-out button')
   })
 
   it('an app from before the flag is known by its process, above the CLI or its launcher', () => {
     const isApp = (asker: Asker): boolean => isDesktopApp(asker, 'darwin')
-    expect(signOutAsked({ interactive: false, flags: [], ancestors: [app], isApp })).toBe('desktop app')
-    expect(signOutAsked({ interactive: false, flags: [], ancestors: [{ pid: 13, command: '/bin/sh /Users/me/.local/bin/harness logout' }, app], isApp })).toBe('desktop app')
+    expect(signOutAsked({ interactive: false, flags: [], ancestors: () => [app], isApp })).toBe('desktop app')
+    expect(signOutAsked({ interactive: false, flags: [], ancestors: () => [{ pid: 13, command: '/bin/sh /Users/me/.local/bin/harness logout' }, app], isApp })).toBe('desktop app')
   })
 
   it.runIf(process.platform === 'darwin')('by default, the app is known on this platform', () => {
-    expect(signOutAsked({ interactive: false, flags: [], ancestors: [shell, app] })).toBe('desktop app')
-    expect(signOutAsked({ interactive: false, flags: [], ancestors: [tester, shell] })).toBeNull()
+    expect(signOutAsked({ interactive: false, flags: [], ancestors: () => [shell, app] })).toBe('desktop app')
+    expect(signOutAsked({ interactive: false, flags: [], ancestors: () => [tester, shell] })).toBeNull()
   })
 
   it('a test, an agent or a script with no terminal and no flag is not', () => {
     const isApp = (asker: Asker): boolean => isDesktopApp(asker, 'darwin')
-    expect(signOutAsked({ interactive: false, flags: ['--json'], ancestors: [tester, shell], isApp })).toBeNull()
+    expect(signOutAsked({ interactive: false, flags: ['--json'], ancestors: () => [tester, shell], isApp })).toBeNull()
   })
 
   it.each([

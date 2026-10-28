@@ -25,19 +25,26 @@ export type SignOutAsked = 'terminal' | 'sign-out button' | 'desktop app'
 
 /**
  * How a person asked for the sign-in to go, or null when nothing says one did: a test, an agent, a script.
- * [ancestors] are the processes above this one, nearest first.
+ * [ancestors] reads the processes above this one, nearest first, and is called only when the button's flag
+ * or a terminal has not decided: on Windows it asks PowerShell, which takes a while (review of #1866).
  */
 export function signOutAsked(opts: {
   interactive: boolean
   flags: readonly string[]
-  ancestors: readonly Asker[]
+  ancestors: () => readonly Asker[]
   isApp?: (asker: Asker) => boolean
 }): SignOutAsked | null {
   if (opts.flags.includes(SIGN_OUT_BUTTON_FLAG)) return 'sign-out button'
   if (opts.interactive) return 'terminal'
   const isApp = opts.isApp ?? ((asker: Asker): boolean => isDesktopApp(asker))
-  if (opts.ancestors.some((asker) => isApp(asker))) return 'desktop app'
+  if (opts.ancestors().some((asker) => isApp(asker))) return 'desktop app'
   return null
+}
+
+/** [ancestors], read at most once: what decides a sign-out and what its log line names are the same. */
+export function ancestorsOnce(): () => Asker[] {
+  let read: Asker[] | undefined
+  return () => read ??= ancestors()
 }
 
 /**
@@ -117,12 +124,12 @@ function stamp(at: Date): string {
  * processes ran it. The one way the CLI deletes it: [signOutAsked] said a person asked first. A log that
  * cannot be written does not keep the person signed in.
  */
-export function removeSignIn(reason: string, asked: SignOutAsked, chain: readonly Asker[] = ancestors()): void {
+export function removeSignIn(reason: string, asked: SignOutAsked, chain: () => readonly Asker[] = ancestorsOnce()): void {
   try {
     const self = { pid: process.pid, command: process.argv.join(' ') }
     // `harness reset` has just emptied the folder the log lives in.
     mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true })
-    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain }) + '\n')
+    appendFileSync(join(env.ADAPTER_DATA_DIR, 'harness.log'), removalLine({ reason, asked, self, ancestors: chain() }) + '\n')
   } catch { /* the log is a record, not a gate */ }
   clearAuthSession()
 }

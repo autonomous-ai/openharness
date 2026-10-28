@@ -264,27 +264,54 @@ describe('AuthSessionManager', () => {
     expect(refused).toHaveBeenCalledTimes(1)
   })
 
-  it('a refused refresh is tried again when asked, and one that now works signs the computer back in', async () => {
+  // The app asks `auth status` often; each ask must not be a refresh request (review of #1866).
+  it('a refused refresh is tried again a minute on, then twice as long each time, and a refresh that now works '
+    + 'signs the computer back in', async () => {
+    const at = 1_000_000
     writeAuthSession(baseSession())
-    markSignedOut('refresh-refused')
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => refusal()))
+    await markSignedOut('refresh-refused', at)
+    const refused = vi.fn<typeof fetch>().mockImplementation(async () => refusal())
+    vi.stubGlobal('fetch', refused)
     const manager = new AuthSessionManager('https://api.example.test')
 
-    expect(await manager.retrySignedOut()).toBe(false)
+    expect(await manager.retrySignedOut(at + 30_000)).toBe(false)
+    expect(refused).not.toHaveBeenCalled()
+    expect(await manager.retrySignedOut(at + 60_000)).toBe(false)
+    expect(refused).toHaveBeenCalledTimes(1)
+    expect(await manager.retrySignedOut(at + 60_000 + 119_000)).toBe(false)
+    expect(refused).toHaveBeenCalledTimes(1)
     expect(readSignedOut()).toMatchObject({ reason: 'refresh-refused' })
 
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => renewal()))
-    expect(await manager.retrySignedOut()).toBe(true)
+    expect(await manager.retrySignedOut(at + 60_000 + 120_000)).toBe(true)
 
     expect(readSignedOut()).toBeNull()
     expect(readAuthSession()).toMatchObject({ accessToken: 'renewed-access', refreshToken: 'refresh-2', machineId: 'machine-1' })
+  })
+
+  // Review of #1866: a revoke marked while another process refreshed was written over by that refresh's
+  // save, and the revoked sign-in was used again.
+  it('a revoke that lands while a refresh runs holds: the refresh saves first, and the mark stays', async () => {
+    writeAuthSession(baseSession())
+    let answer!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve })))
+    const refreshing = new AuthSessionManager('https://api.example.test').accessToken()
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+
+    const marked = markSignedOut('revoked')
+    answer(renewal())
+    await refreshing
+    await marked
+
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+    expect(readAuthSession()).toBeNull()
   })
 
   // The daemon stops on a revoke and comes back signed out (core/main.ts `onRevoked`): it boots signed in
   // only on a sign-in it can read, and every request takes its token from here.
   it('a revoked sign-in is never acted on again: no token, no refresh, until a new sign-in', async () => {
     writeAuthSession({ ...baseSession(), expiresAt: Date.now() + 3_600_000 })
-    markSignedOut('revoked')
+    await markSignedOut('revoked')
     const fetched = vi.fn<typeof fetch>()
     vi.stubGlobal('fetch', fetched)
     const manager = new AuthSessionManager('https://api.example.test')
@@ -298,9 +325,9 @@ describe('AuthSessionManager', () => {
     expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
   })
 
-  it('a new sign-in replaces one marked signed out', () => {
+  it('a new sign-in replaces one marked signed out', async () => {
     writeAuthSession(baseSession())
-    markSignedOut('revoked')
+    await markSignedOut('revoked')
 
     writeAuthSession({ ...baseSession(), accessToken: 'new-sign-in' })
 
