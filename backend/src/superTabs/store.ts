@@ -1511,11 +1511,12 @@ export class SuperTabStore {
   /** Which of one Swarm's sessions `user` may watch, with that Swarm loaded once however many are asked about. */
   private async observable<T extends { machineId: string; harnessId: string; machineOwnerId: string }>(user: AuthUser, tabId: string,
     sessions: T[]): Promise<Set<T>> {
-    const watchable = new Set<T>()
     // Watching is a person's: a team session has no person to watch as.
-    if (isTeamSession(user)) return watchable
+    if (isTeamSession(user)) return new Set()
     try {
-      await transaction(this.db, async tx => {
+      return await transaction(this.db, async tx => {
+        // Each attempt decides afresh: an aborted attempt's allowance must not outlive a revocation before the retry.
+        const watchable = new Set<T>()
         const { state } = await this.load(tx, user, tabId)
         person(state, user.sub)
         const targets = new Map(sessions.flatMap(s => {
@@ -1532,9 +1533,9 @@ export class SuperTabStore {
             watchable.add(session)
           } catch (error) { if (!(error instanceof SuperTabError)) throw error }
         }
+        return watchable
       })
-    } catch (error) { if (!(error instanceof SuperTabError)) throw error }
-    return watchable
+    } catch (error) { if (error instanceof SuperTabError) return new Set(); throw error }
   }
 
   /** Whether an agent's session is confidential in any Swarm (confidential.ts). */
