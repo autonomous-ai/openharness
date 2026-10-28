@@ -17,6 +17,8 @@ export interface DshCommandOptions {
   /** Each line of combined stdout+stderr, as it arrives. */
   onLine?: (line: string) => void
   timeoutMs?: number
+  /** The platform and Git Bash to run under, when not this computer's: a test runs Windows' path on any computer. */
+  host?: DshShellHost
 }
 
 export interface DshCommandResult {
@@ -63,7 +65,7 @@ export function isKilledJobReport(line: string): boolean {
  * is sourced from `.bash_profile`. A setup or a doctor is one process, so the reason bash panes avoid
  * `-l` (a PATH built in .bashrc compounding across subshells) does not apply here.
  */
-export function dshShellArgv(script: string, host: DshShellHost = {}): { path: string; args: string[] } {
+export function dshShellArgv(script: string, host: DshShellHost = {}): { path: string; args: string[]; env?: Record<string, string> } {
   if ((host.platform ?? process.platform) === 'win32') return gitBashArgv(script, (host.gitBash ?? findGitBash)())
   const shell = interactiveEngineShell()
   const body = `${dshNodeFallback()}\n${script}`
@@ -89,8 +91,11 @@ export interface DshShellHost {
  * fails with "stdin is not a tty" here, where the command's output is a pipe. And Harness's Node at the end of a PATH
  * with none, as `dshNodeFallback` does elsewhere, but written by cygpath: its folder is a `C:\...` path, whose colon
  * would split a Git Bash PATH in two. Both were found, and checked on Windows 11, by an outside contribution (#1511).
+ *
+ * CHERE_INVOKING: Git for Windows' /etc/profile changes a login shell to $HOME unless it is set, and a setup or doctor
+ * runs in the harness's folder (review of #2025).
  */
-function gitBashArgv(script: string, bash: string | null): { path: string; args: string[] } {
+function gitBashArgv(script: string, bash: string | null): { path: string; args: string[]; env: Record<string, string> } {
   if (!bash) throw new Error(`Setup and doctor scripts need Git Bash on Windows, and it was not found. ${INSTALL_GIT_FOR_WINDOWS}`)
   const runtimeDir = shellSingleQuote(win32.dirname(managedNodePath()))
   const body = [
@@ -98,7 +103,7 @@ function gitBashArgv(script: string, bash: string | null): { path: string; args:
     `if ! command -v node >/dev/null 2>&1; then PATH="\${PATH:+$PATH:}$(cygpath -u -- ${runtimeDir})"; export PATH; fi`,
     script,
   ].join('\n')
-  return { path: bash, args: ['-lic', body] }
+  return { path: bash, args: ['-lic', body], env: { CHERE_INVOKING: '1' } }
 }
 
 /**
@@ -113,11 +118,11 @@ export function dshNodeFallback(): string {
   return harnessNodePrelude(managedNodePath()).trimEnd()
 }
 
-export function spawnDshCommand(script: string, opts: { cwd: string; env?: Record<string, string> }): ChildProcess {
-  const { path, args } = dshShellArgv(script)
+export function spawnDshCommand(script: string, opts: { cwd: string; env?: Record<string, string>; host?: DshShellHost }): ChildProcess {
+  const { path, args, env } = dshShellArgv(script, opts.host)
   return spawn(path, args, {
     cwd: opts.cwd,
-    env: { ...process.env, ...(opts.env ?? {}) },
+    env: { ...process.env, ...env, ...(opts.env ?? {}) },
     stdio: ['ignore', 'pipe', 'pipe'],
     // Its own process group, so stopping it stops what it started (`sh -c node …`).
     detached: true,
@@ -132,7 +137,7 @@ export function runDshCommand(script: string, opts: DshCommandOptions): Promise<
     let settled = false
     let child: ChildProcess
     try {
-      child = spawnDshCommand(script, { cwd: opts.cwd, env: opts.env })
+      child = spawnDshCommand(script, { cwd: opts.cwd, env: opts.env, host: opts.host })
     } catch (error) {
       // spawn throws only Errors (an invalid argument: a NUL in the cwd, say).
       const line = `could not start: ${(error as Error).message}`

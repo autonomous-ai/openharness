@@ -525,15 +525,27 @@ function Find-HarnessGit {
     [string[]]$Roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs' }))
   )
   foreach ($dir in ($Path -split ';')) {
-    if (-not $dir) { continue }
-    $git = Join-Path $dir 'git.exe'
-    if (Test-Path -LiteralPath $git -PathType Leaf) { return $git }
+    $git = Get-HarnessFileIn -Folder $dir -Name 'git.exe'
+    if ($git) { return $git }
   }
   foreach ($root in $Roots) {
-    if (-not $root) { continue }
-    $git = Join-Path $root 'Git\cmd\git.exe'
-    if (Test-Path -LiteralPath $git -PathType Leaf) { return $git }
+    $git = Get-HarnessFileIn -Folder $root -Name 'Git\cmd\git.exe'
+    if ($git) { return $git }
   }
+  return ''
+}
+
+function Get-HarnessFileIn {
+  # [Folder]\[Name] when that file exists, else ''. Joined as text and tried on its own: PATH can name a drive that is
+  # not there (an unplugged USB disk, an unmapped share), where Join-Path stops with 'Cannot find drive', or hold an
+  # entry in quotes, which .NET calls illegal. Under the installer's errors-stop either one turned a finished install
+  # into a failed one (review of #2025).
+  param([string]$Folder, [string]$Name)
+  if (-not $Folder) { return '' }
+  try {
+    $file = [IO.Path]::Combine($Folder, $Name)
+    if (Test-Path -LiteralPath $file -PathType Leaf) { return $file }
+  } catch { }
   return ''
 }
 

@@ -176,6 +176,12 @@ describe.runIf(windows)('install.ps1 building blocks, in Windows PowerShell 5.1'
     expect(ps(`Find-HarnessGit -Path 'C:\\nowhere;${cmd}' -Roots @()`).stdout).toBe(join(cmd, 'git.exe'))
     expect(ps(`Find-HarnessGit -Path '' -Roots @('${root}')`).stdout).toBe(join(cmd, 'git.exe'))
     expect(ps(`Find-HarnessGit -Path '' -Roots @()`).stdout).toBe('')
+    // A PATH entry on a drive that is not there (an unplugged USB disk, an unmapped share), or one written in quotes:
+    // Join-Path stops on the first under errors-stop, and a finished install then exited as failed (review of #2025).
+    const absent = 'ZYXWVUTSRQ'.split('').find((letter) => !existsSync(`${letter}:\\`))!
+    const odd = ps(`Find-HarnessGit -Path '${absent}:\\gone;"C:\\quoted dir";${cmd}' -Roots @('${absent}:\\gone')`)
+    expect(odd.stdout, odd.stderr).toBe(join(cmd, 'git.exe'))
+    expect(odd.status).toBe(0)
     const missing = ps(`Write-HarnessGitNote -Git ''`).stdout
     expect(missing).toContain('Git for Windows is not installed')
     expect(missing).toContain('winget install --id Git.Git -e')

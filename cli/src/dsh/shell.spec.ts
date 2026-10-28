@@ -79,6 +79,17 @@ describe('dshShellArgv on Windows', () => {
       expect(ran.stdout).toBe('harness-node\n')
       expect(readFileSync(join(dir, 'asked'), 'utf8')).toBe(`${win32.dirname(managedNodePath())}\n`)
     })
+
+    it('runs setup and doctor in the harness folder, though a login Git Bash goes home', async () => {
+      // Git for Windows' /etc/profile changes to $HOME in a login shell unless CHERE_INVOKING is set; this profile
+      // does the same, so the command would otherwise run in the home folder, not the harness's.
+      const home = join(dir, 'home'); const stubs = join(dir, 'stubs'); const harness = join(dir, 'harness')
+      for (const folder of [home, stubs, harness]) mkdirSync(folder)
+      writeFileSync(join(home, '.bash_profile'), '[ -n "$CHERE_INVOKING" ] || cd "$HOME"\n')
+      writeFileSync(join(stubs, 'cygpath'), `#!/bin/sh\nprintf '%s\\n' '${stubs}'\n`, { mode: 0o755 })
+      const result = await runDshCommand('pwd', { cwd: harness, env: { HOME: home, PATH: stubs }, host: { platform: 'win32', gitBash: () => '/bin/bash' } })
+      expect(result.lines).toEqual([harness])
+    })
   })
 })
 
