@@ -108,11 +108,11 @@ export interface CableHostWiring {
   /** A Harness Pro came with Swarm cards (true) or the last one went (false): the core reads the Swarms only meanwhile. */
   swarmCardsWanted?: (on: boolean) => void
   /** One Lead's last message, read on request; null when it could not be read. */
-  swarmCardRecap?: (tabId: string, leadId: string) => Promise<LeadRecap | null>
+  swarmCardRecap?: (tabId: string, leadId: string, chat?: boolean) => Promise<LeadRecap | null>
   /** The recap a device (one cable `session`) has open, or null once closed. */
-  swarmCardOpen?: (session: string, tabId: string, leadId: string | null) => void
+  swarmCardOpen?: (session: string, tabId: string, leadId: string | null, chat?: boolean) => void
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; false when the harness leads no project. */
-  swarmSay?: (harnessId: string, text: string) => Promise<boolean>
+  swarmSay?: (harnessId: string, text: string, chat?: boolean) => Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
@@ -423,16 +423,16 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardsWanted?.(on)
   }
 
-  swarmCardRecap(tabId: string, leadId: string): Promise<LeadRecap | null> {
-    return this.wiring.swarmCardRecap?.(tabId, leadId) ?? Promise.resolve(null)
+  swarmCardRecap(tabId: string, leadId: string, chat = false): Promise<LeadRecap | null> {
+    return this.wiring.swarmCardRecap?.(tabId, leadId, chat) ?? Promise.resolve(null)
   }
 
-  swarmCardOpen(session: string, tabId: string, leadId: string | null): void {
-    this.wiring.swarmCardOpen?.(session, tabId, leadId)
+  swarmCardOpen(session: string, tabId: string, leadId: string | null, chat = false): void {
+    this.wiring.swarmCardOpen?.(session, tabId, leadId, chat)
   }
 
-  swarmSay(harnessId: string, text: string): Promise<boolean> {
-    return this.wiring.swarmSay?.(harnessId, text) ?? Promise.resolve(false)
+  swarmSay(harnessId: string, text: string, chat = false): Promise<boolean> {
+    return this.wiring.swarmSay?.(harnessId, text, chat) ?? Promise.resolve(false)
   }
 
   superTabSelected(superTabId: string, projectId: string): void {
@@ -442,12 +442,14 @@ export class DaemonCableHost implements CableHost {
   /**
    * The active tab when it is a Swarm, with its open project or '' when none is (its Chat with PM, a DM, or a Swarm
    * not loaded yet); `fromDevice` when the announce was a device's own pick. A Swarm tab with no project used to read
-   * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm.
+   * as no Swarm at all, and the dial stayed on "Nothing on this tab" while the window showed the Swarm. `conversationId`: the
+   * conversation it has open there, when the window names one, which the round dial's face follows.
    */
-  activeSwarmProject(): { superTabId: string; projectId: string; fromDevice: boolean } | null {
+  activeSwarmProject(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null {
     const app = this.swarms
     const tab = app?.swarms.find((s) => s.id === app.active)
-    return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '', fromDevice: app.fromDevice === true } : null
+    return app && tab?.superTabId ? { superTabId: tab.superTabId, projectId: tab.projectId ?? '',
+      ...(tab.conversationId ? { conversationId: tab.conversationId } : {}), fromDevice: app.fromDevice === true } : null
   }
 
   selectSwarm(swarmId: string): void {

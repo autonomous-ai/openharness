@@ -106,22 +106,27 @@ function recapIn(value: unknown): LeadRecap | null {
 export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log = (line) => console.log(line) }: SuperTabCardsDeps) {
   /** The last good list, or null before the service has said one. */
   let last: SwarmCard[] | null = null
-  /** Whether any capable device wants cards, and the Swarms to read first. */
+  /** Whether any capable device wants cards, the Swarms to read first, and the conversation the window has open in a Swarm tab. */
   let wanted = false, include: string[] = []
+  let focus: { tabId: string; conversationId: string } | null = null
   const route = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try {
       const answer = await request?.(payload)
       return answer === undefined ? { error: 'SERVICE_UNAVAILABLE' } : object(answer)
     } catch { return { error: 'SERVICE_UNAVAILABLE' } }
   }
-  const tell = (): void => { void route({ action: 'cardsWanted', on: wanted, include }) }
+  const tell = (): void => { void route({ action: 'cardsWanted', on: wanted, include, ...(focus ? { focus } : {}) }) }
   const api = {
-    /** The devices say whether a capable Pro is attached (and which Swarms the desktop has open): the service is told. */
-    want(on: boolean, swarms: unknown): void {
+    /** The devices say whether a capable Pro is attached (and which Swarms the desktop has open, and the conversation it has
+     *  open in one): the service is told. */
+    want(on: boolean, swarms: unknown, open?: unknown): void {
       const next = on && Array.isArray(swarms) ? [...new Set(swarms.filter(id))].slice(0, MAX_CARDS) : []
-      if (on === wanted && next.join(',') === include.join(',')) return
+      const asked = object(open)
+      const nextFocus = on && id(asked.tabId) && id(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+      if (on === wanted && next.join(',') === include.join(',') && `${nextFocus?.tabId}/${nextFocus?.conversationId}` === `${focus?.tabId}/${focus?.conversationId}`) return
       wanted = on
       include = next
+      focus = nextFocus
       tell()
     },
     /** The Super Tab service (re)connected: it has forgotten, so it is told again if a device wants the cards. */
@@ -133,6 +138,7 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       if (!wanted) return
       wanted = false
       include = []
+      focus = null
       tell()
     },
     /** The account changed or ended: the list shown and kept is of someone else, and the service starts over. */
@@ -161,10 +167,12 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
     /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap`,
      *  `cardOpen` and `cardSay` go to the service; any other action is refused. */
     ask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
-      if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include); return Promise.resolve({ ok: true }) }
-      if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId })
-      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text })
-      if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId })
+      if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include, payload.focus); return Promise.resolve({ ok: true }) }
+      // A round dial that speaks swarmChat asks for the chat on its face; without the flag, the request is today's.
+      const chat = payload.chat === true ? { chat: true } : {}
+      if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
+      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat })
+      if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })
       return Promise.resolve({ error: 'INVALID_REQUEST' })
     },
     /** A dial attached: it has nothing, so it is shown the last list again. */

@@ -357,17 +357,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
         if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat).
+          const chat = payload.chat === true
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
-            cards().want(payload.on === true, include)
+            const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
+            const focus = cardId(asked.tabId) && cardId(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+            cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
-          if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId) }
+          if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim()) }
+            return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim(), chat) }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
-            cards().open(payload.session, payload.tabId, payload.leadId)
+            cards().open(payload.session, payload.tabId, payload.leadId, chat)
             return { ok: true }
           }
           return { error: 'INVALID_REQUEST' }

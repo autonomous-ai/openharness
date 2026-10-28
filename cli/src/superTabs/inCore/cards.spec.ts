@@ -195,6 +195,42 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     request.mockRejectedValueOnce(new Error('gone'))
     expect(await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' })).toEqual({ error: 'SERVICE_UNAVAILABLE' })
   })
+  it('says the window\'s focus with the wish, again on a change and when the service reconnects; a malformed one is none', () => {
+    const { cards, request } = wanting()
+    const focus = { tabId: 't1', conversationId: 'g1' }
+    cards.want(true, ['t1'], focus)
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
+    cards.want(true, ['t1'], { ...focus })
+    expect(request).toHaveBeenCalledTimes(1)
+    cards.want(true, ['t1'], { tabId: 't1', conversationId: 'pm1' })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { tabId: 't1', conversationId: 'pm1' } })
+    request.mockClear()
+    cards.serviceUp()
+    expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'], focus: { tabId: 't1', conversationId: 'pm1' } }]])
+    for (const bad of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 't1', conversationId: 7 }, { tabId: 't1' }, 'focus', null]) {
+      cards.want(true, ['t1'], { tabId: 't1', conversationId: 'pm1' })
+      request.mockClear()
+      cards.want(true, ['t1'], bad)
+      expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
+    }
+    // The devices gone take the focus with them.
+    cards.want(true, ['t1'], focus)
+    cards.devicesGone()
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: false, include: [] })
+  })
+  it('passes a device\'s focus and a swarmChat dial\'s chat flag on to the service', async () => {
+    const { cards, request } = wanting()
+    const focus = { tabId: 't1', conversationId: 'g1' }
+    expect(await cards.ask({ action: 'cardsWanted', on: true, include: ['t1'], focus })).toEqual({ ok: true })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
+    request.mockClear()
+    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true })
+    await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true })
+    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true })
+    await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' })
+    expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true }],
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }], [{ action: 'cardRecap', tabId: 't1', leadId: 'l1' }]])
+  })
   it('on an account change with no device wanting cards only clears the list', () => {
     const { cards, request, swarmCards } = wanting()
     cards.cards([card('t1')])

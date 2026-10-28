@@ -277,6 +277,8 @@ export interface AppSwarms {
     id: string; name: string; agentIds: string[]; panes: number
     /** A Super Tab (Swarm) tab: which Swarm it shows and the project the window has open in it. Absent on any other tab. */
     superTabId?: string; projectId?: string
+    /** The conversation the window has open in that Swarm tab, when it is one (its Lead's, Chat with PM or a group). */
+    conversationId?: string
   }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
@@ -340,15 +342,15 @@ export interface CableHost {
   /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
   swarmCardsWanted?(on: boolean): void
   /** One Lead's last message, read on request; null when it could not be read. */
-  swarmCardRecap?(tabId: string, leadId: string): Promise<LeadRecap | null>
+  swarmCardRecap?(tabId: string, leadId: string, chat?: boolean): Promise<LeadRecap | null>
   /** The recap a device has open (its Lead), or null once it closes: the only one pushed when its text changes. */
-  swarmCardOpen?(session: string, tabId: string, leadId: string | null): void
+  swarmCardOpen?(session: string, tabId: string, leadId: string | null, chat?: boolean): void
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
-  swarmSay?(harnessId: string, text: string): Promise<boolean>
+  swarmSay?(harnessId: string, text: string, chat?: boolean): Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
-  activeSwarmProject?(): { superTabId: string; projectId: string; fromDevice: boolean } | null
+  activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null
   appName(): string
   voiceLang(): string
   /** The window's latest selected pane, including selections made before this dial attached. */
