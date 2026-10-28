@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
+import 'dismissed_cards.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'pm_chat.dart';
@@ -67,6 +68,9 @@ class SuperTabController extends ChangeNotifier {
       machinesGroupOpen = initial['machinesGroupOpen'] as bool? ?? true;
       offlineMachinesOpen = initial['offlineMachinesOpen'] as bool? ?? false;
       selectedId = initial['selectedId'] as String? ?? 'lead';
+      _dismissedCards = SuperTabDismissedCards.restore(
+        initial['dismissedCards'],
+      );
       final drafts = initial['drafts'];
       if (drafts is Map) {
         for (final entry in drafts.entries) {
@@ -293,6 +297,18 @@ class SuperTabController extends ChangeNotifier {
     if (!closedOpenProjects.remove(projectId)) {
       closedOpenProjects.add(projectId);
     }
+    _changed();
+  }
+
+  var _dismissedCards = SuperTabDismissedCards.restore(null);
+
+  /// Today's stand-up or recap card was dismissed from the top of its chat.
+  bool cardDismissed(String messageId) => _dismissedCards.contains(messageId);
+
+  /// Takes today's card off the top of its chat, after a restart too.
+  void dismissCard(String messageId) {
+    _dismissedCards.add(messageId);
+    _saveSoon();
     _changed();
   }
 
@@ -689,6 +705,7 @@ class SuperTabController extends ChangeNotifier {
         entry.key: Map<String, String>.of(entry.value),
     },
     'readAt': Map<String, int>.of(_readAt),
+    'dismissedCards': _dismissedCards.toJson(),
     if (_pending != null) 'pending': _pending,
   };
 

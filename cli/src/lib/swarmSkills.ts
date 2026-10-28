@@ -115,6 +115,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.
 - Morning digest: when a person asks for one, set the project's digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.
+- Stand-up and recap cards go out with the digest by themselves. On Monday the recap card thanks everyone who helped last week: after the digest, post one warm, short thank-you naming them, without repeating the card.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
 - Keep each worker supplied: have its next group ready before it finishes, so nobody waits for you.
 - Cancel a duplicate, obsolete or wrong task with a reason.
@@ -399,6 +400,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.
 - Morning digest: when a person asks for one, set the project's digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.
+- Stand-up and recap cards go out with the digest by themselves. On Monday the recap card thanks everyone who helped last week: after the digest, post one warm, short thank-you naming them, without repeating the card.
 - Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.

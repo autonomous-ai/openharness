@@ -620,7 +620,35 @@ describe('the morning digest', () => {
     await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
     f.clock.now = 3 * 60 * 60_000
     await Promise.all([f.leadInbox(), f.leadInbox()])
-    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
+    const kinds = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).map(m => (m.source as { kind?: string } | null)?.kind)
+    expect(kinds.filter(kind => kind === 'digest-request')).toHaveLength(1)
+    expect(kinds.filter(kind => kind === 'standup')).toHaveLength(1)
+  })
+
+  it('posts the day\'s stand-up card into the project chat for people, and on Monday the recap of last week\'s shipped work, once', async () => {
+    const f = await swarm()
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const checkId = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
+    await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId, passed: true, evidence: 'Verified' })
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'done',
+      result: 'Merged https://github.com/example/project/pull/9' }, host, f.worker)
+    // Shipped on Thursday 1 January 1970, archived and asleep by Monday: the recap still loads it.
+    await f.execute({ type: 'conversation.archive', conversationId: f.group, archived: true })
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: f.group }, data: { dormant: true } })
+    const cards = async () => (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
+      .filter(m => ['standup', 'recap'].includes((m.source as { kind?: string } | null)?.kind ?? ''))
+    // Monday 5 January, 03:00 UTC.
+    f.clock.now = (4 * 24 + 3) * 60 * 60_000
+    await f.leadInbox()
+    await f.leadInbox()
+    const posted = await cards()
+    expect(posted.map(m => [(m.source as { kind: string }).kind, m.conversationId, m.recipientIds])).toEqual([['standup', 'lead', []], ['recap', 'lead', []]])
+    const recap = (posted[1]!.source as { card: { shipped: Array<{ number: number; title: string }> } }).card
+    expect(recap.shipped.map(s => `#${s.number} ${s.title}`)).toEqual(['#1 Ship the parser'])
+    f.clock.now += 24 * 60 * 60_000
+    await f.leadInbox()
+    expect((await cards()).map(m => (m.source as { kind: string }).kind)).toEqual(['standup', 'recap', 'standup'])
   })
 
   it('lists work that shipped and was archived before the digest (#1757 review, 4)', async () => {
