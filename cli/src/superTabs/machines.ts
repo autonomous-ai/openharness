@@ -117,6 +117,10 @@ const MACHINE_DEPS = { backend, open: openDaemon, capabilities: readCapabilities
 
 /** Separate from chat delivery: slow resource readers and agent launches never
  * hold up a delivery lease. Only a tab's explicit owner grant wakes this queue. */
+/** A pool's starts this host launches: its agents', and its Buddies', which the backend lists apart so that a host from before
+ *  Buddies never launches one as a Builder (backend read/hostRows.ts). */
+const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts)]
+
 export class ContributedMachines {
   private stopped = false
   private running: Promise<void> | null = null
@@ -243,7 +247,7 @@ export class ContributedMachines {
     const where = { dataDir: this.core.dataDir, port: this.core.daemon.port, machineId: this.machineId }
     const pools = list((await this.sources.feed.current(POOLS_FRESH_MS)).pools).filter(row => identifier(row.tabId) && object(row.machine).machineId === this.machineId && identifier(object(row.machine).generation))
     if (this.stopped || pools.length === 0) { this.published.clear(); this.waiting.clear(); return }
-    const pendingIds = new Set(pools.flatMap(row => list(row.starts).map(start => start.id)))
+    const pendingIds = new Set(pools.flatMap(row => startsOf(row).map(start => start.id)))
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
@@ -271,7 +275,7 @@ export class ContributedMachines {
           if (await this.core.agents.stopped?.(id) || (!this.core.agents.byAgent(id) && await this.core.agents.gone?.(id))) stopped.push(id)
         }
         const running = ids.filter(id => !!this.core.agents.byAgent(id) && !stopped.includes(id))
-        const pending = list(row.starts)
+        const pending = startsOf(row)
         const preparing = began >= this.preparingRefusedUntil ? pending.flatMap(start => this.preparing.has(String(start.id)) ? [String(start.id)] : []) : []
         const tools = [...new Set([...COMMON_TOOLS, ...pending.flatMap(start => {
           const wanted = object(object(start.request).requirements).tools

@@ -434,3 +434,18 @@ describe('built-in Swarm skills', () => {
     expect(await buildLaunchOverrides(deps, 'claude', { cwd, swarmSkill }, 'a')).toMatchObject({ ok: false, error: 'SWARM_SKILL_FAILED', detail: expect.not.stringContaining('HARNESS_SWARM') })
   })
 })
+
+describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
+  it.each([undefined, 'default', 'orchestration'] as const)('brainstorms and proposes only when asked, the same in every mode (%s)', mode => {
+    expect(parseSwarmSkill({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })).toEqual({ role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
+    const prepared = prepareSwarmSkill(fixture(), { role: 'buddy', key: 'session', ...(mode ? { mode } : {}) })
+    const text = readFileSync(prepared.file, 'utf8')
+    expect(text.startsWith('---\nname: swarm-buddy\n')).toBe(true)
+    // Harness Instructions' brainstorming: the goal first, options with a recommendation, an agreed scope.
+    for (const step of ['Ask the goal first', 'Offer 2 or 3 options', 'Agree the scope']) expect(text).toContain(step)
+    expect(text).toContain('Only when your owner asks')
+    expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
+    expect(text).toContain('Never assign work, start agents, change code or open pull requests')
+    expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
+  })
+})

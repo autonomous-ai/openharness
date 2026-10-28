@@ -79,6 +79,14 @@ describe('current Swarm role lookup', () => {
     groups = []
     expect(await swarmRoleFor(sources, 'harness')).toBeNull()
   })
+  it('derives a Buddy from its owner while it is in its chat, so its skill stays the Buddy\'s', async () => {
+    const t = setup()
+    const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', buddyOf: { personId: 'peer', generation: 'g' } }
+    vi.mocked(t.call).mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data:
+      path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent }]) : swarmReply(path, { agents: [agent],
+        conversations: [{ id: 'chat', kind: 'buddy', leadId: null, agentIds: ['agent'] }] }) } }))
+    expect(await swarmRoleFor(sourcesOf(t.core), 'harness')).toEqual({ role: 'buddy', mode: 'orchestration' })
+  })
   it.each(['lead', 'member', 'assigned'] as const)('derives an old %s from current groups on its machine', async kind => {
     const t = setup()
     const agent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1' }

@@ -10,7 +10,7 @@ export { isSwarmRole, isSwarmSkillMode, parseSwarmSkill }
 export type { SwarmRole, SwarmSkill, SwarmSkillGrant, SwarmSkillMode }
 
 /** The owner's texts, used verbatim. */
-const orchestration: Record<SwarmRole, string> = {
+const orchestration: Record<Exclude<SwarmRole, 'buddy'>, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager), before discussing, specifying, splitting, routing, assigning, reviewing or closing work.
@@ -349,7 +349,7 @@ Mark your review assignment done with the verdict and revision. Print little.
 `,
 }
 
-const defaults: Record<SwarmRole, string> = {
+const defaults: Record<Exclude<SwarmRole, 'buddy'>, string> = {
   lead: `---
 name: swarm-lead
 description: Use when coordinating a Harness Swarm project as its Lead (shown as Product Manager): taking requests, splitting work into groups, assigning, tracking and closing them.
@@ -510,11 +510,46 @@ Start within 30 minutes of being asked; oldest ready work first. If you cannot, 
 Mark your review done with the verdict and revision.
 `,
 }
-const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: defaults, orchestration }
+/** A Buddy's skill: Harness Instructions' brainstorming (ask the goal, offer options, agree scope), and the one way it reaches
+ *  the PM. The same in every mode: a Buddy does no project work, so neither mode's team process applies to it. */
+const buddy = `---
+name: swarm-buddy
+description: Use when you are a person's Buddy in a Harness Swarm project, brainstorming with them in your private chat and, only when they ask, sending their proposal to the Product Manager.
+---
+# Brainstorm with your owner
+
+You are one person's Buddy for one project. You help them think a request through; the Product Manager decides and assigns the work. Project instructions (AGENTS.md, CLAUDE.md) and your owner's words outrank this skill.
+
+## Where you talk
+- Your chat with your owner, named in your start note. Read it with harness super-tab --tab TAB messages CHAT, and reply there with harness super-tab --tab TAB post CHAT 'your message' OPERATION_ID. Only your owner and you read it.
+- The project chat, for context: its id is the project's leadConversationId in status. Read it; you cannot post there.
+- Nothing else. You cannot read workgroups or other people's chats, and the Swarm refuses every other command.
+- The person whose machine runs you can see your terminal. If your owner starts on something they may not want seen there, say so once.
+
+## Brainstorm
+1. Ask the goal first: what they want and why now. One question per message, in their language.
+2. Look before you ask: read the project chat and the code in your folder, and never ask what they already answered.
+3. Offer 2 or 3 options, each with its trade-off, and say which you recommend and why.
+4. Agree the scope: what is in, what is out, and how they will know it worked. Play it back in a sentence or two and ask what is wrong or missing.
+5. Keep it short. No specs or plans they did not ask for.
+
+## Send to the PM
+- Only when your owner asks (for example "send to the PM"), never on your own, and once for each time they ask.
+- Write the goal, the scope and a priority (low, normal or high) from what you agreed. Put in only what your owner wants sent; anything private stays in your chat.
+- Send it with harness super-tab --tab TAB propose OPERATION_ID '{"conversationId":"CHAT","ownerMessageId":"MESSAGE","goal":"...","scope":"...","priority":"normal"}', where MESSAGE is the id of your owner's message asking you to send it.
+- The Swarm posts it in the project chat as one message to the PM, marked as on your owner's behalf. Tell your owner it went; the PM answers in the project chat.
+
+## Limits
+- Never assign work, start agents, change code or open pull requests. Your folder is for reading.
+- Say "I don't know" rather than guess, and point your owner to the PM in the project chat for anything you cannot answer.
+`
+
+const skills: Record<SwarmSkillMode, Record<SwarmRole, string>> = { default: { ...defaults, buddy }, orchestration: { ...orchestration, buddy } }
 
 /** What a session is told to use, in its mode's words: a Default agent otherwise works its usual way. */
 export function swarmSkillUse(role: SwarmRole, mode: SwarmSkillMode): string {
-  return mode === 'default' ? `Use the swarm-${role} skill for this session: the team process; otherwise work your usual way.`
+  // A Buddy's text is the same in every mode, and no team process applies to it.
+  return mode === 'default' && role !== 'buddy' ? `Use the swarm-${role} skill for this session: the team process; otherwise work your usual way.`
     : `Use the built-in swarm-${role} skill for this session.`
 }
 const MODE_NAMES: Record<SwarmSkillMode, string> = { default: 'Default', orchestration: 'Harness orchestration' }

@@ -220,6 +220,13 @@ describe('routeTask', () => {
     expect(await models('other')).toContain('sonnet')
     expect(await models('lead')).not.toContain('sonnet')
   })
+  it('never offers a Buddy: it brainstorms with its owner and is never assigned work', async () => {
+    const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, buddyOf: { personId: 'peer', generation: 'g' } } : a)
+    const s = scoped({ tab: t })
+    await routeTask(input, s, where as never, opener(), () => 'op')
+    const titles = (recorded(s).command.decision.candidates as Array<{ title: string }>).map(c => c.title)
+    expect(titles.some(c => c.startsWith('Multiply'))).toBe(false)
+  })
   it('offers a Reviewer only for a review group, and starts a new one as a Reviewer', async () => {
     const offered = async (reviewer: boolean, reviewGroup: boolean) => {
       const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' && reviewer ? { ...a, role: 'reviewer' } : a)
