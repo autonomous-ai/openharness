@@ -13,7 +13,7 @@
  * whether a capable Pro is attached and which Swarms the desktop has tabs for (`want`), and the core says it to the Super Tab
  * service, again whenever that service (re)connects (`serviceUp`), and takes it back when the devices go (`devicesGone`).
  */
-import type { LeadRecap, SwarmCard, SwarmLead } from '../../core/api.js'
+import type { LeadNotice, LeadRecap, SwarmCard, SwarmChat, SwarmLead } from '../../core/api.js'
 
 export interface SuperTabCardsDeps {
   /** The devices' door for the list (`ports.devices.swarmCards`). */
@@ -27,6 +27,8 @@ export interface SuperTabCardsDeps {
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, ENGINE_BYTES = 16, RECAP_BYTES = 1500
 const STATES: ReadonlySet<string> = new Set(['ask', 'stuck', 'work', 'done'])
+const CHATS: ReadonlySet<string> = new Set(['lead', 'pm', 'group'])
+const NOTICE_CHATS: ReadonlySet<string> = new Set(['lead', 'pm'])
 /** The Pro keeps an id in 48 bytes with its NUL. */
 const ID = /^[A-Za-z0-9_-]{1,47}$/
 const id = (value: unknown): value is string => typeof value === 'string' && ID.test(value)
@@ -44,6 +46,21 @@ function cut(text: string, bytes: number): string {
   return out
 }
 
+/** The chat on a Lead's face, checked and cut; null when it is not one, and the Lead goes on without it (today's frames). */
+function chatIn(value: unknown): SwarmChat | null {
+  const chat = object(value)
+  if (typeof chat.kind !== 'string' || !CHATS.has(chat.kind) || !id(chat.id) || typeof chat.name !== 'string' || typeof chat.working !== 'boolean') return null
+  if (chat.since !== undefined && !whole(chat.since)) return null
+  return { kind: chat.kind as SwarmChat['kind'], id: chat.id, name: cut(chat.name, NAME_BYTES), working: chat.working, ...(chat.since === undefined ? {} : { since: chat.since }) }
+}
+
+/** A Lead's notice, checked and cut; null when it is not one, and the Lead goes on without it. */
+function noticeIn(value: unknown): LeadNotice | null {
+  const notice = object(value)
+  if (typeof notice.chat !== 'string' || !NOTICE_CHATS.has(notice.chat) || !id(notice.chatId) || !id(notice.id) || typeof notice.text !== 'string' || !whole(notice.at)) return null
+  return { chat: notice.chat as LeadNotice['chat'], chatId: notice.chatId, id: notice.id, text: cut(notice.text, RECAP_BYTES), at: notice.at }
+}
+
 /** A Lead the service sent, checked and cut; null when it is not one. */
 function leadIn(value: unknown): SwarmLead | null {
   const lead = object(value)
@@ -54,10 +71,13 @@ function leadIn(value: unknown): SwarmLead | null {
   if (lead.since !== undefined && !whole(lead.since)) return null
   // The project's index in its Swarm, which the round dial shows the Leads by (the Pro sorts its own and ignores it).
   if (!whole(lead.order)) return null
+  // The round dial's chat and alert are additions: one that is not sound is left out, and the Lead is kept as today's.
+  const chat = lead.chat === undefined ? null : chatIn(lead.chat)
+  const notice = lead.notice === undefined ? null : noticeIn(lead.notice)
   return {
     id: lead.id, projectId: lead.projectId, project: cut(lead.project, NAME_BYTES), engine: cut(lead.engine, ENGINE_BYTES),
     owner: cut(lead.owner, NAME_BYTES), local: lead.local, state: lead.state as SwarmLead['state'], order: lead.order,
-    ...(lead.since === undefined ? {} : { since: lead.since }),
+    ...(lead.since === undefined ? {} : { since: lead.since }), ...(chat ? { chat } : {}), ...(notice ? { notice } : {}),
   }
 }
 
@@ -78,7 +98,9 @@ function cardIn(value: unknown): SwarmCard | null {
 function recapIn(value: unknown): LeadRecap | null {
   const recap = object(value)
   if (!id(recap.tabId) || !id(recap.leadId) || typeof recap.text !== 'string' || !whole(recap.at) || typeof recap.none !== 'boolean') return null
-  return { tabId: recap.tabId, leadId: recap.leadId, text: cut(recap.text, RECAP_BYTES), at: recap.at, none: recap.none }
+  // A chat's recap names its chat or is not one: a dial must never show it for another chat.
+  if (recap.chatId !== undefined && !id(recap.chatId)) return null
+  return { tabId: recap.tabId, leadId: recap.leadId, text: cut(recap.text, RECAP_BYTES), at: recap.at, none: recap.none, ...(recap.chatId === undefined ? {} : { chatId: recap.chatId }) }
 }
 
 export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log = (line) => console.log(line) }: SuperTabCardsDeps) {

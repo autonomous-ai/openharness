@@ -87,6 +87,38 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCardRecap).toHaveBeenCalledTimes(3)
     expect(log).toHaveBeenCalledTimes(8)
   })
+
+  it('keeps a sound chat and notice, drops a malformed one', () => {
+    const { cards, swarmCards, swarmCardRecap, log } = setup()
+    const chat = (over: Record<string, unknown> = {}) => ({ kind: 'group', id: 'g1', name: 'Fix login', working: true, since: 5, ...over })
+    const notice = (over: Record<string, unknown> = {}) => ({ chat: 'pm', chatId: 'pm1', id: 'm1', text: 'Shipped', at: 1792560000, ...over })
+    cards.cards([card('t1', [lead('l1', { chat: chat({ name: 'g'.repeat(60) }), notice: notice({ text: '日'.repeat(600) }) })])])
+    const [sent] = swarmCards.mock.calls[0][0][0].leads
+    expect(sent.chat).toEqual(chat({ name: 'g'.repeat(48) }))
+    expect(sent.notice).toEqual(notice({ text: '日'.repeat(500) }))
+    // A chat without `since`, or a Lead chat that does not work, is sound too.
+    cards.cards([card('t1', [lead('l1', { chat: { kind: 'lead', id: 'c1', name: 'Lead', working: false }, notice: notice({ chat: 'lead' }) })])])
+    expect(swarmCards.mock.calls[1][0][0].leads[0]).toMatchObject({ chat: { kind: 'lead', id: 'c1' }, notice: { chat: 'lead' } })
+    expect(swarmCards.mock.calls[1][0][0].leads[0].chat).not.toHaveProperty('since')
+    swarmCards.mockClear()
+    const badChats = [chat({ kind: 'other' }), chat({ id: 'bad id' }), chat({ name: 5 }), chat({ working: 'yes' }), chat({ since: -1 }), 'chat']
+    const badNotices = [notice({ chat: 'group' }), notice({ chatId: 'bad id' }), notice({ id: '' }), notice({ text: 5 }), notice({ at: -1 }), 7]
+    for (const bad of badChats) cards.cards([card('t1', [lead('l1', { chat: bad })])])
+    for (const bad of badNotices) cards.cards([card('t1', [lead('l1', { notice: bad })])])
+    // The Lead stays, without what was not sound.
+    expect(swarmCards).toHaveBeenCalledTimes(badChats.length + badNotices.length)
+    for (const [list] of swarmCards.mock.calls) {
+      expect(list[0].leads[0]).toMatchObject({ id: 'l1' })
+      expect(list[0].leads[0]).not.toHaveProperty('chat')
+      expect(list[0].leads[0]).not.toHaveProperty('notice')
+    }
+    expect(log).not.toHaveBeenCalled()
+    // A recap names its chat with an id, or is dropped: a dial must not show it for the wrong chat.
+    cards.recap(recap({ chatId: 'g1' }))
+    expect(swarmCardRecap).toHaveBeenLastCalledWith(recap({ chatId: 'g1' }))
+    cards.recap(recap({ chatId: 'bad id' }))
+    expect(swarmCardRecap).toHaveBeenCalledOnce()
+  })
 })
 
 describe('whether the Swarm cards are wanted, which the core owns', () => {
