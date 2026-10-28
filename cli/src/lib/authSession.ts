@@ -176,10 +176,38 @@ export type SignedOutReason = 'refresh-refused' | 'revoked'
  * it. Only a person deletes it (lib/signOut.ts `removeSignIn`). A refused refresh is tried again
  * ([AuthSessionManager.retrySignedOut]); a revoked one is not.
  */
-export function markSignedOut(reason: SignedOutReason, at = Date.now()): Promise<void> {
+export function markSignedOut(reason: SignedOutReason, at = Date.now(), lock: Lock = withLock): Promise<void> {
   // Under the refresh lock: a refresh another process has under way saves its session when it is done, and a
   // mark written before that save was written over by it, and the revoked sign-in used again (review of #1866).
-  return withLock(async () => markSignedOutHeld(reason, at))
+  // A lock that cannot be had (another process holding it past its stale time) still marks: a revoke left
+  // unmarked stopped the daemon, and the core that came back used the revoked sign-in until it was refused
+  // again (follow-up to the review of #1866).
+  return lock(async () => markSignedOutHeld(reason, at)).catch((error: unknown) => {
+    if (!(error instanceof AuthSessionError) || error.code !== 'UNAVAILABLE') throw error
+    markSignedOutHeld(reason, at)
+  })
+}
+
+/** How [markSignedOut] and [updateAuthSession] take the refresh lock; a spec's own in place of [withLock]. */
+export type Lock = <T>(action: () => Promise<T>) => Promise<T>
+
+/**
+ * Rewrites this computer's sign-in from the newest one on disk: [change] gives the new one, or null (or the
+ * same one) to leave it. Under the refresh lock, so a refresh's rotated tokens and a signed-out mark are never
+ * written over, and it is read again just before the write: a sign-in marked meanwhile is left marked (follow-up
+ * to the review of #1866). The sign-in written; null when there was none, or it is marked signed out.
+ */
+export function updateAuthSession(change: (latest: AuthSession) => AuthSession | null): Promise<AuthSession | null> {
+  if (!readAuthSession()) return Promise.resolve(null)
+  return withLock(async () => {
+    const latest = readAuthSession()
+    if (!latest) return null
+    const next = change(latest)
+    if (!next || next === latest) return latest
+    if (readStored()?.signedOut) return null
+    writeAuthSession(next)
+    return next
+  })
 }
 
 /** The first wait before a refused refresh is tried again, and the longest. The app asks `auth status` often,
@@ -405,9 +433,7 @@ export class AuthSessionManager {
     })
   }
 
-  updateMachineId(machineId: string): void {
-    const current = readAuthSession()
-    if (!current || current.machineId === machineId) return
-    writeAuthSession({ ...current, machineId, updatedAt: Date.now() })
+  async updateMachineId(machineId: string): Promise<void> {
+    await updateAuthSession((current) => current.machineId === machineId ? null : { ...current, machineId, updatedAt: Date.now() })
   }
 }

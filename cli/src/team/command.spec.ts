@@ -48,7 +48,12 @@ function fake(over: Partial<TeamCommandDeps> & { adminResult?: Awaited<ReturnTyp
     out: (line) => out.push(line), err: (line) => err.push(line),
     user: () => 'owner-placeholder', home: () => OWNER_HOME, uid: () => 501, hostname: () => 'Mac-placeholder',
     env: {}, interactive: false, ask: vi.fn(async () => 'y'), now: () => now, sleep: vi.fn(async (ms: number) => { now += ms }),
-    session: () => session, writeSession: vi.fn((s: AuthSession) => { session = s }), signOutAsked: (flags) => signOutAsked({ interactive: over.interactive ?? false, flags, ancestors: () => [], isApp: () => false }),
+    session: () => session, writeSession: vi.fn((s: AuthSession) => { session = s }),
+    updateSession: vi.fn(async (change: (latest: AuthSession) => AuthSession | null) => {
+      const next = session ? change(session) : null
+      if (next) session = next
+      return next ?? session
+    }), signOutAsked: (flags) => signOutAsked({ interactive: over.interactive ?? false, flags, ancestors: () => [], isApp: () => false }),
     removeSignIn: vi.fn(() => { session = null }),
     auth: vi.fn(async () => ({ session: session!, headers: { authorization: 'Bearer x' } })), post: post as never,
     get: vi.fn(async (path: string) => path === '/api/machines' ? { machines: MACHINES } : { user: { id: 'user-placeholder-1' } }) as never,
