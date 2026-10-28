@@ -253,6 +253,24 @@ void main() {
     expect(woken, contains('studio'));
   });
 
+  // The list's word alone, for a row that already reads online: no node-status change runs, so only the list's own
+  // wake can reach the parked connection (review of #2027).
+  test('a row already online that the list reports online still wakes its parked connection', () async {
+    const studio = Machine(
+      machineId: 'studio',
+      authMode: MachineAuthMode.remote,
+      name: 'Studio',
+      status: 'online',
+    );
+    final api = _Api()..listed = const [studio];
+    final woken = <String>[];
+    app = _App(api, onWake: woken.add)..status = AppStatus.authenticated;
+    app.machines = [studio];
+    app.machineStates['studio'] = MachineState(studio)..nodeOnline = true;
+    await app.refreshMachines();
+    expect(woken, contains('studio'));
+  });
+
   test('every refusal code reads as a sentence', () {
     for (final code in [
       'NOT_YOUR_MACHINE',

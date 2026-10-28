@@ -221,9 +221,12 @@ class WsConn {
   static const _recheck = 'recheck';
 
   /// The wait before a parked connection dials again on its own after [rechecks] of them in a
-  /// row: a minute, then 2, 4, 8, and 15 at most. Anything that says the machine is back [wake]s it.
+  /// row: 30 s, then a minute, 2, 4, 8, and 15 at most. Anything that says the machine is back
+  /// [wake]s it. The first is the relay's own retry-after for an offline machine (backend
+  /// `OFFLINE_RETRY_AFTER_MS`): a wake that reaches the daemon while it still answers from that
+  /// refusal parks again, and a machine back online must not then wait a minute more.
   static Duration parkedRecheckAfter(int rechecks) {
-    final wait = const Duration(minutes: 1) * (1 << min(max(rechecks, 0), 4));
+    final wait = const Duration(seconds: 30) * (1 << min(max(rechecks, 0), 5));
     return wait > const Duration(minutes: 15)
         ? const Duration(minutes: 15)
         : wait;

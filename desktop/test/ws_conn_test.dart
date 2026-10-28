@@ -599,10 +599,12 @@ void main() {
     expect(hub.protocols, hasLength(2));
   });
 
-  test('a parked connection rechecks after 1, 2, 4, 8 and then every 15 minutes', () {
+  // The first recheck is the relay's own retry-after (30 s): a machine back online that a wake reached while the relay
+  // still answered from its refusal parks again, and must not wait a minute more (review of #2027).
+  test('a parked connection rechecks after 30 s, then 1, 2, 4, 8 and every 15 minutes', () {
     expect(
-      [for (var n = 0; n < 7; n++) WsConn.parkedRecheckAfter(n).inMinutes],
-      [1, 2, 4, 8, 15, 15, 15],
+      [for (var n = 0; n < 7; n++) WsConn.parkedRecheckAfter(n).inSeconds],
+      [30, 60, 120, 240, 480, 900, 900],
     );
   });
 
