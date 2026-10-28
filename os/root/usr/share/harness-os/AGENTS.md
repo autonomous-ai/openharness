@@ -116,6 +116,12 @@ is required.
 - Print/`Super+p` saves a full screenshot and Shift+Print/`Super+r` a region to
   `~/Pictures/Screenshots`, also copied to the clipboard. When the user mentions
   "the screenshot", read the newest file there. `grim` and `slurp` are installed.
+- To try a desktop app as a person would, use the `desktop` MCP tools when they are
+  attached (`screenshot`, `click`, `drag`, `scroll`, `type`, `key`; each answers
+  with the screen afterwards). Only the person attaches them, once:
+  `harness mcp-servers add desktop -- /usr/lib/harness-os/desktop_mcp.py`. Never
+  add them yourself. They refuse while the screen is locked. For a website, a
+  browser tool such as Playwright's MCP with `/usr/bin/chromium` reads the page better.
 - On the PC image, the packages for supported NVIDIA Turing and newer GPUs are
   `nvidia-open-lts nvidia-utils`, including RTX 4090/5090 and RTX 6000 generations.
   New USB images carrying the NVIDIA bundle install them offline when the exact

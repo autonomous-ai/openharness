@@ -16,7 +16,9 @@ import tempfile
 # dnsmasq: NetworkManager's shared mode hands the setup hotspot's phone an address with it.
 # github-cli (gh) and sound-theme-freedesktop (foot.ini's bell): for a computer installed before they were
 # in the image (packages.x86_64) to get them with an update.
-DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq', 'github-cli', 'sound-theme-freedesktop')
+# wtype, python-pywayland and wlr-protocols: the desktop MCP's keys and mouse (os/desktop_mcp.py).
+DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp', 'dnsmasq', 'github-cli', 'sound-theme-freedesktop',
+                'wtype', 'python-pywayland', 'wlr-protocols')
 
 
 def package_info(version, timestamp, size, compositor_dependencies=()):
@@ -83,6 +85,7 @@ def stage(source, runtime, destination, commit):
         'os/hardware.py': 'usr/lib/harness-os/hardware.py',
         'os/gpu_health.py': 'usr/lib/harness-os/gpu_health.py',
         'os/gpu_probe.py': 'usr/lib/harness-os/gpu_probe.py',
+        'os/desktop_mcp.py': 'usr/lib/harness-os/desktop_mcp.py',
         'os/tools/hn-os': 'usr/bin/hn-os',
         'os/lock.json': 'usr/share/harness-os/lock.json',
         'tui/README.md': 'usr/share/harness-os/guide/tui.md',
