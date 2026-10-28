@@ -8,7 +8,7 @@
  *   - `up`   { t:'up', frame }            → normalized claude events + `<x>_result` RPC replies
  *   - `down` { t:'down', connId, frame }  → web chat/control + data-plane RPC requests
  *
- * Mirrors the hosted runtime’s managerSocket: idempotent connect, exponential backoff (1s→30s),
+ * Mirrors the hosted runtime’s managerSocket: idempotent connect, jittered exponential backoff (1s→30s),
  * WS liveness (`lib/wsLiveness.ts`: ping every 20s, 60s deadline on silence) + a 15s app-level
  * `{t:'ping'}` that refreshes the backend presence key, and a bounded FIFO queue for client-facing
  * outbound frames.
@@ -38,9 +38,24 @@ const APP_PRESENCE_UP_MS = 60_000
 const HANDSHAKE_TIMEOUT_MS = 15_000
 const BASE_DELAY_MS = 1_000
 const MAX_DELAY_MS = 30_000
+// How long a link must stay up before its backoff starts over. Resetting on 'open' alone let a pod that
+// answers the upgrade and then drains cut every machine back to a 1 s redial, again and again; production
+// showed 76% of relay sockets living under a second (#1795). A link that outlived the longest wait was
+// a real connection.
+const STABLE_MS = MAX_DELAY_MS
 const QUEUE_MAX = 2_000
 
 export type OutboundEnvelope = Record<string, unknown>
+
+/**
+ * The wait before redial `attempt` (0 for the first): at random between the 1 s floor and that attempt's
+ * step (2, 4, 8, 16, then 30 s). Without the spread, every machine a draining pod dropped redialed at the
+ * same moment and the next pod took them all at once. The floor keeps a redial no sooner than before.
+ */
+function reconnectDelay(attempt: number): number {
+  const step = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.min(attempt + 1, 5))
+  return Math.round(BASE_DELAY_MS + Math.random() * (step - BASE_DELAY_MS))
+}
 
 interface QueueItem {
   id: number
@@ -96,6 +111,8 @@ export class UpstreamLink {
   private readonly testToken?: string
   private readonly url: string
   private attempts = 0
+  /** When the current socket opened (0 while none is open): how the backoff knows the link was stable. */
+  private openedAt = 0
   private closed = false
   private queue: QueueItem[] = []
   private draining = false
@@ -154,7 +171,10 @@ export class UpstreamLink {
     } catch (err) {
       this.connecting = false
       this.events.status(false)
-      const delay = err instanceof AuthSessionError && err.code === 'INVALID_REFRESH' ? MAX_DELAY_MS : BASE_DELAY_MS
+      // Anything but a rejected refresh token (the backend down, another process refreshing) re-enters
+      // the backoff: a flat second had every signed-in machine asking /api/auth/refresh once a second
+      // for as long as the backend was away.
+      const delay = err instanceof AuthSessionError && err.code === 'INVALID_REFRESH' ? MAX_DELAY_MS : reconnectDelay(this.attempts++)
       if (!this.closed) setTimeout(() => this.connect(), delay)
       return
     }
@@ -166,7 +186,7 @@ export class UpstreamLink {
     this.connecting = false
 
     ws.on('open', () => {
-      this.attempts = 0
+      this.openedAt = Date.now()
       console.log(`[backend] connected → ${this.url}`)
       this.events.status(true)
       this.drainQueue()
@@ -214,6 +234,8 @@ export class UpstreamLink {
     const onGone = (why: string): void => {
       if (this.ws !== ws) return
       this.ws = null
+      if (this.openedAt && Date.now() - this.openedAt >= STABLE_MS) this.attempts = 0
+      this.openedAt = 0
       if (this.heartbeat) { this.heartbeat.stop(); this.heartbeat = null }
       if (this.appPing) { clearInterval(this.appPing); this.appPing = null }
       this.draining = false
@@ -223,7 +245,7 @@ export class UpstreamLink {
       // A 401 refresh owns the next connect (see the error handler below): no competing backoff timer,
       // or two sockets would race for the one machine claim.
       if (this.retryingAuth) { console.log(`[backend] disconnected (${why}) — refreshing the token before reconnecting`); return }
-      const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.min(this.attempts++, 5))
+      const delay = reconnectDelay(this.attempts++)
       console.log(`[backend] disconnected (${why}) — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
       setTimeout(() => this.connect(), delay)
     }
@@ -258,7 +280,7 @@ export class UpstreamLink {
             }
             if (this.closed) return
             if (this.ws === ws) { this.ws = null; try { ws.terminate() } catch { /* ignore */ } }
-            const delay = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** Math.min(this.attempts++, 5))
+            const delay = reconnectDelay(this.attempts++)
             console.log(`[backend] token refresh failed (${error instanceof Error ? error.message : String(error)}) — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
             setTimeout(() => this.connect(), delay)
           })
