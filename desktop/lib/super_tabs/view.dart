@@ -29,6 +29,7 @@ import 'workgroup_name.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
+import 'buddies.dart';
 import 'decisions.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
@@ -1091,6 +1092,13 @@ class _SuperTabViewState extends State<SuperTabView>
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
+    if (c.buddiesOn && c.buddyChat(projectId) == null) {
+      // No Buddy here yet: the shortcut offers to add one.
+      if (c.canWrite) {
+        unawaited(showAddBuddy(context, c, projectId: projectId));
+      }
+      return Future.value(false);
+    }
     return c.openPmChat(projectId);
   }
 
@@ -1360,6 +1368,27 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isPmChat(SuperTabConversation group) =>
       c.pmChat(group.projectId)?.id == group.id;
 
+  /// Whom a Buddy's proposal speaks for, by name; null for other messages.
+  String? _proposalOwner(SuperTabMessage message) =>
+      message.proposalOwnerId == null
+      ? null
+      : buddyPersonName(c, message.proposalOwnerId!);
+
+  /// The reader's own chat with their Buddy.
+  bool _isBuddyChat(SuperTabConversation group) =>
+      c.buddyChat(group.projectId)?.id == group.id;
+
+  /// The name of the reader's Buddy that [group] is the chat with: the
+  /// running Buddy's, else the chat's own (a removed Buddy's). Null when
+  /// [group] is no Buddy chat of the reader's.
+  String? _buddyName(SuperTabConversation? group) {
+    if (group == null || !_isBuddyChat(group)) return null;
+    final agent = c.buddy(group.projectId);
+    return agent == null
+        ? group.title
+        : c.snapshot!.agentName(agent.id, fallback: agent.name);
+  }
+
   /// The open conversation's name, or what the pane shows instead of one,
   /// named as the sidebar names it: "# openharness", or a workgroup's
   /// [SuperTabWorkgroupName].
@@ -1379,6 +1408,8 @@ class _SuperTabViewState extends State<SuperTabView>
         ? '# $kProductManagersChannel'
         : _isPmChat(group)
         ? kChatWithPm
+        : _buddyName(group) != null
+        ? '${_buddyName(group)} · Your Buddy'
         : null;
     if (name == null) return SuperTabWorkgroupName(group!, style: style);
     return Text(
@@ -1402,6 +1433,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_isPmChat(group)) {
       return 'Message ${pmChatName(snapshot, snapshot.projectFor(group.id)!)}';
     }
+    if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
   }
 
@@ -1660,6 +1692,16 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Swarm routing', () => _groupAction('routing', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
+        ] else if (_isBuddyChat(group)) ...[
+          // A Buddy chat is the reader's own: its history from before Buddies,
+          // and the Buddy itself to remove. Nothing to rename or archive.
+          if (c.pmChat(group.projectId) case final earlier?)
+            item('Earlier Chat with PM', () => unawaited(c.select(earlier.id))),
+          if (editable && c.buddy(group.projectId) != null)
+            item(
+              'Remove Buddy',
+              () => unawaited(confirmRemoveBuddy(context, c, group.projectId)),
+            ),
         ] else ...[
           // A private conversation is chat only: it has no work.
           if (group.audience == null)
@@ -1692,7 +1734,11 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsisVertical,
-        tooltip: isProject ? 'Project options' : 'Workgroup options',
+        tooltip: isProject
+            ? 'Project options'
+            : _isBuddyChat(group)
+            ? 'Buddy options'
+            : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
@@ -1760,6 +1806,7 @@ class _SuperTabViewState extends State<SuperTabView>
       child: SuperTabMessageRow(
         message: message,
         author: _shownAuthor(c, message),
+        proposalOwner: _proposalOwner(message),
         person: person,
         grouped: SuperTabMessageRow.groupsWith(message, messages.lastOrNull),
         reply: reply,
@@ -1835,6 +1882,7 @@ class _SuperTabViewState extends State<SuperTabView>
       key: ValueKey('super-message-${message.id}'),
       message: message,
       author: _shownAuthor(c, message),
+      proposalOwner: _proposalOwner(message),
       // A person is named by their address's first part, as people say it.
       mentions: [
         for (final id in message.mentions)
@@ -1997,7 +2045,8 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     }
     final group = c.selected;
-    final writable = c.canWrite && group != null && !group.archived;
+    final writable =
+        c.canWrite && group != null && !group.archived && !c.readOnly(group);
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -2049,8 +2098,12 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
-        // The reader's own chat with the PM shows what the PM asked them.
-        if (group != null && _isPmChat(group))
+        if (group != null && _isBuddyChat(group))
+          SuperTabBuddyBar(controller: c, chat: group),
+        // The reader's own chat with the PM shows what the PM asked them;
+        // with Buddies on, their Buddy chat does instead.
+        if (group != null &&
+            (c.buddiesOn ? _isBuddyChat(group) : _isPmChat(group)))
           SuperTabDecisionsPanel(
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
@@ -2069,6 +2122,8 @@ class _SuperTabViewState extends State<SuperTabView>
                         ? 'Loading conversation…'
                         : c.snapshot!.isProjectLead(group.id)
                         ? 'Discuss the plan with your product manager.'
+                        : _buddyName(group) != null
+                        ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
                         : _isPmChat(group)
                         ? 'Only you and the Product Manager read this chat.'
                         : 'Start the conversation.',
@@ -2425,7 +2480,23 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-        if (group != null && group.archived)
+        if (group != null && c.readOnly(group))
+          Padding(
+            key: const ValueKey('super-pm-chat-read-only'),
+            padding: const EdgeInsets.fromLTRB(
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.controlGap,
+              grid.AppDesktop.panelPadding,
+              grid.AppDesktop.groupGap,
+            ),
+            child: Text(
+              'This chat is read-only now. Talk to the PM in '
+              '#${c.snapshot!.projectFor(group.id)?.name ?? ''}; private things '
+              'go to ${_buddyName(c.buddyChat(group.projectId)) ?? 'your Buddy'}.',
+              style: DesktopChrome.metadata(),
+            ),
+          )
+        else if (group != null && group.archived)
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
             child: Row(

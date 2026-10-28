@@ -13,6 +13,7 @@ import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'local_models.dart';
+import 'buddies.dart';
 import 'machines.dart';
 import 'model.dart';
 import 'pm_chat_rows.dart';
@@ -522,6 +523,50 @@ class ProjectSidebar extends StatelessWidget {
     );
   }
 
+  /// The signed-in person's Buddies, one row per project where they have one
+  /// or its chat stays, the project in brackets once there are several.
+  List<Widget> _buddies(List<SuperTabProject> projects) {
+    final listed = [
+      for (final project in projects)
+        if (controller.buddyChat(project.id) case final chat?) (project, chat),
+    ];
+    return [
+      for (final (project, chat) in listed)
+        _buddy(project, chat, named: listed.length > 1),
+    ];
+  }
+
+  Widget _buddy(
+    SuperTabProject project,
+    SuperTabConversation chat, {
+    required bool named,
+  }) {
+    final snapshot = controller.snapshot!;
+    final agent = controller.buddy(project.id);
+    final name = agent == null
+        ? chat.title
+        : snapshot.agentName(agent.id, fallback: agent.name);
+    return SuperTabPmChatRow(
+      key: ValueKey('super-buddy-${project.id}'),
+      agentId: agent?.id,
+      name: name,
+      project: named ? project.name : null,
+      tooltip: 'Your Buddy · ${project.name}',
+      note: agent == null
+          ? 'removed'
+          : agent.downSince != null
+          ? 'offline'
+          : null,
+      selected:
+          !devicesSelected &&
+          !notificationsSelected &&
+          controller.selectedId == chat.id,
+      unread: controller.unread(chat),
+      unreadCount: controller.unreadCount(chat),
+      onTap: () => onSelect(chat.id),
+    );
+  }
+
   /// A project's open conversations, newest first: the most recently created
   /// has the highest number, and one without a number predates numbering.
   List<SuperTabConversation> _newestFirst(SuperTabProject project) {
@@ -532,6 +577,7 @@ class ProjectSidebar extends StatelessWidget {
               g.projectId == project.id &&
               g.id != project.leadConversationId &&
               g.id != pmChat &&
+              !g.isBuddyChat &&
               !g.closed,
         )
         .toList();
@@ -651,7 +697,9 @@ class ProjectSidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
-    final pmChats = _pmChats(snapshot?.projects ?? const []);
+    final projects = snapshot?.projects ?? const <SuperTabProject>[];
+    final buddiesOn = controller.buddiesOn;
+    final pmChats = buddiesOn ? const <Widget>[] : _pmChats(projects);
     return Material(
       color: DesktopChrome.surface,
       child: ListView(
@@ -717,6 +765,24 @@ class ProjectSidebar extends StatelessWidget {
               startInset: SuperTabSectionHeading.indentFor(0),
             ),
             ...pmChats,
+            const SizedBox(height: 16),
+          ],
+          // Buddies take Chat with PM's place (spec: Buddies, 10-28).
+          if (buddiesOn) ...[
+            SuperTabSectionHeading(
+              'Buddies',
+              onAdd:
+                  controller.canWrite &&
+                      !controller.saving &&
+                      !controller.hasPendingAction &&
+                      buddyProjects(controller).isNotEmpty
+                  ? () => unawaited(showAddBuddy(context, controller))
+                  : null,
+              addTooltip: 'Add a Buddy',
+              endInset: 0,
+              startInset: SuperTabSectionHeading.indentFor(0),
+            ),
+            ..._buddies(projects),
             const SizedBox(height: 16),
           ],
           // Machine online/offline, unread marks and theme changes do not touch

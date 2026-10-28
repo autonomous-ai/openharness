@@ -63,6 +63,12 @@ class SuperTabAgent {
           row['machineOwnerId'] as String? ?? _text(row, 'contributorId'),
       role = row['role'] as String?,
       roleId = row['roleId'] as String?,
+      buddyOf = switch (row['buddyOf']) {
+        final String person => person,
+        {'personId': final String person} => person,
+        {'id': final String person} => person,
+        _ => null,
+      },
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
@@ -94,6 +100,13 @@ class SuperTabAgent {
   final String? role;
   final String? roleId;
   bool get isReviewer => role == 'reviewer';
+
+  /// A person's private agent for one project (spec: Buddies, 10-28); it
+  /// never takes work.
+  bool get isBuddy => role == 'buddy';
+
+  /// The person whose Buddy it is; null for any other agent.
+  final String? buddyOf;
   final Map<String, dynamic> configuration;
   String get engine => configuration['engine'] as String? ?? '';
 }
@@ -116,6 +129,7 @@ class SuperTabConversation {
       // before projects belongs to the first.
       projectId =
           row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
+      kind = row['kind'] as String?,
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -147,6 +161,11 @@ class SuperTabConversation {
           ? null
           : Map.unmodifiable(superTabMap(row['assignment']));
   final String id, projectId, title, brief;
+
+  /// What the backend calls it apart from a workgroup: `leads` for the Product
+  /// Managers' conversation, `buddy` for a person's chat with their Buddy.
+  final String? kind;
+  bool get isBuddyChat => kind == 'buddy';
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -253,7 +272,9 @@ class SuperTabSnapshot {
       localModels = SuperTabLocalModels.read(row['localModels']),
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
-      decisionsDigest = row['decisionsDigest'] as String? {
+      decisionsDigest = row['decisionsDigest'] as String?,
+      buddiesEnabled =
+          superTabMap(row['buddies'] ?? const {})['enabled'] == true {
     if (row['version'] != 1) {
       throw const FormatException('Update Harness to open this Swarm.');
     }
@@ -277,6 +298,10 @@ class SuperTabSnapshot {
   final String id, name, ownerId;
   final Map<String, dynamic>? project;
   final bool paused;
+
+  /// The Swarm's Buddies setting: off unless its owner turned it on, and off
+  /// from a backend before Buddies.
+  final bool buddiesEnabled;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
   final List<Map<String, dynamic>> machines;
@@ -743,6 +768,11 @@ class SuperTabMessage {
   bool get fromTerminal => source['kind'] == 'native';
   SuperTabRoute? get route => SuperTabRoute.fromSource(source);
   bool get routeOverride => source['kind'] == 'route-override';
+
+  /// The person a Buddy's proposal speaks for, from the tag the server writes
+  /// on it; null for every other message, whatever its text says.
+  String? get proposalOwnerId =>
+      source['kind'] == 'buddy-proposal' ? source['ownerId'] as String? : null;
 
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>

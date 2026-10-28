@@ -1051,11 +1051,70 @@ class SuperTabController extends ChangeNotifier {
   SuperTabConversation? pmChat(String projectId) => snapshot?.conversations
       .where(
         (g) =>
+            !g.isBuddyChat &&
             g.projectId == projectId &&
             g.audience?.length == 1 &&
             g.audience!.single == accountId,
       )
       .firstOrNull;
+
+  /// Whether the Swarm has Buddies on: each person's Buddy chats take Chat
+  /// with PM's place (spec: Buddies, 10-28).
+  bool get buddiesOn => snapshot?.buddiesEnabled == true;
+
+  /// The signed-in person's chat with their Buddy in [projectId]. It stays
+  /// after the Buddy is removed, so adding one again reopens its history.
+  SuperTabConversation? buddyChat(String projectId) => snapshot?.conversations
+      .where(
+        (g) =>
+            g.isBuddyChat &&
+            g.projectId == projectId &&
+            g.audience?.length == 1 &&
+            g.audience!.single == accountId,
+      )
+      .firstOrNull;
+
+  /// The signed-in person's Buddy in [projectId]; null when they have none.
+  SuperTabAgent? buddy(String projectId) => snapshot?.agents
+      .where(
+        (a) => a.isBuddy && a.buddyOf == accountId && a.projectId == projectId,
+      )
+      .firstOrNull;
+
+  /// The project of the reader's Buddy chat [group]; null for any other.
+  SuperTabAgent? buddyIn(SuperTabConversation group) =>
+      buddyChat(group.projectId)?.id == group.id
+      ? buddy(group.projectId)
+      : null;
+
+  /// Adds the reader's Buddy in [projectId] on [machineId] with [engine], and
+  /// opens its chat. False when refused: [operationError] says why.
+  Future<bool> addBuddy({
+    required String projectId,
+    required String machineId,
+    required String engine,
+  }) async {
+    final result = await command({
+      'type': 'buddy.add',
+      'projectId': projectId,
+      'machineId': machineId,
+      'engine': engine,
+    });
+    if (result == null) return false;
+    final id = result['conversationId'];
+    if (id is String) await select(id);
+    return true;
+  }
+
+  /// Removes the reader's Buddy in [projectId]; its chat stays.
+  Future<bool> removeBuddy(String projectId) async =>
+      await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
+
+  /// Whether [group] takes no new messages here: with Buddies on, the
+  /// reader's old Chat with PM keeps its history but no longer reaches the
+  /// PM (the backend refuses a send there).
+  bool readOnly(SuperTabConversation group) =>
+      buddiesOn && pmChat(group.projectId)?.id == group.id;
 
   /// How many of [group]'s messages from others came after the reader's read
   /// mark: exact once the messages held reach back to the mark
@@ -1179,6 +1238,12 @@ class SuperTabController extends ChangeNotifier {
   /// while a person who left and rejoined, whom the old chat no longer admits,
   /// gets a new one.
   Future<bool> openPmChat(String projectId) async {
+    // With Buddies on, the reader's way to talk privately is their Buddy:
+    // there is no new Chat with PM (spec: Buddies, 10-28).
+    if (buddiesOn) {
+      final chat = buddyChat(projectId);
+      return chat != null && await select(chat.id);
+    }
     if (pmChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
     final email = me?.email;

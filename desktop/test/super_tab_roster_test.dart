@@ -878,6 +878,20 @@ void main() {
     await f.close(tester);
   });
 
+  testWidgets('a Buddy reads Buddy, never Dev: it takes no work', (
+    tester,
+  ) async {
+    final f = await fixture(tester);
+    (f.server.state['agents'] as List)[1]
+      ..['role'] = 'buddy'
+      ..['buddyOf'] = 'owner';
+    await f.controller.refresh();
+    await f.show(tester);
+    expect(f.inRow(1, find.text('Buddy')), findsOneWidget);
+    expect(f.inRow(1, find.text('Dev')), findsNothing);
+    await f.close(tester);
+  });
+
   testWidgets('custom role name appears in the roster and agent details', (
     tester,
   ) async {
