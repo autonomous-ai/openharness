@@ -37,7 +37,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -747,6 +747,10 @@ export class SuperTabStore {
       }
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
+      if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
+        context.openDecisions = await fullFor(tx, tabId, { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId,
+          conversationId: command.conversationId, question: command.result })
+      }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
       if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
@@ -1659,10 +1663,11 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       let loaded = await this.load(tx, user, tabId)
       // Work finished since the last digest and archived or asleep since still shipped, but ordinary loads leave it out
-      // (#1757 review, 4): a due digest loads it.
+      // (#1757 review, 4): a due digest loads it. A paused Swarm sends none (digest.ts digestRequest), so its digest stays
+      // due: it loads nothing for it, or every poll repeats the loads over a growing window (Diego's issue file, 2026-10-27).
       const led = ledProject(loaded.state, agentId)
       let asked: Array<{ conversationId: string; personId: string; count: number }> = []
-      if (led && digestDue(led, this.now())) {
+      if (led && !loaded.state.paused && digestDue(led, this.now())) {
         const finished = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, lastActivityAt: { gte: new Date(digestSince(led, this.now())) },
           OR: [{ projectId: led.id }, ...led.id === 'lead' ? [{ projectId: null }] : []] }, select: { key: true } })
         // A decision waits in its conversation even once that conversation went quiet.

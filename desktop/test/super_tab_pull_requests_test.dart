@@ -362,6 +362,38 @@ void main() {
       },
     );
   }
+  testWidgets('local GitHub unavailable is retried', (tester) async {
+    var reads = 0;
+    await mount(tester, prServer([1]), (_) async {
+      reads++;
+      return reads == 1
+          ? {'error': 'LOCAL_GITHUB_UNAVAILABLE'}
+          : {
+              'rows': [prRow(1)],
+            };
+    });
+    expect(find.textContaining('View status on GitHub'), findsOneWidget);
+    // This computer connects; the next minute's refresh asks GitHub again.
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.text('Pull request 1'), findsOneWidget);
+    expect(find.textContaining('View status on GitHub'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('a computer that cannot read PR status is not asked again', (
+    tester,
+  ) async {
+    var reads = 0;
+    await mount(tester, prServer([1]), (_) async {
+      reads++;
+      return {'error': 'UNSUPPORTED'};
+    });
+    await tester.pump(const Duration(seconds: 60));
+    await tester.pumpAndSettle();
+    expect(reads, 1);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets(
     'refreshes only open PRs every minute and stops when the pane is hidden',
     (tester) async {
