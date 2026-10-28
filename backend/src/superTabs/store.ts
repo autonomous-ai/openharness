@@ -15,7 +15,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVA
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
-import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
@@ -210,13 +210,6 @@ export interface SuperTabStoreHooks {
    *  at once (lib/observerWs.ts). It must not throw. */
   accessChanged?: (tabId: string) => void
 }
-
-/** The commands after which someone may no longer watch an agent's terminal (`mayObserve`): a person, agent, machine or
- *  project leaves, a project's sharing changes, or a session turns confidential (a Lead, a private conversation's member). */
-const NARROWING = new Set<Command['type']>(['member.remove', 'project.sharing', 'project.delete', 'agent.remove', 'agent.rebind',
-  'agent.add', 'machine.remove', 'machine.pause', 'conversation.audience', 'conversation.agent'])
-const narrowsWatching = (command: Command): boolean => NARROWING.has(command.type)
-  || command.type === 'conversation.create' && !!command.audience
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
 /** The routing decision a command names. `decision.answer` names a person's decision instead (decisions.ts). */
@@ -1055,7 +1048,7 @@ export class SuperTabStore {
       }
       if (command.type === 'project.delete' || command.type.startsWith('project.role')) await this.writeRoleTexts(tx, tabId, effects.state, command)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
-      if (narrowsWatching(command) && this.hooks.accessChanged) {
+      if (this.hooks.accessChanged && watchingNarrowed(original, effects.state)) {
         const told = this.hooks.accessChanged
         afterCommit(tx, () => told(tabId))
       }

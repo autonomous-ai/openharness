@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchingNarrowed } from './projects.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -546,5 +546,47 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     delete f.state.agents.find(a => a.id === lead)!.confidential
     f.run({ type: 'conversation.create', title: 'Next', brief: '', checks: [] })
     expect(f.state.agents.find(a => a.id === lead)!.confidential).toBe(true)
+  })
+})
+
+describe('whether a commit narrows who may watch a terminal', () => {
+  // Each case starts where peer may watch a Builder in the main project, then runs one command.
+  function watched() {
+    const f = setup()
+    const builder = f.add('lead', 'builder', false)
+    expect(canWatchAgent(f.state, peer, f.state.agents.find(a => a.id === builder)!)).toBe(true)
+    const before = structuredClone(f.state)
+    return { f, builder, before, narrowed: () => watchingNarrowed(before, f.state) }
+  }
+
+  it('is narrowed when a session turns confidential, whatever the command: here made its project’s Lead', () => {
+    const { f, builder, narrowed } = watched()
+    f.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: ['owner'] } })
+    expect(narrowed()).toBe(false)
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
+    expect(narrowed()).toBe(true)
+  })
+
+  it('is narrowed when a person leaves or a project stops being shared with them', () => {
+    const removed = watched()
+    removed.f.run({ type: 'member.remove', userId: 'peer' })
+    expect(removed.narrowed()).toBe(true)
+    const unshared = watched()
+    unshared.f.run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(unshared.narrowed()).toBe(true)
+  })
+
+  it('is narrowed when a watched agent leaves', () => {
+    const { f, builder, narrowed } = watched()
+    f.run({ type: 'agent.remove', agentId: builder })
+    expect(narrowed()).toBe(true)
+  })
+
+  it('is not narrowed by a change that leaves every watcher watching', () => {
+    const { f, narrowed } = watched()
+    f.run({ type: 'conversation.create', title: 'Another task', brief: '', checks: [] })
+    f.run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: ['peer'] })
+    f.add('lead', 'second', false)
+    expect(narrowed()).toBe(false)
   })
 })

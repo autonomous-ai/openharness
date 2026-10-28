@@ -63,22 +63,23 @@ afterAll(async () => { await database?.stop() })
 
 describe('a terminal observer of a Swarm agent', () => {
   /** Peer watches a Builder on host's machine through the Swarm's share. */
-  async function watching() {
+  async function watching(withLead = true) {
     const tab = (await store.create(owner, randomUUID(), 'Observed')).id
-    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
+    if (withLead) await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: randomUUID(), name: 'Lead', configuration: config, lead: true })
     for (const person of [peer, host]) {
       const invitation = await run(tab, { type: 'invite.create', email: person.email, role: 'collaborator', conversationId: 'lead' })
       await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, person)
     }
     const harnessId = randomUUID()
-    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId, name: 'Builder', configuration: config, lead: false })
+    const builder = (await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId, name: 'Builder', configuration: config, lead: false }))
+      .result.agentId as string
     const share = await database.db.harnessShare.create({ data: { id: randomUUID(), superTabId: tab, ownerId: host.sub, machineId: 'test-host',
       agentId: harnessId, recipientEmail: peer.email, autonomousEnv: 'prod', name: 'Builder', ownerPublicKey: 'fixture-key',
       expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } })
     const ws = new Socket()
     await attachObserver(ws as never, peer, share)
     expect(ws.send).toHaveBeenCalledWith(JSON.stringify({ type: 'observer_connected' }))
-    return { tab, ws }
+    return { tab, ws, builder }
   }
 
   it('closes within a second of its viewer being removed from the Swarm', async () => {
@@ -91,6 +92,13 @@ describe('a terminal observer of a Swarm agent', () => {
   it('closes within a second of the agent’s project no longer being shared with its viewer', async () => {
     const { tab, ws } = await watching()
     await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [host.sub] })
+    expect(await until(() => ws.close.mock.calls.length > 0, 1_000)).toBe(true)
+    expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
+  })
+
+  it('closes within a second of the watched session turning confidential, here by becoming its project’s Lead', async () => {
+    const { tab, ws, builder } = await watching(false)
+    await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
     expect(await until(() => ws.close.mock.calls.length > 0, 1_000)).toBe(true)
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
   })
