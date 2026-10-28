@@ -2031,7 +2031,11 @@ export class SuperTabStore {
       let settled = 0
       for (const delivery of rows) {
         if (!stuck(delivery, !!state && this.deliveryAllowed(state, delivery), now)) continue
-        settled += (await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: delivery.status, updatedAt: delivery.updatedAt },
+        // A held claim is the same while its claim and hold are: its live host claims it again on every poll (cli
+        // superTabs/host.ts), so its write time would let it outrun the pass for good. Any other is as last written.
+        const unchanged = delivery.holdSince ? { claimId: delivery.claimId, holdReason: delivery.holdReason, holdSince: delivery.holdSince }
+          : { updatedAt: delivery.updatedAt }
+        settled += (await tx.superTabDelivery.updateMany({ where: { id: delivery.id, tabId, status: delivery.status, ...unchanged },
           data: { status: 'cancelled' } })).count
       }
       return settled

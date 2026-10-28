@@ -349,14 +349,30 @@ describe('a delivery that cannot move', () => {
     expect(await status(id)).toBe('cancelled')
   })
 
-  it('leaves a delivery its host wrote after the pass read it', async () => {
+  it('leaves a delivery its host typed or claimed again after the pass read it', async () => {
     const f = await swarm()
-    const id = await toLead(f, 'Claimed as the pass reads it.')
+    const typed = await toLead(f, 'Typed as the pass reads it.')
+    const reclaimed = await toLead(f, 'Claimed again as the pass reads it.')
+    for (const id of [typed, reclaimed]) await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    const read = await db.superTabDelivery.findMany({ where: { id: { in: [typed, reclaimed] } }, orderBy: { id: 'asc' } })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await f.timed.delivery(host, f.tab, f.lead, typed, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    // A live host claims a claim it still holds again: that is what tells it from a claim nobody will type.
+    await f.timed.delivery(host, f.tab, f.lead, reclaimed, { type: 'claim', claimId: 'claim' })
+    expect(await f.timed.settleDeliveries(f.tab, read, Math.max(...read.map(r => r.updatedAt.getTime())) + HOUR)).toBe(0)
+    expect([await status(typed), await status(reclaimed)]).toEqual(['delivered', 'claimed'])
+  })
+
+  it('ends a hold that is over even though its live host claimed it again after the pass read it', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Held while the Lead works.')
     await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
     const read = await db.superTabDelivery.findUniqueOrThrow({ where: { id } })
     await new Promise(resolve => setTimeout(resolve, 5))
-    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
-    expect(await f.timed.settleDeliveries(f.tab, [read], read.updatedAt.getTime() + HOUR)).toBe(0)
-    expect(await status(id)).toBe('delivered')
+    // Its core refused the write while the terminal was busy, so the host claims it again on each poll (cli superTabs/host.ts).
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    expect(await f.timed.settleDeliveries(f.tab, [read], f.clock.now + HOUR + MINUTE)).toBe(1)
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_idle' })
   })
 })
