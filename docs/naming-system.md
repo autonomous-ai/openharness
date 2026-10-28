@@ -99,8 +99,10 @@ no CLI keeps its maker's name (Fo).
 A pane is a view, so closing a pane or tab closes views. **Stop Harness** ends the
 running harness. Adding harnesses to a tab groups them without a separate team
 setup. A **Swarm** occupies one tab in that same tab bar. A person can belong to several Swarms.
-Its sidebar reads like a chat app's. It starts with **New project**, **Manage models**,
-**Your devices** and **Notifications**, then three sections in this order: **Projects**,
+Its sidebar reads like a chat app's. It starts with **New project**, **Your devices** and
+**Your models** (and **Notifications** where no menu-bar list carries it: on a Mac, what needs
+the person is in the menu bar's Harness menu and on the Dock's badge), then three sections in this
+order: **Projects**,
 **Direct messages** and **Machines**. Projects and Machines have section headings with disclosure
 after the label and an add action at the right. Project rows read as channels, from A to Z:
 **#** at the left, then their name and status, with no chevron. The Product Managers'

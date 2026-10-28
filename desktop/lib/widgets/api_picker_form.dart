@@ -33,7 +33,7 @@ class ApiPickerForm extends StatefulWidget {
   final String? connectionId;
   final bool removing;
 
-  /// In a Swarm's Manage models: how many of this API's models are shared with the Swarm, which stop when it is
+  /// In a Swarm's Your models: how many of this API's models are shared with the Swarm, which stop when it is
   /// deleted (the CLI takes them off first). Null elsewhere.
   final int? swarmShares;
   final ValueChanged<String?> onClose;

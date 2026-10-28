@@ -480,7 +480,7 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
   state.projects = [{ ...projectsOf(state)[0]!, ...(visibility ? { visibility } : {}), skillMode: 'default' }]
   // Its models are on from the start (owner, 2026-10-24): the owner's computer makes the Swarm's grid in the background
   // (CLI `superTabs/swarmGrids.ts`) and reports how it went. Fire and forget: a grid that could not be made leaves the
-  // Swarm as it is, and the owner's first share or run in Manage models sets the models up then.
+  // Swarm as it is, and the owner's first share or run in Your models sets the models up then.
   state.localModels = { grid: swarmGridName(id), enabled: true }
   syncLeads(state)
   return state

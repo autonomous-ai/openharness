@@ -17,6 +17,7 @@
  *    the external identity service.
  */
 import type { IncomingMessage } from 'http'
+import { frameKind, markCpuKind } from './selfProfile.js'
 import type { Duplex } from 'stream'
 import { WebSocket, type RawData } from 'ws'
 import { createWss, WS_LIMITS } from './wsServer.js'
@@ -68,11 +69,19 @@ export { BACKEND_ONLY_DOWN_TYPES } from './backendOnlyFrames.js'
 
 const wss = createWss(WS_LIMITS.web, { echoFirstProtocol: true })
 
+/** Frame types the CPU self-profile may log by name; any other type a client sends is logged as `other`. */
+const WEB_FRAME_TYPES: ReadonlySet<string> = new Set([...TERMINAL_DOWN_TYPES, ...P2P_DOWN_TYPES,
+  'p2p_result', 'e2e_hello', 'machine_select', 'machine_deselect', 'machines_watch', 'devices_watch', 'message'])
+
 // Device-status re-seed: covers the silent-offline case (worker crash → presence TTL 45s ages out
 // with no transition published) — the watcher re-reads presence keys on this cadence.
 const DEVICE_RESEED_MS = 30_000
 // Trailing debounce for list re-derivations poked by machines_watch (see scheduleWatchAgents).
 const WATCH_DEBOUNCE_MS = 250
+/** How long a relay refused for an offline machine waits before it selects that machine again: a daemon's relay
+ *  re-dialled offline machines every few seconds, 68% of 1,884 selects in 10 minutes (prod, 2026-10-27, #314). The
+ *  Desktop's own longest reconnect backoff, so a machine coming back is seen no later than it was. */
+export const OFFLINE_RETRY_AFTER_MS = 30_000
 
 /** Who is on the other end of a per-user socket, as the client declares it: the surface (`?client=`), and
  *  for the phone the release (`?release=`, the public x.y.z) and whether the build is a debug or simulator
@@ -327,7 +336,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       send({ type: 'node_status', payload: { online, status: online ? 'running' : lifecycle === 'unknown' ? 'offline' : lifecycle } })
     })(), 'web-ws seed node_status', { userId: user.sub, machineId })
   }
-  const bindAgent = async (machineIdRaw: unknown): Promise<void> => {
+  const bindAgent = async (machineIdRaw: unknown, refuseOffline: boolean): Promise<void> => {
     if (typeof machineIdRaw !== 'string' || !machineIdRaw) return
     const machineId = machineIdRaw
     const gen = ++selectGen
@@ -369,6 +378,17 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     // Idempotent same-agent re-select keeps the connId, but still passed through ensureMachineReady so
     // selecting a deliberately stopped machine wakes it before the readiness ack.
     if (client && machineId === currentAgentId) { currentBinding = binding; ack(machineId); return }
+    // A daemon's relay (a socket that declares no phone or web client) cannot use an offline machine: it hung up on the
+    // ack half a second later and dialled again, every daemon already out there included. Refused here instead, before
+    // a hub client and an ack, in the machine_select_error every daemon already turns into a failed dial. A phone or
+    // the web viewer waits attached for the machine to come back, as before.
+    if ((refuseOffline || !surface) && !await machineOnline(machineId, !!await getAgentPresence(machineId))) {
+      if (!closed && gen === selectGen) {
+        send({ type: 'machine_select_error', payload: { machineId, error: 'MACHINE_OFFLINE', retryAfterMs: OFFLINE_RETRY_AFTER_MS } })
+      }
+      return
+    }
+    if (closed || gen !== selectGen) return
     client?.detach()
     // A guest never hears the machine's broadcasts, only what the machine addresses to it (lib/hub.ts).
     client = attachHubClient(ws, machineId, 'web', { guest: !!shared })
@@ -481,8 +501,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       }
     }
     if (type === 'machine_select') {
-      const machineId = (frame.payload as { machineId?: unknown } | undefined)?.machineId
-      await bindAgent(machineId)
+      const payload = frame.payload as { machineId?: unknown; offline?: unknown } | undefined
+      await bindAgent(payload?.machineId, payload?.offline === 'refuse')
       return
     }
     if (type === 'machine_deselect') {
@@ -569,6 +589,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     let frame: Frame
     try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
+    markCpuKind(frameKind('web-ws', frame.type, WEB_FRAME_TYPES))
     inbox.enqueue(frame)
   })
 
@@ -628,6 +649,7 @@ function attachWebClient(ws: WebSocket, machineId: string): void {
     let frame: Frame
     try { frame = JSON.parse(raw.toString()) as Frame } catch { return }
     const type = frame.type as string | undefined
+    markCpuKind(frameKind('web-ws', type, WEB_FRAME_TYPES))
     // The same backend-only refusal as the per-user path: a key holder is a client, not the backend.
     if (isBackendOnlyDownType(type)) return
     if (typeof type === 'string' && type.startsWith('terminal_') && !TERMINAL_DOWN_TYPES.has(type)) return

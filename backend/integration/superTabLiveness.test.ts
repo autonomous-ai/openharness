@@ -588,6 +588,24 @@ describe('the morning digest', () => {
     expect(await digestText()).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 201 for owner@example\.com$/)
   })
 
+  // groupBy on SuperTabDecision once panicked the Prisma engine on Mongo (review of #1855): the same counts, read without it.
+  it('counts the decisions waiting without groupBy, leaving out answered ones', async () => {
+    const counted = counting()
+    const f = await swarm({ client: counted.client })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    const decision = (personId: string, i: number, answeredAt?: Date) => ({ id: randomUUID(), tabId: f.tab, batchId: 'batch', projectId,
+      conversationId: f.group, assignmentId: null, personId, askerAgentId: f.lead, question: `Question ${i}?`, options: ['Yes', 'No'],
+      recommended: 0, unblocks: 'Work', createdAt: new Date(1_000 + i), ...(answeredAt ? { answeredAt, choice: 0 } : {}) })
+    await db.superTabDecision.createMany({ data: [decision(owner.sub, 1), decision(owner.sub, 2), decision(owner.sub, 3, new Date(2_000))] })
+    f.clock.now = 3 * 60 * 60_000
+    counted.ops.length = 0
+    await f.leadInbox()
+    expect(counted.ops).not.toContain('SuperTabDecision.groupBy')
+    const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
+    expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+  })
+
   it('lists a decision still waiting in a conversation that has gone quiet', async () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
@@ -614,6 +632,29 @@ describe('the morning digest', () => {
     const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
     expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
     expect(digest.text).not.toMatch(/Secret launch plan|Price it|Behind a flag/)
+  })
+
+  // Diego's issue file (2026-10-27): a paused Swarm sends no digest (digest.ts digestRequest), so it stays due, and every full
+  // Lead poll read the dormant groups and waiting decisions for it again, over a window that kept growing.
+  it('reads nothing for the digest while the Swarm is paused, and sends it once it resumes', async () => {
+    const queries: Array<{ model?: string; args: { where?: Record<string, unknown> } }> = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, args, query }) {
+      queries.push({ model, args: args as { where?: Record<string, unknown> } })
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const f = await swarm({ client })
+    const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
+    await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
+    await f.execute({ type: 'tab.pause', paused: true })
+    f.clock.now = 3 * 60 * 60_000
+    queries.length = 0
+    await f.leadInbox()
+    const forDigest = queries.filter(q => (q.model === 'SwarmGroup' && q.args.where?.dormant === true && q.args.where.lastActivityAt) || q.model === 'SuperTabDecision')
+    expect(forDigest).toEqual([])
+    await f.execute({ type: 'tab.pause', paused: false })
+    f.clock.now += 30_000
+    await f.leadInbox()
+    expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')).toHaveLength(1)
   })
 
   it('is sent once when two of the Lead\'s polls run at the same moment', async () => {

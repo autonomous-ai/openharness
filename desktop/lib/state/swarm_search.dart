@@ -2456,7 +2456,7 @@ class SwarmSearchController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// The models list of a Swarm's Manage models, drawn in its own way (`super_tabs/local_models.dart`).
+  /// The models list of a Swarm's Your models, drawn in its own way (`super_tabs/local_models.dart`).
   bool get isSwarmModels => isModelMode && swarmModels != null;
 
   /// How many of the Swarm's APIs' models [row]'s API shares with the Swarm. Null for any row but an API's own.
@@ -2467,7 +2467,7 @@ class SwarmSearchController extends ChangeNotifier {
     return swarm.shares.where((key) => key.startsWith('$id\u0000')).length;
   }
 
-  /// The one model section the list shows, or every section: the scope buttons of a Swarm's Manage models.
+  /// The one model section the list shows, or every section: the scope buttons of a Swarm's Your models.
   ModelSearchSection? modelScope;
 
   void setModelScope(ModelSearchSection? section) {
