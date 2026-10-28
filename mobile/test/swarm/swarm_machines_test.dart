@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -17,6 +18,7 @@ Map<String, dynamic> machinePool(
   String owner = me,
   int? receivedAt,
   num cpu = 25,
+  String deviceType = 'MacBook Pro',
 }) => {
   'machineId': id,
   'name': name,
@@ -33,7 +35,7 @@ Map<String, dynamic> machinePool(
       'diskTotalBytes': 512 * 1073741824,
       'diskFreeBytes': 128 * 1073741824,
       'chip': 'Apple M2',
-      'deviceType': 'MacBook Pro',
+      'deviceType': deviceType,
       'os': 'macOS',
     },
     'quotas': [
@@ -296,5 +298,49 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Current readings unavailable'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+  testWidgets(
+    'hardware labels and values share a row, label left and value right',
+    (tester) async {
+      await open(tester);
+      await tester.tap(key('swarm-machine-$tab-mac-1'));
+      await tester.pumpAndSettle();
+      final label = find.text('CPU');
+      final value = find.text('25% in use');
+      expect(
+        tester.getTopLeft(label).dy,
+        closeTo(tester.getTopLeft(value).dy, 1),
+      );
+      expect(
+        tester.getTopRight(label).dx,
+        lessThan(tester.getTopLeft(value).dx),
+      );
+    },
+  );
+
+  testWidgets('Mac Studio has a desktop icon and MacBook has a laptop icon', (
+    tester,
+  ) async {
+    await open(
+      tester,
+      machines: [
+        machinePool('mac-1', 'MacBook Pro'),
+        machinePool('studio', 'MAC-Mac-Studio', deviceType: 'Mac Studio'),
+      ],
+    );
+    expect(
+      find.descendant(
+        of: key('swarm-machine-$tab-studio'),
+        matching: find.byIcon(LucideIcons.monitor300),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: key('swarm-machine-$tab-mac-1'),
+        matching: find.byIcon(LucideIcons.laptop300),
+      ),
+      findsOneWidget,
+    );
   });
 }

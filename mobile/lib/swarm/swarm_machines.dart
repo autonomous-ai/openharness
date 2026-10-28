@@ -319,11 +319,25 @@ Widget _heading(String title) => Padding(
 
 Widget _detail(String label, String text) => Padding(
   padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
-  child: Column(
+  child: Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: AppType.caption(color: AppPalette.textSecondary)),
-      Text(text, style: AppType.body(color: AppPalette.textPrimary)),
+      Expanded(
+        flex: 2,
+        child: Text(
+          label,
+          style: AppType.caption(color: AppPalette.textSecondary),
+        ),
+      ),
+      const SizedBox(width: AppSpace.m),
+      Expanded(
+        flex: 3,
+        child: Text(
+          text,
+          textAlign: TextAlign.right,
+          style: AppType.body(color: AppPalette.textPrimary),
+        ),
+      ),
     ],
   ),
 );

@@ -63,7 +63,7 @@ void main() {
       };
       final rows = [
         machinePool('mac-1', 'MacBook-Pro-19'),
-        machinePool('mac-2', 'MAC-Mac-Studio'),
+        machinePool('mac-2', 'MAC-Mac-Studio', deviceType: 'Mac Studio'),
         machinePool('mac-3', 'MacBookPro2021', receivedAt: 1),
       ];
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
