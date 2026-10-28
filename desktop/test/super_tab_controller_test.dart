@@ -267,7 +267,12 @@ void main() {
       expect(await first.send(), isNull);
       expect(server.messages, hasLength(1));
       expect(first.hasPendingAction, isTrue);
-      expect(first.draft('lead'), 'Build the agreed plan.');
+      // The message waits in the chat for Retry; the draft is free.
+      expect(first.draft('lead'), isEmpty);
+      expect(
+        first.outgoing('lead').single.state,
+        SuperTabOutgoingState.unconfirmed,
+      );
       await first.flush();
       first.dispose();
       final reopened = server.controller(initial: server.saved);
@@ -324,10 +329,14 @@ void main() {
     server.reject = true;
     await controller.retry();
     expect(controller.hasPendingAction, isFalse);
-    expect(controller.draft('lead'), 'Hold this draft');
+    expect(
+      controller.outgoing('lead').single.state,
+      SuperTabOutgoingState.refused,
+    );
     server.reject = false;
-    await controller.send();
-    expect(server.messages, hasLength(1));
+    await controller.retryOutgoing(controller.outgoing('lead').single);
+    expect(server.messages.single['text'], 'Hold this draft');
+    expect(controller.outgoing('lead'), isEmpty);
   });
 
   test(
