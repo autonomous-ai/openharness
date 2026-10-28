@@ -186,17 +186,29 @@ function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisio
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }
 
+/** What an access check reads of a conversation (projects.ts canReadGroup). */
+const ACCESS_FIELDS = ['id', 'kind', 'projectId', 'audience'] as const
+
 /** The conversations [ids] names: those the read loaded, and the rest (quiet, archived, or left out of a light read) read
- *  here, so a decision in one still counts. A deleted conversation is none. */
-async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids: string[]): Promise<Map<string, Conversation>> {
-  const found = new Map(state.conversations.filter(c => ids.includes(c.id)).map(c => [c.id, c]))
-  const missing = [...new Set(ids.filter(id => !found.has(id)))]
-  if (missing.length) {
-    for (const row of await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })) {
-      found.set(row.key, row.data as unknown as Conversation)
-    }
-  }
+ *  here, so a decision in one still counts. With [only], the rest bring only those fields. A deleted conversation is none. */
+async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids: string[],
+  only?: readonly string[]): Promise<Map<string, Conversation>> {
+  const named = new Set(ids)
+  const found = new Map(state.conversations.filter(c => named.has(c.id)).map(c => [c.id, c]))
+  const missing = [...named].filter(id => !found.has(id))
+  if (!missing.length) return found
+  const rows = only
+    ? await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: missing } } },
+      { $project: { _id: 0, key: 1, ...Object.fromEntries(only.map(field => [`data.${field}`, 1])) } }] }) as unknown as Array<{ key: string; data: unknown }>
+    : await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })
+  for (const row of rows) found.set(row.key, row.data as Conversation)
   return found
+}
+
+/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions. */
+const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conversation>, conversationId: string) => {
+  const group = groups.get(conversationId)
+  return group && canReadGroup(state, actor, group) ? group : undefined
 }
 
 /** ponytail: capped at 200 per state, newest first; page it if a reader ever has more. */
@@ -206,9 +218,8 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Acto
     orderBy: { createdAt: 'desc' }, take: 200 })
   const groups = await conversationsOf(tx, tabId, state, rows.map(r => r.conversationId))
   return rows.flatMap(row => {
-    const group = groups.get(row.conversationId)
-    // Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions.
-    return group && canReadGroup(state, actor, group) ? [{ row, group }] : []
+    const group = readableIn(state, actor, groups, row.conversationId)
+    return group ? [{ row, group }] : []
   })
 }
 
@@ -224,12 +235,13 @@ export async function waitingInProject(tx: Tx, tabId: string, projectId: string)
  *  when the latest open one was reminded (escalation), so a client sees a reminder though no count moved. Counted
  *  exactly per kind over the conversations the person still reads, with no page between them, so neither kind crowds the
  *  other out (review of #1769). With a digest of which decisions are open: a client reads its list again when it moves,
- *  as when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Never what they ask. */
+ *  as when one is answered elsewhere and another asked, which leaves the count alone (review of #1820). Read on every poll,
+ *  so only ids and each quiet conversation's access fields: never what they ask, nor a brief (#1825). */
 export async function requestsWaiting(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>) {
   const open: Prisma.SuperTabDecisionWhereInput = { tabId, AND: [readerWhere(state, actor), waiting] }
   const ids = (await tx.superTabDecision.findMany({ where: open, distinct: ['conversationId'], select: { conversationId: true } })).map(r => r.conversationId)
-  const groups = await conversationsOf(tx, tabId, state, ids)
-  const where = { ...open, conversationId: { in: ids.filter(id => { const group = groups.get(id); return !!group && canReadGroup(state, actor, group) }) } }
+  const groups = await conversationsOf(tx, tabId, state, ids, ACCESS_FIELDS)
+  const where = { ...open, conversationId: { in: ids.filter(id => readableIn(state, actor, groups, id)) } }
   const all = await tx.superTabDecision.count({ where })
   const handsOn = await tx.superTabDecision.count({ where: { ...where, kind: 'handsOn' } })
   const asked = (await tx.superTabDecision.findMany({ where: { ...where, ...ofKind('decision') }, select: { id: true } })).map(r => r.id).sort()
