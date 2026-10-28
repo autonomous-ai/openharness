@@ -12,7 +12,6 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
-import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -23,10 +22,10 @@ import '../test/swarm/swarm_fixture.dart';
 /// Swarm Home in the real shell on a simulator, a screenshot at each step:
 /// the app opens on Swarm Home; Needs you opens one thing at a time, a tag
 /// with Done, a decision answered with one tap and its Undo; the drawer with
-/// Chat with PM, the projects and a project's chats; a project with Chat with
-/// PM as its one main button; Chat with PM itself; Harness from the drawer
-/// and back with the terminal's Swarm mark; and Swarm turned off, the
-/// terminal as it always was.
+/// Chat with PM, the projects and a project's chats, and no Harness there; a
+/// project on its project chat, Chat with PM at the top right; Chat with PM
+/// itself; Harness through an agent's notice and back with the terminal's
+/// Swarm mark; and Swarm turned off, the terminal as it always was.
 ///
 /// The Swarm is scripted here, in the app: a machine connection that never
 /// dials answers the phone's Swarm requests (`super_tabs`, `action:
@@ -46,7 +45,7 @@ void main() {
   ) async {
     final swarm = _Swarm();
     final walk = _Walk(tester, binding, 'swarm-home');
-    await _openShell(tester, swarm);
+    final notifier = await _openShell(tester, swarm);
     final navigator = find
         .descendant(
           of: find.byType(PhoneShell),
@@ -97,9 +96,11 @@ void main() {
     await walk.shot('tag-done');
 
     // ⑤ The drawer: Swarm Home, the projects with their initial and team
-    // line, Harness and Settings; a project's arrow lists its chats, Chat
-    // with PM first.
+    // line, then Settings, and no Harness; a project's arrow lists its chats,
+    // Chat with PM first.
     await drawer();
+    expect(walk.key('swarm-drawer-settings'), findsOneWidget);
+    expect(walk.key('swarm-drawer-harness'), findsNothing);
     await walk.shot('drawer');
     await tester.tap(walk.key('swarm-drawer-chats-$tab-$project'));
     await walk.waitFor(walk.key('swarm-drawer-pm-$tab-$project'));
@@ -135,10 +136,9 @@ void main() {
     await back();
     await walk.waitFor(walk.key('swarm-menu'));
 
-    // ⑧ Harness from the drawer: the terminal at the root. Its Swarm mark
-    // goes back to Swarm Home.
-    await drawer();
-    await tester.tap(walk.key('swarm-drawer-harness'));
+    // ⑧ An agent's notice tapped: Harness, the terminal at the root, as the
+    // drawer has no way there. Its Swarm mark goes back to Swarm Home.
+    _openNotice(notifier);
     await walk.waitFor(walk.key('swarm-mark'));
     await walk.wait(1500);
     await walk.shot('harness');
@@ -159,7 +159,7 @@ void main() {
     tester,
   ) async {
     final walk = _Walk(tester, binding, 'swarm-home-kept');
-    await _openShell(tester, _Swarm(more: 8));
+    final notifier = await _openShell(tester, _Swarm(more: 8));
     final list = find
         .descendant(
           of: find.byType(SwarmPage),
@@ -176,38 +176,23 @@ void main() {
     expect(scrolled, greaterThan(0));
     await walk.shot('home-scrolled');
 
-    // ② Harness from the drawer, below its projects.
-    await tester.tap(walk.key('swarm-menu'));
-    await walk.waitFor(find.byType(SwarmDrawer));
-    await walk.wait();
-    await tester.scrollUntilVisible(
-      walk.key('swarm-drawer-harness'),
-      200,
-      scrollable: find
-          .descendant(
-            of: find.byType(SwarmDrawer),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    await tester.tap(walk.key('swarm-drawer-harness'));
+    // ② Harness, through an agent's notice.
+    _openNotice(notifier);
     await walk.waitFor(walk.key('swarm-mark'));
     await walk.wait(1500);
     await walk.shot('harness');
 
-    // ③ Back to Home with the Swarm mark: scrolled where it was, its drawer
-    // closed.
+    // ③ Back to Home with the Swarm mark: scrolled where it was.
     await tester.tap(walk.key('swarm-mark'));
     await walk.waitFor(walk.key('swarm-menu'));
     expect(offset(), scrolled);
-    expect(walk.key('swarm-drawer-harness'), findsNothing);
     await walk.shot('home-back');
   }, timeout: const Timeout(Duration(minutes: 2)));
 }
 
 /// The real shell on [swarm], Swarm on, with one machine of the account
-/// connected and its one agent listed.
-Future<void> _openShell(WidgetTester tester, _Swarm swarm) async {
+/// connected and its one agent listed; its notifier, to tap a notice with.
+Future<AppNotifier> _openShell(WidgetTester tester, _Swarm swarm) async {
   const machine = Machine(
     machineId: 'mac-1',
     authMode: MachineAuthMode.remote,
@@ -246,7 +231,16 @@ Future<void> _openShell(WidgetTester tester, _Swarm swarm) async {
   addTearDown(() => experimentalFeaturesStore.value = const {});
 
   await tester.pumpWidget(_phone(PhoneShell(notifier: notifier)));
+  return notifier;
 }
+
+/// The shell's one agent's "agent finished" notice, tapped: Harness at the
+/// root, that agent on screen.
+void _openNotice(AppNotifier notifier) =>
+    notifier.agentNotices.system.opened.value = (
+      machineId: 'mac-1',
+      agentId: 'agent-review',
+    );
 
 /// One Swarm, "Phone Swarm", as the backend would send it: Mobile app (River
 /// its Product Manager, Nova waiting on the person, Kai working, Atlas

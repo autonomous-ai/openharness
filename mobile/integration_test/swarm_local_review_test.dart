@@ -22,11 +22,12 @@ import 'package:harness_mobile/ws/ws_conn.dart';
 
 /// Swarm on the phone against an isolated local backend, a screenshot at each
 /// step. First the real shell: Home without Swarm, Settings ▸ Experimental,
-/// then Swarm Home at the root, Harness from its drawer, and the terminal's
-/// Swarm mark and Find's Swarm command back to Swarm Home, all through the
-/// app's own Swarm path to one account machine. Then the screens: what needs
-/// the person and the Swarms, a project, a chat, a post with a mention, and a
-/// decision answered with one tap and its Undo.
+/// then Swarm Home at the root, Harness through an agent's notice (its drawer
+/// has no way there), and the terminal's Swarm mark and Find's Swarm command
+/// back to Swarm Home, all through the app's own Swarm path to one account
+/// machine. Then the screens: what needs the person and the Swarms, a
+/// project, a chat, a post with a mention, and a decision answered with one
+/// tap and its Undo.
 ///
 /// The backend is the local backend recipe's (in-memory MongoDB and Redis, a
 /// fake SSO, no daemon), seeded with one Swarm whose open decision and tag are
@@ -144,13 +145,14 @@ void main() {
       await walk.waitFor(find.textContaining('River asks you'));
       await walk.shot('swarm-home');
 
-      // ④ Harness from its drawer: the terminal, its mark with how many
+      // ④ Harness through the agent's "agent finished" notice, tapped (the
+      // drawer has no way there): the terminal, its mark with how many
       // things need the person; the mark goes back to Swarm Home.
       Future<void> harness() async {
-        await tester.tap(walk.key('swarm-menu'));
-        await walk.waitFor(walk.key('swarm-drawer-harness'));
-        await walk.wait();
-        await tester.tap(walk.key('swarm-drawer-harness'));
+        notifier.agentNotices.system.opened.value = (
+          machineId: machine.machineId,
+          agentId: 'agent-review',
+        );
         await walk.waitFor(walk.key('swarm-mark-count'));
       }
 
