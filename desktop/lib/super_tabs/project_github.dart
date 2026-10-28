@@ -48,6 +48,11 @@ class SuperTabProjectGitHub {
   };
 }
 
+/// Names in a sentence: "Notes", "Notes and Docs", "Notes, Docs and Site".
+String _names(List<String> names) => names.length < 2
+    ? names.join()
+    : '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+
 /// The project's GitHub access in full, with what to do about it: Project details, and the dialog the sidebar line
 /// opens. Read when shown; [SuperTabController.readGitHubAccess] keeps it at most 5 minutes.
 class ProjectGitHubAccess extends StatefulWidget {
@@ -152,7 +157,11 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
             "Teammates' agents can't push to $repository yet. Install Harness on GitHub there: "
                 "an owner of ${repository.split('/').first}, or the repository's owner, can.",
           'not-approved' =>
-            access.canApprove
+            access.canApprove && access.approvedFor.isNotEmpty
+                // Approving is per project: one approved for the reader's other projects says so (group #646, item 8).
+                ? "Teammates' agents can't use $repository in this project yet. It's approved for "
+                      '${_names(access.approvedFor)}. Approve it here too?'
+                : access.canApprove
                 ? "Teammates' agents can't use $repository in this project yet. Someone who can push to it "
                       'approves it, signing in to GitHub.'
                 : "Teammates' agents can't use $repository in this project yet. This Harness server can't approve "
@@ -231,11 +240,6 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
                         key: const Key('super-project-github-approve'),
                         onPressed: _busy ? null : () => _approve('project'),
                         child: const Text('Approve for this project'),
-                      ),
-                      TextButton(
-                        key: const Key('super-project-github-approve-swarm'),
-                        onPressed: _busy ? null : () => _approve('swarm'),
-                        child: const Text('Approve for every project here'),
                       ),
                     ],
                     TextButton(

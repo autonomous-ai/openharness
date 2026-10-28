@@ -239,11 +239,14 @@ void main() {
         find.textContaining("can't use acme/app in this project yet"),
         findsOneWidget,
       );
-      await tester.tap(
+      // Approved one project at a time: nothing widens it to every project in one click (Scholes, 2026-10-28).
+      expect(
         find.byKey(const Key('super-project-github-approve-swarm')),
+        findsNothing,
       );
+      await tester.tap(find.byKey(const Key('super-project-github-approve')));
       await tester.pumpAndSettle();
-      expect(asked.last, endsWith('/github/approve swarm'));
+      expect(asked.last, endsWith('/github/approve project'));
       expect(launched.last, contains('/login/oauth/authorize'));
       refuseApprove = true;
       await tester.tap(find.byKey(const Key('super-project-github-approve')));
@@ -253,6 +256,48 @@ void main() {
         findsOneWidget,
       );
       approving.dispose();
+    },
+  );
+
+  // Local Team account run, 2026-10-28 (group #646, item 8): a second project on an approved repository asked again with
+  // no hint. It names the reader's other projects it is approved for, as the server says.
+  testWidgets(
+    'names the other projects the repository is approved for, and asks to approve it here too',
+    (tester) async {
+      Future<void> reads(List<String> approvedFor, String line) async {
+        answer = {
+          'state': 'not-approved',
+          'repository': 'acme/app',
+          'canApprove': true,
+          'approvedFor': approvedFor,
+        };
+        final c = await mount(
+          tester,
+          (c, p) => ProjectGitHubAccess(controller: c, projectId: p.id),
+        );
+        expect(
+          find.text(
+            "Teammates' agents can't use acme/app in this project yet. $line",
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('super-project-github-approve')),
+          findsOneWidget,
+        );
+        c.dispose();
+      }
+
+      await reads(['Notes'], "It's approved for Notes. Approve it here too?");
+      await reads([
+        'Notes',
+        'Docs',
+      ], "It's approved for Notes and Docs. Approve it here too?");
+      await reads([
+        'Notes',
+        'Docs',
+        'Site',
+      ], "It's approved for Notes, Docs and Site. Approve it here too?");
     },
   );
 
