@@ -18,7 +18,7 @@ import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import { swarmReadCache } from '../src/superTabs/cache.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
-import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
+import { NOW, outsider, owner as ownerActor, peer, swarm } from '../src/superTabs/read/fixture.test-support.js'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 // The hot reads of the roadmap's 2.7 (indexes) under Mongo's profiler: each must read only the documents it returns, never
@@ -52,7 +52,7 @@ afterAll(async () => {
 
 /** A Swarm on two machines of the owner's: a Lead, and on the other a worker with running work, finished work, and OTHERS quiet conversations,
  *  closed deliveries of other messages to other agents, and open decisions in other conversations. */
-async function scene(sharedMachine?: string) {
+async function scene({ sharedMachine, edit }: { sharedMachine?: string; edit?: (s: ReturnType<typeof swarm>) => void } = {}) {
   const [machineId, leadMachine] = [sharedMachine ?? `m-${randomUUID().slice(0, 8)}`, `l-${randomUUID().slice(0, 8)}`]
   for (const id of sharedMachine ? [leadMachine] : [machineId, leadMachine]) {
     await db.machine.create({ data: { machineId: id, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
@@ -66,6 +66,7 @@ async function scene(sharedMachine?: string) {
   s.run({ type: 'work.assign', conversationId: web, agentId: worker })
   const done = s.group('Done work')
   const quiet = Array.from({ length: OTHERS }, (_, i) => s.group(`Quiet ${i}`))
+  edit?.(s)
   s.edit(state => {
     state.conversations.find(c => c.id === done)!.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
@@ -123,7 +124,7 @@ function timestampScans(entries: ProfileEntry[]) {
 }
 
 it('batches cold host timestamp misses across Swarms and leaves warm timestamps out of the batch', async () => {
-  const a = await scene(), b = await scene(a.machineId)
+  const a = await scene(), b = await scene({ sharedMachine: a.machineId })
   for (const s of [a, b]) swarmReadCache()!.drop(s.tabId)
   const hosts = new HostReads(store, { now: () => Date.now() })
   const expected = await lastChangedAt(db, [a.tabId, b.tabId])
@@ -135,7 +136,7 @@ it('batches cold host timestamp misses across Swarms and leaves warm timestamps 
   for (const scan of timestampScans(cold)) expect(new Set(scan.ids)).toEqual(new Set([a.tabId, b.tabId]))
   expect(timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))).toEqual([])
 
-  const c = await scene(a.machineId)
+  const c = await scene({ sharedMachine: a.machineId })
   swarmReadCache()!.drop(c.tabId)
   const mixed = timestampScans(await profiled(() => hosts.changes(owner, a.machineId, { full: true })))
   expect(mixed).toHaveLength(7)
@@ -292,5 +293,32 @@ describe('which machines take teammates\' work is read once per 15 s per Swarm',
       expect(teamWork(await swarmReads.changes(owner, s.tabId, cursor))).toMatchObject({ allowed: false, code: 'MACHINE_OFFLINE' })
     })
     expect(teamReads(later)).toHaveLength(1)
+  })
+})
+
+describe('the owner\'s grid poll', () => {
+  it('reads each Swarm\'s head and only the people of those with Local models, never their groups, agents, machines or starts', async () => {
+    const off = await scene({ edit: s => s.edit(state => { delete state.localModels }) })
+    const on = await scene({ edit: s => s.join(peer) })
+    let grids: Awaited<ReturnType<SuperTabStore['hostGrids']>> = []
+    const entries = await profiled(async () => { grids = await store.hostGrids(owner) })
+    expect(grids.filter(g => g.tabId === off.tabId)).toEqual([])
+    const head = await db.swarmHead.findFirstOrThrow({ where: { tabId: on.tabId } })
+    expect(grids.filter(g => g.tabId === on.tabId)).toEqual([{ tabId: on.tabId, grid: (head.data as { localModels: { grid: string } }).localModels.grid,
+      enabled: true, ready: null, members: [peer.email] }])
+    const heavy = entries.filter(e => /\.Swarm(Group|Agent|Machine|Start|Progress)$/.test(e.ns))
+    expect(heavy.map(e => e.ns.slice(e.ns.indexOf('.') + 1))).toEqual([])
+    // The people read asks for the Swarms with Local models only.
+    const people = entries.filter(e => e.ns.endsWith('.SwarmMember'))
+    expect(people.length).toBeGreaterThan(0)
+    expect(JSON.stringify(people.map(e => e.command))).not.toContain(off.tabId)
+  })
+
+  it('leaves out someone removed from a Swarm with Local models', async () => {
+    const s = await scene({ edit: s => { s.join(peer); s.join(outsider) } })
+    clock = Date.now()
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'member.remove', userId: outsider.userId } })
+    expect(await db.swarmMember.findFirst({ where: { tabId: s.tabId, key: outsider.userId }, select: { deleted: true } })).toEqual({ deleted: true })
+    expect((await store.hostGrids(owner)).find(g => g.tabId === s.tabId)!.members).toEqual([peer.email])
   })
 })

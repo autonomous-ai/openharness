@@ -1165,15 +1165,14 @@ class _SuperTabViewState extends State<SuperTabView>
     SuperTabMessage? held() =>
         c.messages(id).where((m) => m.id == mention.messageId).firstOrNull;
     var message = held();
-    // The tag is what to see, not the rows read back: the first read goes up
-    // to the latest, never only a few pages below them.
-    if (message == null) c.readingBack(id, false);
     // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
-    // is after it, so the first read is up to the latest; the rest go back.
+    // is after it, so the first read is up to the latest, its own even with
+    // a poll's read under way (that one may hold rows below a reader scrolled
+    // up); the rest go back.
     for (var page = 0; message == null && page < 50; page++) {
       final older = page > 0;
       if (older && !c.hasOlder(id)) break;
-      await c.loadMessages(id, older: older);
+      await (older ? c.loadMessages(id, older: true) : c.showLatest(id));
       if (!mounted) return;
       message = held();
     }

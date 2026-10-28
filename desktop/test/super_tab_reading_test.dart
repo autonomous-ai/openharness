@@ -283,6 +283,38 @@ void main() {
       });
     });
 
+    test('a reader scrolled up holding three pages below reads no newer page '
+        'only to drop it', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..messagePage = 2;
+        for (final text in ['one', 'two']) {
+          server.append(text);
+        }
+        final reads = _Reads(server);
+        final c = _controller(reads, reading: _web)..start();
+        async.elapse(const Duration(seconds: 61));
+        c.readingBack('lead', true);
+        for (var i = 3; i <= 40; i++) {
+          _reply(server, 'Update $i');
+        }
+        // Polls join three pages of two below the reader.
+        async.elapse(const Duration(seconds: 30));
+        expect(
+          c.messages('lead').map((m) => m.sequence),
+          List.generate(8, (i) => i + 1),
+        );
+        expect(c.hasNewer('lead'), isTrue);
+
+        reads.clear();
+        async.elapse(const Duration(seconds: 60));
+
+        expect(reads.tails, 0);
+        expect(c.messages('lead'), hasLength(8));
+        expect(c.hasNewer('lead'), isTrue);
+        c.dispose();
+      });
+    });
+
     test('a full read asks for new messages beside the state', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');
