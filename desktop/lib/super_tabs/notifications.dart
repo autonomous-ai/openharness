@@ -62,7 +62,8 @@ void Function(SuperTabMention)? superTabMentionNotice(
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend
-/// whenever the Swarm changes while a tag waits or the count moves. One per
+/// when the count or the digest of which tags wait moves (or, from a backend
+/// without the digest, whenever the Swarm changes while a tag waits). One per
 /// controller.
 class SuperTabMentions extends ChangeNotifier {
   SuperTabMentions._(this.controller) {
@@ -82,6 +83,7 @@ class SuperTabMentions extends ChangeNotifier {
   List<SuperTabMention> waiting = const [], earlier = const [];
   String? error;
   int? _count;
+  String? _digest;
   int _lastChangedAt = -1;
   int? _epoch;
   // Null until the first read: tags waiting then are not news.
@@ -98,9 +100,11 @@ class SuperTabMentions extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
-  /// A tag can arrive while another is answered, leaving the count as it was,
-  /// so any change of the Swarm is read while a tag waits. With none waiting
-  /// and none answered (an idle Swarm, or a backend before tags) nothing is.
+  /// A tag can arrive while another is answered, leaving the count as it was:
+  /// the digest moves then. A backend without the digest leaves only the
+  /// change of the Swarm to go by, so any is read while a tag waits, and so is
+  /// any after a failed read. With none waiting and none answered (an idle
+  /// Swarm, or a backend before tags) nothing is.
   void _changed() {
     final snapshot = controller.snapshot;
     if (snapshot == null) return;
@@ -117,16 +121,20 @@ class SuperTabMentions extends ChangeNotifier {
         }
         _lastChangedAt = controller.lastChangedAt;
         _count = snapshot.mentionsWaiting;
+        _digest = snapshot.mentionsDigest;
         unawaited(load());
         return;
       }
     }
     // A tag that expires moves the count without changing the Swarm.
     final count = snapshot.mentionsWaiting;
-    final moved = count != _count;
-    if (!moved && controller.lastChangedAt == _lastChangedAt) return;
+    final digest = snapshot.mentionsDigest;
+    final moved = count != _count || digest != _digest;
+    final changed = controller.lastChangedAt != _lastChangedAt;
+    if (!moved && !(changed && (digest == null || error != null))) return;
     _lastChangedAt = controller.lastChangedAt;
     _count = count;
+    _digest = digest;
     if (count == 0 && (!moved || _seen == null)) {
       _seen ??= {};
       return;
@@ -173,6 +181,10 @@ class SuperTabMentions extends ChangeNotifier {
       // Read before who may read what changed: the read asked again since
       // replaces it.
       if (epoch != _epoch) return;
+      final same =
+          error == null &&
+          _sameMentions(waiting, nextWaiting) &&
+          _sameMentions(earlier, nextEarlier);
       waiting = nextWaiting;
       earlier = nextEarlier;
       error = null;
@@ -183,6 +195,8 @@ class SuperTabMentions extends ChangeNotifier {
           if (!seen.contains(m.id)) onArrived?.call(m);
         }
       }
+      // The same lists again: nothing to show, so nobody is told.
+      if (same) return;
     } catch (_) {
       if (epoch != _epoch) return;
       error = 'Could not load notifications. Try again.';
@@ -211,6 +225,28 @@ class SuperTabMentions extends ChangeNotifier {
     unawaited(controller.refresh());
     return true;
   }
+}
+
+/// Whether [a] and [b] show the same tags the same way.
+bool _sameMentions(List<SuperTabMention> a, List<SuperTabMention> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    final (x, y) = (a[i], b[i]);
+    if (x.id != y.id ||
+        x.projectId != y.projectId ||
+        x.projectName != y.projectName ||
+        x.conversationId != y.conversationId ||
+        x.conversationTitle != y.conversationTitle ||
+        x.messageId != y.messageId ||
+        x.leadId != y.leadId ||
+        x.leadName != y.leadName ||
+        x.text != y.text ||
+        x.createdAt != y.createdAt ||
+        x.resolvedBy != y.resolvedBy) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// The reader's tags across the Swarm: Waiting first, then Earlier, newest
