@@ -407,3 +407,30 @@ describe('a Buddy is never a worker', () => {
     expect(buddy.workDecision).toBeUndefined()
   })
 })
+
+describe('Chat with PM while Buddies are on', () => {
+  const on = () => { const f = setup(); f.run({ type: 'tab.buddies', enabled: true }); return f }
+  const say = (conversationId: string) => ({ type: 'message.send' as const, conversationId, text: 'Hi', replyTo: null, recipientIds: [] })
+
+  it('is read-only: no new one, and nobody posts in an old one, the PM included; its history stays readable', () => {
+    const f = on()
+    expect(() => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'owner', brief: '', checks: [],
+      audience: { personIds: ['owner'] } })).toThrow('Chat with PM is read-only')
+    expect(() => f.run(say(f.pmChat), peer)).toThrow('Chat with PM is read-only')
+    expect(() => f.run(say(f.pmChat), agentActor(f.pm))).toThrow('Chat with PM is read-only')
+    expect(canReadGroup(f.state, peer, group(f, f.pmChat))).toBe(true)
+  })
+
+  it('takes no new decisions: the PM asks in the project chat or a workgroup', () => {
+    const f = on()
+    const ask = (conversationId: string) => f.run({ type: 'decision.ask', conversationId, personId: 'peer',
+      questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] }, agentActor(f.pm))
+    expect(() => ask(f.pmChat)).toThrow('Chat with PM is read-only')
+    expect(ask(f.app.conversationId).result.decisionIds).toHaveLength(1)
+  })
+
+  it('works as before while Buddies are off', () => {
+    const f = setup()
+    expect(f.run(say(f.pmChat), peer).messages).toHaveLength(1)
+  })
+})

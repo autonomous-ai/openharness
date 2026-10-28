@@ -609,6 +609,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     return project
   }
+  /** No private channel to the PM while Buddies are on (Ken's spec, 10-28): a Chat with PM keeps its history, read only. */
+  const pmChatClosed = (pmChat: boolean) => {
+    if (state.buddies && pmChat) {
+      fail('PM_CHAT_READ_ONLY', 'Chat with PM is read-only while Buddies are on. Talk to the PM in the project chat, or brainstorm with your Buddy.', 403)
+    }
+  }
   /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
    *  as rules are. */
   const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
@@ -1096,6 +1102,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       requirable(command.task)
       if (command.audience) {
+        pmChatClosed(true)
         // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
         if (command.task || command.checks.length || command.reviewOf || command.requesterId) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
         if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
@@ -1131,6 +1138,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'decision.ask': {
       const group = open(state, command.conversationId)
+      pmChatClosed(!!group.audience && !isBuddyChat(group))
       effects.decisions = askDecisions(state, group, command.personId, command.questions,
         { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       result.decisionIds = effects.decisions.map(d => d.id)
@@ -1652,6 +1660,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'message.send': {
       const group = postable(state, actor, command.conversationId)
+      pmChatClosed(!!group.audience && !isBuddyChat(group))
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
