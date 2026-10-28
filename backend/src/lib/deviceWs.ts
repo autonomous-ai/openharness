@@ -1273,6 +1273,9 @@ function relay(device: WebSocket, opts: RelayOpts): void {
     if (msg.type === 'voice_end') { void finishVoice(); return }
     if (msg.type === 'voice_resume') { void handleVoiceResume(msg); return }
     if (msg.type === 'device_hello') { handleHello(msg); return }
+    // Presence for us alone: any inbound frame already refreshed this socket's liveness (trackSocketLiveness).
+    // Relayed, it reached a machine that refuses it as plaintext and logged that every 15 s.
+    if (msg.type === 'ping') return
     inbox.enqueue(msg)
   })
   device.on('close', closeBoth)

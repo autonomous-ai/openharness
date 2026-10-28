@@ -1,4 +1,4 @@
-import { activeWork, stableId, type Agent, type Assignment, type Author, type Conversation, type MessageDraft,
+import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
 import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
@@ -136,8 +136,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
     + (resumeAt ? `It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC, unless you hand it on first. `
       + 'If another account or engine has allowance now, assign it there now with its branch and last progress note, or cancel it.'
       : 'Assign it to another agent now, or cancel it.')
-  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
-    { id: stableId('work-lost', assignment.id, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
+  // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
+  const loss = String(now)
+  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
+    { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
       text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }]
     .map(row => reachable(state, row))
 }
@@ -162,14 +164,35 @@ export function judgedMachines(before: SuperTabState, state: SuperTabState, rows
   return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
 }
 
+/** A Buddy chat has no Lead: its owner reads why their Buddy did not start, written as theirs and sent to no one. */
+function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
+  const owner = state.people.find(p => p.id === start.request.buddyOf!.personId && p.generation === start.request.buddyOf!.generation)
+  if (!owner || !state.conversations.some(c => c.id === start.request.conversationId)) return []
+  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
+    author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
+    // Their own Buddy on a machine of the Swarm: the reason names only that machine, so its owner reads it whole.
+    text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
+}
+
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
   return [...loseTasks(state, now), ...failStalledStarts(state, now)]
 }
 
+/** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
+ *  host from before Buddies never sees one (read/hostRows.ts). */
+export const BUDDY_PICKUP_MS = 5 * 60_000
+
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
+    if (start.request.buddyOf && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+      && now - start.requestedAt > BUDDY_PICKUP_MS) {
+      const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
+      if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
+      start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
+      return buddyNotice(state, start)
+    }
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
     // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
     const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
@@ -179,6 +202,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
     // Never a lookup that throws: these checks run inside every machine's report.
+    if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []

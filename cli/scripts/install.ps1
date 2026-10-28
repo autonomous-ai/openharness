@@ -516,6 +516,53 @@ function Write-HarnessDone {
   Write-Host '  harness works in this window now. Terminals that were already open see it once they are reopened.'
 }
 
+function Find-HarnessGit {
+  # The git Store installs clone with, or '' when this computer has none. Windows does not come with one, and git
+  # was missing on computers where every Store install failed at once (0 of 25 in three days, 2026-10-28). PATH
+  # first, then where Git for Windows installs, for everyone or for this user alone, in case PATH is not updated yet.
+  param(
+    [string]$Path = $env:PATH,
+    [string[]]$Roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Programs' }))
+  )
+  foreach ($dir in ($Path -split ';')) {
+    $git = Get-HarnessFileIn -Folder $dir -Name 'git.exe'
+    if ($git) { return $git }
+  }
+  foreach ($root in $Roots) {
+    $git = Get-HarnessFileIn -Folder $root -Name 'Git\cmd\git.exe'
+    if ($git) { return $git }
+  }
+  return ''
+}
+
+function Get-HarnessFileIn {
+  # [Folder]\[Name] when that file exists, else ''. Joined as text and tried on its own: PATH can name a drive that is
+  # not there (an unplugged USB disk, an unmapped share), where Join-Path stops with 'Cannot find drive', or hold an
+  # entry in quotes, which .NET calls illegal. Under the installer's errors-stop either one turned a finished install
+  # into a failed one (review of #2025).
+  param([string]$Folder, [string]$Name)
+  if (-not $Folder) { return '' }
+  try {
+    $file = [IO.Path]::Combine($Folder, $Name)
+    if (Test-Path -LiteralPath $file -PathType Leaf) { return $file }
+  } catch { }
+  return ''
+}
+
+function Write-HarnessGitNote {
+  # Said, not done: installing Git for Windows is the person's choice, and this installer changes nothing outside
+  # their own folder and PATH. Harness itself runs without git; the Store's harnesses do not.
+  param([string]$Git = (Find-HarnessGit))
+  if ($Git) { return }
+  Write-Host ''
+  Write-Host '  Git for Windows is not installed. Harnesses from the Store are installed with git, and run their setup in its Git Bash.' -ForegroundColor Yellow
+  Write-Host '  Install it, then open a new window:'
+  Write-Host ''
+  Write-Host '      winget install --id Git.Git -e'
+  Write-Host ''
+  Write-Host '  or download it from https://git-scm.com/download/win'
+}
+
 function Read-HarnessCurrentCli {
   # The version cli\current names, or '' before a first install.
   param([string]$Root)
@@ -625,6 +672,7 @@ function Install-Harness {
     return 1
   }
   Write-HarnessDone -Version $version -Desktop:$Desktop -NoService:$NoService -Command $command
+  Write-HarnessGitNote
   return 0
 }
 
@@ -729,6 +777,7 @@ function Install-HarnessApp {
   Write-Host ''
   Write-Host "Harness $version is installed, and it is opening now."
   Write-Host 'Next time, open it from the Start menu. On its first start it sets up the Harness command line.'
+  Write-HarnessGitNote
   return 0
 }
 

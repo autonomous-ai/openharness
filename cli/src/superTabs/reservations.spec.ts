@@ -212,6 +212,41 @@ it('reserves disk on its destination volume and keeps separate volumes independe
   expect(f.deps.disk).toHaveBeenLastCalledWith('/second-volume', true)
 })
 
+// Diego's Mac, 2026-10-28: free disk is measured, so it already counts each running agent's worktree; holding its 10 GiB
+// past launch counted that space twice. 15 settled agents held 150 GiB on a disk with 140 GiB free and every start was refused.
+const diskInput = (n: number) => input(n, 0, 10 * GiB)
+const freeDisk = (f: ReturnType<typeof setup>, bytes: number) => f.deps.disk.mockResolvedValue({ freeBytes: bytes, volume: 'first', path: '/fixture/repo' })
+
+it('counts a start\'s disk only during its start window, so settled agents do not block more starts', async () => {
+  const f = setup(), book = f.open()
+  freeDisk(f, 1000 * GiB)
+  for (let n = 1; n <= 15; n++) { expect(await book.reserve(diskInput(n))).toMatchObject({ ok: true }); f.launch(n) }
+  f.clock.now += 5 * MINUTE
+  freeDisk(f, 15 * GiB)
+  expect(await book.reserve(diskInput(16))).toMatchObject({ ok: true })
+})
+
+it('keeps holding disk for a start inside its window and for one that has not launched', async () => {
+  const f = setup(), book = f.open()
+  freeDisk(f, 15 * GiB)
+  expect(await book.reserve(diskInput(1))).toMatchObject({ ok: true })
+  f.clock.now += 60 * MINUTE
+  expect(await book.reserve(diskInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('disk') })
+  f.launch(1)
+  f.clock.now += 5 * MINUTE - 1
+  expect(await book.reserve(diskInput(2))).toMatchObject({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('disk') })
+  f.clock.now += 1
+  expect(await book.reserve(diskInput(2))).toMatchObject({ ok: true })
+})
+
+it('lets only one of two simultaneous starts take the last free disk', async () => {
+  const f = setup(), a = f.open(), b = f.open()
+  freeDisk(f, 15 * GiB)
+  const answers = await Promise.all([a.reserve(diskInput(1)), b.reserve(diskInput(2))])
+  expect(answers.filter(r => r.ok)).toHaveLength(1)
+  expect(answers.filter(r => r.error)).toEqual([expect.objectContaining({ error: 'CAPACITY_UNAVAILABLE', detail: expect.stringContaining('disk') })])
+})
+
 it('refuses to reuse a reservation when an unmount moves the same path to a different volume', async () => {
   const f = setup(), book = f.open()
   await book.reserve(input())

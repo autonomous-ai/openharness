@@ -177,12 +177,46 @@ each person and project, and the server answers a repeat with the conversation
 it already made.
 
 It behaves like the project chat: replies, attachments, the unread mark and the
-product manager's tags in Notifications. Only that person and the product
+product manager's tags in Notifications. While the Swarm's Buddies are on, it is read-only (see Buddies). Only that person and the product
 manager read it. Other members, the project's owner and the Swarm's owner
 included, never receive it, its messages or its notifications. The chat is
 chat only: no work is assigned in it, and only the product manager joins it
 among agents. As with any session, the owner of the machine running the
 product manager can see what its terminal shows.
+
+## Buddies
+
+A Buddy is a person's own agent in one project. They brainstorm with it in a chat that only they and their Buddy read:
+it asks what they want and why, offers two or three options with the one it recommends, and agrees the scope with
+them. When they say to send it to the product manager, it posts one proposal (goal, scope and priority) in the project
+chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
+the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
+
+The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy, fails
+any still starting, and stops their posts. Their chats stay for their owners to read.
+
+- Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
+  list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  account: never on a machine shared with them, and never in a Harness Team account.
+- A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
+  the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
+  Swarm read shows no machines or routing rules.
+- A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
+  file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
+  full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the
+  Harness GitHub App's token.
+  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
+  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
+- Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
+- A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
+  or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
+- Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
+  stay there; the Buddy posts only what its owner asks it to send.
+- Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again
+  reopens the same chat. Adding one while the person's Buddy there is down replaces it in one step, in the same chat;
+  while it runs or starts, adding another is refused. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
+- While Buddies are on, Chat with PM is read-only. Nobody opens a new one or posts in an old one, the product manager
+  included, and old history stays readable. To talk to the product manager, people use the project chat.
 
 ## Leaderboard
 

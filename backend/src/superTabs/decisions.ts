@@ -3,6 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
  *  through Chat with PM. Called inside SuperTabStore's transactions. */
+import { isBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -104,11 +105,13 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 }
 
 /** The Lead's one line saying what it chose, in the person's own Chat with PM of that project: only they read it, and they
- *  were asked the question. None when they have no open one with the Lead in it. */
+ *  were asked the question. None when they have no open one with the Lead in it. While Buddies are on, Chat with PM is
+ *  read-only and decisions live with the Buddy (Ken's spec, 10-28): the line goes to their Buddy chat instead, or nowhere. */
 function delegatedLine(state: SuperTabState, actor: Actor, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
   const lead = state.agents.find(a => a.id === leadId)
-  const chat = state.conversations.find(c => !c.archived && c.audience?.people.length === 1 && c.audience.people[0]!.id === asked.personId
-    && groupProject(state, c).id === projectId && c.agentIds.includes(leadId) && canReadGroup(state, actor, c))
+  const theirs = (c: Conversation) => !c.archived && c.audience?.people.length === 1 && c.audience.people[0]!.id === asked.personId
+    && groupProject(state, c).id === projectId && canReadGroup(state, actor, c)
+  const chat = state.conversations.find(c => theirs(c) && (state.buddies ? isBuddyChat(c) : !isBuddyChat(c) && c.agentIds.includes(leadId)))
   if (!lead || !chat) return null
   const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
   const question = asked.question.replace(/\s+/g, ' ')

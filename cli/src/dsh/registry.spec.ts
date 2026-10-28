@@ -60,6 +60,8 @@ describe('storeEntry', () => {
     ['a viewer package: its kind and no engine', { spec: 1, kind: 'viewer', id: 'autonomous/pane', name: 'Pane', viewer: { command: 'v.sh', url: 'http://127.0.0.1:${port}/' } }, { upstream: 'https://example.com/up', screenshots: ['https://example.com/1.png'] }],
     ['tagline: carried as written', { spec: 1, id: 'autonomous/sim', name: 'Sim', engine: 'claude' }, { tagline: 'Advanced physics simulation' }],
     ['examples: carried as written', { spec: 1, id: 'autonomous/lamp', name: 'Lamp', engine: 'claude', viewer: { use: 'autonomous/model-viewer' } }, { examples: [{ prompt: 'A desk lamp.', image: 'https://example.com/lamp.jpg', caption: 'Lamp · glTF' }] }],
+    ['a setup script: says it runs one', { spec: 1, id: 'autonomous/built', name: 'Built', engine: 'claude', toolchain: { setup: 'setup.sh' } }, {}],
+    ['a doctor alone: says it runs one', { spec: 1, kind: 'viewer', id: 'autonomous/probe', name: 'Probe', toolchain: { doctor: 'doctor.sh' }, viewer: { command: 'v.sh', url: 'http://127.0.0.1:${port}/' } }, {}],
   ]
   for (const [what, manifest, facts] of cases) {
     it(`${what}, the same from the build`, () => {
@@ -70,7 +72,11 @@ describe('storeEntry', () => {
   }
 
   it('says exactly what each case ships', () => {
-    const [bare, checked, cad, pane, sim, lamp] = cases.map(([, manifest, facts]) => storeEntry('p', manifest, facts))
+    const [bare, checked, cad, pane, sim, lamp, built, probe] = cases.map(([, manifest, facts]) => storeEntry('p', manifest, facts))
+    // Windows cannot run them yet: the CLI refuses such a harness from its entry, before downloading it.
+    expect(built.runsScripts).toBe(true)
+    expect(probe.runsScripts).toBe(true)
+    for (const entry of [checked, cad, pane, sim, lamp]) expect(entry).not.toHaveProperty('runsScripts')
     expect(sim.tagline).toBe('Advanced physics simulation')
     expect(lamp.examples).toEqual([{ prompt: 'A desk lamp.', image: 'https://example.com/lamp.jpg', caption: 'Lamp · glTF' }])
     expect(bare).toEqual({ id: 'autonomous/bare', name: 'Bare', repo: HARNESS_MONOREPO, ref: 'main', path: 'p', engine: 'claude', engines: dshSupportedEngines({ engine: 'claude' }), tier: 0, verified: true })

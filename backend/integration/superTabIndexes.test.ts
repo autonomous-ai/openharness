@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
@@ -126,6 +126,35 @@ describe('message page reads', () => {
     expect(await pageReactions(db, 'A', PAGE)).toEqual(await db.superTabReaction.findMany({ where: { tabId: 'A', messageId: { in: PAGE } },
       select: { messageId: true, emoji: true, actorKind: true, actorId: true } }))
     expect(await pageDeliveries(db, 'B', PAGE)).toEqual([])
+  })
+})
+
+describe('the delivery poll order', () => {
+  const at = new Date(T0), later = new Date(T0 + 1000)
+  const row = (messageId: string, conversationId: string, createdAt = at) => ({ messageId, conversationId, createdAt })
+  beforeAll(async () => {
+    await db.superTabMessage.createMany({ data: [['O-c1-1', 'c1', 1], ['O-c1-2', 'c1', 2], ['O-c1-3', 'c1', 3], ['O-c1-4', 'c1', 4],
+      ['O-c2-7', 'c2', 7], ['O-c2-8', 'c2', 8]].map(([id, conversationId, sequence]) => ({ id: id as string, tabId: 'O',
+      conversationId: conversationId as string, sequence: sequence as number, author: { kind: 'person', id: 'owner' }, text: 'm', recipientIds: ['agent-0'] })) })
+  })
+
+  it('puts each conversation\'s tied rows in sequence order in that conversation\'s places, reading only the tied messages by id', async () => {
+    const read = [row('O-c1-3', 'c1'), row('O-c2-8', 'c2'), row('O-c1-1', 'c1'), row('O-c1-4', 'c1', later), row('O-c2-7', 'c2'), row('O-c1-2', 'c1')]
+    const [rows, profile] = await profiled('SuperTabMessage', () => inConversationOrder(db, 'O', read))
+    expect(rows.map(r => r.messageId)).toEqual(['O-c1-1', 'O-c2-7', 'O-c1-2', 'O-c1-4', 'O-c2-8', 'O-c1-3'])
+    expect(profile).toEqual({ plans: ['IXSCAN { _id: 1 }'], docsExamined: 5, returned: 5 })
+  })
+
+  it('reads nothing when no conversation has two rows at one time', async () => {
+    const read = [row('O-c1-2', 'c1'), row('O-c2-7', 'c2'), row('O-c1-1', 'c1', later)]
+    const [rows, profile] = await profiled('SuperTabMessage', () => inConversationOrder(db, 'O', read))
+    expect(rows).toEqual(read)
+    expect(profile).toEqual({ plans: [], docsExamined: 0, returned: 0 })
+  })
+
+  it('never orders by another Swarm\'s messages: rows whose messages it does not find keep their places', async () => {
+    const read = [row('O-c1-2', 'c1'), row('O-c1-1', 'c1')]
+    expect((await inConversationOrder(db, 'B', read)).map(r => r.messageId)).toEqual(['O-c1-2', 'O-c1-1'])
   })
 })
 
