@@ -1,10 +1,14 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart' show kMinInteractiveDimensionCupertino;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
@@ -12,7 +16,9 @@ import 'model.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_conversation_page.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
+import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
@@ -21,10 +27,10 @@ import 'swarm_style.dart';
 import 'swarm_team_line.dart';
 import 'team_glance.dart';
 
-/// The conversations of one project the person may read, as the project page
-/// lists them: its work by latest activity, and the quiet or archived work
-/// behind "Older". The Lead's chat and the person's Chat with PM
-/// ([pmChatId]) are pinned above, so they are not here; a private chat is
+/// The conversations of one project the person may read, as its sheet lists
+/// them: its work by latest activity, and the quiet or archived work behind
+/// "Older". The project chat is the screen and the person's Chat with PM
+/// ([pmChatId]) is in its header, so they are not here; a private chat is
 /// listed only to its people (the backend's rule, kept here too).
 ({List<SuperTabConversation> active, List<SuperTabConversation> older})
 swarmProjectWork(
@@ -65,13 +71,11 @@ Set<String> swarmWaitingOnYou(SwarmInbox inbox, String swarmId) => {
     if (need is SwarmWorkNeed && need.swarmId == swarmId) need.conversationId,
 };
 
-/// One project, as the approved prototype draws it: its name in the top bar;
-/// its team as avatars and a line ([swarmTeamLine]), each agent in a sheet;
-/// Chat with PM as its one main button; the project chat (its Product
-/// Manager and everyone); then its work — what waits on the person, then
-/// what the team is working on, by latest activity — and older work folded
-/// under "Older", read from the Swarm's closed work when opened, as no first
-/// load has it ([SwarmReader.loadDormant]).
+/// One project, as prototype B draws it (Tony, 2026-10-28): its project chat
+/// (its Product Manager and everyone) is the screen, under the project's name
+/// and who is in it; Chat with PM at the header's end; and under the header
+/// the team in one line ([SwarmProjectStatus]), which opens the project's work
+/// and team in a sheet ([showSwarmProjectSheet]).
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
@@ -87,8 +91,13 @@ class SwarmProjectPage extends StatefulWidget {
 
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
-  bool _older = false, _openingPm = false;
-  String? _error, _olderError;
+
+  /// Chat with PM: being opened, and why the last one did not open. Its
+  /// button and its line listen; the chat is not built again for them.
+  final _pm = ValueNotifier<({bool opening, String? error})>((
+    opening: false,
+    error: null,
+  ));
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -99,6 +108,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// A read of the Swarm since the page opened has finished ([_readOnOpen]).
   /// Until then, a project the Swarm did not have may be one just made.
   bool _read = false;
+
+  /// The project chat as last built, with what it was built from: a read
+  /// that moved none of it builds none of it again ([_chatOf]).
+  ({Object inputs, Widget chat})? _chat;
 
   @override
   void didChangeDependencies() {
@@ -117,14 +130,14 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   void dispose() {
     _session?.inbox.removeListener(_inboxChanged);
     _session?.leave();
+    _pm.dispose();
     super.dispose();
   }
 
   /// The inbox tells of every change of every Swarm, and again when what
   /// waits on the person is read after one; the page is built again only
   /// when what it shows of the inbox moved. Its Swarm's own changes come
-  /// from its reader, and what waits in its chats is read off the inbox,
-  /// which has caught up by the time the page is built.
+  /// from its reader.
   void _inboxChanged() {
     final inbox = _session?.inbox;
     if (inbox == null) return;
@@ -162,35 +175,10 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   Future<void> _pull() =>
       _reader?.refresh() ?? _session?.inbox.refresh() ?? Future.value();
 
-  void _open(String conversationId) =>
-      openSwarmConversation(context, widget.swarmId, conversationId);
-
-  void _toggleOlder() {
-    setState(() => _older = !_older);
-    if (_older) unawaited(_readOlder());
-  }
-
-  /// The project's closed work: its first page, or [earlier] the next.
-  Future<void> _readOlder({bool earlier = false}) async {
-    final reader = _reader;
-    if (reader == null) return;
-    setState(() => _olderError = null);
-    try {
-      await reader.loadDormant(widget.projectId, earlier: earlier);
-    } catch (_) {
-      if (mounted) {
-        setState(() => _olderError = 'Could not load older work. Try again.');
-      }
-    }
-  }
-
   Future<void> _openPm() async {
     final reader = _reader;
-    if (reader == null || _openingPm) return;
-    setState(() {
-      _openingPm = true;
-      _error = null;
-    });
+    if (reader == null || _pm.value.opening) return;
+    _pm.value = (opening: true, error: null);
     final error = await openSwarmPm(
       context,
       reader,
@@ -198,10 +186,78 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       widget.projectId,
     );
     if (!mounted) return;
-    setState(() {
-      _openingPm = false;
-      _error = error;
-    });
+    _pm.value = (opening: false, error: error);
+  }
+
+  void _openSheet() => unawaited(
+    showSwarmProjectSheet(
+      context,
+      swarmId: widget.swarmId,
+      projectId: widget.projectId,
+    ),
+  );
+
+  /// [project]'s chat as the screen: its name over who is in it — and, with
+  /// several Swarms, which one — Chat with PM, and the team's line.
+  Widget _chatOf(SuperTabSnapshot snapshot, SuperTabProject project) {
+    final who = switch (swarmPmName(snapshot, project)) {
+      final name? => '$name and everyone',
+      null => 'Everyone in the project',
+    };
+    final inputs = (
+      project.leadConversationId,
+      project.name,
+      _several ? '$who · ${snapshot.name}' : who,
+    );
+    if (_chat case final kept? when kept.inputs == inputs) return kept.chat;
+    final chat = SwarmConversationPage(
+      key: ValueKey('swarm-project-chat-${project.leadConversationId}'),
+      swarmId: widget.swarmId,
+      conversationId: project.leadConversationId,
+      title: inputs.$2,
+      subtitle: inputs.$3,
+      action: ValueListenableBuilder(
+        valueListenable: _pm,
+        builder: (context, pm, _) => SwarmButton(
+          key: const ValueKey('swarm-pm-chat'),
+          icon: LucideIcons.messageSquare300,
+          label: 'Chat with PM',
+          busy: pm.opening,
+          busyLabel: 'Opening…',
+          onPressed: () => unawaited(_openPm()),
+        ),
+      ),
+      below: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SwarmProjectStatus(
+            swarmId: widget.swarmId,
+            projectId: widget.projectId,
+            onTap: _openSheet,
+          ),
+          ValueListenableBuilder(
+            valueListenable: _pm,
+            builder: (context, pm, _) => switch (pm.error) {
+              final error? => Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpace.screenInset,
+                  vertical: AppSpace.s,
+                ),
+                child: SwarmRow.line(
+                  error,
+                  key: const ValueKey('swarm-pm-error'),
+                  lines: 3,
+                  color: AppColors.danger,
+                ),
+              ),
+              null => const SizedBox.shrink(),
+            },
+          ),
+        ],
+      ),
+    );
+    _chat = (inputs: inputs, chat: chat);
+    return chat;
   }
 
   @override
@@ -212,124 +268,498 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     final back = SwarmBackButton(
       onPressed: () => Navigator.of(context).maybePop(),
     );
-    return Scaffold(
-      backgroundColor: AppPalette.windowBg,
-      body: SafeArea(
-        bottom: false,
-        child: session == null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [SwarmTopBar(leading: back, title: '')],
-              )
-            : ListenableBuilder(
-                // Not listed yet: the inbox tells when it is ([_inboxChanged]).
-                listenable: reader ?? Listenable.merge(const []),
-                builder: (context, _) {
-                  final snapshot = reader?.snapshot;
-                  final project = snapshot?.projects
-                      .where((p) => p.id == widget.projectId)
-                      .firstOrNull;
-                  if (snapshot != null && project != null) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        SwarmTopBar(
-                          leading: back,
-                          title: project.name,
-                          // With one Swarm, its name would say nothing new.
-                          subtitle: _several ? snapshot.name : null,
-                        ),
-                        Expanded(
-                          child: RefreshIndicator(
-                            onRefresh: _pull,
-                            child: CustomScrollView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              slivers: _body(
-                                context,
-                                session,
-                                reader!,
-                                snapshot,
-                                project,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-                  // Why there is no project to show: still reading, or a read
-                  // that failed or finished without it.
-                  final why = switch (reader) {
-                    null => _listError ?? (_read ? _gone : null),
-                    // Taken away: nothing of it stays, and none is read.
-                    SwarmReader(accessRevoked: true) => reader.error ?? _gone,
-                    SwarmReader(snapshot: null) => reader.error,
-                    _ => _read ? reader.error ?? _gone : null,
-                  };
-                  if (why == null) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _LoadingTopBar(leading: back),
-                        const Expanded(child: _Loading()),
-                      ],
-                    );
-                  }
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SwarmTopBar(leading: back, title: ''),
-                      Expanded(
-                        child: RefreshIndicator(
-                          onRefresh: _pull,
-                          child: ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                            children: [SwarmRow.line(why, lines: 3)],
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-      ),
+    if (session == null) {
+      return _Frame(top: SwarmTopBar(leading: back, title: ''));
+    }
+    return ListenableBuilder(
+      // Not listed yet: the inbox tells when it is ([_inboxChanged]).
+      listenable: reader ?? Listenable.merge(const []),
+      builder: (context, _) {
+        final snapshot = reader?.snapshot;
+        final project = snapshot?.projects
+            .where((p) => p.id == widget.projectId)
+            .firstOrNull;
+        if (snapshot != null && project != null) {
+          return _chatOf(snapshot, project);
+        }
+        // Why there is no project to show: still reading, or a read that
+        // failed or finished without it.
+        final why = switch (reader) {
+          null => _listError ?? (_read ? _gone : null),
+          // Taken away: nothing of it stays, and none is read.
+          SwarmReader(accessRevoked: true) => reader.error ?? _gone,
+          SwarmReader(snapshot: null) => reader.error,
+          _ => _read ? reader.error ?? _gone : null,
+        };
+        if (why == null) {
+          return _Frame(
+            top: _LoadingTopBar(leading: back),
+            body: const _Loading(),
+          );
+        }
+        return _Frame(
+          top: SwarmTopBar(leading: back, title: ''),
+          body: RefreshIndicator(
+            onRefresh: _pull,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              children: [SwarmRow.line(why, lines: 3)],
+            ),
+          ),
+        );
+      },
     );
   }
 
   static const _gone = 'This project is no longer in the Swarm.';
+}
 
-  /// The page's slivers: the team, Chat with PM and the project chat at
-  /// once; then its work, built row by row as it comes into view.
-  List<Widget> _body(
-    BuildContext context,
-    SwarmSession session,
-    SwarmReader reader,
-    SuperTabSnapshot snapshot,
-    SuperTabProject project,
-  ) {
-    final glance = swarmTeamGlance(snapshot, projectId: project.id);
-    final pm = swarmPmChat(reader, project.id);
-    final lead = snapshot.conversation(project.leadConversationId);
+/// The page before its project chat is: its [top] bar, and [body] under it.
+class _Frame extends StatelessWidget {
+  const _Frame({required this.top, this.body});
+
+  final Widget top;
+  final Widget? body;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return Scaffold(
+      backgroundColor: AppPalette.windowBg,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [top, if (body case final body?) Expanded(child: body)],
+        ),
+      ),
+    );
+  }
+}
+
+/// The team of a project in one line under its chat's header, as prototype
+/// B draws it: its avatars, the Product Manager first, then its line
+/// ([SwarmTeamLine]) — or, while work waits on the person, how much does in
+/// the warning colour, with only who is down of the team — and a chevron. It
+/// opens the project's work and team ([onTap]). Counted from the Home kept,
+/// its line reads "Updating…" until its Swarm is read again
+/// ([swarmHomeKept]), and nothing waits yet.
+///
+/// It follows its Swarm and the inbox itself, and is built again only when
+/// what it shows moved: the chat around it is not built again for it.
+class SwarmProjectStatus extends StatefulWidget {
+  const SwarmProjectStatus({
+    super.key,
+    required this.swarmId,
+    required this.projectId,
+    required this.onTap,
+  });
+
+  final String swarmId, projectId;
+  final VoidCallback onTap;
+
+  @override
+  State<SwarmProjectStatus> createState() => _SwarmProjectStatusState();
+}
+
+/// What [SwarmProjectStatus] shows: its team, its Product Manager, how much
+/// work waits on the person, and whether it is counted from the Home kept.
+typedef _Status = ({
+  SwarmTeamGlance glance,
+  String? pmId,
+  int waiting,
+  bool kept,
+});
+
+class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
+  SwarmSession? _session;
+  SwarmReader? _reader;
+  _Status? _status;
+
+  /// Avatars past this many would crowd out the line.
+  static const _most = 5;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final session = SwarmScope.of(context);
+    if (session == _session) return;
+    _session?.inbox.removeListener(_changed);
+    _session = session?..inbox.addListener(_changed);
+    _follow();
+    _status = _see();
+  }
+
+  @override
+  void dispose() {
+    _session?.inbox.removeListener(_changed);
+    _reader?.removeListener(_changed);
+    super.dispose();
+  }
+
+  /// Listens to the Swarm's reader the inbox has now.
+  void _follow() {
+    final reader = _session?.inbox.reader(widget.swarmId);
+    if (reader == _reader) return;
+    _reader?.removeListener(_changed);
+    _reader = reader?..addListener(_changed);
+  }
+
+  void _changed() {
+    _follow();
+    final status = _see();
+    if (status != _status) setState(() => _status = status);
+  }
+
+  _Status? _see() {
+    final session = _session, reader = _reader;
+    final snapshot = reader?.snapshot;
+    final project = snapshot?.projects
+        .where((p) => p.id == widget.projectId)
+        .firstOrNull;
+    if (session == null || snapshot == null || project == null) return null;
+    final kept = swarmHomeKept(reader);
+    final waits = swarmWaitingOnYou(session.inbox, widget.swarmId);
     final work = swarmProjectWork(
       snapshot,
       project,
       session.accountId,
-      pmChatId: pm?.id,
+      pmChatId: swarmPmChat(reader!, project.id)?.id,
     );
+    return (
+      glance: swarmTeamGlance(snapshot, projectId: project.id),
+      pmId: swarmPmId(snapshot, project),
+      // What was kept is not now, what waits on the person least of all.
+      waiting: kept
+          ? 0
+          : work.active.where((g) => waits.contains(g.id)).length,
+      kept: kept,
+    );
+  }
+
+  /// The line beside the avatars: what waits on the person, in the warning
+  /// colour, with who is down; or else the team's line.
+  Widget _line(_Status? status) {
+    if (status == null || !swarmTeamLine) return const SizedBox.shrink();
+    if (status.waiting == 0) {
+      return SwarmTeamLine(
+        status.glance,
+        size: 14,
+        spread: true,
+        kept: status.kept,
+      );
+    }
+    return Row(
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: AppColors.warning.withValues(alpha: .13),
+            borderRadius: BorderRadius.circular(AppControl.radius),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+            child: Text(
+              '${status.waiting} waiting on you',
+              maxLines: 1,
+              style: swarmChatText(
+                14,
+                color: AppColors.warning,
+                weight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: AppSpace.m),
+        Flexible(
+          child: SwarmTeamLine(
+            status.glance,
+            size: 14,
+            only: const {SwarmAgentState.down},
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final tty = Tty.of(context);
+    final status = _status;
+    final agents = status == null
+        ? const <SwarmAgentGlance>[]
+        : _pmFirst(status.glance, status.pmId).take(_most).toList();
+    return Material(
+      key: const ValueKey('swarm-team-line'),
+      color: Colors.transparent,
+      shape: Border.symmetric(horizontal: BorderSide(color: AppGlass.hair)),
+      child: InkWell(
+        onTap: widget.onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: kMinInteractiveDimensionCupertino),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.screenInset,
+              vertical: AppSpace.xs,
+            ),
+            child: Row(
+              children: [
+                if (agents.isNotEmpty) ...[
+                  SizedBox(
+                    width: 24 + 17.0 * (agents.length - 1),
+                    height: 24,
+                    child: Stack(
+                      children: [
+                        for (final (i, a) in agents.indexed)
+                          Positioned(
+                            left: 17.0 * i,
+                            child: SwarmAvatar(
+                              id: a.agent.id,
+                              name: a.name,
+                              size: 24,
+                              ring: tty.ground,
+                              picture: a.agent.avatar,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: AppSpace.m),
+                ],
+                Expanded(child: _line(status)),
+                const SizedBox(width: AppSpace.s),
+                Icon(
+                  LucideIcons.chevronRight300,
+                  size: AppIconSize.besideText,
+                  color: AppPalette.textFaint,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The project's work and team in a sheet over its chat: its work — what
+/// waits on the person, then what the team is working on, by latest activity,
+/// and older work folded under "Older", read from the Swarm's closed work
+/// when opened, as no first load has it ([SwarmReader.loadDormant]) — or its
+/// team: each agent with its avatar, its name and its role in a tag (PM, Dev
+/// or Rev), and its state in a word with the work it holds; the Product
+/// Manager first, then who needs a person.
+Future<void> showSwarmProjectSheet(
+  BuildContext context, {
+  required String swarmId,
+  required String projectId,
+}) => showModalBottomSheet<void>(
+  context: context,
+  isScrollControlled: true,
+  backgroundColor: AppGlass.rowFill,
+  barrierColor: Colors.black.withValues(alpha: .55),
+  shape: AppControl.sheetShape,
+  // On the page's own navigator, under the shell's [SwarmScope]: a chat
+  // opened from it goes over it, and back comes back to it.
+  builder: (_) => SwarmProjectSheet(swarmId: swarmId, projectId: projectId),
+);
+
+/// What [showSwarmProjectSheet] shows.
+class SwarmProjectSheet extends StatefulWidget {
+  const SwarmProjectSheet({
+    super.key,
+    required this.swarmId,
+    required this.projectId,
+  });
+
+  final String swarmId, projectId;
+
+  @override
+  State<SwarmProjectSheet> createState() => _SwarmProjectSheetState();
+}
+
+class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
+  /// The team shows, not the work.
+  bool _team = false;
+  bool _older = false;
+  String? _olderError;
+
+  void _toggleOlder(SwarmReader reader) {
+    setState(() => _older = !_older);
+    if (_older) unawaited(_readOlder(reader));
+  }
+
+  /// The project's closed work: its first page, or [earlier] the next.
+  Future<void> _readOlder(SwarmReader reader, {bool earlier = false}) async {
+    setState(() => _olderError = null);
+    try {
+      await reader.loadDormant(widget.projectId, earlier: earlier);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _olderError = 'Could not load older work. Try again.');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final session = SwarmScope.of(context);
+    final inbox = session?.inbox;
+    return SizedBox(
+      // As tall whichever part shows, and its work built as it comes into
+      // view: a sheet the size of its rows would build every row.
+      height: MediaQuery.sizeOf(context).height * .82,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+          child: session == null || inbox == null
+              ? const SizedBox.shrink()
+              // Not listed yet, the inbox tells when it is; then the Swarm's
+              // reader tells what changes.
+              : ListenableBuilder(
+                  listenable: inbox,
+                  builder: (context, _) => switch (inbox.reader(
+                    widget.swarmId,
+                  )) {
+                    final reader? => ListenableBuilder(
+                      listenable: reader,
+                      builder: (context, _) => _sheet(context, session, reader),
+                    ),
+                    null => _sheet(context, session, null),
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sheet(
+    BuildContext context,
+    SwarmSession session,
+    SwarmReader? reader,
+  ) {
+    final snapshot = reader?.snapshot;
+    final project = snapshot?.projects
+        .where((p) => p.id == widget.projectId)
+        .firstOrNull;
+    final glance = snapshot == null
+        ? null
+        : swarmTeamGlance(snapshot, projectId: widget.projectId);
+    final pmId = snapshot == null || project == null
+        ? null
+        : swarmPmId(snapshot, project);
+    final work = snapshot == null || project == null
+        ? null
+        : swarmProjectWork(
+            snapshot,
+            project,
+            session.accountId,
+            pmChatId: swarmPmChat(reader!, project.id)?.id,
+          );
     final waits = swarmWaitingOnYou(session.inbox, widget.swarmId);
     final waiting = [
-      for (final g in work.active)
+      for (final g in work?.active ?? const <SuperTabConversation>[])
         if (waits.contains(g.id)) g,
     ];
+    final Widget body;
+    if (snapshot == null) {
+      body = switch (reader?.error) {
+        final error? => Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+          child: SwarmRow.line(error, lines: 3),
+        ),
+        null => _team ? const _MatesLoading() : const _WorkLoading(),
+      };
+    } else if (_team) {
+      body = _mates(glance!, pmId);
+    } else if (work == null) {
+      body = const SizedBox.shrink();
+    } else {
+      body = RefreshIndicator(
+        onRefresh: reader!.refresh,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: _work(snapshot, reader, work, waiting),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Center(
+          child: Container(
+            width: 36,
+            height: 5,
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: AppGlass.hair,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 0, 2, 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  project?.name ?? 'Team',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: AppPalette.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              SwarmIconButton(
+                key: const ValueKey('swarm-team-close'),
+                icon: LucideIcons.x300,
+                label: 'Close',
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ],
+          ),
+        ),
+        _Parts(
+          team: _team,
+          work: switch ((work, waiting.length)) {
+            (_, > 0 && final n) => (text: '$n waiting', waits: true),
+            (final work?, _) => (text: '${work.active.length}', waits: false),
+            (null, _) => null,
+          },
+          mates: glance == null ? null : '${glance.agents.length}',
+          onTeam: (team) => setState(() => _team = team),
+        ),
+        const SizedBox(height: AppSpace.xs),
+        Expanded(child: body),
+      ],
+    );
+  }
+
+  /// The work part's slivers: what waits on the person, then what the team
+  /// works on, then "Older" — each card built row by row as it comes into
+  /// view.
+  List<Widget> _work(
+    SuperTabSnapshot snapshot,
+    SwarmReader reader,
+    ({List<SuperTabConversation> active, List<SuperTabConversation> older})
+    work,
+    List<SuperTabConversation> waiting,
+  ) {
     final working = [
       for (final g in work.active)
-        if (!waits.contains(g.id)) g,
+        if (!waiting.contains(g)) g,
     ];
-    final olderRead = reader.dormantLoaded(project.id);
-    final olderReading = reader.dormantLoading(project.id);
+    final projectId = widget.projectId;
+    final olderRead = reader.dormantLoaded(projectId);
+    final olderReading = reader.dormantLoading(projectId);
     final older = _older ? work.older : const <SuperTabConversation>[];
-    final earlier = _older && reader.hasEarlierDormant(project.id);
+    final earlier = _older && reader.hasEarlierDormant(projectId);
     SwarmRow row(SuperTabConversation g) {
       final agentId = g.assignment?['agentId'] as String?;
       return SwarmRow(
@@ -345,93 +775,28 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
               ),
         number: g.number == null ? null : '#${g.number}',
         title: g.title,
-        detail: switch (_status(snapshot, g)) {
+        detail: switch (_statusOf(snapshot, g)) {
           final status? => SwarmRow.line(status),
           null => null,
         },
-        onTap: () => _open(g.id),
+        onTap: () => openSwarmConversation(context, widget.swarmId, g.id),
       );
     }
 
-    Widget box(Widget child) => _Gutter(SliverToBoxAdapter(child: child));
+    Widget box(Widget child) => SliverToBoxAdapter(child: child);
     // A card whose rows are built only as they come into view.
-    Widget card(int count, Widget Function(int i) build) => _Gutter(
-      SliverList.builder(
-        itemCount: count,
-        itemBuilder: (context, i) =>
-            _CardRow(first: i == 0, last: i == count - 1, child: build(i)),
-      ),
+    Widget card(int count, Widget Function(int i) build) => SliverList.builder(
+      itemCount: count,
+      itemBuilder: (context, i) =>
+          _CardRow(first: i == 0, last: i == count - 1, child: build(i)),
     );
 
     return [
-      _Gutter(
-        SliverList.list(
-          children: [
-            if (swarmTeamLine) ...[
-              const SizedBox(height: 6),
-              _TeamButton(
-                glance: glance,
-                pmId: lead?.leadId,
-                onTap: () => showSwarmTeam(
-                  context,
-                  swarmId: widget.swarmId,
-                  projectId: project.id,
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            SwarmButton(
-              key: const ValueKey('swarm-pm-chat'),
-              icon: LucideIcons.messageSquare300,
-              label: 'Chat with PM',
-              style: SwarmButtonStyle.fill,
-              wide: true,
-              busy: _openingPm,
-              busyLabel: 'Opening…',
-              onPressed: () => unawaited(_openPm()),
-            ),
-            if (_error case final error?) ...[
-              const SizedBox(height: 8),
-              SwarmRow.line(
-                error,
-                key: const ValueKey('swarm-pm-error'),
-                lines: 3,
-                color: AppColors.danger,
-              ),
-            ],
-            if (lead != null) ...[
-              const SizedBox(height: 8),
-              SwarmGroup(
-                children: [
-                  SwarmRow(
-                    key: const ValueKey('swarm-lead-chat'),
-                    leading: switch (lead.leadId) {
-                      final id? => SwarmAvatar(
-                        id: id,
-                        name: snapshot.agentName(id),
-                        size: 24,
-                        picture: snapshot.agent(id)?.avatar,
-                      ),
-                      null => null,
-                    },
-                    title: 'Project chat',
-                    detail: SwarmRow.line(switch (lead.leadId) {
-                      final id? => '${snapshot.agentName(id)} and everyone',
-                      null => 'Everyone in the project',
-                    }),
-                    onTap: () => _open(lead.id),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
       if (waiting.isNotEmpty) ...[
-        box(const SwarmCaption('Waiting on you')),
+        box(const SwarmCaption('Waiting on you', first: true)),
         card(waiting.length, (i) => row(waiting[i])),
       ],
-      box(const SwarmCaption('Working on')),
+      box(SwarmCaption('Working on', first: waiting.isEmpty)),
       if (working.isEmpty)
         box(
           Padding(
@@ -455,7 +820,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             chevron: _older
                 ? LucideIcons.chevronDown300
                 : LucideIcons.chevronRight300,
-            onTap: _toggleOlder,
+            onTap: () => _toggleOlder(reader),
           );
         }
         if (i <= older.length) return row(older[i - 1]);
@@ -465,7 +830,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
           trailing: olderReading ? SwarmRow.line('Loading…') : null,
           onTap: olderReading
               ? null
-              : () => unawaited(_readOlder(earlier: true)),
+              : () => unawaited(_readOlder(reader, earlier: true)),
         );
       }),
       if (_older && _olderError != null)
@@ -492,9 +857,36 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     ];
   }
 
+  /// The team part: each agent, the Product Manager first.
+  Widget _mates(SwarmTeamGlance glance, String? pmId) {
+    if (glance.agents.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SwarmRow.line(glance.line),
+        ),
+      );
+    }
+    final agents = _pmFirst(glance, pmId);
+    return ListView.separated(
+      itemCount: agents.length,
+      separatorBuilder: (_, _) =>
+          Divider(height: 1, thickness: 1, color: AppGlass.hair),
+      itemBuilder: (context, i) => _Mate(
+        glance: agents[i],
+        role: agents[i].agent.id == pmId
+            ? 'PM'
+            : agents[i].agent.isReviewer
+            ? 'Rev'
+            : 'Dev',
+      ),
+    );
+  }
+
   /// "Nova · Needs you"-like, from the work it holds; null when nobody holds
   /// it.
-  static String? _status(SuperTabSnapshot snapshot, SuperTabConversation g) {
+  static String? _statusOf(SuperTabSnapshot snapshot, SuperTabConversation g) {
     final assignment = g.assignment;
     final status = assignment?['status'];
     if (assignment == null || status is! String) return null;
@@ -506,17 +898,89 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   }
 }
 
-/// A sliver with the page's side margins.
-class _Gutter extends StatelessWidget {
-  const _Gutter(this.sliver);
+/// The sheet's two parts, side by side: Work, with how much there is or how
+/// much waits on the person ([work]), and Team, with how many ([mates]).
+class _Parts extends StatelessWidget {
+  const _Parts({
+    required this.team,
+    required this.work,
+    required this.mates,
+    required this.onTeam,
+  });
 
-  final Widget sliver;
+  final bool team;
+  final ({String text, bool waits})? work;
+  final String? mates;
+  final ValueChanged<bool> onTeam;
 
   @override
-  Widget build(BuildContext context) => SliverPadding(
-    padding: const EdgeInsets.symmetric(horizontal: 12),
-    sliver: sliver,
-  );
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final tty = Tty.of(context);
+    Widget part(String label, ({String text, bool waits})? count, bool on) =>
+        Expanded(
+          child: Semantics(
+            button: true,
+            selected: on,
+            child: Material(
+              key: ValueKey('swarm-sheet-${label.toLowerCase()}'),
+              color: on ? AppPalette.windowBg : Colors.transparent,
+              borderRadius: BorderRadius.circular(AppControl.rowRadius),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => onTeam(label == 'Team'),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    minHeight: AppControl.heightField,
+                  ),
+                  child: Center(
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: label),
+                          if (count case final count?)
+                            TextSpan(
+                              text: '  ${count.text}',
+                              style: tty.style(
+                                size: AppType.monoLabelSize,
+                                color: count.waits
+                                    ? AppColors.warning
+                                    : AppPalette.textFaint,
+                              ),
+                            ),
+                        ],
+                      ),
+                      maxLines: 1,
+                      style: swarmChatText(
+                        15,
+                        color: on
+                            ? AppPalette.textPrimary
+                            : AppPalette.textSecondary,
+                        weight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppPalette.swarmSearchSurface,
+        borderRadius: BorderRadius.circular(AppControl.radius),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpace.xs / 2),
+        child: Row(
+          children: [
+            part('Work', work, !team),
+            part('Team', mates == null ? null : (text: mates!, waits: false), team),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// One row of a card built row by row: a [SwarmGroup] drawn a row at a time,
@@ -541,7 +1005,8 @@ class _CardRow extends StatelessWidget {
         bottom: Radius.circular(last ? 14 : 0),
       ),
       child: ColoredBox(
-        color: AppGlass.rowFill,
+        // A step from the sheet it is on.
+        color: AppPalette.windowBg,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -592,36 +1057,38 @@ class _LoadingTopBar extends StatelessWidget {
   }
 }
 
-/// The page on its way, each part the size of what replaces it: the team,
-/// Chat with PM, the project chat, and three rows of work.
+/// The page on its way: the team's line under the header, the size of what
+/// replaces it.
 class _Loading extends StatelessWidget {
   const _Loading();
 
   @override
+  Widget build(BuildContext context) => const SkeletonBlock(
+    key: ValueKey('swarm-project-loading'),
+    child: Align(
+      alignment: Alignment.topCenter,
+      child: _SkeletonRow(team: true),
+    ),
+  );
+}
+
+/// The sheet's work on its way: three rows, the shape of its cards'.
+class _WorkLoading extends StatelessWidget {
+  const _WorkLoading();
+
+  @override
   Widget build(BuildContext context) => SkeletonBlock(
-    key: const ValueKey('swarm-project-loading'),
+    key: const ValueKey('swarm-work-loading'),
     child: ListView(
       physics: const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 12),
       children: [
-        if (swarmTeamLine) ...[
-          const SizedBox(height: 6),
-          const SwarmGroup(children: [_SkeletonRow(team: true)]),
-        ],
-        const SizedBox(height: 12),
-        const Skeleton(height: 52, radius: 10),
-        const SizedBox(height: 8),
-        const SwarmGroup(children: [_SkeletonRow()]),
-        const SwarmCaption('Working on'),
+        const SwarmCaption('Working on', first: true),
         SwarmGroup(
           children: [
             for (var i = 0; i < 3; i++)
               Opacity(
                 opacity: skeletonFade(i, 3, depth: .4),
-                child: _SkeletonRow(
-                  key: ValueKey('swarm-project-loading-work-$i'),
-                  width: i.isEven ? .45 : .6,
-                ),
+                child: _SkeletonRow(width: i.isEven ? .45 : .6),
               ),
           ],
         ),
@@ -631,19 +1098,26 @@ class _Loading extends StatelessWidget {
 }
 
 /// A row on its way, the shape of a [SwarmRow] with a 24-point avatar and a
-/// line under its title; or of the team card ([team]): overlapping avatars
-/// and the team's line.
+/// line under its title; or of the team's line ([team]): overlapping avatars
+/// and the line.
 class _SkeletonRow extends StatelessWidget {
-  const _SkeletonRow({super.key, this.width = .45, this.team = false});
+  const _SkeletonRow({this.width = .45, this.team = false});
 
   final double width;
   final bool team;
 
   @override
   Widget build(BuildContext context) => ConstrainedBox(
-    constraints: const BoxConstraints(minHeight: SwarmRow.height),
+    constraints: BoxConstraints(
+      minHeight: team ? kMinInteractiveDimensionCupertino : SwarmRow.height,
+    ),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: team
+          ? const EdgeInsets.symmetric(
+              horizontal: AppSpace.screenInset,
+              vertical: AppSpace.xs,
+            )
+          : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Row(
         children: [
           Skeleton(width: team ? 24 + 17.0 * 2 : 24, height: 24, radius: 12),
@@ -687,225 +1161,7 @@ List<SwarmAgentGlance> _pmFirst(SwarmTeamGlance glance, String? pmId) => [
   ...glance.agents.where((a) => a.agent.id != pmId),
 ];
 
-/// The team in one card: its avatars overlapping, its line, a chevron.
-class _TeamButton extends StatelessWidget {
-  const _TeamButton({
-    required this.glance,
-    required this.pmId,
-    required this.onTap,
-  });
-
-  final SwarmTeamGlance glance;
-  final String? pmId;
-  final VoidCallback onTap;
-
-  /// Avatars past this many would crowd out the line.
-  static const _most = 5;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final agents = _pmFirst(glance, pmId).take(_most).toList();
-    return Material(
-      key: const ValueKey('swarm-team-line'),
-      color: AppGlass.rowFill,
-      borderRadius: BorderRadius.circular(14),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: SwarmRow.height),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Row(
-              children: [
-                if (agents.isNotEmpty) ...[
-                  SizedBox(
-                    width: 24 + 17.0 * (agents.length - 1),
-                    height: 24,
-                    child: Stack(
-                      children: [
-                        for (final (i, a) in agents.indexed)
-                          Positioned(
-                            left: 17.0 * i,
-                            child: SwarmAvatar(
-                              id: a.agent.id,
-                              name: a.name,
-                              size: 24,
-                              ring: AppGlass.rowFill,
-                              picture: a.agent.avatar,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                Expanded(child: SwarmTeamLine(glance, size: 14, spread: true)),
-                const SizedBox(width: 12),
-                Icon(
-                  LucideIcons.chevronRight300,
-                  size: 18,
-                  color: AppPalette.textFaint,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The team of one project in a sheet over its page: each agent with its
-/// avatar, its name and its role in a tag (PM, Dev or Rev), and its state in
-/// a word with the work it holds; the Product Manager first, then who needs
-/// a person.
-Future<void> showSwarmTeam(
-  BuildContext context, {
-  required String swarmId,
-  required String projectId,
-}) => showModalBottomSheet<void>(
-  context: context,
-  isScrollControlled: true,
-  backgroundColor: AppGlass.rowFill,
-  barrierColor: Colors.black.withValues(alpha: .55),
-  shape: AppControl.sheetShape,
-  // On the page's own navigator, under the shell's [SwarmScope].
-  builder: (_) => SwarmTeamSheet(swarmId: swarmId, projectId: projectId),
-);
-
-/// What [showSwarmTeam] shows.
-class SwarmTeamSheet extends StatelessWidget {
-  const SwarmTeamSheet({
-    super.key,
-    required this.swarmId,
-    required this.projectId,
-  });
-
-  final String swarmId, projectId;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final inbox = SwarmScope.of(context)?.inbox;
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * .82,
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 16),
-          child: inbox == null
-              ? const SizedBox.shrink()
-              // Not listed yet, the inbox tells when it is; then the Swarm's
-              // reader tells what changes.
-              : ListenableBuilder(
-                  listenable: inbox,
-                  builder: (context, _) => switch (inbox.reader(swarmId)) {
-                    final reader? => ListenableBuilder(
-                      listenable: reader,
-                      builder: (context, _) => _sheet(context, reader),
-                    ),
-                    null => _sheet(context, null),
-                  },
-                ),
-        ),
-      ),
-    );
-  }
-
-  Widget _sheet(BuildContext context, SwarmReader? reader) {
-    final snapshot = reader?.snapshot;
-    final project = snapshot?.projects
-        .where((p) => p.id == projectId)
-        .firstOrNull;
-    final glance = snapshot == null
-        ? null
-        : swarmTeamGlance(snapshot, projectId: projectId);
-    final pmId = snapshot == null || project == null
-        ? null
-        : swarmPmId(snapshot, project);
-    final agents = glance == null
-        ? const <SwarmAgentGlance>[]
-        : _pmFirst(glance, pmId);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Center(
-          child: Container(
-            width: 36,
-            height: 5,
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
-              color: AppGlass.hair,
-              borderRadius: BorderRadius.circular(3),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 2, 6),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  project?.name ?? 'Team',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              SwarmIconButton(
-                key: const ValueKey('swarm-team-close'),
-                icon: LucideIcons.x300,
-                label: 'Close',
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-            ],
-          ),
-        ),
-        if (snapshot == null)
-          switch (reader?.error) {
-            final error? => Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-              child: SwarmRow.line(error, lines: 3),
-            ),
-            null => const _MatesLoading(),
-          },
-        if (glance != null && glance.agents.isEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-            child: SwarmRow.line(glance.line),
-          ),
-        if (glance != null && glance.agents.isNotEmpty)
-          Flexible(
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: agents.length,
-              separatorBuilder: (_, _) =>
-                  Divider(height: 1, thickness: 1, color: AppGlass.hair),
-              itemBuilder: (context, i) => _Mate(
-                glance: agents[i],
-                role: agents[i].agent.id == pmId
-                    ? 'PM'
-                    : agents[i].agent.isReviewer
-                    ? 'Rev'
-                    : 'Dev',
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// The team sheet's agents on their way: three, the shape of [_Mate].
+/// The team part's agents on their way: three, the shape of [_Mate].
 class _MatesLoading extends StatelessWidget {
   const _MatesLoading();
 
@@ -964,7 +1220,7 @@ class _MatesLoading extends StatelessWidget {
   }
 }
 
-/// One agent of the team sheet.
+/// One agent of the team part.
 class _Mate extends StatelessWidget {
   const _Mate({required this.glance, required this.role});
 
@@ -1034,7 +1290,7 @@ class _Mate extends StatelessWidget {
                   TextSpan(
                     children: [
                       TextSpan(
-                        text: '●\u00A0',
+                        text: '● ',
                         style: TextStyle(color: swarmStateColor(glance.state)),
                       ),
                       TextSpan(

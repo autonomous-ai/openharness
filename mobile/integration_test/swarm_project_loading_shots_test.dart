@@ -14,8 +14,9 @@ import '../test/swarm/swarm_fixture.dart';
 import '../test/voice_fakes.dart' show MemoryKeyValueStore;
 
 /// A Swarm project page while it reads, on a simulator, a screenshot at each
-/// step: its rows on their way while the Swarm is read, its team sheet then,
-/// the page read, a pull, and hundreds of older chats opened.
+/// step: its header and line on their way while the Swarm is read, its sheet's
+/// work and team then, the page read on its project chat, a pull in the sheet,
+/// and hundreds of older chats opened.
 ///
 /// Every answer is scripted in memory ([FakeSwarm]) and held until the step
 /// that shows it: nothing reaches an account, a machine or the backend.
@@ -79,6 +80,20 @@ void main() {
         ],
       ),
     );
+    fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+        (_) => {
+          'messages': [
+            {
+              'id': 'm1',
+              'conversationId': leadChat,
+              'text': 'Morning: Fix login is next, then the skeleton rows.',
+              'sequence': 1,
+              'author': {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
+              'createdAt': '2026-10-28T01:00:00.000Z',
+            },
+          ],
+          'next': null,
+        };
     fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
       'decisions': <Object>[],
     };
@@ -130,15 +145,15 @@ void main() {
             builder: (context) => Stack(
               children: [
                 const SwarmProjectPage(swarmId: tab, projectId: project),
-                // The team sheet as the page opens it, before the page can.
+                // The sheet as the page opens it, before the page can.
                 Positioned(
                   right: 0,
                   bottom: 0,
                   child: SizedBox.square(
-                    key: const ValueKey('shots-team'),
+                    key: const ValueKey('shots-sheet'),
                     dimension: 1,
                     child: GestureDetector(
-                      onTap: () => showSwarmTeam(
+                      onTap: () => showSwarmProjectSheet(
                         context,
                         swarmId: tab,
                         projectId: project,
@@ -156,7 +171,10 @@ void main() {
     await walk.waitFor(walk.key('swarm-project-loading'));
     expect(find.text('This project is no longer in the Swarm.'), findsNothing);
     await walk.shot('page-reading');
-    await tester.tap(walk.key('shots-team'), warnIfMissed: false);
+    await tester.tap(walk.key('shots-sheet'), warnIfMissed: false);
+    await walk.waitFor(walk.key('swarm-work-loading'));
+    await walk.shot('work-reading');
+    await tester.tap(walk.key('swarm-sheet-team'));
     await walk.waitFor(walk.key('swarm-team-loading'));
     await walk.shot('team-reading');
 
@@ -165,23 +183,37 @@ void main() {
     await walk.shot('team-read');
     await tester.tap(walk.key('swarm-team-close'));
     await walk.waitFor(walk.key('swarm-pm-chat'));
+    await walk.waitFor(find.textContaining('Fix login is next'));
     await walk.shot('page-read');
 
+    // The sheet's work: a pull reads the Swarm again, then the older chats.
+    await tester.tap(walk.key('swarm-team-line'));
+    await walk.waitFor(walk.key('swarm-conversation-g0'));
     pulled = Completer<void>();
-    await tester.fling(walk.key('swarm-pm-chat'), const Offset(0, 300), 1000);
-    await walk.shot('page-pulled', settle: 500);
+    await tester.fling(
+      walk.key('swarm-conversation-g0'),
+      const Offset(0, 300),
+      1000,
+    );
+    await walk.shot('work-pulled', settle: 500);
     pulled.complete();
     await walk.wait();
 
+    final sheetList = find
+        .descendant(
+          of: find.byType(SwarmProjectSheet),
+          matching: find.byType(Scrollable),
+        )
+        .first;
     await tester.tap(walk.key('swarm-older'));
     await walk.waitFor(walk.key('swarm-conversation-old-0'));
-    await tester.drag(find.byType(Scrollable).first, const Offset(0, -500));
+    await tester.drag(sheetList, const Offset(0, -500));
     await walk.shot('older-open');
     await tester.scrollUntilVisible(
       walk.key('swarm-conversation-old-299'),
       600,
       maxScrolls: 100,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: sheetList,
     );
     await walk.shot('older-last');
   });

@@ -411,6 +411,44 @@ void main() {
     },
   );
 
+  testWidgets(
+    'a project opened from the Home kept reads Updating… under its header '
+    'until its Swarm is read again',
+    (tester) async {
+      final (:host, :fake) = await coldStart(tester);
+      final read = Completer<void>();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) async {
+        await read.future;
+        return firstLoad();
+      };
+      await tester.tap(key('swarm-project-$tab-$project'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+
+      final line = key('swarm-team-line');
+      Finder inLine(Finder matching) =>
+          find.descendant(of: line, matching: matching);
+      // Kept: Nova waiting on the person in Fix login.
+      expect(inLine(find.text('Updating…')), findsOneWidget);
+      expect(
+        inLine(find.textContaining('waiting')),
+        findsNothing,
+        reason: 'neither the team nor what waits on the person is now',
+      );
+      expect(inLine(find.byType(SwarmAvatar)), findsWidgets, reason: 'who');
+
+      read.complete();
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      // Read again: nobody holds work.
+      expect(inLine(find.text('Updating…')), findsNothing);
+      expect(inLine(find.text('All idle')), findsOneWidget);
+      stopReads(host);
+    },
+  );
+
   testWidgets('the drawer hides the team counts kept too', (tester) async {
     await coldStart(tester);
 

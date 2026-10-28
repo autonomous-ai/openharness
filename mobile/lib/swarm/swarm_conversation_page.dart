@@ -65,9 +65,24 @@ class SwarmConversationPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.conversationId,
+    this.title,
+    this.subtitle,
+    this.action,
+    this.below,
   });
 
   final String swarmId, conversationId;
+
+  /// The header's lines in place of the chat's name and its project: a
+  /// project's chat is its project's screen, under the project's name and
+  /// who is in it (`swarm_project_page.dart`).
+  final String? title, subtitle;
+
+  /// At the header's end: a project's Chat with PM.
+  final Widget? action;
+
+  /// Under the header: a project's team in one line.
+  final Widget? below;
 
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
@@ -458,7 +473,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _header(context, tty, title: inbox.loaded ? 'Chat' : null),
+        _header(
+          context,
+          tty,
+          title: widget.title ?? (inbox.loaded ? 'Chat' : null),
+          project: widget.subtitle,
+        ),
+        ?widget.below,
         Expanded(
           child: inbox.loaded
               ? _said(_notOpen)
@@ -484,7 +505,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// The back button, then the chat's name and its project under it — or,
   /// while the chat is not known yet ([title] null), placeholders of their
-  /// size.
+  /// size — and the page's [SwarmConversationPage.action] at its end.
   Widget _header(
     BuildContext context,
     Tty tty, {
@@ -492,7 +513,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     String? project,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
-    padding: const EdgeInsets.fromLTRB(0, 2, 8, 2),
+    padding: const EdgeInsets.fromLTRB(0, 2, _headerEnd, 2),
     child: Row(
       children: [
         TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
@@ -517,6 +538,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   children: [
                     Text(
                       title,
+                      key: const ValueKey('swarm-title'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: tty.style(
@@ -537,9 +559,22 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   ],
                 ),
         ),
+        // The screen's side margin from its edge: the header's own end
+        // inset, and the rest of the margin.
+        if (widget.action case final action?)
+          Padding(
+            padding: const EdgeInsetsDirectional.only(
+              start: AppSpace.s,
+              end: AppSpace.screenInset - _headerEnd,
+            ),
+            child: action,
+          ),
       ],
     ),
   );
+
+  /// The header's inset at its end.
+  static const _headerEnd = 8.0;
 
   /// The header and the composer follow [view] — the header [c] too, until
   /// the chat is known; the messages, and what is said under them, follow
@@ -559,12 +594,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         builder: (context, _) => _header(
           context,
           tty,
-          title: view.known || c.state == SwarmChatState.lost
-              ? view.title
-              : null,
-          project: view.project,
+          title:
+              widget.title ??
+              (view.known || c.state == SwarmChatState.lost
+                  ? view.title
+                  : null),
+          project: widget.subtitle ?? view.project,
         ),
       ),
+      ?widget.below,
       Expanded(
         child: Stack(
           children: [

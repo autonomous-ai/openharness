@@ -13,10 +13,11 @@ const swarmHomeMark = true;
 /// (`swarm_page.dart`).
 const swarmNeedsFirst = true;
 
-/// 3. A project: Chat with PM pinned first, then the Lead's chat, then work
-/// by latest activity, with quiet and archived work behind "Older"; the team
-/// in one line at the top (`swarm_project_page.dart`). True shows the team
-/// line.
+/// 3. A project opens on its project chat, Chat with PM at the header's end,
+/// and a line under the header that opens its work (by latest activity, quiet
+/// and archived work behind "Older") and its team in a sheet: prototype B
+/// (Tony, 2026-10-28; `swarm_project_page.dart`). True shows what waits on
+/// the person and the team's counts on that line; false, its faces only.
 const swarmTeamLine = true;
 
 /// 4. Posting: text, @mentions and files — from the photo library, the camera

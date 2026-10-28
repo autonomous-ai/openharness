@@ -15,8 +15,9 @@ import 'package:harness_mobile/swarm/swarm_need_rows.dart';
 /// otherwise, so no CI or simulator run reaches a real account.
 ///
 /// It reads: Swarm on (in memory only; the saved switch is left as it was),
-/// Swarm Home, Harness from its drawer and the terminal's mark back to Swarm
-/// Home, the first project, its project chat. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
+/// Swarm Home and its drawer, Harness through the first listed agent's notice
+/// (the drawer has no way there) and the terminal's mark back to Swarm Home,
+/// the first project, its project chat. It writes only when `SWARM_E2E_CHAT` names a test chat whose open
 /// decision asks this person: there it posts one short line and answers that
 /// decision with its first option. Nothing else is written.
 ///
@@ -103,42 +104,60 @@ void main() {
       experimentalFeaturesStore.value = {...saved, PhoneExperiment.swarm};
 
       // ① Swarm Home at the root: needs first, Chat with PM, the projects.
-      // Harness from its drawer; the terminal's mark goes back to Swarm Home.
+      // Its drawer, with no way to Harness; Harness through an agent's
+      // "agent finished" notice, tapped, as the person reaches it; the
+      // terminal's mark goes back to Swarm Home.
       await waitFor(keyStarting('swarm-project-'), seconds: 60);
       await shot('swarm');
       await tester.tap(key('swarm-menu'));
-      await waitFor(key('swarm-drawer-harness'));
+      await waitFor(key('swarm-drawer-home'));
+      expect(key('swarm-drawer-harness'), findsNothing);
       await shot('drawer');
-      await tester.tap(key('swarm-drawer-harness'));
+      await tester.tap(key('swarm-drawer-home'));
+      await waitGone(key('swarm-drawer-home'));
+      final notifier = tester
+          .widget<PhoneShell>(find.byType(PhoneShell))
+          .notifier;
+      ({String machineId, String agentId})? listed() => [
+        for (final machine in notifier.machineStates.values)
+          for (final agent in machine.agents)
+            (machineId: machine.machine.machineId, agentId: agent.id),
+      ].firstOrNull;
+      for (var i = 0; i < 300 && listed() == null; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      final agent = listed();
+      if (agent == null) {
+        fail('No agent listed on your computers: start one, then run again.');
+      }
+      notifier.agentNotices.system.opened.value = agent;
       await waitFor(key('swarm-mark'));
       await shot('home-mark');
       await tester.tap(key('swarm-mark'));
       await waitFor(keyStarting('swarm-project-'), seconds: 60);
 
-      // ② The first project, then its Product Manager chat: read only.
+      // ② The first project: it opens on its project chat, read only.
       await tester.tap(keyStarting('swarm-project-').first);
       await waitFor(key('swarm-pm-chat'));
-      await shot('project');
-      await tester.tap(key('swarm-lead-chat'));
       await waitFor(key('swarm-messages'));
       await wait(3000);
-      await shot('product-manager-chat');
+      await shot('project');
 
       if (chat.isEmpty) return;
 
       // ③ The named test chat, from its decision on Swarm Home: one line
       // posted, and the decision answered with its first option.
-      // Back twice, as the pages' own chevrons do: the shell's navigator.
-      tester.state<NavigatorState>(
-          find
-              .descendant(
-                of: find.byType(PhoneShell),
-                matching: find.byType(Navigator),
-              )
-              .first,
-        )
-        ..pop()
-        ..pop();
+      // Back, as the page's own chevron does: the shell's navigator.
+      tester
+          .state<NavigatorState>(
+            find
+                .descendant(
+                  of: find.byType(PhoneShell),
+                  matching: find.byType(Navigator),
+                )
+                .first,
+          )
+          .pop();
       await wait(1500);
       final card = find.byWidgetPredicate(
         (w) =>

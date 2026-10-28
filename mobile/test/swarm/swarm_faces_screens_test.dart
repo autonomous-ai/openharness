@@ -155,7 +155,7 @@ void main() {
     expect(asked, [Uri.parse(leadPhoto)]);
   });
 
-  testWidgets("the project page shows each worker's chosen face", (
+  testWidgets("the project's work shows each worker's chosen face", (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1170, 2532);
@@ -164,6 +164,8 @@ void main() {
       tester,
       const SwarmProjectPage(swarmId: tab, projectId: project),
     );
+    await tester.tap(find.byKey(const ValueKey('swarm-team-line')));
+    await tester.pumpAndSettle();
     expect(within('swarm-conversation-g1', find.text('🦉')), findsOneWidget);
     // Nobody chose one: the initial, as before.
     expect(within('swarm-conversation-g2', find.text('P')), findsOneWidget);

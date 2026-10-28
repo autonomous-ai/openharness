@@ -22,9 +22,15 @@ class SwarmTeamLine extends StatelessWidget {
     this.size = 13.5,
     this.spread = false,
     this.kept = false,
+    this.only,
   });
 
   final SwarmTeamGlance glance;
+
+  /// Only the parts of these states, and nothing when it has none of them:
+  /// the project's line keeps who is down beside what waits on the person.
+  /// Null draws every part.
+  final Set<SwarmAgentState>? only;
 
   /// Counted from the Home kept, not read again yet ([swarmHomeKept]).
   final bool kept;
@@ -43,7 +49,15 @@ class SwarmTeamLine extends StatelessWidget {
       fontSize: size,
       height: 1.35,
     );
-    final parts = glance.parts;
+    final parts = switch (only) {
+      final only? => [
+        for (final part in glance.parts)
+          if (only.contains(part.state)) part,
+      ],
+      null => glance.parts,
+    };
+    // None of those it is to show: nothing, not "All idle".
+    if (only != null && parts.isEmpty && !kept) return const SizedBox.shrink();
     if (kept || parts.isEmpty) {
       return Text(
         kept ? 'Updating…' : glance.line,
@@ -77,7 +91,9 @@ class SwarmTeamLine extends StatelessWidget {
           ],
         ],
       ),
-      semanticsLabel: glance.line,
+      semanticsLabel: only == null
+          ? glance.line
+          : parts.map((part) => part.text).join(' · '),
     );
   }
 }
