@@ -37,6 +37,11 @@ export function noteProjectReports(state: SuperTabState, messages: MessageDraft[
 /** What each dirty conversation's report reaches, by conversation: what a wake-up asks the Lead to acknowledge. */
 const throughOf = (groups: Conversation[]) => Object.fromEntries(groups.map(g => [g.id, g.reportSeq ?? 0]).sort(([a], [b]) => a! < b! ? -1 : 1))
 
+/** How long an update request the Lead's host received holds later ones back while unanswered. On 26 Oct one was never
+ *  answered and held its project's every later request: its reports were never summarized, and 372 archived conversations
+ *  could not go quiet for two days (prod, 2026-10-28). One not yet received (its host offline) holds them as before. */
+export const UNANSWERED_REQUEST_MS = 2 * 60 * 60_000
+
 export function projectUpdateRequest(state: SuperTabState, target: Agent, now: number): MessageDraft | null {
   // An older Swarm without stored projects is one synthesized project. It keeps no report progress (noteProjectReports),
   // so its Lead is woken only for lost work (liveness.ts), which replaced the wake-up for workers down two hours.

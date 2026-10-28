@@ -680,6 +680,52 @@ class SuperTabController extends ChangeNotifier {
 
   bool hasOlder(String id) => _before[id] != null;
 
+  /// Conversations whose reader is scrolled up ([readingBack]).
+  final _readingBack = <String>{};
+
+  /// Conversations with messages after the newest held that no read has
+  /// brought yet ([hasNewer]).
+  final _newer = <String>{};
+
+  /// Conversations whose next read takes the latest page whole
+  /// ([showLatest]).
+  final _latestWanted = <String>{};
+
+  /// How many pages joined below the rows of a reader scrolled up, by
+  /// conversation.
+  final _pagesBelow = <String, int>{};
+
+  /// At most this many pages join below a reader scrolled up: past them the
+  /// rest waits for [showLatest], so a long burst is not all held.
+  static const _pagesBelowReader = 3;
+
+  /// Forgets reading back in [id], or in every conversation.
+  void _forgetNewer([String? id]) {
+    for (final kept in [_readingBack, _newer, _latestWanted]) {
+      id == null ? kept.clear() : kept.remove(id);
+    }
+    id == null ? _pagesBelow.clear() : _pagesBelow.remove(id);
+  }
+
+  /// The reader of [id] scrolled up, or back to its end. While they read
+  /// back, a read that finds more than a page new keeps the rows they are
+  /// reading and adds the next page below; [showLatest] reads the rest.
+  void readingBack(String id, bool reading) =>
+      reading ? _readingBack.add(id) : _readingBack.remove(id);
+
+  /// Whether more messages came after the newest held than reads brought.
+  bool hasNewer(String id) => _newer.contains(id);
+
+  /// Brings [id]'s newest messages: when more are waiting than reads
+  /// brought, the latest page replaces what is held.
+  Future<void> showLatest(String id) async {
+    _readingBack.remove(id);
+    await _reading[(id, false)];
+    if (_disposed || !_newer.contains(id)) return;
+    _latestWanted.add(id);
+    await _readMessages(id);
+  }
+
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
   int _loadedMessageSequence(String id) =>
@@ -880,6 +926,7 @@ class SuperTabController extends ChangeNotifier {
     snapshot = null;
     _parts = null;
     _messages.clear();
+    _forgetNewer();
     _quoted.clear();
     _quoting.clear();
     _sent.clear();
@@ -1080,11 +1127,87 @@ class SuperTabController extends ChangeNotifier {
   SuperTabConversation? pmChat(String projectId) => snapshot?.conversations
       .where(
         (g) =>
+            !g.isBuddyChat &&
             g.projectId == projectId &&
             g.audience?.length == 1 &&
             g.audience!.single == accountId,
       )
       .firstOrNull;
+
+  /// Whether the Swarm has Buddies on: each person's Buddy chats take Chat
+  /// with PM's place (spec: Buddies, 10-28).
+  bool get buddiesOn => snapshot?.buddiesEnabled == true;
+
+  /// The signed-in person's chat with their Buddy in [projectId]. It stays
+  /// after the Buddy is removed, so adding one again reopens its history.
+  SuperTabConversation? buddyChat(String projectId) => snapshot?.conversations
+      .where(
+        (g) =>
+            g.isBuddyChat &&
+            g.projectId == projectId &&
+            g.buddyOwnerId == accountId,
+      )
+      .firstOrNull;
+
+  /// The signed-in person's Buddy in [projectId]; null when they have none.
+  SuperTabAgent? buddy(String projectId) => snapshot?.agents
+      .where(
+        (a) => a.isBuddy && a.buddyOf == accountId && a.projectId == projectId,
+      )
+      .firstOrNull;
+
+  /// The newest start of the reader's Buddy in [projectId]: under way while
+  /// it has neither a harness nor an error, failed with an error.
+  Map<String, dynamic>? buddyStart(String projectId) {
+    final chat = buddyChat(projectId)?.id;
+    return snapshot?.buddyStarts.reversed.where((start) {
+      final request = superTabMap(start['request']);
+      return superTabMap(request['buddyOf'])['personId'] == accountId &&
+          (request['projectId'] == projectId ||
+              (chat != null && request['conversationId'] == chat));
+    }).firstOrNull;
+  }
+
+  /// Adds the reader's Buddy in [projectId] on [machineId] with [engine], and
+  /// opens its chat. False when refused: [operationError] says why.
+  Future<bool> addBuddy({
+    required String projectId,
+    required String machineId,
+    required String engine,
+  }) async {
+    final result = await command({
+      'type': 'buddy.create',
+      'projectId': projectId,
+      'machineId': machineId,
+      'engine': engine,
+    });
+    if (result == null) return false;
+    final id = result['conversationId'];
+    if (id is String) await select(id);
+    return true;
+  }
+
+  /// Removes the reader's Buddy in [projectId]; its chat stays.
+  Future<bool> removeBuddy(String projectId) async =>
+      await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
+
+  /// Whether [group] is out of the app: with Buddies on there is no private
+  /// channel to the PM (Ken, 10-28), so no private chat but a Buddy chat is
+  /// listed or opened, the reader's old Chat with PM included.
+  bool hiddenByBuddies(SuperTabConversation group) =>
+      buddiesOn && group.audience != null && !group.isBuddyChat;
+
+  /// Where conversation [id] opens: a chat [hiddenByBuddies] opens its
+  /// project's chat, where the PM is talked to; any other opens itself.
+  String _shownFor(String id) {
+    final group = snapshot?.conversation(id);
+    if (group == null || !hiddenByBuddies(group)) return id;
+    return snapshot!.projects
+            .where((p) => p.id == group.projectId)
+            .firstOrNull
+            ?.leadConversationId ??
+        id;
+  }
 
   /// How many of [group]'s messages from others came after the reader's read
   /// mark: exact once the messages held reach back to the mark
@@ -1113,15 +1236,18 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The unread messages in the reader's own PM chats, for the Swarm badge.
-  int get pmUnread => [
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (pmChat(project.id) case final chat?) unreadCount(chat),
-  ].fold(0, (a, b) => a + b);
+  int get pmUnread => buddiesOn
+      ? 0
+      : [
+          for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+            if (pmChat(project.id) case final chat?) unreadCount(chat),
+        ].fold(0, (a, b) => a + b);
 
   /// Reads each PM chat whose count is still open ([_pmCountOpen]), page by
   /// page, so the count is exact up to [kCountCap]; nothing once every chat's
   /// count is known.
   void _readUnreadPmChats() {
+    if (buddiesOn) return;
     for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
       final chat = pmChat(project.id);
       if (chat == null || !_pmCountOpen(chat) || !_pmCounting.add(chat.id)) {
@@ -1208,6 +1334,12 @@ class SuperTabController extends ChangeNotifier {
   /// while a person who left and rejoined, whom the old chat no longer admits,
   /// gets a new one.
   Future<bool> openPmChat(String projectId) async {
+    // With Buddies on, the reader's way to talk privately is their Buddy:
+    // there is no new Chat with PM (spec: Buddies, 10-28).
+    if (buddiesOn) {
+      final chat = buddyChat(projectId);
+      return chat != null && await select(chat.id);
+    }
     if (pmChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
     final email = me?.email;
@@ -1244,6 +1376,7 @@ class SuperTabController extends ChangeNotifier {
       // The reader moved on while this was read: it must not pull them back.
       if (ask != _selectRequest) return false;
     }
+    id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
     final group = snapshot!.conversation(id)!;
@@ -1386,6 +1519,7 @@ class SuperTabController extends ChangeNotifier {
         if (!allowed.contains(selectedId)) {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
+        selectedId = _shownFor(selectedId);
         if (localAccessChanged) _saveSoon();
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.
@@ -1693,7 +1827,7 @@ class SuperTabController extends ChangeNotifier {
     }
     // A saved page may be stale in its receipts as well as short of new
     // messages: the first read after it takes the latest page whole.
-    if (_showingSaved) return '';
+    if (_showingSaved || _latestWanted.contains(id)) return '';
     final tail = _messages[id]?.lastOrNull?.sequence;
     return tail != null ? '?after=$tail' : '';
   }
@@ -1738,6 +1872,7 @@ class SuperTabController extends ChangeNotifier {
       snapshot = null;
       _parts = null;
       _messages.clear();
+      _forgetNewer();
       _quoted.clear();
       _quoting.clear();
       _poll?.cancel();
@@ -1782,6 +1917,7 @@ class SuperTabController extends ChangeNotifier {
           ? known.last.sequence
           : null;
       final query = _query(id, older: older);
+      final latest = !older && _latestWanted.remove(id);
       final from = _before[id];
       final first = early != null && early.query == query ? early.page : null;
       var answer = first != null
@@ -1795,7 +1931,31 @@ class SuperTabController extends ChangeNotifier {
       // Recorded only once the rows are refreshed: a read that fails leaves
       // the change for the next poll.
       final reactionSeq = older ? null : answer['reactionSeq'];
-      if (!_disposed &&
+      // More than a page arrived after the newest held (back from another
+      // conversation, or from sleep): the page after it would show messages
+      // from hours ago as the newest. The latest page replaces what is held,
+      // unless the reader is scrolled up: their rows stay, the page joins
+      // below them, and the rest waits for [showLatest].
+      final skipped = query.startsWith('?after=') && answer['next'] != null;
+      final keepPlace = skipped && _readingBack.contains(id);
+      final full = keepPlace && (_pagesBelow[id] ?? 0) >= _pagesBelowReader;
+      if (!_disposed && skipped && !keepPlace) {
+        answer = await request('GET', _messagesPath(id));
+      } else if (!_disposed && keepPlace) {
+        // A changed reaction refreshes the page ending at the newest held:
+        // the latest page, under rows read back, would leave a gap.
+        final shown = reacted
+            ? (await request(
+                    'GET',
+                    '${_messagesPath(id)}?before=${tail! + 1}',
+                  ))['messages']
+                  as List
+            : const [];
+        answer = {
+          ...answer,
+          'messages': [...shown, if (!full) ...answer['messages'] as List],
+        };
+      } else if (!_disposed &&
           !older &&
           (!light || reacted) &&
           tail != null &&
@@ -1837,7 +1997,8 @@ class SuperTabController extends ChangeNotifier {
       }
       // The first read over a saved page replaces it: merged, the saved
       // page would leave a gap when more than a page arrived since.
-      final replacing = _showingSaved && !older;
+      final replacing =
+          (_showingSaved || latest || (skipped && !keepPlace)) && !older;
       if (replacing) _rows.remove(id);
       _keepRows(id, answer['messages'] as List);
       final combined = {
@@ -1899,6 +2060,13 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
+      if (keepPlace) {
+        _newer.add(id);
+        if (!full) _pagesBelow[id] = (_pagesBelow[id] ?? 0) + 1;
+      } else if (!older) {
+        _newer.remove(id);
+        _pagesBelow.remove(id);
+      }
       _dropShownSends(id);
       if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
       if (older || replacing || !_before.containsKey(id)) {
@@ -1916,6 +2084,7 @@ class SuperTabController extends ChangeNotifier {
       if (failure is SuperTabFailure &&
           const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
         _messages.remove(id);
+        _forgetNewer(id);
         _quoted.remove(id);
         _quoting.remove(id);
         unawaited(refresh());

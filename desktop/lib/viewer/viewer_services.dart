@@ -40,7 +40,10 @@ class ViewerServices {
     final store = keys ?? ViewerKeyStore();
     final auth = createViewerAuth(
       session: session,
-      api: DirectAuthApi(config: config),
+      api: DirectAuthApi(
+        config: config,
+        harnessSessionLabel: viewerSessionLabel(),
+      ),
     );
     return ViewerServices._(
       keys: store,

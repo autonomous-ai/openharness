@@ -6,7 +6,6 @@ import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
 import {
   backfillMachineAuthMode,
   backfillMachinePresenceTurnsStarted,
-  ensureSchema,
   migrateAutonomousEnvironment,
   migrateMachineRename,
   migrateUserIdentityByEmail,
@@ -15,10 +14,8 @@ import {
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
-import { ensureProductUsageExpiry } from './lib/productUsage.js'
-import { ensureTerminalExpiry } from './superTabs/terminal.js'
-import { ensureMentionExpiry } from './superTabs/mentions.js'
-import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
+import { releaseSchema } from './lib/db/schemaRelease.js'
+import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
@@ -38,11 +35,7 @@ async function start(): Promise<void> {
   await migrateUserIdentityByEmail()
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
-  ensureSchema()
-  await ensureProductUsageExpiry()
-  await ensureTerminalExpiry(prisma)
-  await ensureMentionExpiry(prisma)
-  await ensurePartExpiry(prisma)
+  await releaseSchema()
   // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
   await markFinishedGroups(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge

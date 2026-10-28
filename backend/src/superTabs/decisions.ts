@@ -3,6 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
  *  through Chat with PM. Called inside SuperTabStore's transactions. */
+import { isBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -11,6 +12,7 @@ import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, t
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
+import { groupsBy } from './parts/indexed.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_QUESTIONS = 10
@@ -103,11 +105,13 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
 }
 
 /** The Lead's one line saying what it chose, in the person's own Chat with PM of that project: only they read it, and they
- *  were asked the question. None when they have no open one with the Lead in it. */
+ *  were asked the question. None when they have no open one with the Lead in it. While Buddies are on, Chat with PM is
+ *  read-only and decisions live with the Buddy (Ken's spec, 10-28): the line goes to their Buddy chat instead, or nowhere. */
 function delegatedLine(state: SuperTabState, actor: Actor, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
   const lead = state.agents.find(a => a.id === leadId)
-  const chat = state.conversations.find(c => !c.archived && c.audience?.people.length === 1 && c.audience.people[0]!.id === asked.personId
-    && groupProject(state, c).id === projectId && c.agentIds.includes(leadId) && canReadGroup(state, actor, c))
+  const theirs = (c: Conversation) => !c.archived && c.audience?.people.length === 1 && c.audience.people[0]!.id === asked.personId
+    && groupProject(state, c).id === projectId && canReadGroup(state, actor, c)
+  const chat = state.conversations.find(c => theirs(c) && (state.buddies ? isBuddyChat(c) : !isBuddyChat(c) && c.agentIds.includes(leadId)))
   if (!lead || !chat) return null
   const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
   const question = asked.question.replace(/\s+/g, ' ')
@@ -200,10 +204,9 @@ async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids:
   const found = new Map(state.conversations.filter(c => named.has(c.id)).map(c => [c.id, c]))
   const missing = [...named].filter(id => !found.has(id))
   if (!missing.length) return found
-  const rows = only
-    ? await tx.swarmGroup.aggregateRaw({ pipeline: [{ $match: { tabId, deleted: false, key: { $in: missing } } },
-      { $project: { _id: 0, key: 1, ...Object.fromEntries(only.map(field => [`data.${field}`, 1])) } }] }) as unknown as Array<{ key: string; data: unknown }>
-    : await tx.swarmGroup.findMany({ where: { tabId, key: { in: missing }, deleted: false }, select: { key: true, data: true } })
+  // By id through its index (parts/indexed.ts): a person's read counts these on each poll.
+  const rows = await groupsBy(tx, 'key', [{ $match: { tabId, deleted: false, key: { $in: missing } } },
+    { $project: { _id: 0, key: 1, ...only ? Object.fromEntries(only.map(field => [`data.${field}`, 1])) : { data: 1 } } }]) as unknown as Array<{ key: string; data: unknown }>
   for (const row of rows) found.set(row.key, row.data as Conversation)
   return found
 }
