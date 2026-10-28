@@ -18,6 +18,8 @@ export const GROUP_INDEX = {
   project: { tabId: 1, projectId: 1, dormant: 1, lastActivityAt: 1 },
   dormancy: { tabId: 1, dormant: 1, changedAt: 1 },
   changes: { tabId: 1, changedAt: 1 },
+  /** Every live group: the host signature's index. */
+  live: { tabId: 1, deleted: 1, key: 1, hostDigest: 1, dormant: 1 },
 } as const
 export type GroupIndex = keyof typeof GROUP_INDEX
 

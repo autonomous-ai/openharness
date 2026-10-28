@@ -41,13 +41,13 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
   const extra: Part<GroupData>[] = []
   const add = (groups: Part<GroupData>[]) => { for (const g of groups) if (!held.has(g.key)) { held.add(g.key); extra.push(g) } }
   if (named.allGroups || named.agentIds?.length || named.projectIds?.length) {
-    const dormant = await view.get(tabId, 'dormant', 'main', () => store.loadGroups(db, tabId, { dormant: true }))
+    const dormant = await view.get(tabId, 'dormant', 'main', () => store.loadGroups(db, tabId, 'dormancy', { dormant: true }))
     const agents = new Set(named.agentIds ?? []), projects = new Set(named.projectIds ?? [])
     // A group stored with no project belongs to the default one (projects.ts groupProject).
     add(named.allGroups ? dormant : dormant.filter(g => g.data!.agentIds.some(id => agents.has(id)) || projects.has(g.data!.projectId ?? 'lead')))
   }
   for (const id of named.groupIds ?? []) {
-    if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, { key: id })))
+    if (!held.has(id)) add(await view.get(tabId, `group:${id}`, 'main', () => store.loadGroups(db, tabId, 'key', { key: id })))
   }
   const startIds = new Set(named.startIds ?? []), startAgents = new Set(named.startAgentIds ?? [])
   const agentOf = (start: AgentStart) => start.harnessId ? stableId(start.request.machineId, start.harnessId) : null

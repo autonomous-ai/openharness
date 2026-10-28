@@ -80,11 +80,12 @@ async function scene() {
     return { ...row, id: `${tabId}:${key}`, key, projectId, dormant, ordinal: 100 + i, changedAt: new Date(MIGRATED - (i + 1) * 60_000),
       lastActivityAt: new Date(MIGRATED - (i % 28) * DAY), data: { ...row.data as object, id: key, projectId, title: key, brief: 'b'.repeat(2000) } }
   })
-  const quietLead = bulk('ql', QUIET_LEAD, 'lead', true), quietOther = bulk('qo', QUIET_OTHER, other, true)
-  await db.swarmGroup.createMany({ data: [...quietLead, ...quietOther, ...bulk('op', OPEN, 'lead', false)] })
+  const quietLead = bulk('ql', QUIET_LEAD, 'lead', true), quietOther = bulk('qo', QUIET_OTHER, other, true), open = bulk('op', OPEN, 'lead', false)
+  await db.swarmGroup.createMany({ data: [...quietLead, ...quietOther, ...open] })
   // Every project's Lead conversation and the Leads' one: a host's light load always reads them (parts/light.ts).
   const leadConversations = [...state.projects!.map(p => p.leadConversationId), ...state.leadsConversationId ? [state.leadsConversationId] : []]
-  return { tabId, machineId, lead, worker, web, done, other, empty, quietLead, quietOther, leadConversations }
+  const active = [...leadConversations, web, done, ...open.map(r => r.key)]
+  return { tabId, machineId, lead, worker, web, done, other, empty, quietLead, quietOther, leadConversations, active }
 }
 
 /** One read as the profiler saw it: its command and every getMore (they share a query hash). */
@@ -129,6 +130,11 @@ const mentions = (shape: string, field: string) => shape.includes(`"$${field}"`)
 /** The reads whose filter mentions every field of `fields`. */
 const where = (reads: Read[], fields: string[]) => reads.filter(r => fields.every(f => mentions(r.shape, f)))
 
+/** Each read examined only the documents it returned. */
+function expectOnlyReturned(reads: Read[]) {
+  for (const read of reads) expect(read.docsExamined, JSON.stringify(read)).toBeLessThanOrEqual(read.returned)
+}
+
 /** Named its index: never raced against the others, never through $expr. */
 function expectIndexed(reads: Read[]) {
   for (const read of reads) {
@@ -159,6 +165,30 @@ describe('hot SwarmGroup reads name their index and read only what they return (
     const docs = reads.reduce((n, r) => n + r.docsExamined, 0)
     // The worker's conversation is also running work: read once per branch at most.
     expect(docs, JSON.stringify(reads)).toBeLessThanOrEqual(groups.length + 1)
+  })
+
+  it('a command loads the Swarm\'s open conversations and those it names, each read through its index', async () => {
+    const quiet = s.quietLead[5]!.key
+    for (const [named, expected] of [
+      [{ groupIds: [quiet] }, [...s.active, quiet]],
+      // An agent's conversations and a project's, quiet ones too (store.ts moreNamed, namedFor).
+      [{ agentIds: [s.worker], projectIds: [s.other] }, [...s.active, ...s.quietOther.map(r => r.key)]],
+    ] as const) {
+      let keys: string[] = []
+      const reads = await profiled(async () => { keys = (await db.$transaction(tx => parts.loadActive(tx, s.tabId, named))).groups.map(g => g.key) })
+      expect(keys.sort()).toEqual([...new Set(expected)].sort())
+      expectIndexed(reads)
+      expectOnlyReturned(reads)
+    }
+  })
+
+  it('the read cache\'s base loads the Swarm\'s open conversations through the dormancy index', async () => {
+    let keys: string[] = []
+    const reads = await profiled(async () => { keys = (await db.$transaction(tx => parts.loadReadBase(tx, s.tabId))).groups.map(g => g.key) })
+    expect(keys.sort()).toEqual([...s.active].sort())
+    expect(reads).toHaveLength(1)
+    expectIndexed(reads)
+    expectOnlyReturned(reads)
   })
 
   it('the leaderboard reads a project\'s quiet conversations of the weeks it sums, and only those', async () => {
