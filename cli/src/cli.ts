@@ -49,7 +49,7 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -290,13 +290,10 @@ async function resolveComputerMachine(signal?: AbortSignal): Promise<AuthSession
   const machineId = result.machine?.machineId
   if (!machineId) throw new Error('Backend did not return a machine id for this computer')
   // Refresh can atomically replace the session while this request is in flight. Always merge the
-  // machine id into the newest file so a stale caller never rolls its rotated refresh token back.
-  const latest = readAuthSession()
-  if (!latest) throw new Error('SSO session disappeared while resolving this computer')
-  const next = latest.machineId === machineId
-    ? latest
-    : { ...latest, machineId, updatedAt: Date.now() }
-  if (next !== latest) writeAuthSession(next)
+  // machine id into the newest file, under the lock, so a stale caller never rolls its rotated refresh
+  // token back nor writes over a signed-out mark.
+  const next = await updateAuthSession((latest) => latest.machineId === machineId ? null : { ...latest, machineId, updatedAt: Date.now() })
+  if (!next) throw new Error('SSO session disappeared while resolving this computer')
   return next
 }
 
@@ -315,9 +312,8 @@ async function recordSignInAccount(accessToken: string, signInEpoch: string, aut
       authorization: `Bearer ${accessToken}`, 'x-autonomous-env': autonomousEnv,
     })
     const acct = me?.user?.id
-    const latest = readAuthSession()
-    if (typeof acct !== 'string' || !acct || latest?.signInEpoch !== signInEpoch) return
-    writeAuthSession({ ...latest, signInAcct: acct })
+    if (typeof acct !== 'string' || !acct) return
+    await updateAuthSession((latest) => latest.signInEpoch === signInEpoch ? { ...latest, signInAcct: acct } : null)
   } catch { /* no account recorded */ }
 }
 

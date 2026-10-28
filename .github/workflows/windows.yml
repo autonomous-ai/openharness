@@ -168,7 +168,7 @@ jobs:
           # serialWindows.spec.ts runs the real harness-serial.exe, placed beside the host by the payload step.
           HARNESS_SERIAL_BIN: ${{ github.workspace }}\pty\target\${{ matrix.target }}\release\harness-serial.exe
         run: |
-          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts')
+          $paths = @('src/lib/ptyHostBackend.contract.spec.ts', 'src/lib/ptyHost', 'src/lib/windows', 'src/scripts/windowsCiChecks.spec.ts', 'src/lib/uninstall', 'src/engines/kit/hookRemoval.spec.ts', 'src/engines/kit/windowsHooks.spec.ts', 'src/engines/kit/windowsFiles.spec.ts', 'src/engines/kit/nativePaths.windows.spec.ts', 'src/engines/kit/launchExecutable.windows.spec.ts', 'src/dsh/runtime.windows.spec.ts', 'src/engines/removeHooks.spec.ts', 'src/engines/windowsHomes.spec.ts', 'src/cable/windowsSerial.spec.ts', 'src/cable/serialWindows.spec.ts')
           npx vitest run @paths --maxWorkers=1
       # Two real builds (sub-project G): the rollover from the previous host to this one (hostMove.real.spec.ts, and
       # drain.spec.ts's two-build case), and the payload install (the bin\ replacement, and install.ps1 in Windows

@@ -15,6 +15,7 @@ import { nextMachineShareGrants } from '../lib/machineSharePolicy.js'
 import type { MachineShare } from '@prisma/client'
 import { z } from 'zod'
 import { prisma, machineAlive } from '../lib/prisma.js'
+import { upsertRacing } from '../lib/upsertRace.js'
 import { publishDeviceMachineListChanged, publishMachineShareChanged } from '../lib/bus.js'
 import { machinesSharedWith, shareMembers, sharedVia } from '../lib/machineAccess.js'
 import { emailDomain, isPublicEmailDomain } from '../lib/publicEmailDomains.js'
@@ -145,8 +146,8 @@ export async function machineShareRoutes(app: FastifyInstance): Promise<void> {
       const via = share && machine ? sharedVia(share, user.email) : null
       if (!share || !via) return sendError(reply, 'This machine is not shared with you.', 'NOT_SHARED', 404)
       if (via === 'domain') {
-        await prisma.machineShareAdd.upsert({ where: { machineId_userId: { machineId, userId: user.sub } },
-          create: { machineId, userId: user.sub }, update: {} })
+        await upsertRacing(() => prisma.machineShareAdd.upsert({ where: { machineId_userId: { machineId, userId: user.sub } },
+          create: { machineId, userId: user.sub }, update: {} }))
       }
       // The owner's daemon reads who uses the machine again and trusts this account's machines.
       await Promise.all([share.ownerId, user.sub].map(id => publishDeviceMachineListChanged(id, { reason: 'updated' }))).catch(() => [])

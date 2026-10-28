@@ -880,6 +880,14 @@ it('accepts POSIX, Windows drive and UNC folders and refuses relative, drive-rel
   const refused = contribute('relative')
   expect(!refused.success && refused.error.issues[0]!.message).toBe('Use a full folder path, such as /home/me/work or C:\\Users\\me\\work.')
 })
+it('lets a big machine offer more than 16 agents and refuses only counts that are not whole, positive and sane', () => {
+  const f = fixture()
+  const contribute = (maxAgents: number) => commandSchema.safeParse({ type: 'machine.contribute', machineId: 'host', name: 'Studio', cwd: '/repo', engines: ['claude'], maxAgents })
+  for (const maxAgents of [1, 17, 96, 1024]) expect(contribute(maxAgents).success, String(maxAgents)).toBe(true)
+  for (const maxAgents of [0, -1, 2.5, 1025]) expect(contribute(maxAgents).success, String(maxAgents)).toBe(false)
+  f.run(contribute(96).data!, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+  expect(f.state.machines![0]!.maxAgents).toBe(96)
+})
 it('restricts recording a legacy project to the owner or controlling lead', () => {
   const f = fixture(); f.invite()
   const command: Command = { type: 'tab.project', machineId: 'host', project: { cwd: '/repo', repositoryUrl: null } }
@@ -1647,6 +1655,23 @@ describe('a failed start\'s reason', () => {
     for (const hidden of ['Studio', 'host-mac', '/Users', 'token', 'ghs_', RAW]) expect(notice!.text).not.toContain(hidden)
     // The start keeps the raw reason for those who may read it.
     expect(f.state.starts![0]!.error).toBe(RAW)
+  })
+  // Ken's MacBook Pro, 2026-10-28: a start refused for memory read as a broken machine. Members see a machine's free memory in
+  // the Machines view, so that reason, and only its numbers, is told as it is.
+  it('tells the group a memory shortage with its numbers, and keeps every other reason hidden, even one that starts like it', () => {
+    const f = fixture(); f.invite()
+    failed(f)
+    const memory = 'Not enough free memory: 1.8 GiB free, 2 GiB needed. 6 GiB more is set aside for agents still starting.'
+    expect(f.run({ type: 'agent.startFailed', startId: 's1', error: memory }, owner).messages[0]!.text)
+      .toBe('Could not start Builder: its machine has only 1.8 GiB of memory free, and it needs 2 GiB.')
+    // A member who did not make the start reads the same, never the rest of the host's reason.
+    f.state.starts![0]!.actorKey = 'person:someone'
+    expect(visibleState(f.state, owner).starts![0]!.error).toBe('Its machine has only 1.8 GiB of memory free, and it needs 2 GiB.')
+    for (const error of ['Not enough free memory on /Users/ken: 1.8 GiB free, 2 GiB needed.', 'Not enough free memory: lots free, 2 GiB needed.', RAW]) {
+      failed(f)
+      expect(f.run({ type: 'agent.startFailed', startId: 's1', error }, owner).messages[0]!.text)
+        .toBe('Could not start Builder: its machine could not prepare or launch it. The Lead and the machine owner can read why.')
+    }
   })
   it('hands the raw reason on the start only to its Lead and the machine owner', () => {
     const f = fixture(); f.invite()

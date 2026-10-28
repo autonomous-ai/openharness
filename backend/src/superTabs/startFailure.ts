@@ -18,8 +18,15 @@ const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 export const ABANDONED = 'Abandoned before it started.'
 
+/** A host's refusal for memory (cli superTabs/capacity.ts memoryShort): its numbers alone, which members already see in the
+ *  Machines view. Read only at the start of the reason, so nothing else a host wrote is ever told (Ken's MacBook Pro,
+ *  2026-10-28, where "could not prepare or launch it" sent people looking for a fault). */
+const MEMORY_SHORT = /^Not enough free memory: (\d+(?:\.\d)? GiB) free, (\d+(?:\.\d)? GiB) needed\./
+
 export function publicReason(error: string): string {
   if (error === MACHINE_REMOVED || error === ABANDONED) return error
+  const memory = MEMORY_SHORT.exec(error)
+  if (memory) return `Its machine has only ${memory[1]} of memory free, and it needs ${memory[2]}.`
   return TIMEOUTS.find(([suffix]) => error.endsWith(suffix))?.[1] ?? MACHINE_FAILED
 }
 

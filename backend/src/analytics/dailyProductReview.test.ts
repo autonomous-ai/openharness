@@ -203,3 +203,17 @@ it('zero-fills absent pairing and skip counters and uses the existing complete s
       not_signed_in: 0, viewer: 0, card_showing: 0, no_storage: 0, account_changed: 0, read_limit: 0 },
   })
 })
+
+it('says why Desktop sign-ins that did not go through ended, beside the signed-out sign-in flow', () => {
+  const r = dailyProductReview([
+    row('2026-10-12', 'setup_desktop_sign_in_started', 6), row('2026-10-12', 'setup_desktop_sign_in_failed', 3),
+    row('2026-10-12', 'setup_desktop_sign_in_reason_no_result', 2), row('2026-10-12', 'setup_desktop_sign_in_reason_cancelled', 1),
+    row('2026-10-12', 'setup_desktop_sign_in_reason_timeout', 1), row('2026-10-11', 'setup_desktop_sign_in_reason_no_result', 1),
+    row('2026-10-12', 'setup_desktop_sign_in_reason_PRIVATE_CANARY', 9),
+  ], new Date('2026-10-13T12:00:00Z'))
+  const signIn = r.flows.find(f => f.channel === 'setup' && f.surface === 'desktop' && f.flow === 'sign_in')
+  expect(signIn).toMatchObject({ endReasons: { no_result: 3, cancelled: 1, timeout: 1, cli_unavailable: 0, other: 0 } })
+  expect(r.flows.find(f => f.channel === 'setup' && f.surface === 'phone' && f.flow === 'sign_in')).not.toHaveProperty('endReasons')
+  expect(r.flows.find(f => f.channel === 'setup' && f.surface === 'desktop' && f.flow === 'setup')).not.toHaveProperty('endReasons')
+  expect(JSON.stringify(r)).not.toContain('PRIVATE_CANARY')
+})

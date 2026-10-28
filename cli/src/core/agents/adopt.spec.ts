@@ -25,6 +25,13 @@ describe('core admission from search observations', () => {
     expect(choose(answer({ session: { ...fact, cwd: join(cwd, 'gone') } }))).toMatchObject({ error: 'SESSION_FOLDER_GONE' })
     expect(adoptionDecision('conversation', 'claude', null, externalUnavailable(), () => false)).toMatchObject({ error: 'SEARCH_UNAVAILABLE' })
   })
+  // 15 refusals on Oct 22 and 26: the old text only said what was wrong, not what to do.
+  it('says to open the harness that already has the conversation', () => {
+    const detail = 'This conversation is already open in a harness on this machine. Open that harness instead.'
+    expect(choose(answer(), null, () => true)).toMatchObject({ error: 'SESSION_IN_HARNESS', detail })
+    expect(choose(answer({ session: { ...fact, aliases: ['reserved'] } }), null, id => id === 'reserved')).toMatchObject({ detail })
+    expect(choose(answer({ owner: { ...owner, harness: true } }), 'now')).toMatchObject({ detail })
+  })
   it('preserves metadata and profile arguments when no other process holds it', () => {
     expect(choose()).toEqual({ ok: true, cwd, title: '', owner: null, busy: false, launchArgs: [] })
     expect(choose(answer({ session: { ...fact, title: 'Named', launchArgs: [] } }))).toMatchObject({ title: 'Named', launchArgs: [] })

@@ -36,7 +36,7 @@ const LIGHT_GROUP = {
 }
 
 /** A date as `aggregateRaw` returns it: Extended JSON. */
-function ms(value: unknown): number {
+export function ms(value: unknown): number {
   const date = (value as { $date?: unknown } | null)?.$date ?? value
   if (typeof date === 'string') return Date.parse(date)
   if (typeof date === 'number') return date

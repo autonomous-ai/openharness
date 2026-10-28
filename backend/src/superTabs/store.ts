@@ -1,6 +1,6 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
-import type { Prisma, PrismaClient, SuperTab, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
+import type { Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -52,14 +52,18 @@ type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
 const unused = { OR: [{ usedBy: null }, { usedBy: { isSet: false } }] }
 const hash = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+/** The fields of a Swarm's row the store reads. A migrated row still keeps its whole old state (`legacyState`, about 1 MB
+ *  for a busy Swarm) until the maintenance script removes it, and every command and read loads this row. */
+const SWARM_ROW = { id: true, ownerId: true, revision: true, format: true } satisfies Prisma.SuperTabSelect
+export type SwarmRow = Prisma.SuperTabGetPayload<{ select: typeof SWARM_ROW }>
 /** A Swarm whose state still waits for its split into parts (design section 6.1) is not served until it is split. */
-function requireParts(row: SuperTab): SuperTab {
+function requireParts(row: SwarmRow): SwarmRow {
   if (row.format !== 2) fail('SWARM_MIGRATING', 'This Swarm is being updated. Try again in a moment.', 503)
   return row
 }
 
 /** What a command or read works on: the index row, the parts it loaded, and the state reassembled from them. */
-export interface Loaded { row: SuperTab; parts: SwarmParts; state: SuperTabState }
+export interface Loaded { row: SwarmRow; parts: SwarmParts; state: SuperTabState }
 /** Groups, agents, projects and starts a command names, loaded even when dormant or finished (design section 3.1). */
 export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: string[]; startIds?: string[]; startAgentIds?: string[]; allGroups?: boolean; includeRecentStarts?: boolean }
 
@@ -111,7 +115,7 @@ function deliveryTouches(delivery: SuperTabDelivery): Touch[] {
 
 /** Loads one Swarm's parts and the state commands run on. Reads never write (design ruling R8); the migration rebuilt
  *  every group's link list from its history. */
-export async function loadRow(tx: Transaction, row: SuperTab, named: Named = {}): Promise<Loaded> {
+export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {}): Promise<Loaded> {
   const parts = await loadActive(tx, row.id, named)
   const state = reassemble(parts)
   parkLaterConversations(state)
@@ -134,9 +138,10 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
   for (let attempt = 1; ; attempt++) {
     try { return await db.$transaction(body, TRANSACTION_OPTIONS) } catch (error) {
       if (!retryable(error)) throw error
-      if (attempt >= TRANSACTION_ATTEMPTS) {
+      // An expired or unstartable transaction (P2028) is load: one more try, then the client retries after Retry-After.
+      if (attempt >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
         // A unique key still taken after every retry is a real duplicate, not contention.
-        if ((error as { code?: unknown }).code === 'P2002') throw error
+        if (errorCode(error) === 'P2002') throw error
         fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
       }
       await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (attempt - 1)))
@@ -149,12 +154,13 @@ const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
 const POLLED_CAP = 5_000
 const TRANSACTION_ATTEMPTS = 8
+const EXPIRED_TRANSACTION_ATTEMPTS = 2
 const TRANSACTION_BACKOFF_MS = 50
 const TRANSACTION_BACKOFF_CAP_MS = 1_500
+const errorCode = (error: unknown): unknown => error && typeof error === 'object' && 'code' in error ? error.code : null
 function retryable(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
-  const code = 'code' in error ? error.code : null
-  return code === 'P2034' || code === 'P2002' || (error instanceof Error && error.message.includes('TransientTransactionError'))
+  return ['P2034', 'P2002', 'P2028'].includes(errorCode(error) as string) || (error instanceof Error && error.message.includes('TransientTransactionError'))
 }
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
@@ -331,7 +337,7 @@ export class SuperTabStore {
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
   async row(tx: Transaction, user: AuthUser, tabId: string) {
-    return requireParts(await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv } }) ??
+    return requireParts(await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW }) ??
       fail('NOT_FOUND', 'This Super Tab is unavailable.', 404))
   }
 
@@ -488,7 +494,7 @@ export class SuperTabStore {
   async list(user: AuthUser, after?: string) {
     this.personOnly(user)
     const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, memberIds: { has: user.sub },
-      ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101 })
+      ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101, select: SWARM_ROW })
     const heads = await this.heads(rows.slice(0, 100))
     return { tabs: rows.slice(0, 100).flatMap(row => {
       const head = heads.get(row.id)
@@ -536,7 +542,7 @@ export class SuperTabStore {
   async invitations(user: AuthUser) {
     this.personOnly(user)
     const email = user.email.trim().toLowerCase()
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, invitedEmails: { has: email } }, take: 100 })
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, invitedEmails: { has: email } }, take: 100, select: SWARM_ROW })
     const heads = await this.heads(rows)
     return rows.flatMap(row => {
       const state = heads.get(row.id)
@@ -547,7 +553,7 @@ export class SuperTabStore {
   }
 
   /** The heads of Swarms already split into parts, by id. */
-  private async heads(rows: SuperTab[]): Promise<Map<string, HeadData>> {
+  private async heads(rows: SwarmRow[]): Promise<Map<string, HeadData>> {
     const heads = await this.db.swarmHead.findMany({ where: { id: { in: rows.filter(r => r.format === 2).map(r => `${r.id}:head`) } } })
     return new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData]))
   }
@@ -689,7 +695,7 @@ export class SuperTabStore {
       if (command?.type === 'agent.startDispatch' && hostMachineId && error instanceof SuperTabError && LASTING_TEAM_REFUSALS.includes(error.code)) {
         // Only one never launched: a repeated dispatch of a launched start is admitted again too, and its agent may be starting.
         const start = await transaction(this.db, async tx => {
-          const row = await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv } })
+          const row = await tx.superTab.findFirst({ where: { id: tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
           return row?.format === 2 ? (await loadRow(tx, row, { startIds: [command.startId] })).state.starts?.find(s => s.id === command.startId) : undefined
         })
         if (start && !start.dispatched && !start.harnessId && !start.error) {
@@ -1368,7 +1374,7 @@ export class SuperTabStore {
       const result = []
       for (const row of rows) {
         if (!states.has(row.tabId)) {
-          const tab = await tx.superTab.findFirst({ where: { id: row.tabId, autonomousEnv: user.autonomousEnv } })
+          const tab = await tx.superTab.findFirst({ where: { id: row.tabId, autonomousEnv: user.autonomousEnv }, select: SWARM_ROW })
           states.set(row.tabId, tab?.format === 2 ? (await loadRow(tx, tab)).state : null)
         }
         const refusal = now - row.createdAt.getTime() > TERMINAL_PICKUP_MS
@@ -1603,7 +1609,7 @@ export class SuperTabStore {
   /** The owner's Swarms with the Local models add-on: what the owner's computer creates on grid and keeps in step. */
   async hostGrids(user: AuthUser) {
     this.personOnly(user)
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 }, take: 100 })
+    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 }, take: 100, select: SWARM_ROW })
     return transaction(this.db, async tx => {
       const grids = []
       for (const row of rows) { const grid = swarmGridRow(row.id, (await loadRow(tx, row)).state); if (grid) grids.push(grid) }
@@ -1894,7 +1900,7 @@ export class SuperTabStore {
    *  queued deliveries are kept for when it reopens, as a person's archive keeps them. True when it archived. */
   async archiveFinished(tabId: string, groupId: string, checked: readonly string[]): Promise<boolean> {
     return transaction(this.db, async tx => {
-      const row = await tx.superTab.findUnique({ where: { id: tabId } })
+      const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })
       if (!row) return false
       const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = structuredClone(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)

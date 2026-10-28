@@ -333,6 +333,14 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
     expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
   })
 
+  it('reads each Swarm\'s newest change over all its parts, without a groupBy (it once panicked the engine on Mongo)', async () => {
+    const [a, b] = [await scene(), await scene()]
+    await writeGroup(b.tabId, b.web, MIGRATED + 5_000, group => { group.title = 'Web, renamed' })
+    const newest = await db.$transaction(tx => parts.lastChangedAt(tx, [a.tabId, b.tabId, 'tab-with-no-parts']))
+    expect(Object.fromEntries(newest)).toEqual({ [a.tabId]: MIGRATED, [b.tabId]: MIGRATED + 5_000 })
+    expect((await db.$transaction(tx => parts.lastChangedAt(tx, []))).size).toBe(0)
+  })
+
   it.each(['/api/super-tabs', '/api/super-tabs/TAB', '/api/super-tabs/hosts/host', '/api/super-tabs/hosts/host/pools', '/api/super-tabs/hosts/host/assignments'])(
     'answers %s with 426 Update required', async url => {
       const s = await scene()
@@ -1024,18 +1032,21 @@ describe('what a read costs the database (group 3b)', () => {
     const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
     const ops: string[] = []
     const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      ops.push(`${model}.${operation}`)
+      ops.push(`${model}.${operation}${operation === 'aggregateRaw' && JSON.stringify(args).includes('"$max"') ? ':max' : ''}`)
       return query(args)
     } } } }) as unknown as PrismaClient
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
     clock = Date.now()
+    // The newest change is one Mongo `$group` per part kind, and never a Prisma groupBy.
+    const newestReads = () => ops.filter(op => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)\.aggregateRaw:max$/.test(op))
     const first = await hosts.changes(owner, machineId, { full: true })
-    expect(ops.filter(op => op.endsWith('.groupBy'))).toHaveLength(7)
+    expect(newestReads()).toHaveLength(7)
+    expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
     ops.length = 0
     clock = Date.now()
     const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
     expect(idle.tabs).toEqual([])
-    expect(ops.filter(op => op.endsWith('.groupBy'))).toEqual([])
+    expect(newestReads()).toEqual([])
     await new SuperTabStore(db).execute(owner, s.tabId, { operationId: randomUUID(),
       command: { type: 'message.send', conversationId: s.web, text: 'Busy', replyTo: null, recipientIds: [] } })
     clock = Date.now()

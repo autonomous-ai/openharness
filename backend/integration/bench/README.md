@@ -43,6 +43,16 @@ NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
   DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/pollDatabaseBytes.ts
 ```
 
+To see what a migrated Swarm's kept old state (`SuperTab.legacyState`, about 1 MB in production) costs each read, run
+the old state diagnostic. It gives the benchmark's Swarm a 1 MB old state, then times the Lead's status, a host's delivery
+poll with nothing waiting (the empty read) and one post, 30 times each, with the old state kept and once it is removed,
+and prints the median time and what MongoDB sent the backend per read. It takes the same options:
+
+```bash
+NODE_ENV=test HARNESS_CREDENTIAL_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
+  DATABASE_URL=mongodb://127.0.0.1:1/bench-never-used npx tsx integration/bench/oldStateReads.ts
+```
+
 The bench's own tests (helpers, plus a short run of the whole scenario), and its typecheck:
 
 ```bash

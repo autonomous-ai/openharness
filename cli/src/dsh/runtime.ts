@@ -5,7 +5,7 @@
 import { ignoreHarnessRuntime } from '../lib/harnessRuntimeIgnore.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
 import { instructionFileOf, launchContract } from '../engines/launches.js'
@@ -34,7 +34,9 @@ export function harnessRuntimeDir(workspace: string, key: string): string {
 function ensureRuntimeDir(workspace: string, dir: string): void {
   const root = resolve(workspace)
   let path = root
-  for (const part of dir.slice(root.length + 1).split('/')) {
+  // By the platform's separator: split on '/', a Windows path was one part, and its non-recursive mkdir failed with
+  // ENOENT on every first launch in a workspace (dsh_runtime_failed from Oct 22, the day after Windows shipped).
+  for (const part of relative(root, dir).split(sep)) {
     path = join(path, part)
     if (existsSync(path) || isLink(path)) {
       const stat = lstatSync(path)
@@ -185,8 +187,11 @@ export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engin
     if (!existsSync(join(skill.dir, 'SKILL.md'))) throw new Error(`Harness skill is missing: ${skill.dir}; repair the harness installation.`)
     const link = join(skillsDir, skill.name)
     if (existsSync(link) || isLink(link)) {
-      if (!isLink(link) || readlinkSync(link) !== skill.dir) throw new Error(`Harness skill path is already occupied: ${link}`)
-    } else symlinkSync(skill.dir, link)
+      // Compared resolved, so a link that writes the same folder another way (a trailing separator) is still its own.
+      if (!isLink(link) || resolve(readlinkSync(link)) !== resolve(skill.dir)) throw new Error(`Harness skill path is already occupied: ${link}`)
+    // A junction on Windows: a directory symlink needs Developer Mode or an administrator (EPERM), a junction
+    // neither. Other platforms ignore the type.
+    } else symlinkSync(skill.dir, link, 'junction')
   }
   migrateHarnessInstructions(ws, dsh)
   installBootstrap(ws, engine)
