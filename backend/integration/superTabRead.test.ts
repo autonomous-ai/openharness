@@ -346,7 +346,8 @@ describe('host form (design 4.10)', () => {
   /** The owner's machine `host` contributed to the Swarm, a third agent whose only group is dormant, a queued start. */
   let machine = 'host'
   /** Each test has its own machine, so other tests' Swarms never show up in its host reads. */
-  const hostScene = async () => {
+  /** [webRequester]: who asked for the Web work this machine's worker runs; the owner contributes the machine. */
+  const hostScene = async (webRequester = owner.sub) => {
     machine = `m-${randomUUID().slice(0, 8)}`
     await db.machine.create({ data: { machineId: machine, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     return scene((s, ids) => {
@@ -360,6 +361,7 @@ describe('host form (design 4.10)', () => {
     s.run({ type: 'conversation.archive', conversationId: archived, archived: true })
     s.edit(state => {
       const pool = state.machines!.find(m => m.machineId === machine)!
+      state.conversations.find(c => c.id === ids.web)!.requesterId = webRequester
       // One in a running group, one in a dormant group none of its agents is in: the host still has to settle it.
       state.starts = [[ids.web, 'queued'], [archived, 'queued-in-dormant']].map(([conversationId, id]) => ({ id: id!, creationId: 'c',
         actorKey: `person:${owner.sub}`, contributorId: owner.sub, membershipGeneration: pool.membershipGeneration,
@@ -536,12 +538,13 @@ describe('host form (design 4.10)', () => {
   })
 
   it('sleeps through the Lent hours a reading credits to the machine\'s running workers', async () => {
-    const s = await hostScene()
+    // Lent counts only work for someone else (leaderboard/lent.ts).
+    const s = await hostScene(peer.sub)
     await reading(s.tabId, (await fullRead(s.tabId)).generation)
     const { cursor, generation } = await fullRead(s.tabId)
     await reading(s.tabId, generation)
     const lent = await db.$transaction(async tx => (await parts.loadActive(tx, s.tabId)).machines.find(m => m.key === machine)!.data!.contribution?.lent)
-    expect(lent?.[0]?.agentMs).toBeGreaterThan(0)
+    expect(lent?.[0]?.busyMs).toBeGreaterThan(0)
     clock = Date.now()
     expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
   })
