@@ -1319,6 +1319,53 @@ describe('Reviewer role', () => {
       expect(delta.assignment!.agentId).toBe(reviewer)
       expect(delta.brief).toContain(`Delta review: #${first.number} reviewed the earlier head. Review only the changes since.`)
     })
+
+    it.each([
+      ['machines', { kind: 'machines', machineIds: ['elsewhere'] }],
+      ['model', { kind: 'forbidModel', model: 'test-model' }],
+      ['effort', { kind: 'minEffort', effort: 'max' }],
+    ])('gives the review to no Reviewer the owner\'s %s rule rules out, and leaves it for the Lead', (_, rule) => {
+      const { f, lead, markReady, reviews } = ready()
+      f.run({ type: 'rule.set', rule, text: 'The owner\'s rule.' } as Command)
+      const effects = markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment).toBeNull()
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+    })
+
+    it('passes over a Reviewer the owner\'s rules rule out for one they allow', () => {
+      // On Codex the Engineer's engine would make `reviewer` (Claude) the pick; only `fresh`'s machine is allowed.
+      const { f, fresh, markReady, reviews } = ready('codex')
+      f.state.agents.find(a => a.id === fresh)!.machineId = 'allowed'
+      f.run({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['allowed'] }, text: 'Only allowed.' } as Command)
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('passes over a Reviewer that is down for one that is up, and waits when none is up', () => {
+      // `reviewer` would be the pick on another engine than the Engineer's, but its session is gone.
+      const { f, leadActor, lead, reviewer, fresh, markReady, reviews } = ready('codex')
+      f.state.agents.find(a => a.id === reviewer)!.downSince = new Date(500).toISOString()
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+      f.run({ type: 'work.cancel', conversationId: reviews()[0]!.id, assignmentId: reviews()[0]!.assignment!.id, reason: 'Again' }, leadActor)
+      f.state.agents.find(a => a.id === fresh)!.downSince = new Date(500).toISOString()
+      const effects = markReady(`Ready again. ${pr}`)
+      const second = reviews().find(c => c.id !== reviews()[0]!.id)!
+      expect(second.assignment).toBeNull()
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === second.id).map(m => m.text))
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+    })
+
+    it('asks for a full review, not a delta, after a review cancelled before its verdict', () => {
+      const { f, leadActor, markReady, reviews } = ready()
+      markReady(`Ready. ${pr}`)
+      const cancelled = reviews()[0]!
+      f.run({ type: 'work.cancel', conversationId: cancelled.id, assignmentId: cancelled.assignment!.id, reason: 'Wrong Reviewer' }, leadActor)
+      markReady(`Ready, same head. ${pr}`)
+      const next = reviews().find(c => c.id !== cancelled.id)!
+      expect(next.brief).not.toContain('Delta review')
+    })
   })
 
   it('does not wake a Reviewer that is stopping', () => {

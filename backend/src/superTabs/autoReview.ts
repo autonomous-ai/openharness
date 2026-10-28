@@ -4,6 +4,7 @@ import { activeWork, agentRole, nextConversationNumber, renderWorkTask, stableId
 import { agentProjectId, groupProject, skillSetOf } from './projects.js'
 import { recordAsked, recordRun } from './leaderboard/record.js'
 import { renewLease } from './liveness.js'
+import { downSince } from './machines.js'
 
 // Reviews start the moment work is ready (Dee, 2026-10-28). The Lead hand-opened about 30 review groups that day, and one
 // review request sat unanswered until its group was archived, so a privacy fix waited hours with no verdict. Now an
@@ -27,9 +28,12 @@ export function projectPullRequest(state: SuperTabState, group: Conversation, te
   return null
 }
 
-/** A review group whose Reviewer has given no verdict (no check carries evidence) and that nobody cancelled. */
+/** Whether a Reviewer gave [group]'s verdict: one of its checks carries evidence. */
+const verdictGiven = (group: Conversation): boolean => group.checks.some(c => c.evidence)
+
+/** A review group whose Reviewer has given no verdict and that nobody cancelled. */
 const verdictMissing = (group: Conversation): boolean =>
-  !!group.reviewOf && group.assignment?.status !== 'cancelled' && !group.checks.some(c => c.evidence)
+  !!group.reviewOf && group.assignment?.status !== 'cancelled' && !verdictGiven(group)
 
 /** A review of [group] that is still open: not archived, not cancelled and with no verdict yet. A second review, by itself
  *  or by hand, waits until it closes (commands.ts conversation.create). */
@@ -50,13 +54,14 @@ const free = (state: SuperTabState, agent: Agent) =>
 /**
  * The Reviewer for [group]'s review: the one that reviewed its earlier head while it is still free (a delta review), else
  * a free Reviewer of the project, one on another engine than the Engineer's first. Never one that is stopping, waiting to
- * resume a lost task, or (`mayWork`) not allowed to take this project's work on its machine.
+ * resume a lost task, down (its session gone or its machine silent), or (`mayWork`) not allowed to take this work: on its
+ * machine, or by the owner's rules (#610 review).
  */
 function pickReviewer(state: SuperTabState, group: Conversation, engineer: Agent | undefined, earlier: Conversation | undefined,
-  mayWork: (agent: Agent) => boolean): Agent | null {
+  mayWork: (agent: Agent) => boolean, now: number): Agent | null {
   const projectId = groupProject(state, group).id
   const candidates = state.agents.filter(a => agentRole(a) === 'reviewer' && agentProjectId(state, a) === projectId &&
-    a.workDecision !== 'stop' && !a.lostTask && free(state, a) && mayWork(a))
+    a.workDecision !== 'stop' && !a.lostTask && !downSince(state, a, now) && free(state, a) && mayWork(a))
   const previous = candidates.find(a => a.id === earlier?.assignment?.agentId)
   return previous ?? candidates.find(a => a.configuration.engine !== engineer?.configuration.engine) ?? candidates[0] ?? null
 }
@@ -91,9 +96,10 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
   const project = groupProject(state, group)
   // On Custom skills without a reviewer role there are no review groups (commands.ts requireCustomRole).
   if (state.paused || (skillSetOf(project) === 'custom' && !project.roles?.some(r => r.kind === 'reviewer'))) return null
-  const earlier = state.conversations.filter(c => c.reviewOf === group.id && c.assignment).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
+  // Only a review that gave its verdict reviewed the earlier head: one cancelled before it reviewed nothing (#610 review).
+  const earlier = state.conversations.filter(c => c.reviewOf === group.id && c.assignment && verdictGiven(c)).sort((a, b) => (b.number ?? 0) - (a.number ?? 0))[0]
   const engineer = state.agents.find(a => a.id === group.assignment?.agentId)
-  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork)
+  const reviewer = pickReviewer(state, group, engineer, earlier, context.mayWork, context.now)
   const id = stableId(context.operationId, 'auto-review')
   const number = nextConversationNumber(state)
   state.groupCounter = number
