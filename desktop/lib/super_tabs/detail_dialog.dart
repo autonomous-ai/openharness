@@ -134,19 +134,25 @@ class _SuperTabDetailDialogState extends State<SuperTabDetailDialog> {
                       inset,
                       inset,
                     ),
-                    child: Row(
+                    // Leading at the left, the rest at the right; with enlarged text the right group wraps beneath.
+                    child: Wrap(
+                      alignment: widget.leadingActions.isEmpty
+                          ? WrapAlignment.end
+                          : WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      runSpacing: DesktopChrome.controlGap,
                       children: [
-                        ...widget.leadingActions,
-                        const Spacer(),
-                        Flexible(
-                          flex: 0,
-                          child: Wrap(
-                            alignment: WrapAlignment.end,
-                            spacing: DesktopChrome.controlGap,
-                            runSpacing: DesktopChrome.controlGap,
-                            children: widget.actions,
-                          ),
-                        ),
+                        for (final group in [
+                          widget.leadingActions,
+                          widget.actions,
+                        ])
+                          if (group.isNotEmpty)
+                            Wrap(
+                              spacing: DesktopChrome.controlGap,
+                              runSpacing: DesktopChrome.controlGap,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: group,
+                            ),
                       ],
                     ),
                   )
