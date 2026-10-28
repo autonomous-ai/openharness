@@ -7,6 +7,10 @@ import '../core/browser_lock.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
 
+/// The browser build keeps its SSO sign-in: it asks for no Harness session
+/// ([DirectAuthApi.harnessSessionLabel]).
+String? viewerSessionLabel() => null;
+
 DirectAuth createViewerAuth({
   required AuthSession session,
   required DirectAuthApi api,

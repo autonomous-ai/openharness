@@ -11,6 +11,8 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import { cursorFor } from '../src/superTabs/read/cursor.js'
+import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -105,6 +107,37 @@ function reads(entries: ProfileEntry[], collection: string, fields: string[], no
   })
 }
 const plan = (rows: ProfileEntry[]) => rows.map(r => ({ plan: r.planSummary, docsExamined: r.docsExamined, keysExamined: r.keysExamined, returned: r.nreturned }))
+
+it('reuses the host timestamp at the same stamp, including a repeated wake with a held etag', async () => {
+  const s = await scene()
+  const hosts = new HostReads(store, { now: () => Date.now() })
+  const first = await hosts.changes(owner, s.machineId, { full: true })
+  const held = Object.fromEntries(first.tabs.map(tab => [tab.tabId, tab.etag]))
+  // An older cursor wakes this Swarm again without another write or stamp bump.
+  const entries = await profiled(async () => {
+    const second = await hosts.changes(owner, s.machineId, { cursor: cursorFor(MIGRATED - 1, 0), held })
+    expect(second.tabs).toEqual(first.tabs.map(tab => ({ tabId: tab.tabId, etag: tab.etag,
+      lastChangedAt: tab.lastChangedAt, unchanged: true })))
+  })
+  const scans = entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
+    .filter(e => {
+      const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: unknown } } }>)?.[0]?.$match
+      // Timestamp scans match only tabId; the host's indexed wake query also bounds changedAt and hostMachineIds.
+      return match?.tabId?.$in && Object.keys(match).length === 1
+    })
+  expect(scans.map(e => e.command?.aggregate)).toEqual([])
+
+  // A committed change invalidates the timestamp along with the host inputs; a cold/direct read agrees.
+  clock = Date.now()
+  await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: s.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+  const changed = await hosts.changes(owner, s.machineId, { full: true })
+  const newest = (await lastChangedAt(db, [s.tabId])).get(s.tabId)
+  expect(newest).toBeGreaterThan(first.tabs[0]!.lastChangedAt!)
+  expect(changed.tabs[0]!.lastChangedAt).toBe(newest)
+  const direct = new HostReads(new SuperTabStore(db, () => clock, null, { readCache: null }))
+  expect((await direct.changes(owner, s.machineId, { full: true })).tabs).toEqual(changed.tabs)
+})
 
 describe('hot reads read only what they return (roadmap 2.7)', () => {
   let entries: ProfileEntry[]
