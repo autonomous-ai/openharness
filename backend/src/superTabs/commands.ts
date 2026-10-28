@@ -14,6 +14,7 @@ import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
+import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -611,7 +612,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     // A launch already under way would arrive with nowhere to go; it finishes in moments.
     if (pending.some(s => s.dispatched)) fail('STARTS_PENDING', 'An agent is starting on this machine. Try again in a moment.')
     for (const start of pending) {
-      start.error = 'Its machine was removed from the Swarm.'
+      start.error = MACHINE_REMOVED
       effects.messages.push({ id: stableId(operationId, 'start', start.id), conversationId: start.request.conversationId, author: sender,
         text: `${start.request.name} will not start: its machine was removed from the Swarm.`, replyTo: null, recipients: [], source: SYSTEM_ROW })
     }
@@ -901,7 +902,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Before a machine was contributed, a Lead's start on it that never dispatched was left pending for good (12 on Ken's
       // Mac that day) and refused every contribution. Those finish as failed; a dispatched or recent start still blocks.
       const abandoned = (state.starts ?? []).filter(s => context.abandonedStartIds?.includes(s.id))
-      for (const start of abandoned) start.error = 'Abandoned before it started.'
+      for (const start of abandoned) start.error = ABANDONED
       // Each project's Lead chat hears once about its own starts, whichever of its groups asked.
       const byLeadChat = new Map<string, Set<string>>()
       for (const start of abandoned) {
@@ -1274,7 +1275,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
-        message(group.id, `Could not start ${start.request.name}: ${command.error}`, lead ? [lead] : [], null, SYSTEM_ROW)
+        message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')
