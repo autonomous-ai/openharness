@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -54,10 +55,11 @@ void main() {
     WidgetTester tester,
     FakeSwarm fake, {
     bool still = false,
+    ValueNotifier<String?>? signedIn,
   }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
-    final account = ValueNotifier<String?>(me);
+    final account = signedIn ?? ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
@@ -318,5 +320,76 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(fake.paths.where((p) => p == path), hasLength(2));
+  });
+
+  group("another account's board never stays", () {
+    /// The backend as each account reads it: the old account's board has
+    /// diego first; the next account's has only ken.
+    FakeSwarm twoAccounts(ValueNotifier<String?> account) {
+      final fake = backend();
+      fake.routes[path] = (_) => account.value == me
+          ? leaderboardData(week: monday)
+          : leaderboardData(
+              week: monday,
+              shipped: 2,
+              people: [scoreData('ken', points: 9, rank: 1, medal: 'gold')],
+            );
+      return fake;
+    }
+
+    testWidgets('an account switch shows only the new account\'s board', (
+      tester,
+    ) async {
+      final account = ValueNotifier<String?>(me);
+      final fake = twoAccounts(account);
+      await pump(tester, fake, signedIn: account);
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      final before = fake.paths.where((p) => p.startsWith(path)).length;
+
+      account.value = 'person-other';
+      await tester.pump();
+
+      expect(
+        key('swarm-leaderboard-person-diego'),
+        findsNothing,
+        reason: 'the old account\'s board is gone at once',
+      );
+      expect(find.text('🚀 19 shipped'), findsNothing);
+
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(
+        inside('swarm-leaderboard-person-ken', find.text('9 pts')),
+        findsOneWidget,
+      );
+      expect(find.text('🚀 2 shipped'), findsOneWidget);
+      expect(
+        fake.paths.where((p) => p.startsWith(path)).length,
+        before + 1,
+        reason: 'read once for the new account',
+      );
+    });
+
+    testWidgets('a sign-out clears the board and reads no more', (
+      tester,
+    ) async {
+      final account = ValueNotifier<String?>(me);
+      final fake = twoAccounts(account);
+      await pump(tester, fake, signedIn: account);
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      final reads = fake.paths.length;
+
+      account.value = null;
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(find.text('🚀 19 shipped'), findsNothing);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+
+      await tester.pump(const Duration(minutes: 11));
+      expect(fake.paths.length, reads, reason: 'nothing read once signed out');
+    });
   });
 }
