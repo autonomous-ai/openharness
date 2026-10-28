@@ -93,6 +93,12 @@ describe('runtime worker contract', () => {
     expect(legacyReply.answer.control.target).toEqual(legacyTarget)
     expect(runtimeAnswer(legacyReply.answer, legacy, { kind: 'records', records: [data] })).toBe(true)
     expect((await t.send({ operation: { kind: 'config' } })).answer.state.effort).toBe('high')
+    // The settings fill an effort the session has not shown; one it has (a reply's, a pane's) stays (#1966 review).
+    const shown = context()
+    shown.state.effort = 'medium'
+    expect((await t.send({ context: shown, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
+    t.adapter.configuredEffort.mockResolvedValueOnce('auto')
+    expect((await t.send({ context: shown, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
     expect((await t.send({ operation: { kind: 'pane', text: 'Opus 5 with high effort' } })).answer.state.model).toBe('claude-opus-5')
     expect((await t.send({ operation: { kind: 'models' } })).answer.models).toEqual([])
     expect((await t.send({ operation: { kind: 'catalog' } })).answer.catalog).toEqual([])

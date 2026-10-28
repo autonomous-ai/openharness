@@ -389,6 +389,28 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'opus', effort: 'low' })
   })
 
+  // The settings name only the effort a session starts with. Read after the transcript on attach, they replaced the
+  // effort a reply recorded with their default, so an adopted agent or a restarted daemon reported it wrong (#1966 review).
+  it.each([['another effort', 'low'], ['none', null]])('keeps the effort a reply recorded over the settings default (%s), on both attach paths', async (_, configured) => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    if (configured) await writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel: configured }))
+    const reply = JSON.stringify({ type: 'assistant', effort: 'medium', message: { model: 'claude-opus-5-5' } })
+
+    const read = new RuntimeProfileManager(), whole = { ...session('claude'), cwd }
+    read.hydrate(whole, [reply])
+    await read.ingestConfig(whole, true)
+    expect(parseRuntimeProfile(read.selectedModel(whole))).toMatchObject({ model: 'opus', effort: 'medium' })
+
+    const staged = new RuntimeProfileManager(), fromEnd = { ...session('claude'), cwd }
+    const stage = staged.beginHydrate(fromEnd)
+    stage.ingest(reply)
+    await stage.config!()
+    stage.commit()
+    expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ model: 'opus', effort: 'medium' })
+  })
+
   it('keeps supported Claude effort on a local model change and falls back to auto otherwise', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')

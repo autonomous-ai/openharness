@@ -13,6 +13,14 @@ export function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }
 
+/** Puts [configured], the settings' default, where the session has shown no effort. Read after the transcript on attach,
+ * it replaced the effort a reply recorded, so an adopted agent or a restarted daemon reported it wrong (#1966 review). */
+export function fillConfiguredEffort(state: RuntimeState, configured: string): void {
+  if (state.effort !== null) return
+  state.effort = configured
+  state.observedAt = Date.now()
+}
+
 export function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }

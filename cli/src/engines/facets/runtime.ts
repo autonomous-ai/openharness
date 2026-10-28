@@ -54,6 +54,8 @@ export interface EngineRuntime {
   reduce(context: RuntimeContext, record: RuntimeRecord): void
   transcript(context: RuntimeContext, record: Record<string, unknown>): void
   pane(context: RuntimeContext, text: string): void
+  /** The effort the engine's settings start a session with: a default, which fills an effort the session has not shown
+   * and never replaces one it has (a reply's, a pane's), as `fillConfiguredEffort` applies it. */
   configuredEffort?(session: RuntimeSession): Promise<string>
   selectedModel(session: RuntimeSession, state: RuntimeState): string | null
   models(session: RuntimeSession, state: RuntimeState | undefined): Promise<RuntimeModelOption[]>
