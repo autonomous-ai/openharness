@@ -1190,6 +1190,7 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       shape: Border(),
       collapsedShape: Border(),
     ),
+    bottomSheetTheme: const BottomSheetThemeData(shape: AppControl.sheetShape),
     dialogTheme: DialogThemeData(
       // The raised block's own fill, not a menu's and not a card's. §9.3: a
       // dialog that takes `windowBg` merges with the page, and one that takes
@@ -1268,8 +1269,17 @@ abstract final class AppControl {
   /// Menu/popover radius, Desktop's 16.
   static const double menuRadius = 16;
 
-  /// Dialog radius and a sheet's top corners, Desktop's 20.
+  /// Dialog radius, Desktop's 20.
   static const double dialogRadius = 20;
+
+  /// A bottom sheet's top corners: the card radius (12). Desktop has no
+  /// sheets; the design system's Phone section lists this as phone-only.
+  static const double sheetRadius = AppCard.radius;
+
+  /// Every bottom sheet's shape, the theme's and each caller's.
+  static const ShapeBorder sheetShape = RoundedRectangleBorder(
+    borderRadius: BorderRadius.vertical(top: Radius.circular(sheetRadius)),
+  );
 
   /// The air between a menu panel and the control it hangs off.
   ///

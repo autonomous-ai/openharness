@@ -149,9 +149,7 @@ Future<SuperTabReactionEmoji?> showSwarmReactionPicker(
     context: context,
     backgroundColor: AppGlass.rowFill,
     barrierColor: Colors.black.withValues(alpha: .55),
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-    ),
+    shape: AppControl.sheetShape,
     builder: (context) => _Picker(mine: mine),
   );
 }

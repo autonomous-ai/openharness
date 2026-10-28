@@ -770,9 +770,7 @@ Future<void> showSwarmTeam(
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
   barrierColor: Colors.black.withValues(alpha: .55),
-  shape: const RoundedRectangleBorder(
-    borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-  ),
+  shape: AppControl.sheetShape,
   // On the page's own navigator, under the shell's [SwarmScope].
   builder: (_) => SwarmTeamSheet(swarmId: swarmId, projectId: projectId),
 );

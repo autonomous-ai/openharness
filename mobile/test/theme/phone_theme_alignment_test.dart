@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/phone/phone_sheet.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
+
+import 'sheet_shape.dart';
 
 /// The phone takes Desktop's corners and roles, at the sizes the Phone section
 /// of desktop/design/desktop-design-system.md gives them.
@@ -40,8 +43,30 @@ void main() {
       test('dialogs round at 20', () {
         expect(radiusOf(theme.dialogTheme.shape), 20);
       });
+
+      test('bottom sheets round their top corners at 12', () {
+        expect(radiusOf(theme.bottomSheetTheme.shape), 12);
+      });
     });
   }
+
+  testWidgets('the shared phone sheet rounds its top corners at 12', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () => showPhoneSheet(context, title: 'Menu'),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(sheetTopRadius(tester), 12);
+  });
 
   test('type roles take their phone sizes', () {
     expect(AppType.display().fontSize, 34);

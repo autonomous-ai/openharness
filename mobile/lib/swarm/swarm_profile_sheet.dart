@@ -59,9 +59,7 @@ Future<void> showSwarmProfile(
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
   barrierColor: Colors.black.withValues(alpha: .55),
-  shape: const RoundedRectangleBorder(
-    borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-  ),
+  shape: AppControl.sheetShape,
   // On the page's own navigator, under the shell's [SwarmScope].
   builder: (_) => SwarmProfileSheet(swarmId: swarmId, pickPhoto: pickPhoto),
 );
@@ -615,9 +613,7 @@ Future<void> showSwarmPerson(
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
   barrierColor: Colors.black.withValues(alpha: .55),
-  shape: const RoundedRectangleBorder(
-    borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-  ),
+  shape: AppControl.sheetShape,
   builder: (sheet) => SwarmPersonSheet(
     swarmId: swarmId,
     personId: personId,

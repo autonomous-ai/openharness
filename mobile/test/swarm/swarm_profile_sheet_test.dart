@@ -12,6 +12,7 @@ import 'package:harness_mobile/swarm/swarm_profile_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
+import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
@@ -120,6 +121,7 @@ void main() {
     }
     await tester.tap(find.text('Open'));
     await tester.pumpAndSettle();
+    expect(sheetTopRadius(tester), 12);
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
