@@ -82,6 +82,26 @@ describe('account HTTP in the gateway', () => {
     }
   })
 
+  // Diego 10-29: a body that timed out after the headers, or HTML from a proxy, read as '200 OK, {}'.
+  it('answers a body that times out after the headers as a timeout, not as an empty success', async () => {
+    const { api, request } = setup()
+    for (const name of ['TimeoutError', 'AbortError']) {
+      const stalled = new ReadableStream({ start(controller) { controller.error(new DOMException('late', name)) } })
+      request.mockResolvedValueOnce(new Response(stalled, { status: 200 }))
+      expect(await api.backend('GET', '/api/auth/me')).toEqual({ status: 504, body: { success: false, error: { code: 'BACKEND_TIMEOUT',
+        message: 'The Harness backend did not answer GET /api/auth/me within 20s. Try again in a moment.' } } })
+    }
+  })
+  it('answers a success whose body is not JSON as a bad response, and an empty one as {}', async () => {
+    const { api, request } = setup()
+    request.mockResolvedValueOnce(new Response('<html>Bad gateway</html>', { status: 200 }))
+    expect(await api.backend('GET', '/api/auth/me')).toMatchObject({ status: 502, body: { success: false, error: { code: 'BACKEND_BAD_RESPONSE' } } })
+    request.mockResolvedValueOnce(new Response(null, { status: 204 }))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 204, body: {} })
+    request.mockResolvedValueOnce(new Response('', { status: 200, headers: { 'content-length': '0' } }))
+    expect(await api.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 200, body: {} })
+  })
+
   it('keeps the guest list local and never asks for a token', async () => {
     const { api, account, request, changed } = setup()
     account({ machineId: null, signIn: null })

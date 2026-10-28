@@ -23,6 +23,7 @@ interface AccountHttpDeps {
 
 const failure = (status: number, code: string, message: string): HttpAnswer =>
   ({ status, body: { success: false, error: { code, message } } })
+const timedOut = (error: Error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
 
 /** A Retry-After header as milliseconds from [now]: delta-seconds or an HTTP date; null when absent or unreadable. */
 export function retryAfterMs(header: string | null, now = Date.now()): number | null {
@@ -64,13 +65,23 @@ export function createAccountHttp(deps: AccountHttpDeps) {
       })
     } catch (error) {
       const e = error as Error & { cause?: { message?: string } }
-      if (e.name === 'TimeoutError' || e.name === 'AbortError') {
-        return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${timeoutMs / 1000}s. Try again in a moment.`)
-      }
+      if (timedOut(e)) return timeout()
       return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${e.cause?.message ?? e.message}). Check the connection and try again.`)
     }
+    // The timeout also covers the body: one that stalls after the headers, or a proxy's HTML page, is not an empty success.
+    let answer: Record<string, unknown> = {}
+    if (res.body !== null && res.headers?.get?.('content-length') !== '0') {
+      try { answer = await res.json() as Record<string, unknown> } catch (error) {
+        if (timedOut(error as Error)) return timeout()
+        if (res.status >= 200 && res.status < 300) return failure(502, 'BACKEND_BAD_RESPONSE', `The Harness backend answered ${method} ${path} with an unreadable reply. Try again in a moment.`)
+      }
+    }
     const retry = res.status === 429 || res.status >= 500 ? retryAfterMs(res.headers?.get?.('retry-after') ?? null) : null
-    return { status: res.status, body: await res.json().catch(() => ({})) as Record<string, unknown>, ...(retry !== null ? { retryAfterMs: retry } : {}) }
+    return { status: res.status, body: answer, ...(retry !== null ? { retryAfterMs: retry } : {}) }
+
+    function timeout(): HttpAnswer {
+      return failure(504, 'BACKEND_TIMEOUT', `The Harness backend did not answer ${method} ${path} within ${timeoutMs / 1000}s. Try again in a moment.`)
+    }
   }
 
   const cache = new MachineListCache(() => backend('GET', '/api/machines'), () => deps.computer.id,
