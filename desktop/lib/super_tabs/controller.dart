@@ -1115,14 +1115,17 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> removeBuddy(String projectId) async =>
       await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
 
-  /// Where conversation [id] opens: with Buddies on there is no Chat with PM
-  /// in the app (Ken, 10-28), so the reader's old one opens their project's
-  /// chat, where the PM is talked to; any other opens itself.
+  /// Whether [group] is out of the app: with Buddies on there is no private
+  /// channel to the PM (Ken, 10-28), so no private chat but a Buddy chat is
+  /// listed or opened, the reader's old Chat with PM included.
+  bool hiddenByBuddies(SuperTabConversation group) =>
+      buddiesOn && group.audience != null && !group.isBuddyChat;
+
+  /// Where conversation [id] opens: a chat [hiddenByBuddies] opens its
+  /// project's chat, where the PM is talked to; any other opens itself.
   String _shownFor(String id) {
     final group = snapshot?.conversation(id);
-    if (!buddiesOn || group == null || pmChat(group.projectId)?.id != id) {
-      return id;
-    }
+    if (group == null || !hiddenByBuddies(group)) return id;
     return snapshot!.projects
             .where((p) => p.id == group.projectId)
             .firstOrNull

@@ -416,6 +416,8 @@ class ProjectSidebar extends StatelessWidget {
               g.projectId == project.id &&
               g.id != project.leadConversationId &&
               g.id != controller.pmChat(project.id)?.id &&
+              !g.isBuddyChat &&
+              !controller.hiddenByBuddies(g) &&
               g.closed,
         )
         .toList();
@@ -580,6 +582,7 @@ class ProjectSidebar extends StatelessWidget {
               g.id != project.leadConversationId &&
               g.id != pmChat &&
               !g.isBuddyChat &&
+              !controller.hiddenByBuddies(g) &&
               !g.closed,
         )
         .toList();

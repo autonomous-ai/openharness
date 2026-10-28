@@ -651,9 +651,24 @@ class ConversationServer {
         // As the backend's Buddy create: a start for the reader's Buddy and
         // its chat, fixed per person and project. The fixture's host starts it
         // at once.
-        revision++;
         final person = reader ?? 'owner';
         final projectId = command['projectId'] as String;
+        bool mine(Object? a) =>
+            a is Map &&
+            (a['buddyOf'] as Map?)?['personId'] == person &&
+            a['projectId'] == projectId;
+        // As the backend: one Buddy per person and project. A running one
+        // refuses another; a down one is replaced.
+        if ((state['agents'] as List).any(
+          (a) => mine(a) && (a as Map)['downSince'] == null,
+        )) {
+          throw const SuperTabFailure(
+            'BUDDY_EXISTS',
+            'You already have a Buddy in this project.',
+            statusCode: 409,
+          );
+        }
+        revision++;
         final agentId = 'buddy-$revision';
         final chatId = 'buddy-$person-$projectId';
         final machine = (state['machines'] as List? ?? const [])
@@ -665,7 +680,10 @@ class ConversationServer {
             .where((p) => p['id'] == person)
             .firstOrNull;
         // A test's lists may be typed literals: copy into plain lists.
-        state['agents'] = <dynamic>[...state['agents'] as List];
+        state['agents'] = <dynamic>[
+          for (final a in state['agents'] as List)
+            if (!mine(a)) a,
+        ];
         state['starts'] = <dynamic>[...state['starts'] as List? ?? const []];
         (state['starts'] as List).add({
           'id': 'start-$revision',

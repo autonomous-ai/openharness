@@ -956,6 +956,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       .where(
                         (group) =>
                             group.archived &&
+                            !c.hiddenByBuddies(group) &&
                             group.projectId == c.selected?.projectId &&
                             group.title.toLowerCase().contains(query),
                       )
@@ -2112,20 +2113,28 @@ class _SuperTabViewState extends State<SuperTabView>
               : unread && c.error != null
               ? _firstReadFailed(c.error!)
               : messages.isEmpty && outgoing.isEmpty
-              ? Center(
-                  child: Text(
-                    c.accessRevoked
-                        ? 'Conversation unavailable.'
-                        : group == null
-                        ? 'Loading conversation…'
-                        : c.snapshot!.isProjectLead(group.id)
-                        ? 'Discuss the plan with your product manager.'
-                        : _buddyName(group) != null
-                        ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
-                        : _isPmChat(group)
-                        ? 'Only you and the Product Manager read this chat.'
-                        : 'Start the conversation.',
-                    style: DesktopChrome.text(color: DesktopChrome.muted),
+              ? Padding(
+                  // The pane's side padding, as the composer has: a long line
+                  // wraps inside it, centered.
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: grid.AppDesktop.panelPadding,
+                  ),
+                  child: Center(
+                    child: Text(
+                      c.accessRevoked
+                          ? 'Conversation unavailable.'
+                          : group == null
+                          ? 'Loading conversation…'
+                          : c.snapshot!.isProjectLead(group.id)
+                          ? 'Discuss the plan with your product manager.'
+                          : _buddyName(group) != null
+                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
+                          : _isPmChat(group)
+                          ? 'Only you and the Product Manager read this chat.'
+                          : 'Start the conversation.',
+                      textAlign: TextAlign.center,
+                      style: DesktopChrome.text(color: DesktopChrome.muted),
+                    ),
                   ),
                 )
               : Stack(

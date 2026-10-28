@@ -107,6 +107,25 @@ void main() {
       expect(c.selectedId, before);
     });
 
+    test('adding a second Buddy while one runs in the project is refused, as the backend does', () async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+
+      expect(
+        await c.addBuddy(
+          projectId: 'lead',
+          machineId: 'studio',
+          engine: 'claude',
+        ),
+        isFalse,
+      );
+      expect(c.operationError, 'You already have a Buddy in this project.');
+      expect(c.buddy('lead')?.id, 'wren');
+    });
+
     test('removing a Buddy sends its project and keeps its chat', () async {
       final server = buddySwarm();
       giveBuddy(server);
@@ -555,6 +574,14 @@ void main() {
             'machineId': 'ken-mac',
             'engine': 'codex',
           });
+          // The new Buddy replaces the down one: one Buddy, running.
+          expect(c.operationError, isNull);
+          expect(
+            c.snapshot!.agents.where((a) => a.buddyOf == 'peer'),
+            hasLength(1),
+          );
+          expect(c.buddy('lead')!.downSince, isNull);
+          expect(find.text('Wren is offline. Your chat stays.'), findsNothing);
           await close(tester, c);
         },
       );
@@ -580,6 +607,32 @@ void main() {
           await close(tester, c);
         },
       );
+
+      testWidgets('the empty Buddy chat text keeps the pane\'s side padding', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+
+        final text = tester.getRect(find.textContaining('Only you and Wren'));
+        final composer = tester.getRect(
+          find.byKey(const ValueKey('super-message-composer-row')),
+        );
+        // The composer row spans the pane; its field is inset by the panel
+        // padding, and so is the empty text.
+        expect(
+          text.left,
+          greaterThanOrEqualTo(composer.left + grid.AppDesktop.panelPadding),
+        );
+        expect(
+          text.right,
+          lessThanOrEqualTo(composer.right - grid.AppDesktop.panelPadding),
+        );
+        await close(tester, c);
+      });
 
       testWidgets(
         'an empty Buddy chat says who reads it and how to reach the PM',
@@ -745,6 +798,52 @@ void main() {
         giveBuddy(server);
         return (server, await show(tester, server));
       }
+
+      testWidgets('no other private chat is listed or opened either', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        (server.state['conversations'] as List).add({
+          ...conversationFixture('private', 'Pricing talk'),
+          'projectId': 'lead',
+          'agentIds': ['lead-agent'],
+          'audience': {
+            'people': [
+              {'id': 'peer', 'generation': 'fixture'},
+              {'id': 'owner', 'generation': 'fixture'},
+            ],
+          },
+        });
+        final c = await show(tester, server);
+        if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey('super-group-offline')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const ValueKey('super-group-private')), findsNothing);
+        expect(find.text('Pricing talk'), findsNothing);
+        expect(await c.select('private'), isTrue);
+        expect(c.selectedId, 'lead');
+        await close(tester, c);
+      });
+
+      testWidgets(
+        'Notifications keep Decisions, for anyone with or without a Buddy',
+        (tester) async {
+          final server = buddySwarm();
+          server.ask(['Ship it?']);
+          final c = await show(tester, server);
+          await tester.tap(find.byKey(const ValueKey('super-notifications')));
+          await tester.pumpAndSettle();
+
+          expect(find.text('Decisions'), findsOneWidget);
+          expect(find.text('Ship it?'), findsOneWidget);
+          await close(tester, c);
+        },
+      );
 
       testWidgets('the Buddy menu offers none', (tester) async {
         final (_, c) = await withHistory(tester);
