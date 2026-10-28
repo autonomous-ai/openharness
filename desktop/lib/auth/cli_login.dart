@@ -207,6 +207,11 @@ class CliLogin implements SignInClient, PhoneSignInClient {
         if (onQr != null && code != null) {
           throw PhoneSignInException(code, text);
         }
+        // A browser one says so too, for the count of why sign-ins did not go through. A CLI that
+        // ended without a result line crashed or was killed: that is a reason of its own.
+        if (onQr == null && (code != null || !gotResult)) {
+          throw SignInException(code ?? 'NO_RESULT', text);
+        }
         throw StateError(text);
       }
     } finally {

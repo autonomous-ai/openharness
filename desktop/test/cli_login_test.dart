@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/cli_login.dart';
+import 'package:harness/auth/sign_in_client.dart';
 import 'package:harness/auth/sign_in_provider.dart';
 import 'package:harness/core/harness_cli_runner.dart';
 
@@ -222,6 +223,56 @@ void main() {
       cli.cancel();
       expect(urls, ['https://auth.example/current']);
       expect(process.kills, 0);
+    },
+  );
+
+  test(
+    'a coded CLI refusal reaches the app with its code and sentence',
+    () async {
+      final runner = _Runner();
+      final cli = CliLogin(runner: runner);
+      final login = cli.login(onAuthorizeUrl: (_) {});
+      final process = _Process();
+      runner.starts.single.complete(process);
+      process.emit({
+        'type': 'result',
+        'status': 'error',
+        'code': 'TIMEOUT',
+        'message': 'SSO login timed out',
+      });
+      process.finish(1);
+      await expectLater(
+        login,
+        throwsA(
+          isA<SignInException>()
+              .having((e) => e.code, 'code', 'TIMEOUT')
+              .having((e) => e.toString(), 'sentence', 'SSO login timed out'),
+        ),
+      );
+    },
+  );
+
+  test(
+    'a CLI that ends without a result line is reported as no result',
+    () async {
+      final runner = _Runner();
+      final cli = CliLogin(runner: runner);
+      final login = cli.login(onAuthorizeUrl: (_) {});
+      final process = _Process();
+      runner.starts.single.complete(process);
+      process.finish(1);
+      await expectLater(
+        login,
+        throwsA(
+          isA<SignInException>()
+              .having((e) => e.code, 'code', 'NO_RESULT')
+              .having(
+                (e) => e.toString(),
+                'sentence',
+                'Sign-in was cancelled.',
+              ),
+        ),
+      );
     },
   );
 
