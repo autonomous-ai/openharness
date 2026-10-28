@@ -299,9 +299,8 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
 
 /**
  * What a git that could not start is reported as. A missing one is said in words (NO_GIT); on Windows, where git is
- * not part of the system and the installer does not bring it, with where to get Git for Windows, since a person there
- * has no package manager that offers it by name (0 of 25 Windows Store installs succeeded, 2026-10-28). Any other
- * failure to start: what Node said.
+ * not part of the system and the installer does not bring it, with where to get Git for Windows and the winget line
+ * that installs it (0 of 25 Windows Store installs succeeded, 2026-10-28). Any other failure to start: what Node said.
  */
 export function gitStartFailure(error: NodeJS.ErrnoException, platform: NodeJS.Platform = process.platform): string {
   if (error.code !== 'ENOENT') return error.message
