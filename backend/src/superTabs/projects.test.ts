@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchingNarrowed } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost, watchingNarrowed } from './projects.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -580,6 +580,15 @@ describe('whether a commit narrows who may watch a terminal', () => {
     const { f, builder, narrowed } = watched()
     f.run({ type: 'agent.remove', agentId: builder })
     expect(narrowed()).toBe(true)
+  })
+
+  it('names each agent and the people who lost sight of it, never its machine\'s owner', () => {
+    const { f, builder, before } = watched()
+    f.state.people.push({ id: 'host', email: 'host@example.com', role: 'collaborator', generation: 'first' })
+    before.people.push({ id: 'host', email: 'host@example.com', role: 'collaborator', generation: 'first' })
+    expect(watchersLost(before, f.state)).toEqual([])
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
+    expect(watchersLost(before, f.state)).toEqual([{ agentId: builder, personIds: ['owner', 'peer'] }])
   })
 
   it('is not narrowed by a change that leaves every watcher watching', () => {
