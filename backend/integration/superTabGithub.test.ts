@@ -310,6 +310,11 @@ describe('a queued start\'s preparation token', () => {
     const { authorizeUrl, installUrl } = asked.json().data as { authorizeUrl: string; installUrl: string }
     expect(installUrl).toMatch(/\/installations\/new\?state=/)
     const state = new URL(authorizeUrl).searchParams.get('state')!
+    // The state is signed, not sealed, and goes to GitHub in the address: ids and the repository only, never the project's
+    // name (privacy review of #1980).
+    const carried = JSON.parse(Buffer.from(state.split('.')[0]!, 'base64url').toString())
+    expect(Object.keys(carried).sort()).toEqual(['autonomousEnv', 'exp', 'projectId', 'repository', 'scope', 'tabId', 'userId'])
+    expect(decodeURIComponent(authorizeUrl + installUrl)).not.toContain('Pool')
     // Someone who cannot push is told so, and nothing is approved.
     push = false
     const refused = await env.app.inject({ method: 'GET', url: `/api/github/callback?code=c&state=${encodeURIComponent(state)}` })

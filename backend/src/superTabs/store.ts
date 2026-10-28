@@ -1748,6 +1748,15 @@ export class SuperTabStore {
     })
   }
 
+  /** A project's name as [userId] may see it now, for the page GitHub sends them back to after approving its repository
+   *  (routes/superTabs.ts). Read here, not carried in the sign-in's state, which GitHub's addresses expose (privacy review of
+   *  #1980). Null when they may not see it any more, or it is gone. */
+  async projectNameFor(userId: string, autonomousEnv: AuthUser['autonomousEnv'], tabId: string, projectId: string): Promise<string | null> {
+    const person = await this.db.user.findUnique({ where: { id: userId }, select: { email: true } })
+    if (!person) return null
+    try { return (await this.projectRepository({ sub: userId, email: person.email, role: 'user', autonomousEnv }, tabId, projectId)).name } catch { return null }
+  }
+
   async machineRemoval(user: AuthUser, tabId: string, machineId: string) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
