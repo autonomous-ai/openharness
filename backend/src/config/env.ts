@@ -41,7 +41,7 @@ const envSchema = z.object({
 
   // On SIGTERM the API answers /api/ready with 503 at once, then keeps serving this long before it closes its
   // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
-  // Kubernetes sets it below terminationGracePeriodSeconds (backend/README.md).
+  // Kubernetes sets it, with probes and grace period, as backend/README.md describes.
   DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
 
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
