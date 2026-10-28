@@ -308,7 +308,7 @@ section says so. Every other rule in this document holds on the phone.
 | Field / row / pane radius | 10 | 10 |
 | Card / inset tile radius | 12 / 8 | 12 / 8 |
 | Popover and menu radius | 16 | 16 |
-| Dialog radius, sheet top corners | 20 | 20 |
+| Dialog radius | 20 | 20 |
 | Action buttons | capsule | capsule |
 
 Every independently tappable control reaches 44 points. A control drawn
@@ -324,6 +324,8 @@ Deliberate differences from Desktop, and only these:
 - Swarm screens set their top-bar titles in the terminal face, as the approved
   phone prototype does. Everything else on them uses the system face.
 - The terminal keeps its own font, size and palette, as on Desktop.
+- Bottom sheets, which Desktop does not have, round their top corners at the
+  card radius (12).
 
 The mobile style check (`scripts/check-ui-style.py`) covers `mobile/lib/swarm`
 with the same rules and allowlist as Desktop's Swarm code.
