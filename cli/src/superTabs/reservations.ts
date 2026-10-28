@@ -8,6 +8,7 @@ import { creationObservation, type CreationObservation } from '../lib/creationOb
 import { readMachineResources } from '../lib/machineResources.js'
 import { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import { readCapacityDisk } from './disk.js'
+import { gibibytes, memoryShort } from './capacity.js'
 import { object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -47,13 +48,6 @@ const unavailable = (detail: string): Json => ({ error: 'CAPACITY_UNAVAILABLE', 
  *  so a reservation held past its start counted the agent twice: on Ken's MacBook Pro (2026-10-28) three settled builders
  *  using about 0.4 GiB held 6 GiB, and a start was refused with 7.85 GiB free. The window covers an agent still loading. */
 export const START_WINDOW_MS = 5 * 60_000
-const GiB = 1024 ** 3
-/** One decimal, rounded down, so a refusal never reads "2 GiB free, 2 GiB needed". */
-export const gibibytes = (bytes: number) => `${Math.floor(Math.max(0, bytes) / GiB * 10) / 10} GiB`
-/** The refusal for memory, the one start-failure reason every Swarm member may read (backend startFailure.ts):
- *  it says only numbers they already see in the Machines view. */
-export const memoryShort = (freeBytes: number, neededBytes: number) =>
-  `Not enough free memory: ${gibibytes(freeBytes)} free, ${gibibytes(neededBytes)} needed.`
 const memoryOf = (core: CoreApi) => {
   const read = createHarnessResourcesReader(() => core.agents.live())
   return async () => new Map((await read()).agents.flatMap(row => row.memoryBytes === null ? [] : [[row.agentId, row.memoryBytes] as const]))

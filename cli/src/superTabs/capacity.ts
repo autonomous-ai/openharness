@@ -69,6 +69,13 @@ export async function readCapabilities(input: Json, deps = {
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const GiB = 1024 ** 3
+/** One decimal, rounded down, so a refusal never reads "2 GiB free, 2 GiB needed". */
+export const gibibytes = (bytes: number) => `${Math.floor(Math.max(0, bytes) / GiB * 10) / 10} GiB`
+/** The refusal for memory, the one start-failure reason every Swarm member may read (backend startFailure.ts): it says
+ *  only numbers they already see in the Machines view. */
+export const memoryShort = (freeBytes: number, neededBytes: number) =>
+  `Not enough free memory: ${gibibytes(freeBytes)} free, ${gibibytes(neededBytes)} needed.`
 /** Only measured windows leave the account reader. No credentials, emails or
  * invented token counts; an unreported/custom-profile allowance is unknown. */
 export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
@@ -108,7 +115,7 @@ export function admission(capacity: Json, engine: Json, quota: ReturnType<typeof
     ['Project disk space', resources.projectDiskFreeBytes, requirements.diskBytes],
   ] as const) {
     if (!finite(value)) { unknown.push(`${label} is unknown.`); if (needed > 0) reasons.push(`${label} could not be verified.`) }
-    else if (value < needed) reasons.push(`${label} is ${value} bytes; this work requires ${needed}.`)
+    else if (value < needed) reasons.push(label === 'Available memory' ? memoryShort(value, needed) : `${label} is ${value} bytes; this work requires ${needed}.`)
   }
   if (!finite(resources.cpuPercent)) {
     unknown.push('CPU use is unknown.')
