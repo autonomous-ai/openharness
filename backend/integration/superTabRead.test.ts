@@ -310,6 +310,22 @@ describe('dormant groups on demand (design 4.5)', () => {
   })
 })
 
+describe('a dormant group\'s required machines', () => {
+  it('names to each reader only the machines that reader sees, in the dormant list and read by id', async () => {
+    const s = await scene((f, ids) => {
+      // Only an agent of the private project runs on 'secret-mac', so the outsider does not see that machine.
+      f.add('secret-harness', f.group('Secret 2', ids.secret), false, ownerActor, 'secret-mac', owner.sub)
+      f.edit(state => { state.conversations.find(c => c.id === ids.done)!.task = { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'],
+        requires: { machines: ['secret-mac', 'host'] } } })
+    })
+    const requires = async (as: AuthUser) => [
+      (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, as)).body.data.groups.find((g: { key: string }) => g.key === s.done).data.task.requires,
+      (await get(`/api/super-tabs/${s.tabId}/groups/${s.done}`, as)).body.data.group.data.task.requires]
+    expect(await requires(owner)).toEqual([{ machines: ['secret-mac', 'host'] }, { machines: ['secret-mac', 'host'] }])
+    expect(await requires(outsider)).toEqual([{ machines: ['host'], unseenMachines: 1 }, { machines: ['host'], unseenMachines: 1 }])
+  })
+})
+
 describe('Swarm list and old routes (design 4.9, 4.11)', () => {
   it('lists the caller\'s Swarms with their newest change', async () => {
     const s = await scene()
