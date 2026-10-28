@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 import 'client.dart';
 import 'controller.dart';
 import 'model.dart';
@@ -226,4 +228,84 @@ class SwarmWorkspacesApi {
         '${_swarm(tabId)}/workspace-join',
         body: {'operationId': operationId},
       );
+}
+
+/// The person's Workspaces and the invitations waiting for them, for the
+/// Workspace menu at the top of the Swarm sidebar. Read when the menu is
+/// built or opened and after each change made here, not polled: a Workspace
+/// changes rarely, and the next open shows what changed meanwhile. One per
+/// [SuperTabClient]; nothing read for one account is shown to the next.
+class SwarmWorkspaces extends ChangeNotifier {
+  SwarmWorkspaces(this.client) : api = SwarmWorkspacesApi(client);
+
+  static final _all = Expando<SwarmWorkspaces>();
+  static SwarmWorkspaces of(SuperTabClient client) =>
+      _all[client] ??= SwarmWorkspaces(client);
+
+  final SuperTabClient client;
+  final SwarmWorkspacesApi api;
+  String? _readFor;
+  List<SwarmWorkspace>? _workspaces;
+  List<SwarmWorkspaceInvitation> _invitations = const [];
+  String? _error;
+  Future<void>? _reading;
+
+  bool get _current => _readFor != null && _readFor == client.account;
+
+  /// Null until read, and from a backend without Workspaces.
+  List<SwarmWorkspace>? get workspaces => _current ? _workspaces : null;
+  List<SwarmWorkspaceInvitation> get invitations =>
+      _current ? _invitations : const [];
+
+  /// Why the last read failed; the last list read stays shown.
+  String? get error => _current ? _error : null;
+
+  /// Owners and admins always see the menu, to manage people; anyone with
+  /// several Workspaces or an invitation waiting, to switch or accept. A
+  /// member or guest of one Workspace sees the sidebar as before Workspaces.
+  bool get showsMenu {
+    final all = workspaces;
+    if (all == null || all.isEmpty) return false;
+    return all.length > 1 ||
+        invitations.isNotEmpty ||
+        all.any((w) => w.role.managesPeople);
+  }
+
+  /// The Workspace holding the Swarm [tabId]; for one no Workspace lists, the
+  /// first the person manages, else their first.
+  SwarmWorkspace? current(String tabId) {
+    final all = workspaces;
+    if (all == null || all.isEmpty) return null;
+    return all.where((w) => w.swarms.any((s) => s.id == tabId)).firstOrNull ??
+        all.where((w) => w.role.managesPeople).firstOrNull ??
+        all.first;
+  }
+
+  Future<void> refresh() =>
+      _reading ??= _read().whenComplete(() => _reading = null);
+
+  Future<void> _read() async {
+    final account = client.account;
+    if (account == null) return;
+    try {
+      final workspaces = await api.list();
+      final invitations = workspaces == null
+          ? const <SwarmWorkspaceInvitation>[]
+          : await api.invitationsForMe();
+      if (client.account != account) return;
+      _readFor = account;
+      _workspaces = workspaces;
+      _invitations = invitations;
+      _error = null;
+    } on SuperTabFailure catch (failure) {
+      if (client.account != account) return;
+      if (_readFor != account) {
+        _readFor = account;
+        _workspaces = null;
+        _invitations = const [];
+      }
+      _error = failure.message;
+    }
+    notifyListeners();
+  }
 }

@@ -29,6 +29,41 @@ SwarmWorkspacesApi _api(_Backend backend) => SwarmWorkspacesApi(
   SuperTabClient(transport: backend.call, storage: MemoryStore())..bind('ken'),
 );
 
+Map<String, dynamic> _workspace(
+  String id,
+  String role, {
+  List<String> swarms = const [],
+}) => {
+  'id': id,
+  'name': 'Workspace $id',
+  'role': role,
+  'revision': 1,
+  'swarms': [
+    for (final s in swarms)
+      {
+        'id': s,
+        'name': 'Swarm $s',
+        'workspaceVisibility': 'invite-only',
+        'member': true,
+      },
+  ],
+};
+
+void _lists(
+  _Backend backend,
+  List<Map<String, dynamic>> workspaces, {
+  List<Map<String, dynamic>> invitations = const [],
+}) {
+  backend.answers['/api/super-tabs/workspaces'] = {'workspaces': workspaces};
+  backend.answers['/api/super-tabs/workspace-invitations'] = {
+    'invitations': invitations,
+  };
+}
+
+int _reads(_Backend backend) => backend.requests
+    .where((r) => r.method == 'GET' && r.path == '/api/super-tabs/workspaces')
+    .length;
+
 void main() {
   test(
     'lists the person\'s Workspaces with the Swarms the server shows them',
@@ -324,4 +359,146 @@ void main() {
       );
     },
   );
+
+  group('the person\'s Workspaces, as the menu shows them', () {
+    late _Backend backend;
+    late SuperTabClient client;
+    late SwarmWorkspaces state;
+    setUp(() {
+      backend = _Backend();
+      client = SuperTabClient(transport: backend.call, storage: MemoryStore())
+        ..bind('ken');
+      state = SwarmWorkspaces(client);
+    });
+    tearDown(() => state.dispose());
+
+    test(
+      'an owner with one Workspace sees the menu, to manage its people',
+      () async {
+        _lists(backend, [
+          _workspace('w1', 'owner', swarms: ['s1']),
+        ]);
+        await state.refresh();
+        expect(state.showsMenu, isTrue);
+      },
+    );
+
+    test('an admin with one Workspace sees it too', () async {
+      _lists(backend, [_workspace('w1', 'admin')]);
+      await state.refresh();
+      expect(state.showsMenu, isTrue);
+    });
+
+    test(
+      'a member or guest with one Workspace sees the sidebar as today',
+      () async {
+        _lists(backend, [
+          _workspace('w1', 'member', swarms: ['s1']),
+        ]);
+        await state.refresh();
+        expect(state.showsMenu, isFalse);
+        _lists(backend, [
+          _workspace('w1', 'guest', swarms: ['s1']),
+        ]);
+        await state.refresh();
+        expect(state.showsMenu, isFalse);
+      },
+    );
+
+    test(
+      'a guest with an invitation waiting sees the menu, to accept it',
+      () async {
+        _lists(
+          backend,
+          [_workspace('w1', 'guest')],
+          invitations: [
+            {
+              'workspaceId': 'w3',
+              'name': 'Acme',
+              'role': 'member',
+              'expiresAt': 1794000000000,
+            },
+          ],
+        );
+        await state.refresh();
+        expect(state.showsMenu, isTrue);
+        expect([for (final i in state.invitations) i.name], ['Acme']);
+      },
+    );
+
+    test('a guest in two Workspaces sees the menu, to switch', () async {
+      _lists(backend, [_workspace('w1', 'guest'), _workspace('w2', 'guest')]);
+      await state.refresh();
+      expect(state.showsMenu, isTrue);
+    });
+
+    test('an older backend without Workspaces shows no menu', () async {
+      backend.failures['/api/super-tabs/workspaces'] = const SuperTabFailure(
+        'NOT_FOUND',
+        'Not found',
+        statusCode: 404,
+      );
+      backend.failures['/api/super-tabs/workspace-invitations'] =
+          const SuperTabFailure('NOT_FOUND', 'Not found', statusCode: 404);
+      await state.refresh();
+      expect(state.workspaces, isNull);
+      expect(state.showsMenu, isFalse);
+      expect(state.error, isNull);
+    });
+
+    test(
+      'the current Workspace is the one holding the Swarm on screen',
+      () async {
+        _lists(backend, [
+          _workspace('w1', 'guest', swarms: ['s1']),
+          _workspace('w2', 'owner', swarms: ['s2']),
+        ]);
+        await state.refresh();
+        expect(state.current('s1')?.id, 'w1');
+        expect(state.current('s2')?.id, 'w2');
+        // A Swarm no Workspace lists: the first one the person manages.
+        expect(state.current('elsewhere')?.id, 'w2');
+      },
+    );
+
+    test('a failed read keeps the last list and says why', () async {
+      _lists(backend, [_workspace('w1', 'owner')]);
+      await state.refresh();
+      backend.failures['/api/super-tabs/workspaces'] = const SuperTabFailure(
+        'OFFLINE',
+        'Harness is offline.',
+      );
+      await state.refresh();
+      expect([for (final w in state.workspaces!) w.id], ['w1']);
+      expect(state.error, 'Harness is offline.');
+      backend.failures.clear();
+      await state.refresh();
+      expect(state.error, isNull);
+    });
+
+    test('reads asked together share one request', () async {
+      _lists(backend, [_workspace('w1', 'owner')]);
+      await Future.wait<void>([state.refresh(), state.refresh()]);
+      expect(_reads(backend), 1);
+    });
+
+    test('nothing of an account that left is shown to the next one', () async {
+      _lists(backend, [
+        _workspace('w1', 'owner', swarms: ['s1']),
+      ]);
+      await state.refresh();
+      client.bind('diego');
+      expect(state.workspaces, isNull);
+      expect(state.showsMenu, isFalse);
+      expect(state.current('s1'), isNull);
+    });
+
+    test('a read that answers after the account changed is dropped', () async {
+      _lists(backend, [_workspace('w1', 'owner')]);
+      final read = state.refresh();
+      client.bind('diego');
+      await read;
+      expect(state.workspaces, isNull);
+    });
+  });
 }

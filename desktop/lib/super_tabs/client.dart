@@ -257,6 +257,9 @@ class SuperTabClient {
   /// account still belongs to.
   Set<String> get hiddenIds => Set.unmodifiable(_hidden);
 
+  /// The account this client reads for, or null signed out.
+  String? get account => _account;
+
   void bind(String? account) {
     if (_account == account) return;
     for (final timer in _viewSaves.values) {
