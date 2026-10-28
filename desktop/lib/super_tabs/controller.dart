@@ -126,6 +126,9 @@ class SuperTabController extends ChangeNotifier {
   SuperTabSnapshot? snapshot;
   String selectedId = 'lead';
 
+  /// Counts [select] calls, so a slow one cannot land over a newer one.
+  int _selectRequest = 0;
+
   /// The newest change of the Swarm this tab has read, in epoch milliseconds: what tells the app and the tag list
   /// that it changed (spec ruling 8).
   int lastChangedAt = -1;
@@ -902,11 +905,15 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Opens conversation [id], reading it first when it is not held
-  /// ([loadGroup]); false when it cannot be read.
+  /// ([loadGroup]); false when it cannot be read, or another was opened while
+  /// it was.
   Future<bool> select(String id) async {
+    final ask = ++_selectRequest;
     // A held group is selected at once, before this returns.
-    if (snapshot?.conversation(id) == null && !await loadGroup(id)) {
-      return false;
+    if (snapshot?.conversation(id) == null) {
+      if (!await loadGroup(id)) return false;
+      // The reader moved on while this was read: it must not pull them back.
+      if (ask != _selectRequest) return false;
     }
     if (id == selectedId && !devicesSelected) return true;
     devicesSelected = false;
