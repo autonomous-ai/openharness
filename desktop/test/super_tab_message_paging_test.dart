@@ -150,34 +150,31 @@ void main() {
     },
   );
 
-  test(
-    'an older page read while the latest page replaces the held ones leaves '
-    'no gap',
-    () async {
-      final server = ConversationServer()..messagePage = 2;
-      for (final text in ['one', 'two', 'three', 'four']) {
-        server.append(text);
-      }
-      final c = server.controller();
-      await c.refresh();
-      for (final text in ['five', 'six', 'seven']) {
-        server.append(text);
-      }
-      final pages = server.holdReads = Completer<void>();
+  test('an older page read while the latest page replaces the held ones leaves '
+      'no gap', () async {
+    final server = ConversationServer()..messagePage = 2;
+    for (final text in ['one', 'two', 'three', 'four']) {
+      server.append(text);
+    }
+    final c = server.controller();
+    await c.refresh();
+    for (final text in ['five', 'six', 'seven']) {
+      server.append(text);
+    }
+    final pages = server.holdReads = Completer<void>();
 
-      // The reader scrolls up while the poll finds more than a page new.
-      final newest = c.loadMessages('lead');
-      final older = c.loadMessages('lead', older: true);
-      server.holdReads = null;
-      pages.complete();
-      await Future.wait([newest, older]);
+    // The reader scrolls up while the poll finds more than a page new.
+    final newest = c.loadMessages('lead');
+    final older = c.loadMessages('lead', older: true);
+    server.holdReads = null;
+    pages.complete();
+    await Future.wait([newest, older]);
 
-      final shown = c.messages('lead').map((m) => m.sequence).toList();
-      expect(shown.last, 7);
-      expect(shown, List.generate(shown.length, (i) => shown.first + i));
-      expect(c.hasOlder('lead'), isTrue);
-    },
-  );
+    final shown = c.messages('lead').map((m) => m.sequence).toList();
+    expect(shown.last, 7);
+    expect(shown, List.generate(shown.length, (i) => shown.first + i));
+    expect(c.hasOlder('lead'), isTrue);
+  });
 
   test('a new message is read after the newest one', () async {
     final server = ConversationServer()..append('one');
