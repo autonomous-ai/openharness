@@ -3198,9 +3198,10 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
   }
   const observers = async (agentId: string) => (await rosterRows(store, host, 'test-host')).find(t => t.agent?.id === agentId)!.observers.map(p => p.userId)
 
-  // A terminal drives its session and its answers land in the conversation: once the session reads private chats, only its
-  // machine's owner may use one, as only they may watch it.
-  it('revokes at once a member\'s terminal on a Builder made its project\'s Lead, refuses a fresh one, and keeps the machine owner\'s', async () => {
+  // A terminal drives its session and its answers land in the conversation. Driving another person's Lead needs its machine's
+  // owner (terminal.ts mayDrive), so a member's terminal on a Builder made a Lead is refused from then on, whether or not it
+  // was revoked with the change.
+  it('refuses a member\'s terminal on a Builder made its project\'s Lead, at use and at open, and keeps the machine owner\'s', async () => {
     const { tab } = await fixture()
     await invite(tab)
     const asHost = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
@@ -3216,17 +3217,16 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       text: 'Typed into the Builder', truncated: false, interrupted: false })
     await typed(peers, 'before')
 
-    // Peer still reads the Builder's conversation; leading the project, where people chat with it privately, makes it confidential.
     await run(tab, { type: 'conversation.agent', conversationId: second.conversationId, agentId: worker, present: true, lead: true })
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: peers } })).revoked).toBe(true)
-    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: hosts } })).revoked).toBe(false)
     await expect(typed(peers, 'after')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
-    await expect(opened(peer)).rejects.toMatchObject({ code: 'SESSION_CONFIDENTIAL' })
-    await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
-    // A terminal the revoke did not reach (one written before this rule) is refused at use all the same.
-    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
-    await expect(typed(peers, 'missed')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
     await expect(store.native.read(host, tab, peers)).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    await expect(opened(peer)).rejects.toMatchObject({ code: 'TERMINAL_PRIVATE' })
+    // Even a terminal the change left unrevoked is refused at use.
+    await db.superTabNativeContext.update({ where: { id: peers }, data: { revoked: false } })
+    await expect(typed(peers, 'unrevoked')).rejects.toMatchObject({ code: 'NATIVE_CONTEXT_REVOKED' })
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: hosts } })).revoked).toBe(false)
+    await expect(typed(hosts, 'owner')).resolves.toMatchObject({ eventId: expect.any(String) })
+    await expect(opened(host)).resolves.toMatchObject({ contextId: expect.any(String) })
   })
 
   it('lets nobody but its machine\'s owner watch it: not a reader outside the chat, not the Swarm owner, not with an earlier share', async () => {
