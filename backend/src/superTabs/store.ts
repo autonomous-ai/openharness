@@ -181,6 +181,28 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
   if (!pending) throw new Error('afterCommit needs a client from a Swarm transaction (store.ts transaction).')
   pending.push(callback)
 }
+/** An agent's open deliveries, oldest first and each conversation's tied rows in its order (pageReads.ts): one indexed
+ *  read, and the tied messages' sequences only when there are ties. */
+const openDeliveries = async (tx: Transaction, tabId: string, agentId: string) => inConversationOrder(tx, tabId,
+  await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 }))
+
+/** The grants a held answer checks again: the agent's own and those of the agents that sent what it allowed. */
+function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelivery[]) {
+  const grants: Record<string, AgentGrant> = {}
+  for (const id of [agentId, ...allowed.filter(d => d.authorKind === 'agent').map(d => d.authorId)]) {
+    const found = state.agents.find(a => a.id === id)
+    if (found) grants[id] = { contributorId: found.contributorId, machineId: found.machineId, machineOwnerId: found.machineOwnerId, hostGrant: found.hostGrant ?? null }
+  }
+  return { swarm: { workspaceId: state.workspaceId, environment: state.environment }, grants }
+}
+
+const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids.length && rows.every(r => ids.includes(r.id))
+
+/** Whose full poll `deliveries` remembers: the caller, and a team session apart, as it may act only for its own machine's
+ *  agents (teamHost) while its person may act for any of theirs. */
+const pollKey = (user: AuthUser, tabId: string, agentId: string) =>
+  `${tabId}:${agentId}:${user.sub}${user.harnessSessionKind === 'team' ? `:team:${user.harnessComputerId ?? ''}` : ''}`
+
 /** Logged, never thrown: without the memory the delivery poll just runs in full. */
 const pollMemoryFailed = (error: unknown): void => {
   logger.warn('[super-tab] delivery poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
@@ -240,21 +262,36 @@ export interface SuperTabStoreHooks {
 /** Which agent, of which Swarm, on which machine, has a delivery to read. */
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
 
+/** What of a Swarm an agent's grant is checked against (SuperTabStore.grantHolds). */
+export type SwarmGrant = Pick<SuperTabState, 'workspaceId' | 'environment'>
+/** What of an agent its grant is checked against: who lent which machine to whom, under which share grant. */
+export type AgentGrant = Pick<Agent, 'contributorId' | 'machineId' | 'machineOwnerId' | 'hostGrant'>
+
+/** A caller's last full delivery poll: when it succeeded and, when it found deliveries open, what it found. */
+export interface Polled {
+  at: number
+  /** The open deliveries it read, those of them it let reach the agent, and the Swarm's main stamp (cache.ts) read before
+   *  it loaded: while all three are unchanged, a held delivery is answered without loading the Swarm (deliveries). The
+   *  grants of the agent and of the agents that sent what it allowed, by agent id, are checked again on every such answer:
+   *  they rest on Workspaces, machines and shares, which no Swarm write records. */
+  open?: { stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
+}
+
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
 export interface PollMemory {
-  get(key: string): Promise<number | undefined>
+  get(key: string): Promise<Polled | undefined>
   /** Remembered for SWEEP_EVERY_MS at least; an older entry is never read. */
-  set(key: string, at: number): Promise<void>
+  set(key: string, polled: Polled): Promise<void>
 }
 
 /** One server's own memory: with several servers behind a load balancer, each runs its own full polls. */
 export function localPollMemory(now: () => number): PollMemory {
-  const polled = new Map<string, number>()
+  const polled = new Map<string, Polled>()
   return {
     get: async key => polled.get(key),
-    set: async (key, at) => {
-      polled.set(key, at)
-      if (polled.size > POLLED_CAP) for (const [k, last] of polled) if (now() - last >= SWEEP_EVERY_MS) polled.delete(k)
+    set: async (key, value) => {
+      polled.set(key, value)
+      if (polled.size > POLLED_CAP) for (const [k, last] of polled) if (now() - last.at >= SWEEP_EVERY_MS) polled.delete(k)
     },
   }
 }
@@ -560,13 +597,19 @@ export class SuperTabStore {
    *  contributor, who must still be in the Swarm's Workspace. Its host need not be, as it need not be in the Swarm. */
   /** `reads`: one request's reads, shared by every agent it checks (GrantReads). */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent, reads?: GrantReads): Promise<void> {
+    await this.grantHolds(tx, state, target, () => person(state, target.contributorId), reads)
+  }
+
+  /** What an agent's grant rests on outside the Swarm: its contributor's Workspace membership, its machine and, lent, the
+   *  machine's share. `inSwarm` checks the contributor is still in it, at the point the full check always did. */
+  private async grantHolds(tx: Transaction, state: SwarmGrant, target: AgentGrant, inSwarm: () => void, reads?: GrantReads): Promise<void> {
     const once = <T>(key: string, read: () => Promise<T>) => reads ? reads.once(key, read) : read()
     await once(`workspace:${state.workspaceId}:${target.contributorId}`, () => requireWorkspaceAccess(tx, state, target.contributorId))
     const machine = await once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
       where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } }))
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     if (target.contributorId !== machine.userId) {
-      person(state, target.contributorId)
+      inSwarm()
       const contributor = await once(`user:${target.contributorId}`, () => tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } }))
       const share = await once(`share:${machine.machineId}`, () => tx.machineShare.findUnique({ where: { machineId: machine.machineId } }))
       if (!contributor || contributor.autonomousEnv !== state.environment || !share || share.ownerId !== machine.userId ||
@@ -2063,20 +2106,52 @@ export class SuperTabStore {
    * succeeded is ever answered this way, so a stranger or a revoked host meets the authority checks every time.
    */
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
-    const key = `${tabId}:${agentId}:${user.sub}`
+    const key = pollKey(user, tabId, agentId)
     const last = await this.polls.get(key).catch(error => { pollMemoryFailed(error); return undefined })
-    if (last !== undefined && this.now() - last < SWEEP_EVERY_MS
-      && !await this.db.superTabDelivery.findFirst({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, select: { id: true } })) return []
-    const rows = await this.fullDeliveries(user, tabId, agentId)
-    await this.polls.set(key, this.now()).catch(pollMemoryFailed)
-    return rows
+    if (last !== undefined && this.now() - last.at < SWEEP_EVERY_MS) {
+      const open = await openDeliveries(this.db, tabId, agentId)
+      if (!open.length) return []
+      // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
+      // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
+      // revokes moves the stamp; what no Swarm write records (a Workspace, a machine, a share) is checked again each time.
+      // A turn typed into a terminal rests on its typist's access too (native.ts allowsDelivery): it takes the full poll.
+      const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
+      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen) && !open.some(d => d.nativeContextId)) {
+        return this.heldDeliveries(user, agentId, open, seen)
+      }
+    }
+    const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
+    const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view)
+    await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
+      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
+      .catch(pollMemoryFailed)
+    return allowed
   }
 
-  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string) {
+  /** The open deliveries the last full poll allowed, while the Swarm is as it read it: the grants it checked are checked
+   *  again, as the full poll does: the agent's refuses the poll, a sender's withholds what it sent (senderAllowed). */
+  private async heldDeliveries(user: AuthUser, agentId: string, open: SuperTabDelivery[], seen: NonNullable<Polled['open']>) {
+    // One request's reads, shared by the agent's check and its senders' (GrantReads), never kept past it.
+    const target = seen.grants[agentId]!, inSwarm = () => {}, reads = new GrantReads()
+    const team = await this.teamHost(this.db, user)
+    if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    await this.grantHolds(this.db, seen.swarm, target, inSwarm, reads)
+    const senders = new Map<string, Promise<boolean>>()
+    const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm, reads)
+      .then(() => true, error => { if (error instanceof SuperTabError) return false; throw error })).get(id)!
+    const allowed: SuperTabDelivery[] = []
+    for (const delivery of open) {
+      if (!seen.allowed.includes(delivery.id)) continue
+      if (delivery.authorKind !== 'agent' || seen.grants[delivery.authorId] && await sent(delivery.authorId)) allowed.push(delivery)
+    }
+    return allowed
+  }
+
+  private async fullDeliveries(user: AuthUser, tabId: string, agentId: string, view: CacheView) {
     // Every write below is the Lead's: its time checks, idle stops, update request, digest and stale runs. Any other agent's
     // poll only reads, through the read cache with no transaction (Diego's review of 10-28, item 1: 20 workers were 40
     // whole-Swarm loads, clones and empty commits a minute). The authority checks are the same; a claim checks them again.
-    const read = await this.readLoad(user, tabId)
+    const read = await this.readLoad(user, tabId, {}, view)
     if (!ledProject(read.state, agentId)) {
       author(read.state, await this.actor(this.db, user, read.state, agentId), true)
       return this.allowedDeliveries(this.db, read.state, tabId, agentId)
@@ -2156,15 +2231,14 @@ export class SuperTabStore {
     })
   }
 
-  /** The agent's open deliveries, oldest first and each conversation's in its order, that its Swarm still lets reach it. */
+  /** The agent's open deliveries, and those of them its Swarm still lets reach it. */
   private async allowedDeliveries(tx: Transaction, state: SuperTabState, tabId: string, agentId: string) {
-    const rows = await inConversationOrder(tx, tabId, await tx.superTabDelivery.findMany({
-      where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 }))
+    const open = await openDeliveries(tx, tabId, agentId)
     const allowed: SuperTabDelivery[] = []
-    for (const delivery of rows) {
+    for (const delivery of open) {
       if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
     }
-    return allowed
+    return { open, allowed, state }
   }
 
   /** A withdrawn host can retire its own journal without regaining shared
