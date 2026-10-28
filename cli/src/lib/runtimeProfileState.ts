@@ -5,7 +5,7 @@ import type { RegisteredSession } from './registry.js'
 import type { RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../engines/facets/inlineRuntime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
-import { encodeRuntimeProfile, fillConfiguredEffort, record, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
+import { encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 import { engineNow, isOtherEngine, loadEngine } from '../engines/inProcess.js'
 import { processIdentityKey } from './terminalRuntime.js'
@@ -317,8 +317,7 @@ export class RuntimeProfileState {
   confirmEffort(sessionId: string, effort: string): void {
     if (!EFFORTS.has(effort)) return
     const state = this.state(sessionId)
-    state.effort = effort
-    state.observedAt = Date.now()
+    showEffort(state, effort)
     this.authoritative(state)
     const control = this.controls.get(sessionId)
     if (control) control.effortConfirmed = control.target.effort === effort
@@ -328,8 +327,7 @@ export class RuntimeProfileState {
   confirmControlProfile(target: RuntimeProfile): void {
     const state = this.state(target.sessionId)
     state.model = target.model
-    state.effort = target.effort
-    state.observedAt = Date.now()
+    showEffort(state, target.effort)
     this.authoritative(state)
     const control = this.controls.get(target.sessionId)
     if (control?.target.id === target.id) {

@@ -103,6 +103,14 @@ describe('runtime worker contract', () => {
     const filled = (await t.send({ operation: { kind: 'config' } })).answer.state
     t.adapter.configuredEffort.mockResolvedValueOnce('medium')
     expect((await t.send({ context: { ...context(), state: filled }, operation: { kind: 'config' } })).answer.state.effort).toBe('medium')
+    // A reply or the screen showing the settings' own effort makes it the session's: a later change leaves it (#1966 delta review).
+    const highReply = t.adapter.decode({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5-5' } })!
+    for (const operation of [{ kind: 'records', records: [highReply] }, { kind: 'pane', text: 'Opus 5.5 with high effort' }]) {
+      const shownHigh = (await t.send({ context: { ...context(), state: filled }, operation })).answer.state
+      expect(shownHigh.settingsEffort).toBeUndefined()
+      t.adapter.configuredEffort.mockResolvedValueOnce('medium')
+      expect((await t.send({ context: { ...context(), state: shownHigh }, operation: { kind: 'config' } })).answer.state.effort).toBe('high')
+    }
     expect((await t.send({ operation: { kind: 'pane', text: 'Opus 5 with high effort' } })).answer.state.model).toBe('claude-opus-5')
     expect((await t.send({ operation: { kind: 'models' } })).answer.models).toEqual([])
     expect((await t.send({ operation: { kind: 'catalog' } })).answer.catalog).toEqual([])

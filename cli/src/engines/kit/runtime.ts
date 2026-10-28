@@ -16,11 +16,20 @@ export function record(value: unknown): Record<string, unknown> | null {
 /** Puts [configured], the settings' default, where the session has shown no effort: none yet, or the one an earlier
  * settings read put there, which follows the settings (moved homes, the project override last). Read after the
  * transcript on attach, it replaced the effort a reply recorded, so an adopted agent or a restarted daemon reported it
- * wrong (#1966 review). An effort the session showed that equals the settings' reads as theirs: the same value either way. */
+ * wrong (#1966 review). */
 export function fillConfiguredEffort(state: RuntimeState, configured: string): void {
   if (state.effort !== null && state.effort !== state.settingsEffort) return
   state.effort = configured
   state.settingsEffort = configured
+  state.observedAt = Date.now()
+}
+
+/** Records [effort] as one the session showed (a reply, the screen): the settings never replace it, even when it
+ * equals what they filled. Kept as theirs, settings that filled high, then a reply showing high, then settings
+ * changed to medium made the row say medium while the session ran high (#1966 delta review). */
+export function showEffort(state: RuntimeState, effort: string): void {
+  state.effort = effort
+  delete state.settingsEffort
   state.observedAt = Date.now()
 }
 

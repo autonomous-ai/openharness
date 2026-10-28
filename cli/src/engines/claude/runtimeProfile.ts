@@ -2,7 +2,7 @@
 import { join } from 'node:path'
 import { sessionClaudeHome } from '../../lib/engineHomes.js'
 import type { EngineRuntime, RuntimeContext, RuntimeModelOption, RuntimeRecord, RuntimeSession, RuntimeState } from '../facets/runtime.js'
-import { addOption, currentPaneUi, encodeRuntimeProfile, flattenContent, parseVersion, readJson, record, stripAnsi, text, versionAtLeast } from '../kit/runtime.js'
+import { addOption, currentPaneUi, encodeRuntimeProfile, flattenContent, parseVersion, readJson, record, showEffort, stripAnsi, text, versionAtLeast } from '../kit/runtime.js'
 
 const CLAUDE_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
 const BASIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -146,15 +146,14 @@ function reduce({ session, state, control }: RuntimeContext, evidence: RuntimeRe
     const nextModel = control?.target.model ?? (text(evidence.nextModel) || state.model)
     state.model = nextModel
     if (!control && nextModel && state.effort && !claudeEfforts(nextModel, session.cliVersion).includes(state.effort)) {
-      state.effort = 'auto'
+      showEffort(state, 'auto')
     }
     state.observedAt = Date.now()
     if (control) control.modelConfirmed = true
   }
   const effort = text(evidence.effort)
   if (effort) {
-    state.effort = effort
-    state.observedAt = Date.now()
+    showEffort(state, effort)
     if (control) control.effortConfirmed = control.target.effort === 'auto' || state.effort === control.target.effort
   }
 }
@@ -170,7 +169,7 @@ function pane({ state }: RuntimeContext, paneText: string): void {
   const banner = !state.model ? claudeStartupBanner(paneText) : null
   if (banner) {
     state.model = banner.model
-    if (banner.effort) state.effort = banner.effort
+    if (banner.effort) showEffort(state, banner.effort)
     state.observedAt = Date.now()
   }
   const header = /(Fable|Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)*)(\s+\(1M context\))?\s+with\s+(low|medium|high|xhigh|max|ultracode)\s+effort/gi
@@ -178,14 +177,10 @@ function pane({ state }: RuntimeContext, paneText: string): void {
   const latest = matches[matches.length - 1]
   if (latest) {
     state.model = `claude-${latest[1].toLowerCase()}-${latest[2].replace(/\./g, '-')}${latest[3] ? '[1m]' : ''}`
-    state.effort = latest[4].toLowerCase()
-    state.observedAt = Date.now()
+    showEffort(state, latest[4].toLowerCase())
   }
   const footer = paneText.split('\n').slice(-8).join('\n')
-  if (/─+\s*ultracode\s*─+/i.test(footer)) {
-    state.effort = 'ultracode'
-    state.observedAt = Date.now()
-  }
+  if (/─+\s*ultracode\s*─+/i.test(footer)) showEffort(state, 'ultracode')
   if (/\bplan mode on\b/i.test(currentUi)) state.mode = 'plan'
   else if (/\b(?:auto|default) mode on\b/i.test(currentUi)) state.mode = 'default'
 }

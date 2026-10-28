@@ -411,6 +411,25 @@ describe('RuntimeProfileManager', () => {
     expect(parseRuntimeProfile(staged.selectedModel(fromEnd))).toMatchObject({ model: 'opus', effort: 'medium' })
   })
 
+  // Settings fill high, a reply (or the screen) shows high, then the settings change to medium: the session still runs
+  // high, and the row said medium (#1966 delta review). Showing an effort makes it the session's, even an equal one.
+  it.each(['a reply', 'the screen'])('keeps an effort %s showed that equals the settings when they change', async by => {
+    const cwd = await mkdtemp(join(tmpdir(), 'machine-runtime-'))
+    cleanup.push(cwd)
+    await mkdir(join(cwd, '.claude'))
+    const settings = (effortLevel: string) => writeFile(join(cwd, '.claude', 'settings.local.json'), JSON.stringify({ effortLevel }))
+    await settings('high')
+    const manager = new RuntimeProfileManager(), value = { ...session('claude'), cwd }
+    manager.hydrate(value, [JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5' } })])
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'high' })
+    if (by === 'a reply') manager.ingest(value, JSON.stringify({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5-5' } }))
+    else manager.ingestPane(value, 'Opus 5.5 with high effort\n❯ ', true)
+    await settings('medium')
+    await manager.ingestConfig(value, true)
+    expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ effort: 'high' })
+  })
+
   it('keeps supported Claude effort on a local model change and falls back to auto otherwise', () => {
     const manager = new RuntimeProfileManager()
     const value = session('claude')
