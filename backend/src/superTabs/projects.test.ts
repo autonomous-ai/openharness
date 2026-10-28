@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost, watchingNarrowed } from './projects.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
@@ -580,7 +580,7 @@ describe('whether a commit narrows who may watch a terminal', () => {
     const builder = f.add('lead', 'builder', false)
     expect(canWatchAgent(f.state, peer, f.state.agents.find(a => a.id === builder)!)).toBe(true)
     const before = structuredClone(f.state)
-    return { f, builder, before, narrowed: () => watchingNarrowed(before, f.state) }
+    return { f, builder, before, narrowed: () => watchersLost(before, f.state).length > 0 }
   }
 
   it('is narrowed when a session turns confidential, whatever the command, and not when it becomes its project’s Lead', () => {
