@@ -132,9 +132,10 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
   for (let attempt = 1; ; attempt++) {
     try { return await db.$transaction(body, TRANSACTION_OPTIONS) } catch (error) {
       if (!retryable(error)) throw error
-      if (attempt >= TRANSACTION_ATTEMPTS) {
+      // An expired or unstartable transaction (P2028) is load: one more try, then the client retries after Retry-After.
+      if (attempt >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
         // A unique key still taken after every retry is a real duplicate, not contention.
-        if ((error as { code?: unknown }).code === 'P2002') throw error
+        if (errorCode(error) === 'P2002') throw error
         fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
       }
       await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (attempt - 1)))
@@ -147,12 +148,13 @@ const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
 const POLLED_CAP = 5_000
 const TRANSACTION_ATTEMPTS = 8
+const EXPIRED_TRANSACTION_ATTEMPTS = 2
 const TRANSACTION_BACKOFF_MS = 50
 const TRANSACTION_BACKOFF_CAP_MS = 1_500
+const errorCode = (error: unknown): unknown => error && typeof error === 'object' && 'code' in error ? error.code : null
 function retryable(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
-  const code = 'code' in error ? error.code : null
-  return code === 'P2034' || code === 'P2002' || (error instanceof Error && error.message.includes('TransientTransactionError'))
+  return ['P2034', 'P2002', 'P2028'].includes(errorCode(error) as string) || (error instanceof Error && error.message.includes('TransientTransactionError'))
 }
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
