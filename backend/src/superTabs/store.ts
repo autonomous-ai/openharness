@@ -183,7 +183,6 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
   if (!pending) throw new Error('afterCommit needs a client from a Swarm transaction (store.ts transaction).')
   pending.push(callback)
 }
-/** Logged, never thrown: without the memory the delivery poll just runs in full. */
 /** An agent's open deliveries, oldest first: one indexed read. */
 const openDeliveries = (tx: Transaction, tabId: string, agentId: string) => tx.superTabDelivery.findMany({
   where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 })
@@ -205,6 +204,7 @@ const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids
 const pollKey = (user: AuthUser, tabId: string, agentId: string) =>
   `${tabId}:${agentId}:${user.sub}${user.harnessSessionKind === 'team' ? `:team:${user.harnessComputerId ?? ''}` : ''}`
 
+/** Logged, never thrown: without the memory the delivery poll just runs in full. */
 const pollMemoryFailed = (error: unknown): void => {
   logger.warn('[super-tab] delivery poll memory unavailable', { error: error instanceof Error ? error.message : String(error) })
 }
@@ -2011,7 +2011,7 @@ export class SuperTabStore {
       if (!open.length) return []
       // A held delivery stays open for as long as its host cannot type it, possibly hours, polled each second (Diego, 10-28):
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
-      // revokes moves the stamp; anything else (a machine, a share, a Workspace) is checked again within SWEEP_EVERY_MS.
+      // revokes moves the stamp; what no Swarm write records (a Workspace, a machine, a share) is checked again each time.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
       if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen)) return this.heldDeliveries(user, agentId, open, seen)
     }
