@@ -428,6 +428,67 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets(
+    'a first read of the Swarm that fails keeps the counts kept hidden, on '
+    'Home and in the drawer, until a read gets through',
+    (tester) async {
+      final answer = Completer<Object?>();
+      final (:host, :fake) = await coldStart(
+        tester,
+        list: (_) => answer.future,
+      );
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          throw const SuperTabFailure('TIMEOUT', 'The Swarm did not answer.');
+      answer.complete({
+        'tabs': [
+          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
+        ],
+        'next': null,
+      });
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      final inbox = host.session!.inbox;
+      expect(inbox.loaded, isTrue);
+      expect(inbox.reader(tab)!.error, isNotNull, reason: 'the read failed');
+
+      final home = key('swarm-project-$tab-$project');
+      final drawer = key('swarm-drawer-project-$tab-$project');
+      void hidden() {
+        for (final row in [home, drawer]) {
+          expect(
+            find.descendant(of: row, matching: find.text('Updating…')),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: row, matching: find.textContaining('waiting')),
+            findsNothing,
+          );
+        }
+        expect(updating(), findsOneWidget);
+      }
+
+      await tester.tap(key('swarm-menu'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      hidden();
+
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
+      await inbox.refresh();
+      await tester.pump();
+      await tester.pump();
+
+      for (final row in [home, drawer]) {
+        expect(
+          find.descendant(of: row, matching: find.text('All idle')),
+          findsOneWidget,
+        );
+      }
+      expect(updating(), findsNothing);
+      stopReads(host);
+    },
+  );
 }
 
 Finder key(String value) => find.byKey(ValueKey(value));
