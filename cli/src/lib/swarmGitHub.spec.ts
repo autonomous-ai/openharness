@@ -186,6 +186,33 @@ describe('a session\'s gh login and trailers', () => {
     writeSessionGitHub(dir, 'not a token\n    oauth_token: other')
     expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
   })
+
+  // A Harness Team account has no git identity: its commits read "Harness Team <harnessteam@<host>.local>" (PR #1934).
+  it('makes the session\'s commits the app\'s when the server names its bot account, and git\'s own otherwise', () => {
+    const dir = fresh('identity')
+    // git as the session runs it: no identity in the environment, only what its config says.
+    const env = { PATH: process.env.PATH!, HOME: home, GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_PARAMETERS: gitConfigParameters('/no/helper', join(dir, 'hooks'), join(dir, 'gitconfig')) }
+    const vars = (name: string) => spawnSync('git', ['var', name], { cwd: dir, encoding: 'utf8', env }).stdout
+    writeFileSync(join(home, '.gitconfig'), '[user]\n\tname = Owner\n\temail = owner@example.com\n')
+    const ident = () => vars('GIT_AUTHOR_IDENT')
+    expect(ident()).toMatch(/^Owner <owner@example\.com> /)
+    const bot = { name: 'harness-for-autonomous[bot]', email: '245891234+harness-for-autonomous[bot]@users.noreply.github.com' }
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], bot)
+    expect(statSync(join(dir, 'gitconfig')).mode & 0o777).toBe(0o600)
+    expect(ident()).toMatch(/^harness-for-autonomous\[bot\] <245891234\+harness-for-autonomous\[bot\]@users\.noreply\.github\.com> /)
+    expect(vars('GIT_COMMITTER_IDENT')).toMatch(/^harness-for-autonomous\[bot\] </)
+    // A refusal keeps it; an answer without one (an older server, a person's machine) or with anything else drops it.
+    writeSessionGitHub(dir, null)
+    expect(ident()).toMatch(/^harness-for-autonomous\[bot\] </)
+    for (const other of [null, { name: 'Mallory', email: 'm@example.com' }, { ...bot, name: 'x[bot]\n[core]' }, 'bot']) {
+      writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], bot)
+      writeSessionGitHub(dir, 'ghs_fixtureToken0000001', [], other)
+      expect(existsSync(join(dir, 'gitconfig'))).toBe(false)
+      expect(ident()).toMatch(/^Owner </)
+    }
+    rmSync(join(home, '.gitconfig'))
+  })
 })
 
 describe('a Swarm session\'s launch', () => {
@@ -194,7 +221,7 @@ describe('a Swarm session\'s launch', () => {
     const launch = swarmGitHubLaunch('harness-codex-abc', { dataDir, command: 'harness', port: 18473, machineId: 'm1' }, 'linux')!
     const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-abc')!
     expect(launch.env).toEqual({
-      GIT_CONFIG_PARAMETERS: gitConfigParameters(join(dataDir, 'swarm-github', 'bin', 'git-credential'), join(dataDir, 'swarm-github', 'hooks')),
+      GIT_CONFIG_PARAMETERS: gitConfigParameters(join(dataDir, 'swarm-github', 'bin', 'git-credential'), join(dataDir, 'swarm-github', 'hooks'), join(dir, 'gitconfig')),
       GIT_TERMINAL_PROMPT: '0', GH_CONFIG_DIR: join(dir, 'gh'), GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', HARNESS_SWARM_GITHUB_DIR: dir,
     })
     expect(launch.clearEnv).toEqual(['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'])

@@ -16,7 +16,7 @@
  *
  * The variable `GIT_CONFIG_KEY_n` is not used: Codex leaves out of its commands every variable whose name contains KEY.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { daemonCommand } from './daemonCommand.js'
@@ -42,8 +42,9 @@ export function swarmGitHubSessionDir(dataDir: string, key: string): string | nu
   return SESSION_KEY.test(key) ? join(swarmGitHubRoot(dataDir), 'sessions', key) : null
 }
 
-/** What git reads for the session (see the file comment). */
-export function gitConfigParameters(helper: string, hooks: string): string {
+/** What git reads for the session (see the file comment). [identity]: the session's own config file, which names who its
+ *  commits are by once the server says (writeSessionGitHub); git skips an include whose file is not there. */
+export function gitConfigParameters(helper: string, hooks: string, identity?: string): string {
   const entries: Array<[string, string]> = [
     // An empty helper empties the list of helpers read so far, from every config file: only Harness's is left.
     ['credential.https://github.com.helper', ''],
@@ -53,6 +54,7 @@ export function gitConfigParameters(helper: string, hooks: string): string {
     ['url.https://github.com/.insteadof', 'git@github.com:'],
     ['url.https://github.com/.insteadof', 'ssh://git@github.com/'],
     ['core.hookspath', hooks],
+    ...(identity ? [['include.path', identity] as [string, string]] : []),
   ]
   return entries.map(([key, value]) => `${shellWord(key)}=${shellWord(value)}`).join(' ')
 }
@@ -164,8 +166,14 @@ const GH_CONFIG = 'version: "1"\n'
  *  among them, and nothing that could break out of the YAML around it or a shell. */
 const TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{19,4095}$/
 
-/** The session's gh login: [token] for github.com, or none. And, when given, the trailers its commits get. */
-export function writeSessionGitHub(dir: string, token: string | null, trailers?: readonly string[]): void {
+/** Who a session's commits are by, as the server names the Harness GitHub App's bot account; nothing else is written. */
+const COMMIT_NAME = /^[a-z0-9][a-z0-9-]{0,99}\[bot\]$/
+const COMMIT_EMAIL = /^[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com$/
+
+/** The session's gh login: [token] for github.com, or none. And, when given, the trailers its commits get and who they are
+ *  by ([commitAs]: the app's bot account, which the server gives a Harness Team account, as it has no git identity of its
+ *  own: its commits read "Harness Team <harnessteam@<host>.local>" before, PR #1934). Without one, git's own stands. */
+export function writeSessionGitHub(dir: string, token: string | null, trailers?: readonly string[], commitAs?: unknown): void {
   const gh = join(dir, 'gh')
   mkdirSync(gh, { recursive: true, mode: 0o700 })
   if (!existsSync(join(gh, 'config.yml'))) writeIfChanged(join(gh, 'config.yml'), GH_CONFIG, 0o600)
@@ -176,6 +184,13 @@ export function writeSessionGitHub(dir: string, token: string | null, trailers?:
   if (trailers) {
     const lines = trailers.filter(line => /^[A-Za-z][A-Za-z0-9-]*: [^\r\n]+$/.test(line) && line.length <= 300)
     writeIfChanged(join(dir, 'trailers'), lines.map(line => `${line}\n`).join(''), 0o600)
+  }
+  if (commitAs !== undefined) {
+    const { name, email } = (commitAs && typeof commitAs === 'object' ? commitAs : {}) as { name?: unknown; email?: unknown }
+    const file = join(dir, 'gitconfig')
+    if (typeof name === 'string' && COMMIT_NAME.test(name) && typeof email === 'string' && COMMIT_EMAIL.test(email)) {
+      writeIfChanged(file, `[user]\n\tname = ${name}\n\temail = ${email}\n`, 0o600)
+    } else rmSync(file, { force: true })
   }
 }
 
@@ -192,7 +207,7 @@ export function swarmGitHubLaunch(key: string, tools: SwarmGitHubTools = default
   if (!existsSync(join(dir, 'gh', 'hosts.yml'))) writeSessionGitHub(dir, null)
   return {
     env: {
-      GIT_CONFIG_PARAMETERS: gitConfigParameters(helper, hooks),
+      GIT_CONFIG_PARAMETERS: gitConfigParameters(helper, hooks, join(dir, 'gitconfig')),
       // A credential the helper cannot give fails at once instead of waiting on a prompt nobody answers in an agent's pane.
       GIT_TERMINAL_PROMPT: '0',
       GH_CONFIG_DIR: join(dir, 'gh'),

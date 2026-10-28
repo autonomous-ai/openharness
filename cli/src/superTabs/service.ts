@@ -24,6 +24,7 @@ import { readTeamStatus } from '../team/privacy.js'
 import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDeps, type TeamTmuxOutcome } from '../team/tmux.js'
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
+import { ensureTeamGh, ghRunsAt, unzipArchive, type TeamGhDeps, type TeamGhOutcome } from '../team/gh.js'
 import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
@@ -205,6 +206,8 @@ export interface SuperTabServiceOptions {
   team?: () => boolean
   /** The Harness Team account's own tmux (team/tmux.ts), for a spec. */
   teamTmux?: () => Promise<TeamTmuxOutcome>
+  /** What installs the Harness Team account's own gh (team/gh.ts), for a spec. */
+  teamGh?: () => Promise<TeamGhOutcome>
   /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
   teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
 }
@@ -257,14 +260,21 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
   let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>> | null = null
-  // In the Harness Team account: a tmux of its own when it has none it can run (team/tmux.ts). Looked at as it connects,
-  // and a failed install again half an hour later.
-  let tmuxCheckedAt = -Infinity
+  // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
+  // at as it connects, and a failed install again half an hour later.
+  const settled = (outcome: string) => outcome === 'present' || outcome === 'installed' || outcome === 'not-team'
+  let tmuxCheckedAt = -Infinity, ghCheckedAt = -Infinity
   const ensureTmux = options.teamTmux ?? (() => ensureTeamTmux(realTeamTmuxDeps()))
+  const ensureGh = options.teamGh ?? (() => ensureTeamGh(realTeamGhDeps()))
   const checkTmux = () => {
-    if (Date.now() - tmuxCheckedAt < 30 * 60_000) return
-    tmuxCheckedAt = Date.now()
-    void ensureTmux().then(outcome => { if (outcome === 'present' || outcome === 'installed' || outcome === 'not-team') tmuxCheckedAt = Infinity })
+    if (Date.now() - tmuxCheckedAt >= 30 * 60_000) {
+      tmuxCheckedAt = Date.now()
+      void ensureTmux().then(outcome => { if (settled(outcome)) tmuxCheckedAt = Infinity })
+    }
+    if (Date.now() - ghCheckedAt >= 30 * 60_000) {
+      ghCheckedAt = Date.now()
+      void ensureGh().then(outcome => { if (settled(outcome)) ghCheckedAt = Infinity })
+    }
   }
   const disconnect = () => { preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
   const port = {
@@ -541,6 +551,24 @@ function realTeamTmuxDeps(): TeamTmuxDeps {
     untar: untarGz,
     runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
     binDir: join(homedir(), '.local', 'bin'),
+    log: (line) => console.log(`[team] ${line}`),
+  }
+}
+
+/** The team daemon's own, as for its tmux: its account, its PATH and Homebrew's places (team/gh.ts). */
+function realTeamGhDeps(): TeamGhDeps {
+  const binDir = join(homedir(), '.local', 'bin')
+  return {
+    team: () => { try { return readTeamConfig()?.user === userInfo().username } catch { return false } },
+    platform: process.platform,
+    arch: process.arch,
+    candidates: () => [binDir, ...(process.env.PATH ?? '').split(delimiter).filter(isAbsolute), '/opt/homebrew/bin', '/usr/local/bin']
+      .map(dir => join(dir, 'gh')).filter(path => existsSync(path)),
+    runs: ghRunsAt,
+    download: (build) => downloadVerified({ url: build.url, sha256: build.sha256, size: build.size }),
+    unzip: unzipArchive,
+    runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
+    binDir,
     log: (line) => console.log(`[team] ${line}`),
   }
 }
