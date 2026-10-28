@@ -41,7 +41,7 @@ export async function attachObserver(ws: WebSocket, user: AuthUser | null,
   share: { id: string; machineId: string; ownerId: string; superTabId?: string | null }, linkEnv?: AutonomousEnvironment): Promise<void> {
   const connId = `observer:${randomUUID()}`
   const send = (frame: unknown) => guardedSendJson(ws, frame, 'must')
-  const disposers: Array<() => void> = [trackSocketLiveness(ws)]
+  const disposers: Array<() => void> = [trackSocketLiveness(ws, 'observer')]
   let closed = false
   let opened = false
   const down = (type: string, payload: unknown) => publishDown(share.machineId, { connId, frame: { type, payload } })

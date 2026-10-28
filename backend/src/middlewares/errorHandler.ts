@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify'
-import { AppError } from '../errors/index.js'
+import { AppError, ValidationError } from '../errors/index.js'
 import { sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
 import { SuperTabError } from '../superTabs/model.js'
@@ -34,6 +34,7 @@ export async function errorHandler(
       path: request.url,
       method: request.method,
       message: error.message,
+      ...(error instanceof ValidationError && error.fields.length ? { fields: error.fields } : {}),
     })
     sendError(reply, error.message, error.code || 'APP_ERROR', error.statusCode)
     return
