@@ -30,8 +30,9 @@ const envSchema = z.object({
   // Per caller and second: the agent or machine the route names (with its person), else the person.
   ROUTE_RATE_LIMIT_PER_CALLER_SECOND: z.coerce.number().int().min(0).default(50),
   // Per person and minute, whatever agents or machines the calls name. The busiest working client is an older CLI's
-  // delivery poll, one call a second per running agent: 12000 is 200 agents.
-  ROUTE_RATE_LIMIT_PER_PERSON_MINUTE: z.coerce.number().int().min(0).default(12_000),
+  // delivery poll, one call a second per running agent. A late poll can land in the next minute, so a minute can see an
+  // agent 61 times: 200 agents are 12200. 15000 leaves room above that.
+  ROUTE_RATE_LIMIT_PER_PERSON_MINUTE: z.coerce.number().int().min(0).default(15_000),
   // Per person and second, whatever agents or machines the calls name, so made-up ids cannot spend the minute's budget
   // at once. 200 agents polling once a second can land up to 400 in one second when polls arrive late: 500 is above it.
   ROUTE_RATE_LIMIT_PER_PERSON_SECOND: z.coerce.number().int().min(0).default(500),
