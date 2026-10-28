@@ -22,9 +22,6 @@
     "edge-insets": 7,
     "border-radius": 3
   },
-  "desktop/lib/super_tabs/machine_details.dart": {
-    "edge-insets": 6
-  },
   "desktop/lib/super_tabs/machine_status.dart": {
     "font-size": 1,
     "edge-insets": 2
@@ -53,9 +50,6 @@
   },
   "desktop/lib/super_tabs/profile_sheet.dart": {
     "font-size": 1
-  },
-  "desktop/lib/super_tabs/project_github.dart": {
-    "edge-insets": 4
   },
   "desktop/lib/super_tabs/project_sidebar.dart": {
     "edge-insets": 10
@@ -92,14 +86,11 @@
     "edge-insets": 1
   },
   "desktop/lib/super_tabs/sharing.dart": {
-    "edge-insets": 5
+    "edge-insets": 4
   },
   "desktop/lib/super_tabs/ship_row.dart": {
     "font-size": 1,
     "edge-insets": 2
-  },
-  "desktop/lib/super_tabs/team_glance_panel.dart": {
-    "edge-insets": 4
   },
   "desktop/lib/super_tabs/terminal_row.dart": {
     "edge-insets": 2
