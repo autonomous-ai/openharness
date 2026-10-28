@@ -416,7 +416,8 @@ static void focus_only_inter(void) {
                     (r->font == &ht_lv_montserrat_22.base && !strcmp(r->text, HT_LV_CROSS));
         bool art = r->font == &ht_wave || r->font == &ht_spark;
         assert(focus_inter(r->font) || icon || art);
-        if (r->arc) assert(r->font == &ht_lv_inter_med_26.base);
+        // The name and status arcs are Inter Medium 26; a Swarm face's chat, on the inner arc, is Inter 20.
+        if (r->arc) assert(r->font == (r->arc == 3 ? &ht_lv_inter_20.base : &ht_lv_inter_med_26.base));
     }
 }
 // Every straight text run of a Focus page sits inside the glass (r 230 on its four corners) and a bracket
@@ -1821,6 +1822,10 @@ static bool chat_card(const char *group_state, const char *c1_chat, const char *
     chat_lead("C2", "web", "", "done", 2, -1, "lead", "lead-web", "Lead");
     return card_send();
 }
+static const ht_run_t *inner_arc(void) {
+    for (int i = 0; i < scene.count; i++) if (scene.runs[i].arc == 3 && scene.runs[i].text[0]) return &scene.runs[i];
+    return NULL;
+}
 static void chat_setup(void) {
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); fake_ms = 100000;
     desk_open();
@@ -1830,15 +1835,25 @@ static void chat_setup(void) {
     scene_take();
 }
 static void swarm_chat_checks(const char *dir) {
-    (void)dir;
     // No entry from a Lead's state when chats are on: the daemon sends no ask or stuck, and a group's work is no alert.
     chat_setup();
     assert(s.notice_count == 0);
     assert(!chat_card("done", "pm", "pm1") && !chat_card("work", "pm", "pm1") && s.notice_count == 0);
 
-    // A working group shows the working pet and its clock, and no recap.
+    // The chat name under the project, on the inner arc: none for the Lead chat, "PM", a group's name cut at a word.
+    enter_at("s1", "C2"); assert(title_is("web") && !inner_arc());
+    enter_at("s1", "C1"); assert(title_is("docs") && inner_arc() && !strcmp(inner_arc()->text, "PM"));
+    FOCUS_PAGE("swarm-6a");
+    card_begin("s1", "t1", "openharness");
+    chat_lead("C0", "mobile", "h0", "done", 0, -1, "group", "g1", "Fix the login redirect loop on Safari and Chrome");
+    card_send(); enter_at("s1", "C0");
+    assert(inner_arc() && !strcmp(inner_arc()->text, "Fix the login\xe2\x80\xa6"));
+    FOCUS_PAGE("swarm-6b");
+    assert(!chat_card("work", "pm", "pm1")); scene_take();
+    // A working group shows the working pet and its clock, its name under the project, and no recap.
     enter_at("s1", "C0");
-    assert(title_is("mobile") && scene_says("0:09"));
+    assert(title_is("mobile") && scene_says("0:09") && inner_arc() && !strcmp(inner_arc()->text, "Fix login"));
+    FOCUS_PAGE("swarm-6c");
     ui_supertab_recap("s1", "C0", "g1", "Tests green on both dials.", 1792560000u, false); scene_take();
     assert(!scene_says("Tests green"));
     // A done group shows its recap.
@@ -1903,7 +1918,6 @@ int main(int argc, char **argv) {
     swarm_pane_checks(argc>1 ? argv[1] : NULL);
     swarm_inbox_checks(argc>1 ? argv[1] : NULL);
     swarm_voice_checks(argc>1 ? argv[1] : NULL);
-    swarm_chat_checks(argc>1 ? argv[1] : NULL);
     // The companion screen is gone: character, edge text and still-character are the app's now
     // (Settings > Autonomous robots). What the glass kept is actions, and Nap is the one that moved
     // off that screen into the controls list.
@@ -3447,6 +3461,8 @@ int main(int argc, char **argv) {
     habitat_touch(false,233,220,2800); assert(!stops && !reviews && recording);
     tap(3400,233,220); assert(stops==1 && !reviews);
     puts("touch UI: PASS (production contacts/renderers; voice start/finish/discard, target pinning, sensor cancellation, immediate scroll, swipes, round trips, congestion and holds)");
+    // Last, so every face above renders exactly as it did before chats: the faces are compared byte for byte.
+    swarm_chat_checks(argc>1 ? argv[1] : NULL);
 }
 '''
 extra_sources = []

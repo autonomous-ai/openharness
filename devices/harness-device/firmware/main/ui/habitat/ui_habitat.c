@@ -1317,6 +1317,7 @@ static void render_swarm_face(ht_scene_t *f)
     const ht_supertab_t *t = swarm_here();
     ht_character_face_t f_ = {.recipient = l->project[0] ? l->project : "Untitled", .status = "", .hint = "",
         .tab = t ? t->name : "", .engine = l->engine, .activity = working && !s.nap ? "Working" : "",
+        .chat = l->chat != HT_CHAT_LEAD ? l->chat_name : NULL,
         .elapsed = since, .detail = "", .mood = character_mood(), .pose = character.motion.reaction.pose,
         .asking = asking,
         .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,
