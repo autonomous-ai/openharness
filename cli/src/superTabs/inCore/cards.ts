@@ -165,7 +165,7 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       swarmCardRecap(recap)
     },
     /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap`,
-     *  `cardOpen` and `cardSay` go to the service; any other action is refused. */
+     *  `cardOpen`, `cardSay` and `cardWorker` go to the service; any other action is refused. */
     ask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include, payload.focus); return Promise.resolve({ ok: true }) }
       // A round dial that speaks swarmChat asks for the chat on its face; without the flag, the request is today's.
@@ -173,6 +173,8 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
       if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat })
       if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })
+      // A card's failure from another computer: whether its agent is a Swarm's worker (services/devices.ts asks; it decides).
+      if (payload.action === 'cardWorker') return route({ action: 'cardWorker', machineId: payload.machineId, harnessId: payload.harnessId })
       return Promise.resolve({ error: 'INVALID_REQUEST' })
     },
     /** A dial attached: it has nothing, so it is shown the last list again. */

@@ -650,7 +650,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), say: vi.fn(async () => true), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), say: vi.fn(async () => true), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -712,6 +712,15 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true)
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', false)
+  })
+  it('cardWorker says whether a machine\'s harness is one of a Swarm\'s workers, for the devices to keep its failure quiet', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h-r1' }, owner)).toEqual({ ok: true, worker: true })
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm1', harnessId: 'h-r1' }, owner)).toEqual({ ok: true, worker: false })
+    for (const bad of [{ action: 'cardWorker', machineId: 'bad id', harnessId: 'h-r1' }, { action: 'cardWorker', machineId: 'm2' }, { action: 'cardWorker', harnessId: 'h-r1' }]) {
+      expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h-r1' }, { local: false, owner: true })).toEqual({ error: 'OWNER_REQUIRED' })
   })
   it('answers a backend refusal while reading a recap as the service does any other', async () => {
     const t = withCards()
