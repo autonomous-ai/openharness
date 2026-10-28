@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
+import { buddyReads, isBuddy, isBuddyChat } from './buddies.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -117,13 +118,17 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
 /** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a private
- *  conversation's listed people (at the generation they were listed with) and the project's Lead, nobody else. */
+ *  conversation's listed people (at the generation they were listed with) and the project's Lead, nobody else. A Buddy
+ *  chat leaves out the Lead too, and a Buddy reads only its project's chat and its own chat (buddies.ts). */
 export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return actor.kind === 'person' ? state.people.some(p => p.id === actor.userId) : !!ledProject(state, actor.agentId)
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
+  const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
+  if (buddy) return buddyReads(buddy, group, project.leadConversationId)
   if (!group.audience) return true
-  if (actor.kind === 'agent') return ledProject(state, actor.agentId)?.id === project.id
+  // A Buddy chat has no private channel to the PM: only its owner and its Buddy read it (buddies.ts).
+  if (actor.kind === 'agent') return !isBuddyChat(group) && ledProject(state, actor.agentId)?.id === project.id
   const member = state.people.find(p => p.id === actor.userId)
   return !!member && (group.audience.people.some(p => p.id === member.id && p.generation === member.generation)
     || (PRIVATE_VISIBLE_TO_OWNERS && (member.id === project.ownerId || member.id === state.ownerId)))

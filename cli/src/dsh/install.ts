@@ -21,7 +21,7 @@ import { readDshManifest, viewerUse, type DshManifest } from './manifest.js'
 import { PACKAGE_PATH_RE, type DshRegistryEntry } from './registry.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
-import { dshShellAvailable, NO_GIT_BASH, runDshCommand } from './shell.js'
+import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
 import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
@@ -348,6 +348,18 @@ export async function runDshDoctor(installed: InstalledDsh, onLine?: (line: stri
   return { ok: result.code === 0 && !result.timedOut, lines: result.lines }
 }
 
+/**
+ * A package whose setup or doctor this computer has no shell for (dsh/shell.ts), refused in words before either runs,
+ * rather than as one that could not start (`spawn /bin/sh ENOENT`). An install is refused once fetched or linked and
+ * before it is placed: one with no catalog entry (from a link) cannot be refused before its download (dsh/service.ts),
+ * but nothing of it may stay on disk (review of #2026, 2026-10-28).
+ */
+function refuseWithoutShell(manifest: DshManifest, progress: (p: DshInstallProgress) => void): DshInstallResult | null {
+  if (!(manifest.toolchain?.setup || manifest.toolchain?.doctor) || dshShellAvailable()) return null
+  progress({ id: manifest.id, phase: 'failed', detail: DSH_SHELL_UNAVAILABLE, error: 'SHELL_UNAVAILABLE' })
+  return { ok: false, error: 'SHELL_UNAVAILABLE', detail: DSH_SHELL_UNAVAILABLE }
+}
+
 export async function installDsh(opts: DshInstallOptions): Promise<DshInstallResult> {
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
   const wrongId = (actual: string): DshInstallResult => {
@@ -370,6 +382,8 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
       if (!linked.ok) { progress({ id: null, phase: 'failed', detail: linked.detail, error: linked.error }); return linked }
       manifest = linked.manifest
       if (opts.expectedId && manifest.id !== opts.expectedId) return wrongId(manifest.id)
+      const refused = refuseWithoutShell(manifest, progress)
+      if (refused) return refused
       unlock = lockDsh(manifest.id)
       if (!unlock) return dshBusy(manifest.id)
       realDir = linked.realDir
@@ -386,6 +400,9 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
         rmSync(cloned.tmpDir, { recursive: true, force: true })
         return wrongId(manifest.id)
       }
+      // The fetched copy goes with `staged`, in the finally below.
+      const refused = refuseWithoutShell(manifest, progress)
+      if (refused) return refused
       unlock = lockDsh(manifest.id)
       if (!unlock) return dshBusy(manifest.id)
       commit = cloned.commit
@@ -417,12 +434,9 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
   const { manifest, realDir } = resolved
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
 
-  // Refused before anything runs, rather than as a setup or doctor that could not start (`spawn /bin/sh ENOENT`).
-  if ((manifest.toolchain?.setup || manifest.toolchain?.doctor) && !dshShellAvailable()) {
-    const detail = NO_GIT_BASH
-    progress({ id: manifest.id, phase: 'failed', detail, error: 'SHELL_UNAVAILABLE' })
-    return { ok: false, error: 'SHELL_UNAVAILABLE', detail }
-  }
+  // An update reaches here with its new copy placed; a failed update puts the previous one back (update.ts).
+  const refused = refuseWithoutShell(manifest, progress)
+  if (refused) return refused
 
   const setupLines: string[] = []
   if (manifest.toolchain?.setup) {

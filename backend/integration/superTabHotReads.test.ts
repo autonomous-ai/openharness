@@ -12,6 +12,7 @@ import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
@@ -227,5 +228,37 @@ describe('hot reads read only what they return (roadmap 2.7)', () => {
   it('no read of these scans a whole collection', () => {
     const scans = entries.filter(e => e.planSummary === 'COLLSCAN' && !e.ns.includes('.system.'))
     expect(scans.map(e => `${e.ns.slice(e.ns.indexOf('.') + 1)} ${queryShape((e.command?.pipeline as Array<{ $match?: unknown }> | undefined)?.[0]?.$match ?? e.command?.filter ?? e.command?.q)}`)).toEqual([])
+  })
+})
+
+// Diego's backend review, item 5 (2026-10-28): which machines are signed in as a team account is the same answer for every
+// reader, and machines report every 15 s, so the read API asks for it at most once per 15 s per Swarm and machine list.
+describe('which machines take teammates\' work is read once per 15 s per Swarm', () => {
+  it('two polls within 15 s read the team machines once; a machine turning team shows 15 s after the read', async () => {
+    const s = await scene()
+    const swarmReads = new SwarmReads(store, { now: () => clock })
+    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'sessionKind'])
+    const teamWork = (read: { derived: { machines: Record<string, { teamWork: unknown }> } }) => read.derived.machines[s.machineId]!.teamWork
+    clock = Date.now()
+    const readAt = clock
+    let cursor = ''
+    const within = await profiled(async () => {
+      const first = await swarmReads.firstLoad(owner, s.tabId)
+      expect(teamWork(first)).toEqual({ allowed: true })
+      clock += 3_000
+      cursor = (await swarmReads.changes(owner, s.tabId, first.cursor)).cursor
+      // The machine's account turns team: a team machine that never reported is offline for teammates' work.
+      await db.machine.update({ where: { machineId: s.machineId }, data: { sessionKind: 'team' } })
+      clock += 3_000
+      const polled = await swarmReads.changes(owner, s.tabId, cursor)
+      expect(teamWork(polled)).toEqual({ allowed: true })
+      cursor = polled.cursor
+    })
+    expect(teamReads(within)).toHaveLength(1)
+    clock = readAt + 15_000
+    const later = await profiled(async () => {
+      expect(teamWork(await swarmReads.changes(owner, s.tabId, cursor))).toMatchObject({ allowed: false, code: 'MACHINE_OFFLINE' })
+    })
+    expect(teamReads(later)).toHaveLength(1)
   })
 })

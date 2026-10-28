@@ -109,7 +109,7 @@ void main() {
     () {
       final source = File('../cli/src/lib/swarmSkills.ts').readAsStringSync();
       final sections = source.split(
-        'const defaults: Record<SwarmRole, string> = {',
+        RegExp(r'const defaults: Record<.*?, string> = \{'),
       );
       expect(sections, hasLength(2));
       final defaults = sections.last;
