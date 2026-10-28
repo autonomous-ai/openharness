@@ -192,8 +192,8 @@ them. When they say to send it to the product manager, it posts one proposal (go
 chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
 the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
 
-The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy. Their
-chats stay for their owners to read.
+The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy, fails
+any still starting, and stops their posts. Their chats stay for their owners to read.
 
 - Each person may add one Buddy per project. They choose the project, a machine in the Swarm's Machines list, and
   Claude Code or Codex. The Buddy runs under that machine's own rules, like any Swarm agent. The person whose machine
@@ -201,8 +201,13 @@ chats stay for their owners to read.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.
-- A proposal is sent only for its owner's own message in their Buddy chat that asked for it, and only once for each such
-  message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
+- A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
+  file editing is turned off, and the files in its own copy of the project are read-only. It may run on any machine its
+  owner may use. A Codex Buddy keeps Codex's full permissions with read-only files, so it runs only on its owner's own
+  machines (follow-up: give Codex the same pre-approved commands). No Buddy gets the Harness GitHub App's token.
+- Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
+- A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
+  or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
 - Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
   stay there; the Buddy posts only what its owner asks it to send.
 - Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again

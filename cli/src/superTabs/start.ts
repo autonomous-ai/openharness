@@ -337,9 +337,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       // readied the start, and prepared it with the app's token if it is another person's (superTabs/projectFolder.ts).
       const hosted = input.hostDispatch === true ? object(input.github) : null
       const mode = facts?.mode ?? null
-      const github = hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
-        ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token, and a Claude Buddy
+      // asks before anything but its Super Tab commands, which its folder's settings pre-approve (lib/swarmSkills.ts).
+      const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
+      const asks = buddy && request.engine === 'claude'
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
+        ...(asks ? { permissionMode: 'ask' } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode) : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer

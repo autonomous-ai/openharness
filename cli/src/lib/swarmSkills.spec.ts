@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -506,5 +506,33 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
     expect(text).toContain('Never assign work, start agents, change code or open pull requests')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
+  })
+})
+
+describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', () => {
+  it('pre-approves only its Super Tab commands for Claude Code, denies file editing, and leaves its files read-only', () => {
+    const workspace = fixture()
+    mkdirSync(join(workspace, 'src'))
+    writeFileSync(join(workspace, 'src', 'app.ts'), 'code\n', { mode: 0o644 })
+    writeFileSync(join(workspace, 'README.md'), 'readme\n', { mode: 0o644 })
+    const prepared = prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })
+    const settings = JSON.parse(readFileSync(join(workspace, '.claude', 'settings.local.json'), 'utf8'))
+    expect(settings.permissions).toEqual({ defaultMode: 'default', allow: ['Bash(harness super-tab:*)'], deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] })
+    for (const file of [join(workspace, 'src', 'app.ts'), join(workspace, 'README.md'), join(workspace, '.claude', 'settings.local.json')]) {
+      expect(statSync(file).mode & 0o222, file).toBe(0)
+    }
+    // Its folders stay writable, so the worktree is removed as any other; its skill keeps its own records.
+    expect(statSync(join(workspace, 'src')).mode & 0o200).toBe(0o200)
+    expect(statSync(prepared.file).mode & 0o200).toBe(0o200)
+    // A relaunch prepares it again the same way.
+    expect(() => prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })).not.toThrow()
+  })
+
+  it('leaves every other role\'s folder as it is', () => {
+    const workspace = fixture()
+    writeFileSync(join(workspace, 'README.md'), 'readme\n', { mode: 0o644 })
+    prepareSwarmSkill(workspace, { role: 'dev', key: 'session' })
+    expect(statSync(join(workspace, 'README.md')).mode & 0o200).toBe(0o200)
+    expect(existsSync(join(workspace, '.claude', 'settings.local.json'))).toBe(false)
   })
 })
