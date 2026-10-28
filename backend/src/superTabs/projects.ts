@@ -205,7 +205,7 @@ export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent,
 /** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
  *  watches: machine, harness and machine owner): a person left, the agent left, its project stopped being shared with them,
  *  or the session turned confidential, by whatever command. Each such agent, with the people who lost it. Its observer
- *  sockets then check again (watchingNarrowed), and those people's terminals on it are revoked (native.ts). */
+ *  sockets then check again (store.ts accessChanged), and those people's terminals on it are revoked (native.ts). */
 export function watchersLost(before: SuperTabState, after: SuperTabState): Array<{ agentId: string; personIds: string[] }> {
   const session = (a: Agent) => `${a.machineId}\n${a.harnessId}\n${a.machineOwnerId}`
   const now = new Map(after.agents.map(a => [session(a), a]))
@@ -225,8 +225,14 @@ export function watchersLost(before: SuperTabState, after: SuperTabState): Array
   })
 }
 
-/** Whether a commit narrows who may watch any agent's terminal (watchersLost). */
-export const watchingNarrowed = (before: SuperTabState, after: SuperTabState): boolean => watchersLost(before, after).length > 0
+/** Everything that decides who reads a conversation and who watches a terminal (canReadGroup, canWatchAgent and the
+ *  terminals native.ts revokes): when two states give the same text, no access changed between them. Messages, statuses and
+ *  checks, most commands, change none of it. */
+export const accessInputs = (state: SuperTabState): string => JSON.stringify([state.ownerId,
+  state.people.map(p => [p.id, p.generation, p.role]),
+  projectsOf(state).map(p => [p.id, p.visibility, p.ownerId, p.members, p.leadConversationId]),
+  state.agents.map(a => [a.id, a.machineId, a.harnessId, a.machineOwnerId, a.projectId, a.confidential]),
+  state.conversations.map(c => [c.id, c.kind, c.projectId, c.leadId, c.archived, c.agentIds, c.audience])])
 
 /** The only actors a confidential session admits: the person whose machine runs it, or the session itself. */
 export const ownSession = (actor: Actor, target: Agent): boolean =>

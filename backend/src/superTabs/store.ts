@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
-import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
+import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
@@ -1067,7 +1067,7 @@ export class SuperTabStore {
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
       }
-      await revokeNativeContexts(tx, original, effects.state)
+      const watchersLost = await revokeNativeContexts(tx, original, effects.state)
       // Rule (b) for claims (design D10): a change to who a conversation's deliveries may reach writes those delivery rows,
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
@@ -1188,7 +1188,7 @@ export class SuperTabStore {
       }
       if (command.type === 'project.delete' || command.type.startsWith('project.role')) await this.writeRoleTexts(tx, tabId, effects.state, command)
       if (effects.terminal) await this.writeTerminal(tx, tabId, effects.terminal, context.now)
-      if (this.hooks.accessChanged && watchingNarrowed(original, effects.state)) {
+      if (this.hooks.accessChanged && watchersLost.length) {
         const told = this.hooks.accessChanged
         afterCommit(tx, () => told(tabId))
       }
@@ -1618,12 +1618,13 @@ export class SuperTabStore {
    *  this, so the 16 tasks a release's update outage lost kept their agents busy for good. */
   private async endRuns(tx: Transaction, tabId: string, before: SuperTabState, after: SuperTabState) {
     const ended = new Set<string>()
+    const earlier = new Map(before.conversations.map(c => [c.id, c])), later = new Map(after.conversations.map(c => [c.id, c]))
     for (const group of after.conversations) {
-      const now = group.assignment, was = before.conversations.find(c => c.id === group.id)?.assignment
+      const now = group.assignment, was = earlier.get(group.id)?.assignment
       if (now && !activeWork(group) && (now.id !== was?.id || now.status !== was.status)) ended.add(now.id)
     }
     for (const group of before.conversations.filter(activeWork)) {
-      const changed = after.conversations.find(c => c.id === group.id)
+      const changed = later.get(group.id)
       if (!changed || !activeWork(changed) || changed.assignment!.id !== group.assignment!.id) ended.add(group.assignment!.id)
     }
     await this.releaseRuns(tx, tabId, [...ended])
