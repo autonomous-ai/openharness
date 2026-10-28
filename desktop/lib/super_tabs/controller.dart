@@ -1115,11 +1115,20 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> removeBuddy(String projectId) async =>
       await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
 
-  /// Whether [group] takes no new messages here: with Buddies on, the
-  /// reader's old Chat with PM keeps its history but no longer reaches the
-  /// PM (the backend refuses a send there).
-  bool readOnly(SuperTabConversation group) =>
-      buddiesOn && pmChat(group.projectId)?.id == group.id;
+  /// Where conversation [id] opens: with Buddies on there is no Chat with PM
+  /// in the app (Ken, 10-28), so the reader's old one opens their project's
+  /// chat, where the PM is talked to; any other opens itself.
+  String _shownFor(String id) {
+    final group = snapshot?.conversation(id);
+    if (!buddiesOn || group == null || pmChat(group.projectId)?.id != id) {
+      return id;
+    }
+    return snapshot!.projects
+            .where((p) => p.id == group.projectId)
+            .firstOrNull
+            ?.leadConversationId ??
+        id;
+  }
 
   /// How many of [group]'s messages from others came after the reader's read
   /// mark: exact once the messages held reach back to the mark
@@ -1148,15 +1157,18 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The unread messages in the reader's own PM chats, for the Swarm badge.
-  int get pmUnread => [
-    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (pmChat(project.id) case final chat?) unreadCount(chat),
-  ].fold(0, (a, b) => a + b);
+  int get pmUnread => buddiesOn
+      ? 0
+      : [
+          for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+            if (pmChat(project.id) case final chat?) unreadCount(chat),
+        ].fold(0, (a, b) => a + b);
 
   /// Reads each PM chat whose count is still open ([_pmCountOpen]), page by
   /// page, so the count is exact up to [kCountCap]; nothing once every chat's
   /// count is known.
   void _readUnreadPmChats() {
+    if (buddiesOn) return;
     for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
       final chat = pmChat(project.id);
       if (chat == null || !_pmCountOpen(chat) || !_pmCounting.add(chat.id)) {
@@ -1285,6 +1297,7 @@ class SuperTabController extends ChangeNotifier {
       // The reader moved on while this was read: it must not pull them back.
       if (ask != _selectRequest) return false;
     }
+    id = _shownFor(id);
     if (id == selectedId && !devicesSelected) return true;
     _acted();
     final group = snapshot!.conversation(id)!;
@@ -1427,6 +1440,7 @@ class SuperTabController extends ChangeNotifier {
         if (!allowed.contains(selectedId)) {
           selectedId = next.projects.firstOrNull?.leadConversationId ?? 'lead';
         }
+        selectedId = _shownFor(selectedId);
         if (localAccessChanged) _saveSoon();
         // A new store holds no closed groups yet, nor one a saved view drew:
         // the open projects read theirs.

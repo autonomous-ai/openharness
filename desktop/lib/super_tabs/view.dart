@@ -1693,10 +1693,9 @@ class _SuperTabViewState extends State<SuperTabView>
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
-          // A Buddy chat is the reader's own: its history from before Buddies,
-          // and the Buddy itself to remove. Nothing to rename or archive.
-          if (c.pmChat(group.projectId) case final earlier?)
-            item('Earlier Chat with PM', () => unawaited(c.select(earlier.id))),
+          // A Buddy chat is the reader's own: the Buddy itself to remove.
+          // Nothing to rename or archive, and no way to a Chat with PM (Ken,
+          // 10-28).
           if (editable && c.buddy(group.projectId) != null)
             item(
               'Remove Buddy',
@@ -2045,8 +2044,7 @@ class _SuperTabViewState extends State<SuperTabView>
       );
     }
     final group = c.selected;
-    final writable =
-        c.canWrite && group != null && !group.archived && !c.readOnly(group);
+    final writable = c.canWrite && group != null && !group.archived;
     final busy = c.saving || c.uploading;
     final latestOwn = c
         .messages(c.selectedId)
@@ -2480,23 +2478,7 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-        if (group != null && c.readOnly(group))
-          Padding(
-            key: const ValueKey('super-pm-chat-read-only'),
-            padding: const EdgeInsets.fromLTRB(
-              grid.AppDesktop.panelPadding,
-              grid.AppDesktop.controlGap,
-              grid.AppDesktop.panelPadding,
-              grid.AppDesktop.groupGap,
-            ),
-            child: Text(
-              'This chat is read-only now. Talk to the PM in '
-              '#${c.snapshot!.projectFor(group.id)?.name ?? ''}; private things '
-              'go to ${_buddyName(c.buddyChat(group.projectId)) ?? 'your Buddy'}.',
-              style: DesktopChrome.metadata(),
-            ),
-          )
-        else if (group != null && group.archived)
+        if (group != null && group.archived)
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
             child: Row(

@@ -149,20 +149,58 @@ void main() {
       },
     );
 
-    test('with Buddies on, the old Chat with PM is read only', () async {
+    /// Ken has a Chat with PM from before Buddies, with an unread PM reply,
+    /// and has it open; then the Swarm turns Buddies on.
+    Future<(ConversationServer, SuperTabController, String)>
+    pmChatThenBuddies() async {
       final server = buddySwarm(enabled: false);
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
       await c.refresh();
       await c.openPmChat('lead');
-      final chat = c.pmChat('lead')!;
-      expect(c.readOnly(chat), isFalse);
-
-      server.state['buddies'] = true;
+      final id = c.pmChat('lead')!.id;
+      await c.select('lead');
+      pmReply(server, id, 'Earlier answer from the PM');
       await c.refresh();
+      expect(c.pmUnread, 1);
+      server.state['buddies'] = true;
+      giveBuddy(server);
+      await c.refresh();
+      return (server, c, id);
+    }
 
-      expect(c.readOnly(c.pmChat('lead')!), isTrue);
+    test('with Buddies on, opening the old Chat with PM by id opens the project chat instead', () async {
+      final (_, c, id) = await pmChatThenBuddies();
+
+      expect(await c.select(id), isTrue);
+
+      expect(c.selectedId, 'lead');
     });
+
+    test(
+      'with Buddies on, a Chat with PM left open moves to the project chat',
+      () async {
+        final server = buddySwarm(enabled: false);
+        final c = server.controller(account: 'peer');
+        addTearDown(c.dispose);
+        await c.refresh();
+        await c.openPmChat('lead');
+        expect(c.selectedId, c.pmChat('lead')!.id);
+
+        server.state['buddies'] = true;
+        await c.refresh();
+
+        expect(c.selectedId, 'lead');
+      },
+    );
+
+    test(
+      'with Buddies on, the old Chat with PM counts nothing on the Swarm tab',
+      () async {
+        final (_, c, _) = await pmChatThenBuddies();
+        expect(c.pmUnread, 0);
+      },
+    );
   });
 
   group('the sidebar', () {
@@ -690,40 +728,52 @@ void main() {
       );
     });
 
-    group('the old Chat with PM', () {
-      Future<SuperTabController> withHistory(WidgetTester tester) async {
+    group('no Chat with PM', () {
+      Future<(ConversationServer, SuperTabController)> withHistory(
+        WidgetTester tester,
+      ) async {
         final server = buddySwarm(enabled: false);
         final c = server.controller(account: 'peer');
         await c.refresh();
         await c.openPmChat('lead');
         final id = c.pmChat('lead')!.id;
         pmReply(server, id, 'Earlier answer from the PM');
+        server.tag('message-${server.revision}', conversationId: id);
+        server.ask(['Ship it?'], conversationId: id);
         c.dispose();
         server.state['buddies'] = true;
         giveBuddy(server);
-        return show(tester, server);
+        return (server, await show(tester, server));
       }
 
+      testWidgets('the Buddy menu offers none', (tester) async {
+        final (_, c) = await withHistory(tester);
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Buddy options'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Remove Buddy'), findsOneWidget);
+        expect(find.text('Earlier Chat with PM'), findsNothing);
+        expect(find.textContaining('Chat with PM'), findsNothing);
+        await close(tester, c);
+      });
+
       testWidgets(
-        'opens from the Buddy menu, keeps its history and takes no new messages',
+        'a tag from the old Chat with PM is placed in the project chat and opens it',
         (tester) async {
-          final c = await withHistory(tester);
-          await tester.tap(buddyEntry);
-          await tester.pumpAndSettle();
-          await tester.tap(find.byTooltip('Buddy options'));
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Earlier Chat with PM'));
+          final (_, c) = await withHistory(tester);
+          await tester.tap(find.byKey(const ValueKey('super-notifications')));
           await tester.pumpAndSettle();
 
-          expect(c.selectedId, c.pmChat('lead')!.id);
-          expect(find.text('Earlier answer from the PM'), findsOneWidget);
-          expect(
-            find.text(
-              'This chat is read-only now. Talk to the PM in #Pilot; private things go to Wren.',
-            ),
-            findsOneWidget,
+          expect(find.textContaining('Chat with PM'), findsNothing);
+          await tester.tap(
+            find.byKey(const ValueKey('super-mention-mention-1')),
           );
-          expect(find.text('Message Lead'), findsNothing);
+          await tester.pumpAndSettle();
+
+          expect(c.selectedId, 'lead');
+          expect(find.text('Earlier answer from the PM'), findsNothing);
           await close(tester, c);
         },
       );
