@@ -10,7 +10,7 @@ import { harnessNodePrelude, interactiveEngineShell } from '../lib/engineLaunch.
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { shellSingleQuote } from '../lib/shellQuote.js'
 import { findGitBash, INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
-import { endProcessTree, processTreeKillDeps } from '../lib/windows/treeKill.js'
+import { endGitBashTree, gitBashTreeDeps } from '../lib/windows/gitBashTree.js'
 
 export interface DshCommandOptions {
   cwd: string
@@ -237,9 +237,10 @@ export function killProcessGroup(child: ChildProcess, graceMs = 3_000, host: Dsh
   child.once('exit', () => clearTimeout(timer))
 }
 
-/** [pid] and everything under it, from the pty host's process table, the furthest first (lib/windows/treeKill.ts). */
-function endWindowsTree(pid: number): Promise<unknown> {
-  return endProcessTree(pid, processTreeKillDeps(null))
+/** [pid], a Git Bash run, and everything it started: what Git Bash lists as its tree and the Windows tree under each,
+ *  the furthest first (lib/windows/gitBashTree.ts). */
+function endWindowsTree(pid: number, gitBash: () => string | null): Promise<unknown> {
+  return endGitBashTree(pid, gitBashTreeDeps(gitBash()))
 }
 
 /** The same, for a group this process did not spawn (a viewer left over from an earlier daemon —
@@ -251,7 +252,8 @@ export function killPidGroup(pid: number, graceMs = 3_000, host: DshShellHost = 
   // Bash's bin\bash.exe is a launcher, and ending it alone left the real bash, and what the setup or doctor started,
   // running after a timeout (review of #2025). Its whole tree is ended instead, at once: nothing there gets a SIGTERM.
   if ((host.platform ?? process.platform) === 'win32') {
-    void (host.endTree ?? endWindowsTree)(pid).catch(() => undefined)
+    const endTree = host.endTree ?? ((root: number) => endWindowsTree(root, host.gitBash ?? findGitBash))
+    void endTree(pid).catch(() => undefined)
     return setTimeout(() => {}, 0)
   }
   const signalGroup = (signal: NodeJS.Signals): void => {
