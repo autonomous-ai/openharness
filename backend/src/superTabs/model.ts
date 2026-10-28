@@ -435,8 +435,9 @@ export function syncLeads(state: SuperTabState): void {
   const id = state.leadsConversationId ??= stableId(state.id, 'leads')
   const group = state.conversations.find(c => c.id === id) ?? { id, kind: 'leads', title: 'Leads', leadId: null, agentIds: [],
     archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0 }
-  state.conversations = [...state.conversations.filter(c => c !== group), group]
-  group.agentIds = state.agents.filter(a => ledProject(state, a.id)).map(a => a.id)
+  // A new record, not the one found: a read's state shares the stored ones (parts/shape.ts reassemble).
+  state.conversations = [...state.conversations.filter(c => c !== group),
+    { ...group, agentIds: state.agents.filter(a => ledProject(state, a.id)).map(a => a.id) }]
 }
 
 /** Legacy groups keep their append order, including archived groups. Persisted

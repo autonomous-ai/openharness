@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 
@@ -95,6 +95,8 @@ function recorder() {
   return { store: methods() as unknown as SuperTabStore, calls }
 }
 
+/** The fake GitHub App's private key: made once, as it is slow to make. */
+const appKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
 let app: FastifyInstance
 let store: ReturnType<typeof recorder>
 beforeEach(async () => {
@@ -112,8 +114,10 @@ beforeEach(async () => {
   app = Fastify()
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticate as never)
-  // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment).
-  const github = { issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
+  // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment). Its config is
+  // what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`).
+  const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null } },
+    issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
     prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
   await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never })

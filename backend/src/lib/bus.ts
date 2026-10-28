@@ -19,6 +19,7 @@ import { Redis } from 'ioredis'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
 import type { Frame, UpBusMsg, DownBusMsg } from './tunnel.js'
+import { redisStamps, type SwarmStamps } from '../superTabs/cache.js'
 
 // A connection in subscriber mode must never fail its (re)SUBSCRIBE commands, so the sub side keeps
 // ioredis' "retry forever" setting.
@@ -232,6 +233,29 @@ export function subscribeTabRelay(share: string, machineId: string, cb: (msg: un
 }
 export function publishTabRelay(share: string, machineId: string, msg: unknown): Promise<number> {
   return safePublish(`amsg:${share}:${machineId}`, JSON.stringify(msg))
+}
+
+/** A Swarm's stamp moved (superTabs/cache.ts): every instance frees what it holds of the Swarm at the old stamp. One
+ *  channel for every Swarm; a broadcast lost while Redis is down costs nothing, since each read checks the stamp itself. */
+const SWARM_STAMP = 'swarm-stamp'
+type StampScopes = Array<'main' | 'machine'>
+export function publishSwarmStamp(tabId: string, scopes: readonly ('main' | 'machine')[]): Promise<number> {
+  return safePublish(SWARM_STAMP, JSON.stringify({ tabId, scopes }))
+}
+export function subscribeSwarmStamps(cb: (tabId: string, scopes: StampScopes) => void): Promise<() => void> {
+  return addSub(SWARM_STAMP, (msg: unknown) => {
+    const { tabId, scopes } = (msg ?? {}) as { tabId?: unknown; scopes?: unknown }
+    if (typeof tabId !== 'string' || !Array.isArray(scopes) || !scopes.every(s => s === 'main' || s === 'machine')) return
+    cb(tabId, scopes as StampScopes)
+  })
+}
+
+/** The Swarm stamps on this Redis (superTabs/cache.ts), their bumps broadcast on the bus. */
+export function redisSwarmStamps(): SwarmStamps {
+  return redisStamps(pub, { publish: publishSwarmStamp, subscribe: listener => {
+    const subscribed = subscribeSwarmStamps(listener).catch((err: unknown) => { logger.error('[bus] Swarm stamp subscribe failed', err); return () => {} })
+    return () => { void subscribed.then(stop => stop()) }
+  } })
 }
 
 /** A machine's sharing changed (routes/machineShares.ts): a session another account holds to it on any
