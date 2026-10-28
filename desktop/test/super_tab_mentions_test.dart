@@ -362,6 +362,34 @@ void main() {
       );
     });
 
+    testWidgets('a tag shows the Lead’s avatar beside its name', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..append('Ship it?')
+        ..tag('message-1', text: 'Ship it?', leadId: 'lead-agent');
+      server.state['agents'] = [
+        {
+          'id': 'lead-agent',
+          'name': 'Lead',
+          'displayName': 'Wren',
+          'machineId': 'm',
+          'harnessId': 'h',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'claude'},
+          'avatar': {'kind': 'preset', 'key': 'owl'},
+        },
+      ];
+      await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('super-mention-mention-1'));
+      expect(
+        find.descendant(of: row, matching: find.text('🦉')),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('mark done moves the tag to Earlier and clears the count', (
       tester,
     ) async {
@@ -435,7 +463,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
       await tester.pumpAndSettle();
       expect(c.selectedId, 'group');
-      expect(find.text('Replying to owner@example.com'), findsOneWidget);
+      expect(find.text('Replying to owner'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('super-message-message-100')).hitTestable(),
         findsOneWidget,

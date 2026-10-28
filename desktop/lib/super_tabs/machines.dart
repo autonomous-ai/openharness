@@ -2278,11 +2278,7 @@ class _MachineLine extends StatelessWidget {
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
                 message: 'Owned by ${superTabPersonName(owner.email)}',
-                child: SuperTabAvatar(
-                  identity: 'person:${owner.id}',
-                  name: superTabPersonName(owner.email),
-                  size: 20,
-                ),
+                child: SuperTabAvatar.person(owner, size: 20),
               ),
             ),
           if (view.cleaning)

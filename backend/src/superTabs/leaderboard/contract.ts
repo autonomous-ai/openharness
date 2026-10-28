@@ -23,6 +23,11 @@ export interface PersonScore {
 
 export interface WeekGoal { shipped: number; points: number; medianAskToShipMs: number | null }
 
+/** A week's attempts at requests (never reviews) and how many ran on a model served on the Swarm's grid; of those whose
+ *  work had a review verdict, how many passed the first one, grid and subscription apart (roadmap, Dec: about 30% of work on
+ *  cheaper models without lower quality). */
+export interface ModelShare { attempts: number; grid: number; reviewed: { grid: number; subscription: number }; passedFirst: { grid: number; subscription: number } }
+
 export interface Leaderboard {
   projectId: string
   week: number
@@ -32,4 +37,6 @@ export interface Leaderboard {
   people: PersonScore[]
   /** Agents waiting on a person now: how many per person, in name order. Never ranked, never in the points. */
   waiting: { total: number; people: Array<{ personId: string; count: number; conversationIds: string[] }> }
+  /** Absent from a backend before it. */
+  models: { thisWeek: ModelShare; lastWeek: ModelShare }
 }
