@@ -21,6 +21,9 @@ class _Backend {
   ];
   SuperTabFailure? refuse;
 
+  /// The Workspaces read fails with this, once set.
+  SuperTabFailure? listFailure;
+
   Future<Object?> call(
     String method,
     String path, {
@@ -39,6 +42,7 @@ class _Backend {
       return {'id': 'w2'};
     }
     if (path == '/api/super-tabs/workspaces') {
+      if (listFailure case final failure?) throw failure;
       return {'workspaces': workspaces};
     }
     return {'invitations': []};
@@ -124,5 +128,30 @@ void main() {
     await tester.tap(_create);
     await tester.pumpAndSettle();
     expect([for (final p in backend.posts) p['operationId']], ['op-0', 'op-0']);
+  });
+
+  testWidgets('a Workspace created but not yet listed says so, and Retry '
+      'reads again without creating another', (tester) async {
+    final backend = _Backend();
+    await _show(tester, backend);
+    backend.listFailure = const SuperTabFailure(
+      'OFFLINE',
+      'Harness is offline.',
+    );
+    await tester.enterText(find.byType(TextField), 'Acme');
+    await tester.pump();
+    await tester.tap(_create);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Acme was created, but could not be shown: Harness is offline.',
+      ),
+      findsOneWidget,
+    );
+    backend.listFailure = null;
+    await tester.tap(find.widgetWithText(FilledButton, 'Retry'));
+    await tester.pumpAndSettle();
+    expect(backend.posts, hasLength(1));
+    expect(find.text('Acme is ready. It has no Swarms yet.'), findsOneWidget);
   });
 }

@@ -642,6 +642,9 @@ class _SwarmNewWorkspaceDialogState extends State<SwarmNewWorkspaceDialog> {
   String? _error;
   SwarmWorkspace? _created;
 
+  /// The new Workspace, created but not read back yet: Retry reads again.
+  ({String id, String name})? _unlisted;
+
   @override
   void initState() {
     super.initState();
@@ -666,15 +669,42 @@ class _SwarmNewWorkspaceDialogState extends State<SwarmNewWorkspaceDialog> {
         operationId: _operationId,
         name: name,
       );
-      await widget.workspaces.refresh();
-      if (!mounted) return;
-      setState(
-        () => _created = widget.workspaces.workspaces
-            ?.where((w) => w.id == id)
-            .firstOrNull,
-      );
+      _unlisted = (id: id, name: name);
+      await _showCreated();
     } on SuperTabFailure catch (failure) {
       if (mounted) setState(() => _error = failure.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Reads the Workspaces again and shows the new one, or says why not.
+  Future<void> _showCreated() async {
+    final unlisted = _unlisted;
+    if (unlisted == null) return;
+    await widget.workspaces.refresh();
+    if (!mounted) return;
+    final created = widget.workspaces.workspaces
+        ?.where((w) => w.id == unlisted.id)
+        .firstOrNull;
+    setState(() {
+      _created = created;
+      if (created != null) {
+        _unlisted = null;
+        _error = null;
+      } else {
+        _error =
+            '${unlisted.name} was created, but could not be shown: '
+            '${widget.workspaces.error ?? 'it is not listed yet.'}';
+      }
+    });
+  }
+
+  Future<void> _retryShow() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await _showCreated();
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -738,7 +768,12 @@ class _SwarmNewWorkspaceDialogState extends State<SwarmNewWorkspaceDialog> {
                       onPressed: () => Navigator.maybePop(context),
                       child: Text(created == null ? 'Cancel' : 'Done'),
                     ),
-                    if (created == null)
+                    if (_unlisted != null)
+                      FilledButton(
+                        onPressed: _busy ? null : _retryShow,
+                        child: const Text('Retry'),
+                      )
+                    else if (created == null)
                       FilledButton(
                         onPressed: _busy || _name.text.trim().isEmpty
                             ? null

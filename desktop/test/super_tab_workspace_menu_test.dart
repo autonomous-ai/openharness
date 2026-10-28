@@ -360,4 +360,33 @@ void main() {
     await _open(tester);
     expect(find.text('Workspaces could not be refreshed'), findsNothing);
   });
+
+  testWidgets('a first read that fails shows a quiet row that reads again', (
+    tester,
+  ) async {
+    final backend = _ken()
+      ..failures['/api/super-tabs/workspaces'] = const SuperTabFailure(
+        'OFFLINE',
+        'Harness is offline.',
+      );
+    await _show(tester, backend);
+    expect(find.text('Workspaces could not be read'), findsOneWidget);
+    expect(find.byKey(const ValueKey('super-workspace-menu')), findsNothing);
+    backend.failures.clear();
+    await _tap(tester, find.byTooltip('Read Workspaces again'));
+    expect(find.text('Workspaces could not be read'), findsNothing);
+    expect(find.byKey(const ValueKey('super-workspace-menu')), findsOneWidget);
+  });
+
+  testWidgets('a backend without Workspaces stays silent', (tester) async {
+    final backend = _ken()
+      ..failures['/api/super-tabs/workspaces'] = const SuperTabFailure(
+        'NOT_FOUND',
+        'Not found',
+        statusCode: 404,
+      );
+    await _show(tester, backend);
+    expect(find.text('Workspaces could not be read'), findsNothing);
+    expect(find.text('Retry'), findsNothing);
+  });
 }

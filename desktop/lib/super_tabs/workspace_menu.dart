@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
+import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_menu.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
@@ -321,12 +322,59 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
     ),
   );
 
+  Widget _unreadRow(String error) => Padding(
+    padding: const EdgeInsets.only(bottom: 2),
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 36),
+      child: Row(
+        children: [
+          SizedBox(width: SuperTabSectionHeading.indentFor(0)),
+          SizedBox(
+            width: SuperTabSectionHeading.actionWidth,
+            child: Icon(
+              AppIcons.circleAlert,
+              size: AppIcons.inlineSize,
+              color: DesktopChrome.muted,
+            ),
+          ),
+          Expanded(
+            child: Tooltip(
+              message: error,
+              child: Text(
+                'Workspaces could not be read',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: DesktopChrome.control(color: DesktopChrome.muted),
+              ),
+            ),
+          ),
+          // An icon, not a second "Retry" beside a terminal's own.
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: AppIconButton(
+              key: const ValueKey('super-workspace-retry'),
+              icon: AppIcons.refreshCw,
+              tooltip: 'Read Workspaces again',
+              onPressed: () => unawaited(widget.workspaces.refresh()),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: widget.workspaces,
     builder: (context, _) {
       grid.AppTheme.watch(context);
       final current = widget.workspaces.current(widget.tabId);
+      // Never read: a failure says so, with Retry. A backend without
+      // Workspaces (no list, no error) stays silent.
+      if (widget.workspaces.workspaces == null &&
+          widget.workspaces.error != null) {
+        return _unreadRow(widget.workspaces.error!);
+      }
       if (!widget.workspaces.showsMenu || current == null) {
         return const SizedBox.shrink();
       }
