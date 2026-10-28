@@ -13,6 +13,7 @@ import { fail, type AgentStart, type SuperTabState } from '../model.js'
 import type { SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
 import { readMachines } from '../cachedReads.js'
+import { retryTransient } from '../retry.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
@@ -113,8 +114,8 @@ export class HostReads {
    *  host still settles a queued start whose group went quiet). */
   private async tabState(tx: Transaction, cached: CacheView, tabId: string, machineId: string): Promise<SuperTabState> {
     const [light, machines] = await Promise.all([cached.get(tabId, `host:state:${machineId}`, 'main',
-      // On a miss, one snapshot of what the host's rows are built from.
-      () => this.db.$transaction(t => this.hostParts(t, tabId, machineId))),
+      // On a miss, one snapshot of what the host's rows are built from, tried again when a lock it waits for is held (retry.ts).
+      () => retryTransient(() => this.db.$transaction(t => this.hostParts(t, tabId, machineId)))),
       readMachines(tx, cached, tabId)])
     return parts.reassemble({ ...light, machines }, { share: true })
   }

@@ -303,20 +303,32 @@ it('the legacy delete path erases all six linked activity collections', async ()
   expect(db.productUsageActivity.deleteMany).toHaveBeenCalledWith({ where: { subject: activitySubject('account', 'k'.repeat(32)) } })
 })
 
+/** The index builds `ensureProductUsageExpiry` sends, in order: each lists its collection first, which finds no index here. */
+const builds = (): Array<Record<string, unknown>> => db.$runCommandRaw.mock.calls.map(([command]) => command).filter(command => 'createIndexes' in command)
+/** Each build in turn takes the next answer (a value, or `{ fails }` to throw); once they run out, every build takes `rest`. */
+function answerBuilds(answers: unknown[], rest: unknown = {}): void {
+  db.$runCommandRaw.mockImplementation(async command => {
+    if (!('createIndexes' in command)) return { ok: 1 }
+    const answer = answers.length ? answers.shift() : rest
+    if (answer && typeof answer === 'object' && 'fails' in answer) throw (answer as { fails: unknown }).fails
+    return answer
+  })
+}
+
 it('installs required unique keys independently of schema push, then expiry for all histories', async () => {
   await ensureProductUsageExpiry()
-  expect(db.$runCommandRaw).toHaveBeenCalledTimes(14)
-  expect(db.$runCommandRaw.mock.calls[12][0]).toMatchObject({ createIndexes: 'product_usage_activity', indexes: [{ key: { expiresAt: 1 }, expireAfterSeconds: 0 }] })
-  expect(db.$runCommandRaw.mock.calls[13][0]).toMatchObject({ createIndexes: 'product_usage_activity', indexes: [{ key: { subject: 1, dayUtc: 1 }, unique: true }] })
-  expect(db.$runCommandRaw.mock.calls[0][0]).toMatchObject({ createIndexes: 'product_usage_preferences', indexes: [{ key: { userId: 1 }, unique: true }] })
-  expect(db.$runCommandRaw.mock.calls[1][0]).toMatchObject({ createIndexes: 'product_usage_totals', indexes: [{ key: { dayUtc: 1, metric: 1 }, unique: true }] })
-  expect(db.$runCommandRaw.mock.calls[2][0]).toMatchObject({ createIndexes: 'product_usage_receipts', indexes: [{ expireAfterSeconds: 0 }] })
-  expect(db.$runCommandRaw.mock.calls[4][0]).toMatchObject({ createIndexes: 'user_daily_presence', indexes: [{ expireAfterSeconds: 35 * 86400 }] })
+  expect(builds()).toHaveLength(14)
+  expect(builds()[12]).toMatchObject({ createIndexes: 'product_usage_activity', indexes: [{ key: { expiresAt: 1 }, expireAfterSeconds: 0 }] })
+  expect(builds()[13]).toMatchObject({ createIndexes: 'product_usage_activity', indexes: [{ key: { subject: 1, dayUtc: 1 }, unique: true }] })
+  expect(builds()[0]).toMatchObject({ createIndexes: 'product_usage_preferences', indexes: [{ key: { userId: 1 }, unique: true }] })
+  expect(builds()[1]).toMatchObject({ createIndexes: 'product_usage_totals', indexes: [{ key: { dayUtc: 1, metric: 1 }, unique: true }] })
+  expect(builds()[2]).toMatchObject({ createIndexes: 'product_usage_receipts', indexes: [{ expireAfterSeconds: 0 }] })
+  expect(builds()[4]).toMatchObject({ createIndexes: 'user_daily_presence', indexes: [{ expireAfterSeconds: 35 * 86400 }] })
   expect(db.productUsageTotal.groupBy).not.toHaveBeenCalled()
 })
 
 it('merges duplicate counters transactionally before installing their unique key', async () => {
-  db.$runCommandRaw.mockResolvedValueOnce({}).mockRejectedValueOnce({ meta: { message: 'E11000 duplicate key' } })
+  answerBuilds([{}, { fails: { meta: { message: 'E11000 duplicate key' } } }])
   db.productUsageTotal.groupBy.mockResolvedValue([{ dayUtc: now, metric: 'relay_turns_started' }])
   db.productUsageTotal.findMany.mockResolvedValue([{ id: 'keep', value: 2 }, { id: 'duplicate', value: 5 }])
   await ensureProductUsageExpiry()
@@ -326,15 +338,15 @@ it('merges duplicate counters transactionally before installing their unique key
 })
 
 it('retries a conflicting repair but fails startup for unrelated database failures', async () => {
-  db.$runCommandRaw.mockResolvedValueOnce({}).mockRejectedValueOnce({ meta: { code: 11000 } })
+  answerBuilds([{}, { fails: { meta: { code: 11000 } } }])
   db.$transaction.mockRejectedValueOnce({ code: 'P2034' })
   await expect(ensureProductUsageExpiry()).resolves.toBeUndefined()
-  db.$runCommandRaw.mockRejectedValueOnce(new Error('permission denied'))
+  answerBuilds([{ fails: new Error('permission denied') }])
   await expect(ensureProductUsageExpiry()).rejects.toThrow('permission denied')
 })
 
 it('bounds duplicate repair work and refuses to claim readiness without a unique key', async () => {
-  db.$runCommandRaw.mockResolvedValueOnce({}).mockRejectedValue({ meta: { code: 11000 } })
+  answerBuilds([{}], { fails: { meta: { code: 11000 } } })
   db.productUsageTotal.groupBy.mockResolvedValue([])
   await expect(ensureProductUsageExpiry()).rejects.toThrow('aggregate key is not ready')
   expect(db.$transaction).toHaveBeenCalledTimes(10)
