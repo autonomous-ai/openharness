@@ -931,6 +931,91 @@ describe('routing contributed capacity', () => {
     })
   })
 
+  describe('a task that requires a machine', () => {
+    // 2026-10-27: a task to check a device plugged into one person's Mac went to another machine by policy order.
+    const two = (diego: (p: any) => void = () => {}) => {
+      const other = { ...healthy(), machineId: 'm3', name: 'Diego Mac', observation: { ...healthy().observation, runningHarnessIds: [] } }
+      diego(other)
+      return [healthy(), other]
+    }
+    const requiring = (requires: Record<string, unknown>) => {
+      const groups = conversations()
+      Object.assign(groups[1]!, { task: { goal: 'Check the device', changes: 'None', constraints: 'None', owns: ['devices'], requires } })
+      return groups
+    }
+    async function route(machines: unknown[], requires: Record<string, unknown>, members = true) {
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: { state: { id: 'tab', agents: members ? agents : [agents[1]], conversations: requiring(requires), machines } },
+        policy: { policy, warnings: [] }, machines: [] } } })
+      return { answer: await routeTask(input, s, where, opener()), s }
+    }
+    it('offers only the required machine and says why every other one is left out', async () => {
+      const { answer, s } = await route(two(), { machines: ['m3'] })
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm3' } })
+      expect(recorded(s).command.decision.candidates.every((c: { machineId: string }) => c.machineId === 'm3')).toBe(true)
+      expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([
+        { title: 'Multiply · Claude sonnet medium · Contributed laptop', reason: 'This task runs only on the machine it requires.' },
+        { title: 'New agent · Claude opus high · Contributed laptop', reason: 'This task runs only on the machine it requires.' }]))
+    })
+    it('waits while the required machine has no free slot, then routes there', async () => {
+      const full = await route(two(p => { p.availableSlots = 0 }), { machines: ['m3'] })
+      expect(full.answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true,
+        detail: 'This task waits for the machine it requires; route it again once that machine can take it.' })
+      expect(full.s.mock.calls.some(c => c[0].action === 'command')).toBe(false)
+      const free = await route(two(p => { p.availableSlots = 1 }), { machines: ['m3'] })
+      expect(free.answer).toMatchObject({ ok: true, pick: { machineId: 'm3' } })
+    })
+    it('waits, offering nothing, for a required machine the Lead cannot see', async () => {
+      const { answer } = await route(two(), { machines: [], unseenMachines: 1 })
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true })
+      expect((answer.excluded as Array<{ reason: string }>).every(e => e.reason === 'This task runs only on the machine it requires.')).toBe(true)
+    })
+    it('counts a Mac\'s Harness Team account as that Mac', async () => {
+      const team = { ...healthy(), machineId: 't3', name: 'Diego Mac', hostMachineId: 'm3', contributorId: 'owner', observation: { ...healthy().observation, runningHarnessIds: [] } }
+      const { answer } = await route([healthy(), team], { machines: ['m3'] }, false)
+      expect(answer).toMatchObject({ ok: true, pick: { machineId: 't3' } })
+    })
+    it('keeps routing a task without a requirement as before', async () => {
+      const { answer } = await route(two(), undefined as never)
+      expect(answer).toMatchObject({ ok: true })
+    })
+  })
+  describe('a task that requires a device', () => {
+    const requiring = (starts: unknown[] = []) => {
+      const groups = conversations()
+      Object.assign(groups[1]!, { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })
+      return { revision: 3, state: { id: 'tab', agents, conversations: groups, starts } }
+    }
+    it('waits when no machine has the device connected', async () => {
+      const answer = await routeTask(input, scoped({ tab: requiring() }), where as never, opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [] })), () => 'op')
+      expect(answer).toMatchObject({ error: 'NO_CANDIDATE', waiting: true,
+        detail: 'This task waits for the machine it requires; route it again once that machine can take it.' })
+    })
+    it('offers a member only when its own start had its machine check the device, as the server requires', async () => {
+      const connected = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], devices: { '/dev/cu.usbmodem1': true } }))
+      const members = async (starts: unknown[]) => {
+        const s = scoped({ tab: requiring(starts) })
+        await routeTask(input, s, where as never, connected, () => 'op')
+        return recorded(s).command.decision
+      }
+      const unchecked = await members([])
+      expect(unchecked.candidates.some((c: { kind: string }) => c.kind === 'member')).toBe(false)
+      expect(unchecked.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+        reason: 'Its start did not have its machine check the device this task requires. Start a new agent for it.' }]))
+      const checked = await members([{ harnessId: 'h1', request: { machineId: 'm1', requirements: { devices: ['/dev/cu.usbmodem1'] } } }])
+      expect(checked.candidates.some((c: { kind: string }) => c.kind === 'member')).toBe(true)
+    })
+  })
+  it('asks the machine for the devices the group\'s task requires, beside those the Lead names', async () => {
+    const groups = conversations()
+    Object.assign(groups[1]!, { task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['o'], requires: { devices: ['/dev/cu.usbmodem1'] } } })
+    const s = scoped({ tab: { revision: 3, state: { id: 'tab', agents, conversations: groups } } })
+    const make = opener(id => daemon(id, { devices: { '/dev/cu.usbmodem1': id === 'm2', '/dev/ttyUSB0': true } }))
+    const answer = await routeTask({ ...input, assessment: { ...input.assessment, needs: { devices: ['/dev/ttyUSB0'] } } }, s, where as never, make, () => 'op')
+    expect(answer).toMatchObject({ ok: true, pick: { machineId: 'm2' } })
+    const hint = JSON.parse(/start OPERATION_ID (\{.*\}), then/.exec(answer.next as string)![1]!)
+    expect(hint.requirements.devices).toEqual(['/dev/ttyUSB0', '/dev/cu.usbmodem1'])
+  })
+
   it.each([
     ['stale', (p: any) => { p.observation.receivedAt = 0 }],
     ['paused', (p: any) => { p.paused = true }],
