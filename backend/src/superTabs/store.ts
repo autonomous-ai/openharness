@@ -1,6 +1,6 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
-import type { Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
+import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -19,7 +19,7 @@ import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
-import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
@@ -277,6 +277,30 @@ export function localPollMemory(now: () => number): PollMemory {
 /** The routing decision a command names. `decision.answer` names a person's decision instead (decisions.ts). */
 const routeDecisionOf = (command: Command): string | undefined => command.type === 'decision.answer' ? undefined
   : 'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
+
+const machineKey = (environment: string, machineId: string, ownerId: string) => `machine:${environment}:${machineId}:${ownerId}`
+
+/**
+ * What agent grant checks read, kept for one request only. A host read checks every agent on its machine, mostly for the
+ * same few contributors: without this each agent cost its machine, share, contributor and Workspace membership again
+ * (4 point queries per agent on a shared machine, Diego's review 2026-10-28). Never kept past the request, so a revoked
+ * share or a Workspace removal drops the rows on the next read, as before.
+ */
+export class GrantReads {
+  private readonly answers = new Map<string, Promise<unknown>>()
+  /** `machine`: a live machine the request already read with the grant's own filter (machineAlive), its host's. */
+  constructor(machine?: Machine) {
+    if (machine) this.answers.set(machineKey(machine.autonomousEnv, machine.machineId, machine.userId), Promise.resolve(machine))
+  }
+
+  once<T>(key: string, read: () => Promise<T>): Promise<T> {
+    const known = this.answers.get(key) as Promise<T> | undefined
+    if (known) return known
+    const answer = read()
+    this.answers.set(key, answer)
+    return answer
+  }
+}
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
@@ -544,15 +568,17 @@ export class SuperTabStore {
   /** Shared with the read API (superTabs/read, design section 7.2). */
   /** Every path that serves an agent's host checks this, so it also holds the Workspace check: the agent acts for its
    *  contributor, who must still be in the Swarm's Workspace. Its host need not be, as it need not be in the Swarm. */
-  async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
-    await requireWorkspaceAccess(tx, state, target.contributorId)
-    const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
-      autonomousEnv: state.environment, ...machineAlive } })
+  /** `reads`: one request's reads, shared by every agent it checks (GrantReads). */
+  async agentGrant(tx: Transaction, state: SuperTabState, target: Agent, reads?: GrantReads): Promise<void> {
+    const once = <T>(key: string, read: () => Promise<T>) => reads ? reads.once(key, read) : read()
+    await requireWorkspaceAccess(tx, state, target.contributorId, reads)
+    const machine = await once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
+      where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } }))
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     if (target.contributorId !== machine.userId) {
       person(state, target.contributorId)
-      const contributor = await tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } })
-      const share = await tx.machineShare.findUnique({ where: { machineId: machine.machineId } })
+      const contributor = await once(`user:${target.contributorId}`, () => tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } }))
+      const share = await once(`share:${machine.machineId}`, () => tx.machineShare.findUnique({ where: { machineId: machine.machineId } }))
       if (!contributor || contributor.autonomousEnv !== state.environment || !share || share.ownerId !== machine.userId ||
           share.autonomousEnv !== state.environment || !sharedVia(share, contributor.email) ||
           machineShareGrant(share, contributor.email) !== target.hostGrant) {
@@ -2013,9 +2039,10 @@ export class SuperTabStore {
       let woken = false
       if (update) {
         const progress = groupProject(state, conversation(state, update.conversationId)).progress!
+        const received = this.now() - (progress.requestedAt ?? 0) < UNANSWERED_REQUEST_MS ? ['delivered'] : []
         const pending = progress.requestMessageId
           ? await tx.superTabDelivery.findFirst({ where: { tabId, agentId, messageId: progress.requestMessageId,
-            status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } } })
+            status: { in: ['queued', 'claimed', 'uncertain', ...received] } } })
           : null
         if (!pending) {
           progress.requested = { ...progress.requested, ...update.source!.through as Record<string, number> }
