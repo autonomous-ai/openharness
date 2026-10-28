@@ -551,7 +551,11 @@ class VoiceInputController extends ChangeNotifier {
       // The count, never the words: a transcript is what someone said.
       appLog.info('voice', 'stt[$language]: ${words.length} chars');
       if (take != _take) return _Take.failed;
-      _heard = _joinWords(_heard, words);
+      if (onWords case final land?) {
+        if (words.trim().isNotEmpty) land(words.trim());
+      } else {
+        _heard = _joinWords(_heard, words);
+      }
       _setStatus(
         VoiceInputStatus.idle,
         notice: words.isEmpty ? VoiceNotice.nothingHeard : null,

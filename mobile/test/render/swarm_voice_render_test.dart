@@ -14,6 +14,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_voice.dart';
 
 import '../voice_fakes.dart';
 import '../swarm/swarm_fixture.dart';
@@ -213,13 +214,22 @@ void main() {
       await shoot(tester, key, 'swarm-voice-listening-$look');
     });
 
-    testWidgets('heard into the box ($look)', skip: skip, (tester) async {
+    testWidgets('heard into the box while talking ($look)', skip: skip, (
+      tester,
+    ) async {
+      final recorder = _MeteredRecorder()
+        ..phrases.add(FakePhraseRecorder.said());
       final stt = FakeTranscriber()
         ..replies.add('Yes, ship it today and tell me when it is up.');
-      final key = await chat(tester, _MeteredRecorder(), stt);
+      final key = await chat(tester, recorder, stt);
       await tapMic(tester);
-      await tapMic(tester);
-      await tester.pumpAndSettle();
+      recorder.meter.value = 0.7;
+      await tester.pump(const Duration(milliseconds: 400));
+      recorder.meter.value = 0.02;
+      await tester.pump(SwarmVoice.breath);
+      for (var i = 0; i < 5; i++) {
+        await tester.pump();
+      }
       await shoot(tester, key, 'swarm-voice-heard-$look');
     });
 
@@ -237,7 +247,7 @@ void main() {
 }
 
 /// A microphone that also says how loud it is: what the bars follow.
-class _MeteredRecorder extends FakeVoiceRecorder implements VoiceLevelMeter {
+class _MeteredRecorder extends FakePhraseRecorder implements VoiceLevelMeter {
   final meter = ValueNotifier<double>(0);
 
   @override

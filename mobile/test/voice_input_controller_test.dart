@@ -762,6 +762,18 @@ void main() {
       expect(phrased.notice, isNull, reason: 'nothing went wrong');
     });
 
+    test('a take from a recorder that cannot cut lands whole where the words '
+        'go', () async {
+      voice.onWords = words.add;
+      backend.replies.add('  all of it  ');
+      await voice.startListening();
+
+      expect(await voice.stopListening(), isTrue);
+
+      expect(words, ['all of it']);
+      expect(voice.transcript, isEmpty);
+    });
+
     test('nothing is cut from a recorder that cannot, nor with nobody taking '
         'the words', () async {
       voice.onWords = words.add;

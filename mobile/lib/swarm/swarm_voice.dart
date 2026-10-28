@@ -11,12 +11,15 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 /// Talking instead of typing in a chat: the terminal's voice input
-/// ([VoiceInputController]), with what it hears put into the message box —
-/// never sent. Send is the person's own tap, once they have read it.
+/// ([VoiceInputController]), with what it hears put into the message box as
+/// the person talks (Tony, 10-28: "like the Claude app").
 ///
-/// Tap to talk; tap again, or stop talking for [pause], and the take is
-/// transcribed into the box. The words land when the take ends, not as they
-/// are said: the backend's speech-to-text takes a finished recording. The
+/// Tap to talk. Each phrase lands in the box a moment after a [breath]: the
+/// backend's speech-to-text takes a finished recording, so the take is cut
+/// into phrases and each is sent on its own, the same way a whole take was.
+/// Tap again and the take ends and what is in the box is sent ([send]) — what
+/// the person typed or changed meanwhile included. Stop talking for [pause]
+/// instead and the take ends with its words left in the box, unsent. The
 /// language is the terminal's ([voiceLanguageStore]).
 ///
 /// ⚠️ **Only while the chat is seen.** A take goes the moment the chat does —
@@ -26,10 +29,15 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 /// until the app is back: neither its pause nor its time limit. A take that
 /// ended just before goes to be transcribed only then, too.
 class SwarmVoice extends ChangeNotifier {
-  SwarmVoice({required this.create, required this.insert});
+  SwarmVoice({required this.create, required this.insert, required this.send});
 
-  /// How long a quiet after speech ends the take, as a second tap does.
+  /// How long a quiet after speech ends the take, its words left in the box.
   static const pause = Duration(seconds: 3);
+
+  /// How long a quiet after speech cuts the phrase said before it, for its
+  /// words to show while the take goes on. Longer than the gap between words,
+  /// so a phrase is not cut mid-word.
+  static const breath = Duration(milliseconds: 700);
 
   /// The microphone's level (`pcm16Level`, 0…1) at and above which it hears
   /// speech, and below which [_quiet] begins a pause. Apart, so a soft word
@@ -43,12 +51,19 @@ class SwarmVoice extends ChangeNotifier {
   /// Puts what was heard into the draft.
   final void Function(String words) insert;
 
+  /// Sends the draft: the second tap ended a take with nothing of it lost.
+  final void Function() send;
+
   VoiceInputController? _voice;
 
   /// Speech was heard in this take: only then does a quiet end it, so the
   /// moment before somebody starts talking is not a pause.
   bool _spoke = false;
-  Timer? _pauseTimer;
+
+  /// Speech was heard since the last phrase was cut: only then does a
+  /// [breath] cut another.
+  bool _phrase = false;
+  Timer? _pauseTimer, _breathTimer;
   bool _disposed = false;
 
   /// Hears the app go to the background, from the first tap.
@@ -73,8 +88,8 @@ class SwarmVoice extends ChangeNotifier {
   /// What went wrong with the last take, as the terminal says it.
   String? get notice => _voice?.notice;
 
-  /// Starts a take; ends it, calls it off while the microphone opens, or
-  /// does nothing while its words are on their way.
+  /// Starts a take; ends it and sends the box, calls it off while the
+  /// microphone opens, or does nothing while its words are on their way.
   void tap() {
     if (_disposed) return;
     final voice = _voice ?? _start();
@@ -85,7 +100,7 @@ class SwarmVoice extends ChangeNotifier {
       case VoiceInputStatus.starting:
         unawaited(voice.stopListening());
       case VoiceInputStatus.listening:
-        _finish(voice);
+        _finish(voice, send: true);
       case VoiceInputStatus.transcribing:
         break;
     }
@@ -112,6 +127,7 @@ class SwarmVoice extends ChangeNotifier {
     voice.level.addListener(_heard);
     voice.onTakeLimit = () async => _limit(voice);
     voice.mayTranscribe = _mayTranscribe;
+    voice.onWords = insert;
     final state = WidgetsBinding.instance.lifecycleState;
     _inFront = state == null || state == AppLifecycleState.resumed;
     _lifecycle = AppLifecycleListener(onStateChange: _lifecycleChanged);
@@ -181,14 +197,14 @@ class SwarmVoice extends ChangeNotifier {
     held?.complete(go);
   }
 
-  /// Ends the take, its words into the draft. A take that fails keeps the
-  /// draft as it was and leaves its [notice].
-  void _finish(VoiceInputController voice) {
+  /// Ends the take, the rest of its words into the draft, and with [send]
+  /// sends the draft once they are there. A take that fails, or lost a
+  /// phrase, sends nothing: the draft keeps what landed, and [notice] says why.
+  void _finish(VoiceInputController voice, {bool send = false}) {
     _stopPause();
     unawaited(
-      voice.submit((words) async {
-        insert(words);
-        return true;
+      voice.stopListening().then((heard) {
+        if (heard && send && !_disposed) this.send();
       }),
     );
   }
@@ -196,24 +212,32 @@ class SwarmVoice extends ChangeNotifier {
   void _changed() {
     if (_voice?.status != VoiceInputStatus.listening) {
       _stopPause();
-      _spoke = false;
+      _spoke = _phrase = false;
       _limitReached = false;
     }
     notifyListeners();
   }
 
   /// The microphone's level moved: speech holds the take open, and a quiet
-  /// after it starts the [pause] that ends it.
+  /// after it starts the [breath] that cuts its phrase and the [pause] that
+  /// ends it.
   void _heard() {
     final voice = _voice;
     if (voice == null || voice.status != VoiceInputStatus.listening) return;
     final level = voice.level.value;
     if (level >= _quiet) {
       _stopPause();
-      if (level >= _speech) _spoke = true;
+      if (level >= _speech) _spoke = _phrase = true;
       return;
     }
     if (!_spoke || !_inFront) return;
+    if (_phrase) {
+      _breathTimer ??= Timer(breath, () {
+        _breathTimer = null;
+        _phrase = false;
+        if (!_disposed) unawaited(voice.cutPhrase());
+      });
+    }
     _pauseTimer ??= Timer(pause, () {
       _pauseTimer = null;
       if (!_disposed && voice.status == VoiceInputStatus.listening) {
@@ -222,9 +246,12 @@ class SwarmVoice extends ChangeNotifier {
     });
   }
 
+  /// Stops the quiet counting: its [breath] and its [pause].
   void _stopPause() {
     _pauseTimer?.cancel();
     _pauseTimer = null;
+    _breathTimer?.cancel();
+    _breathTimer = null;
   }
 
   /// Throws away a take still under way: the microphone closes with the chat.

@@ -162,7 +162,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     _visible = TickerMode.valuesOf(context).enabled;
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
-        _voice = SwarmVoice(create: create, insert: _heard);
+        _voice = SwarmVoice(create: create, insert: _heard, send: _spoken);
       }
     }
     // A covered chat hears nothing: its take goes with it.
@@ -290,13 +290,23 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     );
   }
 
-  /// What the mic heard, into the draft after what is there: never sent.
+  /// What the mic heard, into the draft after what is there. It goes with the
+  /// second tap on the mic ([_spoken]), or with Send.
   void _heard(String words) {
     final c = _conversation;
     if (c == null) return;
     final draft = c.draft;
     final spaced = draft.isEmpty || RegExp(r'\s$').hasMatch(draft);
     c.draft = '$draft${spaced ? '' : ' '}$words';
+  }
+
+  /// The second tap on the mic ended a take: what is in the box goes, as Send
+  /// would send it. Nothing when the box is empty, the chat is covered, or a
+  /// post is already on its way.
+  void _spoken() {
+    final c = _conversation;
+    if (c == null || !_visible || c.draft.trim().isEmpty || !c.canSend) return;
+    _send(c);
   }
 
   /// The composer's +: the sheet, then the picker it names, its files into
