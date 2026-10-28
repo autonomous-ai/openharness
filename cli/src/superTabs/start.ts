@@ -145,12 +145,13 @@ async function startElsewhere(input: Json, failed: Json, scoped: ScopedRequest, 
   const machineName = (id: unknown) => text(machines.find(m => m.machineId === id)?.name) ?? 'its machine'
   const blocked = async (on: Json, required = false): Promise<Json> => {
     const requester = identifier(group?.requesterId) ? [group.requesterId] : []
-    // People read why in the failure row the backend wrote; this one says only what it means, never the raw error, nor the
-    // required machine, which a reader may not see (backend model.ts TaskRequirement).
+    // People read why in the failure row the backend wrote; this one says only what it means, never the raw error. A task's
+    // requirement names no machine at all: the one it failed on is a required one, which a reader may not see (backend
+    // model.ts TaskRequirement; review of #1847).
     requireSuccess(await scoped({ action: 'command', operationId: derived('start-blocked', String(on.id)), command: { type: 'message.send',
       conversationId: request.conversationId, replyTo: null, recipientIds: [], ...(requester.length ? { mentions: requester } : {}),
       text: required
-        ? `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}. This task needs a particular machine or device, so it was not moved to another machine. `
+        ? `${String(request.name)} could not start. This task needs a particular machine or device, so it was not moved to another machine. `
           + 'It has no worker until a machine that has what it needs can start it.'
         : `${String(request.name)} could not start on ${machineName(object(on.request).machineId)}, and no other machine allowed for this task could take it. `
           + 'This task has no worker until that machine is fixed or another one is added.' } }))

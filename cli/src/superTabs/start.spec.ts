@@ -1078,7 +1078,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.of('agent.start')).toHaveLength(1)
   })
 
-  const STAYS = 'Builder could not start on Mac One. This task needs a particular machine or device, so it was not moved to another machine. It has no worker until a machine that has what it needs can start it.'
+  const STAYS = 'Builder could not start. This task needs a particular machine or device, so it was not moved to another machine. It has no worker until a machine that has what it needs can start it.'
   it('keeps a task that requires its machine or device where it is, and tells the group and its requester', async () => {
     // As each Lead reads it: a machine it sees, one it does not (only counted), a device.
     for (const requires of [{ machines: ['mac-one'] }, { machines: [], unseenMachines: 1 }, { devices: ['/dev/cu.round'] }]) {
@@ -1087,6 +1087,8 @@ describe('a Lead\'s start that fails before its agent exists', () => {
       expect(b.of('route.record')).toEqual([])
       expect(b.of('agent.start')).toHaveLength(1)
       expect(b.of('message.send')).toMatchObject([{ conversationId: 'group', mentions: ['person-1'], recipientIds: [], text: STAYS }])
+      // A group reader may not see the machine (backend model.ts withSeenRequirement): the post names none, nor the raw error.
+      for (const hidden of ['mac-one', 'Mac One', TOKEN, 'token']) expect(String(b.of('message.send')[0]!.text)).not.toContain(hidden)
     }
   })
   it('reports the requirement when the backend refuses the new pick for it', async () => {
