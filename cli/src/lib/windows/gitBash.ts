@@ -21,6 +21,9 @@ export interface GitBashSearch {
 /** What a person is told to do when Git for Windows is missing. */
 export const INSTALL_GIT_FOR_WINDOWS = 'Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.'
 
+/** Git's bash under a Scoop root: Scoop keeps each app's current version at apps\<app>\current. */
+const SCOOP_GIT_BASH = win32.join('apps', 'git', 'current', 'bin', 'bash.exe')
+
 export function findGitBash({ env = process.env, isFile = fileExists }: GitBashSearch = {}): string | null {
   const candidates: string[] = []
   // The git on PATH first, as the person's own terminal would run it. Git for Windows puts it in <root>\cmd (the
@@ -28,12 +31,19 @@ export function findGitBash({ env = process.env, isFile = fileExists }: GitBashS
   for (const dir of (env.PATH ?? '').split(';').filter(Boolean)) {
     if (!isFile(win32.join(dir, 'git.exe'))) continue
     candidates.push(win32.resolve(dir, '..', 'bin', 'bash.exe'), win32.resolve(dir, '..', '..', 'bin', 'bash.exe'))
+    // Scoop's git.exe on PATH is a shim in <root>\shims; the git it starts, and its bash, are in <root>\apps\git\current.
+    candidates.push(win32.resolve(dir, '..', SCOOP_GIT_BASH))
   }
   // Then where its installer puts it: for everyone, or for this user alone (no administrator rights).
   for (const root of [env.ProgramFiles, env.ProgramW6432, env['ProgramFiles(x86)']]) {
     if (root) candidates.push(win32.join(root, 'Git', 'bin', 'bash.exe'))
   }
   if (env.LOCALAPPDATA) candidates.push(win32.join(env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe'))
+  // And where Scoop installs it: its root for this user (SCOOP, else ~\scoop), then its root for everyone.
+  const scoopRoots = [env.SCOOP, env.USERPROFILE && win32.join(env.USERPROFILE, 'scoop'), env.SCOOP_GLOBAL, env.ProgramData && win32.join(env.ProgramData, 'scoop')]
+  for (const root of scoopRoots) {
+    if (root) candidates.push(win32.join(root, SCOOP_GIT_BASH))
+  }
   return candidates.find((candidate) => isFile(candidate)) ?? null
 }
 
