@@ -561,6 +561,82 @@ void main() {
       expect(notifies, 1);
     });
 
+    // A Done or an answer waited for the poll's slowest Swarm read before
+    // Home showed it: on the owner's iPhone a read takes seconds.
+    test('a slow poll holds back no Done and no answer', () async {
+      const derived = {'decisionsWaiting': 1, 'mentionsWaiting': 1};
+      final fake = backend({'a': []}, derived: {'a': derived});
+      var answered = false, done = false;
+      fake.routes['/api/super-tabs/a/decisions?state=open'] = (_) => {
+        'decisions': [
+          if (!answered)
+            {
+              'id': 'd1',
+              'conversationId': 'g1',
+              'question': 'Ship it?',
+              'options': ['Yes', 'No'],
+            },
+        ],
+      };
+      fake.routes['/api/super-tabs/a/mentions?state=waiting'] = (_) => {
+        'mentions': [
+          if (!done)
+            {
+              'id': 'm1',
+              'conversationId': 'g1',
+              'messageId': 'msg-1',
+              'text': 'Can you check the copy?',
+            },
+        ],
+      };
+      final sent = Completer<void>();
+      fake.routes['/api/super-tabs/a/commands'] = (body) async {
+        final command = body!['command'] as Map;
+        if (command['type'] == 'decision.answer') {
+          await sent.future;
+          answered = true;
+        } else {
+          done = true;
+        }
+        return {'result': <String, dynamic>{}};
+      };
+      final i = inbox(fake);
+      await i.refresh();
+      await settle();
+      final asks = i.asks('a')!;
+      expect(i.needs.whereType<SwarmMentionNeed>(), hasLength(1));
+      final decision = i.needs.whereType<SwarmDecisionNeed>().single.decision;
+      final read = Completer<void>();
+      final changed = fake.routes['/api/super-tabs/a/changes']!;
+      fake.routes['/api/super-tabs/a/changes'] = (q) async {
+        await read.future;
+        return changed(q);
+      };
+      unawaited(i.refresh());
+      await settle();
+      var notifies = 0;
+      i.addListener(() => notifies++);
+
+      unawaited(asks.done(asks.mentions.single));
+      await settle();
+
+      expect(i.needs.whereType<SwarmMentionNeed>(), isEmpty);
+
+      notifies = 0;
+      unawaited(asks.answer(decision, 0));
+      await settle();
+
+      expect(notifies, greaterThan(0), reason: 'its buttons wait at once');
+      expect(asks.answering, contains('d1'));
+
+      sent.complete();
+      await settle();
+
+      expect(i.needs.whereType<SwarmDecisionNeed>(), isEmpty);
+      read.complete();
+      await settle();
+    });
+
     testWidgets('a screen over it builds once per change, not once per poll', (
       tester,
     ) async {
