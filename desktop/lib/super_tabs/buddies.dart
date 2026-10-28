@@ -105,10 +105,31 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
         projects.where((p) => p.id == c.currentProjectId).firstOrNull?.id ??
         projects.firstOrNull?.id;
     _machine = buddyMachines(c).firstOrNull?.id;
+    c.addListener(_swarmChanged);
+  }
+
+  @override
+  void dispose() {
+    c.removeListener(_swarmChanged);
+    super.dispose();
+  }
+
+  /// The Swarm changed under the open dialog: its machines may have too.
+  void _swarmChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// The chosen machine while it is still one of the reader's, else the
+  /// first that is; null when none is left.
+  String? get _listedMachine {
+    final machines = buddyMachines(c);
+    return machines.any((m) => m.id == _machine)
+        ? _machine
+        : machines.firstOrNull?.id;
   }
 
   Future<void> _submit() async {
-    final project = _project, machine = _machine;
+    final project = _project, machine = _listedMachine;
     if (_busy || project == null || machine == null) return;
     setState(() {
       _busy = true;
@@ -193,7 +214,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                           )
                         : AppSelectField<String>(
                             key: const ValueKey('super-buddy-machine'),
-                            value: _machine ?? '',
+                            value: _listedMachine ?? '',
                             semanticLabel: 'Machine',
                             textStyle: DesktopChrome.control(),
                             options: [
@@ -252,7 +273,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: _busy || _project == null || _machine == null
+          onPressed: _busy || _project == null || _listedMachine == null
               ? null
               : () => unawaited(_submit()),
           child: Text(_busy ? 'Adding…' : 'Add Buddy'),
