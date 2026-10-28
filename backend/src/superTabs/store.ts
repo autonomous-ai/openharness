@@ -1,5 +1,6 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
@@ -16,6 +17,7 @@ import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVA
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
+import { retryTransient } from './retry.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -145,8 +147,8 @@ export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {})
  */
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
-  let hintless = false
-  for (let attempt = 1; ; attempt++) {
+  let hintless = false, staleIndex: unknown = null
+  return retryTransient(async () => {
     let committed: Array<() => void> = []
     const drops = listingDrops()
     try {
@@ -159,17 +161,10 @@ export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, bod
       return result
     } catch (error) {
       // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next attempts name none.
-      if (listingDrops() !== drops) hintless = true
-      else if (!retryable(error)) throw error
-      // An expired or unstartable transaction (P2028) is load: one more try, then the client retries after Retry-After.
-      if (attempt >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
-        // A unique key still taken after every retry is a real duplicate, not contention.
-        if (errorCode(error) === 'P2002') throw error
-        fail('SWARM_BUSY', 'This Swarm is busy. Try again in a moment.', 503)
-      }
-      await sleep(Math.random() * Math.min(TRANSACTION_BACKOFF_CAP_MS, TRANSACTION_BACKOFF_MS * 2 ** (attempt - 1)))
+      if (listingDrops() !== drops) { hintless = true; staleIndex = error }
+      throw error
     }
-  }
+  }, sleep, error => error === staleIndex)
 }
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 }
 /** Each attempt's after-commit work, by that attempt's client: a retried attempt's list is dropped with its client. */
@@ -194,16 +189,6 @@ const pollMemoryFailed = (error: unknown): void => {
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
 const POLLED_CAP = 5_000
-const TRANSACTION_ATTEMPTS = 8
-const EXPIRED_TRANSACTION_ATTEMPTS = 2
-const TRANSACTION_BACKOFF_MS = 50
-const TRANSACTION_BACKOFF_CAP_MS = 1_500
-const errorCode = (error: unknown): unknown => error && typeof error === 'object' && 'code' in error ? error.code : null
-function retryable(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false
-  return ['P2034', 'P2002', 'P2028'].includes(errorCode(error) as string) || (error instanceof Error && error.message.includes('TransientTransactionError'))
-
-}
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000
@@ -966,6 +951,7 @@ export class SuperTabStore {
       }
       if (command.type === 'machine.contribute') context.abandonedStartIds = await abandonedStarts(tx, tabId, original, command.machineId, context.now)
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
+      if (command.type === 'buddy.create') context.contribution = await this.contribution(tx, original, actor, command, true)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
@@ -975,9 +961,20 @@ export class SuperTabStore {
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime() }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
-      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+        || command.type === 'tab.buddies') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
+      }
+      if (command.type === 'buddy.propose') {
+        const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
+        // The newest message its owner wrote there: the chat's newest rows, the Buddy's and the owner's in turn.
+        const recent = asked ? await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
+          orderBy: { sequence: 'desc' }, take: 50, select: { id: true, author: true, source: true } }) : []
+        const ownerId = (asked?.author as unknown as Author | undefined)?.id
+        const newest = recent.find(m => !m.source && (m.author as unknown as Author).kind === 'person' && (m.author as unknown as Author).id === ownerId)
+        if (asked) context.proposalAsk = { id: asked.id, conversationId: asked.conversationId, author: asked.author as unknown as Author,
+          source: !!asked.source, createdAt: asked.createdAt.getTime(), ...(newest ? { newestOwnerMessageId: newest.id } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'agent') {
         const recent = await tx.superTabMessage.findMany({ where: { tabId, conversationId: command.conversationId },
@@ -1651,12 +1648,22 @@ export class SuperTabStore {
     return rows.map(r => r.assignmentId).filter(id => !id.startsWith('release-') && !active.has(id))
   }
 
-  /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
-  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
+  /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. The time
+   *  checks of a machine's report and of a Lead's poll pass `keepStored`: a notice of theirs already stored as that same
+   *  notice (its Swarm, its conversation and its whole source: the kind, and for a loss its worker, task and reason) is
+   *  kept, and only its missing deliveries are written. One duplicate had stopped every later report and poll
+   *  (2026-10-28); any other message under the id still fails, so another task's notice is never delivered as this one. */
+  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
+    keepStored = false) {
+    const stored = keepStored && messages.length ? await tx.superTabMessage.findMany({ where: { id: { in: messages.map(m => m.id) } },
+      select: { id: true, tabId: true, conversationId: true, source: true } }) : []
+    const kept = new Set(stored.filter(row => messages.some(m => m.id === row.id && row.tabId === tabId && row.conversationId === m.conversationId
+      && isDeepStrictEqual(row.source ?? undefined, m.source))).map(row => row.id))
+    if (kept.size) logger.warn('Kept Swarm notices already stored', { tabId, ids: [...kept] })
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []
-    const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
+    let deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     for (const message of messages) {
-      rows.push({ id: message.id, tabId, conversationId: message.conversationId,
+      if (!kept.has(message.id)) rows.push({ id: message.id, tabId, conversationId: message.conversationId,
         sequence: sequences.get(message.id)!, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
         text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] })
@@ -1672,6 +1679,10 @@ export class SuperTabStore {
       }
     }
     if (rows.length) await tx.superTabMessage.createMany({ data: rows })
+    if (kept.size) {
+      const have = new Set((await tx.superTabDelivery.findMany({ where: { messageId: { in: [...kept] } }, select: { id: true } })).map(d => d.id))
+      deliveries = deliveries.filter(d => !have.has(d.id))
+    }
     if (deliveries.length) await tx.superTabDelivery.createMany({ data: deliveries })
     for (const delivery of deliveries) this.announce(tx, { machineId: delivery.machineId, tabId, agentId: delivery.agentId })
   }
@@ -1889,7 +1900,7 @@ export class SuperTabStore {
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
-        await this.writeMessages(tx, tabId, state, rows, sequences)
+        await this.writeMessages(tx, tabId, state, rows, sequences, true)
         return { version }
       }
       if (!state.machines?.includes(pool)) return saved()
@@ -2120,7 +2131,7 @@ export class SuperTabStore {
       // A loss, a start's failure or a stop was judged from a machine's report: a newer report makes this write retry.
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written), ...stoppedMachines(state, idle),
         ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
-      await this.writeMessages(tx, tabId, state, written, sequences)
+      await this.writeMessages(tx, tabId, state, written, sequences, true)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
       const allowed: SuperTabDelivery[] = []

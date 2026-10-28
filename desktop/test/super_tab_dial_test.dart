@@ -122,7 +122,7 @@ void main() {
   });
 
   test('a pick for a closed Swarm opens it first', () async {
-    final (f, c) = await open();
+    final (f, closed) = await open();
     f.app.newSwarm(newTabPage: true);
     await f.app.closeSwarm(
       f.app.swarms.firstWhere((s) => s.superTabId == tabId).id,
@@ -132,6 +132,9 @@ void main() {
     await settle();
     final tab = f.app.swarms.singleWhere((s) => s.superTabId == tabId);
     expect(f.app.activeSwarmId, tab.id);
+    // Closing let go of the Swarm: it opened again with a fresh read.
+    final c = f.app.superTabs.peek(tabId)!;
+    expect(c, isNot(same(closed)));
     expect(c.selectedId, 'design-lead');
     // Opening the Swarm announces too, with the tab's old project; each of
     // those is the pick's, up to the one that names the picked project.

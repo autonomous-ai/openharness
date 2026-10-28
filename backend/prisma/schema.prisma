@@ -552,6 +552,8 @@ model ProductUsageTotal {
 
   @@unique([dayUtc, metric])
   @@map("product_usage_totals")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Random report receipt, used only to prevent retries counting twice. No identity or report body.
@@ -560,6 +562,8 @@ model ProductUsageReceipt {
   expiresAt DateTime
 
   @@map("product_usage_receipts")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([expiresAt], map: "product_usage_expiry")
 }
 
 /// One UTC day a person used Harness while sharing product usage, under a keyed pseudonym
@@ -577,6 +581,8 @@ model ProductUsageActivity {
 
   @@unique([subject, dayUtc])
   @@map("product_usage_activity")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([expiresAt], map: "product_usage_expiry")
 }
 
 /// Legacy individual counters. New ingestion is disabled; dayUtc TTL removes these after 35 days.
@@ -605,6 +611,8 @@ model AnalyticsDailyBucket {
   @@unique([userId, machineId, dayUtc, engine, mode, origin, schemaVersion])
   @@index([userId, dayUtc])
   @@map("analytics_daily_buckets")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Legacy, no longer written. Retained only until the 35-day dayUtc expiry.
@@ -626,6 +634,8 @@ model AnalyticsDailyMachine {
   @@unique([userId, machineId, dayUtc])
   @@index([userId, dayUtc])
   @@map("analytics_daily_machines")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Harness Analytics — per-machine collector control and coverage state. Backs the Coverage panel
@@ -689,6 +699,8 @@ model UserDailyPresence {
   @@unique([userId, machineId, dayUtc])
   @@index([userId, dayUtc])
   @@map("user_daily_presence")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Per-day record of a user on a surface other than the desktop app — `UserDailyPresence` stays the
@@ -714,6 +726,8 @@ model UserDailyClientPresence {
   @@unique([userId, surface, dayUtc])
   @@index([surface, dayUtc])
   @@map("user_daily_client_presence")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Per-day record of whether a user actually established a remote p2p connection to stream a
@@ -732,6 +746,8 @@ model UserDailyRemoteUsage {
   @@unique([userId, machineId, dayUtc])
   @@index([userId, dayUtc])
   @@map("user_daily_remote_usage")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Per-day record of whether a user's device was connected to the device-ws relay
@@ -757,6 +773,8 @@ model UserDailyDevicePresence {
   @@unique([userId, deviceId, dayUtc])
   @@index([userId, dayUtc])
   @@map("user_daily_device_presence")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Per-day record of whether a MACHINE's `harness` daemon was connected to the adapter-ws relay
@@ -783,6 +801,8 @@ model MachineDailyPresence {
   @@unique([machineId, dayUtc])
   @@index([userId, dayUtc])
   @@map("machine_daily_presence")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// Per-day record of an AGENT being driven: one row per (machine, agent, UTC day), created and
@@ -806,6 +826,8 @@ model AgentDailyPresence {
   @@index([machineId, dayUtc])
   @@index([userId, dayUtc])
   @@map("agent_daily_presence")
+  /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
+  @@index([dayUtc], map: "product_usage_expiry")
 }
 
 /// One person's review of one harness in the Harness Store — a star rating and, optionally, a title
@@ -1085,6 +1107,8 @@ model SuperTabMention {
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, conversationId, personId])
+  /// A tag goes 30 days on (superTabs/mentions.ts ensureMentionExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([createdAt], map: "mention_expiry")
 }
 
 /// One reactor's emoji on one message (superTabs/reactions.ts). The id is derived from all four, so adding the same
@@ -1340,6 +1364,8 @@ model SuperTabTerminalRequest {
 
   @@index([machineId, status])
   @@index([tabId, createdAt])
+  /// An unread answer goes after two minutes (superTabs/terminal.ts ensureTerminalExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([createdAt], map: "terminal_request_expiry")
 }
 
 // Swarm state by parts (docs/design/2026-10-26-swarm-state-parts.md). Each part is one record of a Swarm, written only
@@ -1359,6 +1385,9 @@ model SwarmWorkspace {
   createdAt     DateTime  @default(now())
   deletedAt     DateTime?
   purgeAt       DateTime?
+
+  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "workspace_purge")
 }
 
 /// One person of a Workspace. A removal keeps the row with `removedAt` until it is purged; a rejoin writes a new generation.
@@ -1379,6 +1408,8 @@ model SwarmWorkspaceMember {
 
   @@index([workspaceId, removedAt])
   @@index([userId, removedAt])
+  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "workspace_purge")
 }
 
 /// One removal of one Workspace membership, open until the person has left every Swarm of the Workspace. While one is open the
@@ -1398,6 +1429,8 @@ model SwarmWorkspaceRemoval {
 
   @@index([finishedAt, id])
   @@index([workspaceId, userId, finishedAt])
+  /// Removed rows go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "workspace_purge")
 }
 
 /// An invitation to a Workspace, by email; deleted when accepted or revoked, purged when it expires.
@@ -1412,6 +1445,8 @@ model SwarmWorkspaceInvitation {
 
   @@index([email, expiresAt])
   @@index([workspaceId])
+  /// An invitation goes when it expires (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([expiresAt], map: "workspace_invitation_expiry")
 }
 
 model SwarmHead {
@@ -1433,6 +1468,8 @@ model SwarmHead {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "part_purge")
 }
 
 /// One person in the Swarm. Every command of theirs touches it, so removing them and their in-flight action cannot both win.
@@ -1496,6 +1533,8 @@ model SwarmGroup {
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
   @@index([tabId, deleted, key, hostDigest, dormant])
+  /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "part_purge")
 }
 
 model SwarmAgent {
@@ -1570,6 +1609,8 @@ model SwarmStart {
   @@index([tabId, finishedAt])
   @@index([machineId, finishedAt])
   @@index([tabId, agentId])
+  /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "part_purge")
 }
 
 /// One project's report watermark, and the fence a Lead's worker decisions serialize on.
@@ -1586,6 +1627,8 @@ model SwarmProgress {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([purgeAt], map: "part_purge")
 }
 
 model ExperimentalSettings {
@@ -1686,6 +1729,8 @@ model HarnessSession {
 
   @@index([userId])
   @@map("harness_sessions")
+  /// Ended and idle-expired sessions go 30 days on (lib/ssoSession.ts ensureHarnessSessionExpiry). Declared so db push keeps the index; the worker sets its expiry.
+  @@index([expiresAt], map: "harness_session_expiry")
 }
 
 /// One entry of an account's device key log (lib/deviceKeyLog.ts): the identity keys its machines and
