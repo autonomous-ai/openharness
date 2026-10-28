@@ -1122,6 +1122,8 @@ model SuperTabDecision {
   @@index([tabId, personId, createdAt])
   @@index([tabId, askerAgentId, createdAt])
   @@index([tabId, projectId, createdAt])
+  /// Whether a decision waits in a conversation (decisions.ts waitingIn).
+  @@index([tabId, conversationId])
 }
 
 /// One uploaded file, which one message of the actor that uploaded it can send once.
@@ -1200,6 +1202,10 @@ model SuperTabDelivery {
 
   @@index([tabId, agentId, status, createdAt])
   @@index([machineId, status])
+  /// A page of messages' deliveries (store.ts messages).
+  @@index([tabId, messageId])
+  /// A Swarm's open deliveries, whoever they are for (the Lead's poll, store.ts fullDeliveries).
+  @@index([tabId, status])
 }
 
 // One independent harness owns at most one active assignment across all Super Tabs.
@@ -1210,6 +1216,9 @@ model SuperTabRun {
   machineId     String
   harnessId     String
   createdAt     DateTime @default(now())
+
+  /// A Swarm's run records (store.ts staleRuns).
+  @@index([tabId])
 }
 
 // One routing policy document per account and environment (superTabs/routingPolicy.ts).
@@ -1467,7 +1476,10 @@ model SwarmGroup {
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
   @@index([workFinished, archived, lastActivityAt])
-  @@index([executionMachineId])
+  /// A Swarm's running work (parts/light.ts, the host's light load).
+  @@index([tabId, executionMachineId])
+  /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
+  @@index([tabId, deleted, key, hostDigest, dormant])
 }
 
 model SwarmAgent {
@@ -1488,6 +1500,8 @@ model SwarmAgent {
   @@index([tabId, changedAt])
   @@index([machineId, deleted])
   @@index([tabId, contributorId])
+  /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
+  @@index([key, deleted])
 }
 
 /// One machine the Swarm references, contributed or not: its contribution and observation, and its slot ledger.
@@ -1510,6 +1524,8 @@ model SwarmMachine {
   @@unique([tabId, key])
   @@index([tabId, changedAt])
   @@index([machineId, deleted])
+  /// Machines whose settings changed since a host's cursor (read/host.ts woken).
+  @@index([tabId, hostChangedAt])
 }
 
 model SwarmStart {
