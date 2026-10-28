@@ -468,6 +468,36 @@ describe('installDsh, every way it can go', () => {
   })
 
   describe('setup, the used viewer, and the doctor', () => {
+    describe('on a computer with no shell for them (Windows)', () => {
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+      // Only the check reads the platform here: the fixture's clone and its harness folder are the real ones.
+      beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) })
+      afterEach(() => { Object.defineProperty(process, 'platform', platform) })
+
+      it('a harness with a setup or a doctor is refused before either runs, said in words, and not recorded', async () => {
+        // 2026-10-28: every Store install on Windows failed; their setup and doctor ran through a /bin/sh Windows lacks.
+        const detail = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
+        for (const toolchain of [{ setup: 'setup.sh' }, { doctor: 'doctor.sh' }]) {
+          rmSync(join(root, 'src'), { recursive: true, force: true })
+          const repo = thing({ toolchain }, { 'setup.sh': '#!/bin/sh\ntouch set-up\n', 'doctor.sh': '#!/bin/sh\ntouch checked\n' })
+          const frames: DshInstallProgress[] = []
+          const result = await installDsh({ source: repo, onProgress: (p) => frames.push(p) })
+          expect(result, JSON.stringify(toolchain)).toEqual({ ok: false, error: 'SHELL_UNAVAILABLE', detail })
+          expect(frames.at(-1)).toEqual({ id: 'acme/thing', phase: 'failed', error: 'SHELL_UNAVAILABLE', detail })
+          expect(frames.map((f) => f.phase)).toEqual(['clone', 'failed'])
+          expect(existsSync(join(dshInstallDir('acme/thing'), 'set-up'))).toBe(false)
+          expect(existsSync(join(dshInstallDir('acme/thing'), 'checked'))).toBe(false)
+          expect(readInstalledIndex()).toEqual([])
+        }
+      })
+
+      it('a harness with neither installs as before', async () => {
+        const result = await installDsh({ source: thing() })
+        expect(result.ok, JSON.stringify(result)).toBe(true)
+        expect(readInstalledIndex().map((record) => record.id)).toEqual(['acme/thing'])
+      })
+    })
+
     it('a bare script name is the harness\'s own script, as `harness dsh check` reads it, not a PATH lookup', async () => {
       // Found by this spec: `"setup": "setup.sh"` (the shape spec/README.md shows for a viewer package)
       // passed the check, which looks for the file, and then failed install with "command not found".
