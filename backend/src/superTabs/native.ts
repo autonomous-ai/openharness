@@ -3,7 +3,7 @@ import type { Prisma, SuperTabNativeContext } from '@prisma/client'
 import { z } from 'zod'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
-import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
+import { activeWork, agent, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, readConversation } from './projects.js'
 import { noteProjectReports } from './projectUpdates.js'
@@ -208,8 +208,6 @@ export class SuperTabNativeStore {
       // What a person typed in the terminal, or the agent answered, is recorded without any credential in it.
       const text = recovery?.source.required ? recovery.text : event.kind === 'gap'
         ? 'Some terminal activity could not be recorded. Check the native session for the full conversation.' : redactCredentials(event.text).text
-      // Leave a legacy group's list absent so the next read can recover its older links too.
-      if (group.pullRequestUrls !== undefined) appendPullRequestUrls(group, [text])
       // Inform the coordinating lead without replaying this input into the agent
       // that already received it. Its resulting programmatic turn is not native input.
       const recipients = (event.kind !== 'gap' || recovery?.source.required) && group.leadId && group.leadId !== target.id ? [group.leadId] : []

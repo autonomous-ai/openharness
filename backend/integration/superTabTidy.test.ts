@@ -184,7 +184,8 @@ describe('a finished group', () => {
   const archived = async (f: Awaited<ReturnType<typeof swarm>>) => (await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: f.group } })).archived
   const archiveLines = async (f: Awaited<ReturnType<typeof swarm>>) => (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: f.group } }))
     .filter(m => (m.source as { kind?: string } | null)?.kind === 'auto-archive')
-  const linkPr = (f: Awaited<ReturnType<typeof swarm>>) => f.execute({ type: 'message.send', conversationId: f.group, text: `Pull request: ${PR}`, replyTo: null, recipientIds: [] })
+  // Linked on purpose by the Lead's record; a message only naming a pull request never links it (#558).
+  const linkPr = (f: Awaited<ReturnType<typeof swarm>>) => f.execute({ type: 'conversation.merged', conversationId: f.group, pullRequestUrl: PR })
 
   it('archives 30 minutes after its last message once every pull request is merged or closed, with one quiet line', async () => {
     const f = await swarm()
@@ -268,7 +269,7 @@ describe('the archive pass', () => {
     const worker2 = await f.add(second, 'test-host', randomUUID(), 'Writer')
     const work = String((await f.execute({ type: 'work.assign', conversationId: second, agentId: worker2 })).result.assignmentId)
     await f.execute({ type: 'work.cancel', conversationId: second, assignmentId: work, reason: 'Done elsewhere' })
-    for (const group of [f.group, second]) await f.execute({ type: 'message.send', conversationId: group, text: `Pull request: ${PR}`, replyTo: null, recipientIds: [] })
+    for (const group of [f.group, second]) await f.execute({ type: 'conversation.merged', conversationId: group, pullRequestUrl: PR })
     const read: string[] = []
     f.clock.now += 40 * MINUTE
     await archiveFinishedGroups(db, f.timed, { state: async url => { read.push(url); return 'open' }, done: async () => {} }, f.clock.now)

@@ -867,14 +867,12 @@ export class SuperTabStore {
       const dispatched = command.type === 'agent.startDispatch' ? original.starts?.find(s => s.id === command.startId)?.routeDecisionId : undefined
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       const effects = applyCommand(original, actor, command, context)
-      // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
+      // An agent-only notice changes nothing people see: no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source))
-      for (const group of effects.state.conversations) {
-        appendPullRequestUrls(group, [
-          ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
-          ...group.checks.map(check => check.evidence), group.assignment?.result,
-        ])
-      }
+      // A group links the pull requests its work names in check evidence and its result, and those its Lead records merged
+      // (conversation.merged). A message only mentioning one never links it: a Lead naming an unrelated PR in chat linked
+      // it to a group that shipped nothing (#558).
+      for (const group of effects.state.conversations) appendPullRequestUrls(group, [...group.checks.map(check => check.evidence), group.assignment?.result])
       if (command.type === 'agent.rebind') {
         const target = agent(effects.state, command.agentId)
         // A terminal can already belong to a different project or Swarm on this host. The pure
