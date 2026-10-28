@@ -6,6 +6,10 @@
  * who: not which client, how the socket closed, or how long it lived. Every tracked socket now logs a connect line
  * and a disconnect line with the same connId, and each pod logs its counts once a minute, with refusals (a socket
  * turned away before or right at its upgrade) apart from real connects.
+ *
+ * `pod` is the process, not the Kubernetes pod: the host name plus the cluster worker's index (`INSTANCE_ID`,
+ * lib/instance.ts). Every worker logs its own counter line, so a pod's totals are the sum of its workers' lines,
+ * and no line is counted twice.
  */
 import { randomUUID } from 'node:crypto'
 import type { WebSocket } from 'ws'
@@ -23,6 +27,18 @@ export type WsClientKind = typeof WS_CLIENT_KINDS[number] | 'unknown'
 /** A socket that lived less than this counts as short: a refusal, a crash loop, or a dial nobody needed. */
 const SHORT_MS = 2_000
 const VERSION = /^[0-9A-Za-z.+-]{1,40}$/
+const REASON_MAX = 80
+
+/** A close reason is the peer's own text (up to 123 bytes): plain characters only, one line, at most REASON_MAX. */
+function plainReason(reason: string | undefined): string | undefined {
+  const plain = reason
+    ?.replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/[^0-9A-Za-z .,:;_()'/+-]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, REASON_MAX)
+  return plain || undefined
+}
 
 /** The client a socket's query declares, and its version (`?v=`; the phone's `?release=`, which it sent first). */
 export function declaredKind(query: URLSearchParams): { client: WsClientKind; version: string | null } {
@@ -82,6 +98,7 @@ export function trackSocket(
       open[endpoint]--
       if (aliveMs < SHORT_MS) counts[endpoint].short++
       const defined = Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined))
+      reason = plainReason(reason)
       logger.info(`${label} disconnected`, {
         ...common, ...ids, ...defined, ...(code !== undefined ? { code } : {}), ...(reason ? { reason } : {}),
         aliveMs, selects, select: outcome,

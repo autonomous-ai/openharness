@@ -128,6 +128,26 @@ describe('a closed socket', () => {
       code: 1006, selects: 1, select: 'accepted' })])
   })
 
+  // Review of #2029: `ws` emits an error before the close; the line must carry the close's code, not none.
+  it('takes the close code from the close, not an error before it', async () => {
+    const ws = await selects({}, '&client=relay')
+    ws.emit('error', new Error('read ECONNRESET'))
+    ws.emit('close', 1006, Buffer.alloc(0))
+    expect(lines('web user disconnected')).toEqual([expect.objectContaining({ code: 1006 })])
+  })
+
+  // Review of #2029: the old per-agent key path was upgraded and never tracked, so each of its sockets counted as refused.
+  it('tracks a legacy per-agent socket like any other', async () => {
+    const ws = new Socket()
+    m.upgrade.mockImplementation((_r, _s, _h, done) => done(ws))
+    m.attach.mockReturnValue({ connId: 'legacy-conn', detach: vi.fn(), sendDown: vi.fn() })
+    handleWebUpgrade({ url: '/api/web-ws', headers: { 'sec-websocket-protocol': 'a'.repeat(64) } } as never, raw() as never, Buffer.alloc(0))
+    await flush()
+    ws.emit('close', 1001, Buffer.from('going away'))
+    expect(lines('web client (legacy) disconnected')).toEqual([expect.objectContaining({ endpoint: 'web', client: 'unknown',
+      machineId: expect.any(String), code: 1001, reason: 'going away', aliveMs: expect.any(Number) })])
+  })
+
   it('logs a client that declared nothing as unknown', async () => {
     const ws = await selects({})
     ws.emit('close', 1000, Buffer.alloc(0))

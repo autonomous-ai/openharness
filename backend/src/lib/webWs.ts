@@ -114,7 +114,7 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
     void (async () => {
       const binding = await prisma.machine.findUnique({ where: { machineId: machineId } })
       if (!binding || binding.deletedAt || !machineBillingAllowsDataPlane(binding)) { socket.destroy(); return }
-      wss.handleUpgrade(req, socket, head, (ws) => attachWebClient(ws, machineId))
+      wss.handleUpgrade(req, socket, head, (ws) => attachWebClient(ws, machineId, declaredKind(new URL(req.url ?? '/', 'http://x').searchParams)))
     })().catch((err) => { logger.warn('web-ws legacy upgrade failed', { error: String(err) }); socket.destroy() })
     return
   }
@@ -618,7 +618,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     inbox.enqueue(frame)
   })
 
-  const cleanup = (code?: number, reason?: Buffer): void => {
+  const cleanup = (): void => {
     if (closed) return
     closed = true
     releaseLiveness()
@@ -635,18 +635,20 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     if (machineListUnsub) { machineListUnsub(); machineListUnsub = null }
     if (deviceE2eePairUnsub) { deviceE2eePairUnsub(); deviceE2eePairUnsub = null }
     if (documentsUnsub) { documentsUnsub(); documentsUnsub = null }
-    track.closed(code, reason?.toString(), { machineId: currentAgentId ?? undefined })
   }
-  ws.on('close', (code: number, reason: Buffer) => cleanup(code, reason))
+  // The line takes its code from the close: `ws` emits an error first on a broken socket, which has none (review of #2029).
+  ws.on('close', (code: number, reason: Buffer) => { cleanup(); track.closed(code, reason?.toString(), { machineId: currentAgentId ?? undefined }) })
   ws.on('error', () => cleanup())
 }
 
 /** LEGACY per-agent socket (old bundle during rolling deploys): bound to one agent for life. */
-function attachWebClient(ws: WebSocket, machineId: string): void {
+function attachWebClient(ws: WebSocket, machineId: string, declared: ReturnType<typeof declaredKind>): void {
   const client = attachHubClient(ws, machineId, 'web')
   const terminalRate = new TerminalRateGuard()
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, connId: client.connId })
-  logger.info('web client connected (legacy)', { machineId, connId: client.connId })
+  // Tracked like the per-user socket (lib/wsAttribution.ts); untracked, each one counted as refused (review of #2029).
+  const track = trackSocket('web', 'web client (legacy)', ws, { ...declared, machineId, hubConnId: client.connId })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
 
   send({ type: 'connected', payload: { machineId: machineId } })
 
@@ -690,7 +692,6 @@ function attachWebClient(ws: WebSocket, machineId: string): void {
     if (closed) return // 'error' is followed by 'close': detach (and its __client_disconnected) only once
     closed = true
     client.detach()
-    logger.info('web client disconnected (legacy)', { machineId, connId: client.connId })
   }
   ws.on('close', cleanup)
   ws.on('error', cleanup)

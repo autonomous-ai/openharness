@@ -51,6 +51,16 @@ describe('a tracked socket', () => {
       userId: 'u1', code: 1000, reason: 'handshake failed', aliveMs: 400, selects: 1, select: 'MACHINE_OFFLINE' }])
   })
 
+  // Review of #2029: a close reason is the peer's own text. Kept short and plain, like the version, so no line carries
+  // control characters, markup or a pasted token-length string.
+  it('keeps a close reason short and plain', () => {
+    const socket = trackSocket('web', 'web user', upgraded(raw()), { client: 'relay', version: null })
+    socket.closed(4000, `  peer\nsaid <b>bye</b>\u0000 ${'x'.repeat(200)}`)
+    const { reason } = lines('web user disconnected')[0] as { reason: string }
+    expect(reason).toBe(`peer said bbye/b ${'x'.repeat(63)}`)
+    expect(reason.length).toBe(80)
+  })
+
   it('says a socket that never selected so', () => {
     const socket = trackSocket('web', 'web user', upgraded(raw()), { client: 'web', version: null })
     socket.closed(1001, '')
