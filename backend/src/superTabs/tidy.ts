@@ -1,7 +1,7 @@
+import type { Prisma } from '@prisma/client'
 import { isBuddy } from './buddies.js'
 import { agentDisplayName } from './agentNames.js'
 import { verdictPending } from './autoReview.js'
-import type { Prisma } from '@prisma/client'
 import { activeWork, agentRole, stableId, type Agent, type Assignment, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, projectsOf } from './projects.js'
 
