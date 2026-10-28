@@ -339,11 +339,16 @@ class _MachinePickerState extends State<_MachinePicker> {
               child: ExcludeSemantics(
                 child: Row(
                   children: [
+                    // A long hostname reads whole, over two lines if it must (Ken, 2026-10-28).
                     Expanded(
-                      child: Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      child: Tooltip(
+                        message: label,
+                        excludeFromSemantics: true,
+                        child: Text(
+                          label,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                     if (current?.unavailable != null) ...[
@@ -766,100 +771,85 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               final own = ownedMachines();
               final canSave =
                   machineId != null && canSelect(app.stateOf(machineId!));
-              return AlertDialog(
-                title: Text(isConfigure ? 'Configure machine' : 'Add machine'),
-                content: SizedBox(
-                  width: 360,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (own.isNotEmpty)
-                          _MachinePicker(
-                            value: machineId,
-                            busy: busy,
-                            choices: [
-                              for (final m in own)
-                                _MachineChoice(
-                                  id: m.machine.machineId,
-                                  label: labelFor(m),
-                                  unavailable: unavailable(m),
-                                ),
-                            ],
-                            onChanged: (id) {
-                              if (busy || !canSelect(app.stateOf(id))) return;
-                              update(() {
-                                machineId = id;
-                                setupId = null;
-                                error = null;
-                                // Another machine has its own number: the one it
-                                // already offers, or its own suggestion.
-                                slots = slotsFor(id);
-                                slotsEdited = false;
-                              });
-                              unawaited(suggestSlots());
-                            },
-                          )
-                        else
-                          Text(
-                            'No computer is connected to this account yet.',
-                            style: DesktopChrome.text(),
-                          ),
-                        const SizedBox(height: 16),
-                        if (own.isNotEmpty) ...[
-                          Text(
-                            'Let the product manager run agents here using this machine’s signed-in accounts.',
-                            style: DesktopChrome.text(),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Agents the Swarm starts on this machine run without asking for permission.',
-                            style: DesktopChrome.text(),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            'Harness clones each project into ~/harnesses/swarms and lets '
-                            "the Swarm's agents work in it.",
-                            style: DesktopChrome.text(),
-                          ),
-                        ] else ...[
-                          Text(
-                            'To add another computer, install Harness on it and sign in with '
-                            'this account, or approve a device with no screen from Machines.',
-                            style: DesktopChrome.text(),
-                          ),
-                          const SizedBox(height: 4),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton(
-                              onPressed: () {
-                                Navigator.pop(context);
-                                app.requestMachines();
-                              },
-                              child: const Text('Open Machines'),
+              return SuperTabDetailDialog(
+                title: isConfigure ? 'Configure machine' : 'Add machine',
+                body: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (own.isNotEmpty)
+                      _MachinePicker(
+                        value: machineId,
+                        busy: busy,
+                        choices: [
+                          for (final m in own)
+                            _MachineChoice(
+                              id: m.machine.machineId,
+                              label: labelFor(m),
+                              unavailable: unavailable(m),
                             ),
-                          ),
                         ],
-                        if (own.isNotEmpty) ...[
-                          const SizedBox(height: 16),
-                          _AgentSlots(
-                            value: slots,
-                            maximum: maximumFor(machineId),
-                            busy: busy,
-                            onChanged: (next) => update(() {
-                              slots = next;
-                              slotsEdited = true;
-                            }),
-                          ),
-                        ],
-                        if (error != null) ...[
-                          const SizedBox(height: 12),
-                          Text(error!, style: DesktopChrome.metadata()),
-                        ],
-                      ],
-                    ),
-                  ),
+                        onChanged: (id) {
+                          if (busy || !canSelect(app.stateOf(id))) return;
+                          update(() {
+                            machineId = id;
+                            setupId = null;
+                            error = null;
+                            // Another machine has its own number: the one it
+                            // already offers, or its own suggestion.
+                            slots = slotsFor(id);
+                            slotsEdited = false;
+                          });
+                          unawaited(suggestSlots());
+                        },
+                      )
+                    else
+                      Text(
+                        'No computer is connected to this account yet.',
+                        style: DesktopChrome.text(),
+                      ),
+                    const SizedBox(height: 16),
+                    if (own.isNotEmpty) ...[
+                      Text(
+                        "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
+                        'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
+                        style: DesktopChrome.text(),
+                      ),
+                    ] else ...[
+                      Text(
+                        'To add another computer, install Harness on it and sign in with '
+                        'this account, or approve a device with no screen from Machines.',
+                        style: DesktopChrome.text(),
+                      ),
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: () {
+                            Navigator.pop(context);
+                            app.requestMachines();
+                          },
+                          child: const Text('Open Machines'),
+                        ),
+                      ),
+                    ],
+                    if (own.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      _AgentSlots(
+                        value: slots,
+                        maximum: maximumFor(machineId),
+                        busy: busy,
+                        onChanged: (next) => update(() {
+                          slots = next;
+                          slotsEdited = true;
+                        }),
+                      ),
+                    ],
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(error!, style: DesktopChrome.metadata()),
+                    ],
+                  ],
                 ),
                 actions: [
                   if (own.isNotEmpty)
@@ -870,11 +860,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             ? (isConfigure ? 'Saving…' : 'Preparing…')
                             : (isConfigure ? 'Save' : 'Add machine'),
                       ),
-                    )
-                  else
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Close'),
                     ),
                 ],
               );
