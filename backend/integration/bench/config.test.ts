@@ -35,3 +35,12 @@ describe('parseArgs', () => {
     expect(() => parseArgs(['--colour', 'red'])).toThrow(/--colour/)
   })
 })
+
+describe('the read cache the bench runs with', () => {
+  it('keeps stamps in this process by default, or in a Redis it is given, or runs without a cache', () => {
+    expect(parseArgs([]).cache).toBe('memory')
+    expect(parseArgs(['--cache', 'off']).cache).toBe('off')
+    expect(parseArgs(['--cache', 'redis://127.0.0.1:6379/15']).cache).toBe('redis://127.0.0.1:6379/15')
+    expect(() => parseArgs(['--cache', 'disk'])).toThrow(/--cache/)
+  })
+})

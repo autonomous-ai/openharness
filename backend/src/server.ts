@@ -19,9 +19,10 @@ import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { registerSecurityHeaders } from './middlewares/securityHeaders.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
+import { closeBus, pub, redisCount, redisSsoProfileStore, redisSwarmStamps } from './lib/bus.js'
 import { prisma } from './lib/prisma.js'
 import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
+import { configureSwarmStamps } from './superTabs/cache.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
@@ -143,6 +144,7 @@ async function start(): Promise<void> {
   // Every process shares one memory of validated tokens; without it each worker asks the profile API
   // for itself. Attached before anything can authenticate — the REST gate below and the socket upgrades.
   useSharedSsoProfileStore(redisSsoProfileStore)
+  configureSwarmStamps(redisSwarmStamps(), { reads: env.SWARM_READ_CACHE === 'on', maxBytes: env.SWARM_CACHE_MB * 2 ** 20 })
 
   // SSO access-token gate for the control API (data-plane auth happens before Fastify).
   registerAuthMiddleware(app)

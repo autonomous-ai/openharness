@@ -7,6 +7,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { nextConversationNumber, type Conversation, type SuperTabState } from '../model.js'
 import * as parts from '../parts/index.js'
+import { noteChange, swarmTransaction } from '../cache.js'
 
 export interface RollbackReport { tabId: string; ok: boolean; error?: string }
 
@@ -17,7 +18,8 @@ const fail = (message: string): never => { throw new RollbackFailed(message) }
 
 async function run(db: PrismaClient, tabId: string, body: (tx: Prisma.TransactionClient) => Promise<void>): Promise<RollbackReport> {
   try {
-    await db.$transaction(body, ROLLBACK_TRANSACTION)
+    // The Swarm leaves its parts: what any process holds of it is stale.
+    await swarmTransaction(db, tx => { noteChange(tx, tabId, 'main'); return body(tx) }, ROLLBACK_TRANSACTION)
     return { tabId, ok: true }
   } catch (error) {
     return { tabId, ok: false, error: error instanceof Error ? error.message : String(error) }

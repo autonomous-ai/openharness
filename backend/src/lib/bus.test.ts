@@ -219,3 +219,26 @@ describe('redisCount', () => {
     await expect(bus.redisCount('k', 1_000)).rejects.toThrow('redis count failed')
   })
 })
+
+describe('Swarm stamps', () => {
+  beforeEach(() => { pub.publish.mockClear() })
+
+  it('broadcasts which Swarm moved and which stamps, and drops the broadcast while Redis is down', async () => {
+    await bus.publishSwarmStamp('tab-1', ['main', 'machine'])
+    expect(pub.publish.mock.calls).toEqual([['swarm-stamp', JSON.stringify({ tabId: 'tab-1', scopes: ['main', 'machine'] })]])
+    pub.publish.mockRejectedValueOnce(new Error('ECONNREFUSED'))
+    await expect(bus.publishSwarmStamp('tab-1', ['main'])).resolves.toBe(0)
+  })
+
+  it('hands each broadcast to the listener, and ignores one that is not a stamp', async () => {
+    const sub = state.instances[1] as unknown as { on: MockFn; subscribe: MockFn }
+    const heard: unknown[] = []
+    await bus.subscribeSwarmStamps((tabId, scopes) => heard.push([tabId, scopes]))
+    expect(sub.subscribe).toHaveBeenCalledWith('swarm-stamp')
+    const deliver = sub.on.mock.calls.find((c: unknown[]) => c[0] === 'message')![1] as (channel: string, payload: string) => void
+    deliver('swarm-stamp', JSON.stringify({ tabId: 'tab-2', scopes: ['machine'] }))
+    deliver('swarm-stamp', JSON.stringify({ tabId: 7 }))
+    deliver('swarm-stamp', JSON.stringify({ tabId: 'tab-3', scopes: ['everything'] }))
+    expect(heard).toEqual([['tab-2', ['machine']]])
+  })
+})

@@ -24,6 +24,39 @@ function canonical(value: unknown): string {
     ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : item)
 }
 
+/** A value as JSON writes it: a Date as its string, a number JSON cannot hold as null. */
+const asJson = (value: unknown): unknown => {
+  const plain = value && typeof value === 'object' && typeof (value as { toJSON?: unknown }).toJSON === 'function' ? (value as { toJSON(): unknown }).toJSON() : value
+  return typeof plain === 'number' && !Number.isFinite(plain) ? null : plain
+}
+/** What JSON leaves out of an object, and writes as null in a list. */
+const absent = (value: unknown) => value === undefined || typeof value === 'function' || typeof value === 'symbol'
+
+/**
+ * Whether two records hold the same data as stored, whatever order their keys were built in: what comparing their
+ * `canonical` JSON says, without writing either out (Stability Roadmap 2.6: a write compared every part this way, twice).
+ * It stops at the first difference.
+ */
+export function sameData(a: unknown, b: unknown): boolean {
+  const x = asJson(a), y = asJson(b)
+  if (x === y) return true
+  if (absent(x) || absent(y)) return absent(x) && absent(y)
+  if (!x || !y || typeof x !== 'object' || typeof y !== 'object' || Array.isArray(x) !== Array.isArray(y)) return false
+  if (Array.isArray(x)) {
+    const list = y as unknown[]
+    return x.length === list.length && x.every((item, i) => sameData(absent(item) ? null : item, absent(list[i]) ? null : list[i]))
+  }
+  const left = x as Record<string, unknown>, right = y as Record<string, unknown>
+  let count = 0
+  for (const key in left) {
+    if (!Object.hasOwn(left, key) || absent(left[key])) continue
+    count++
+    if (!Object.hasOwn(right, key) || absent(right[key]) || !sameData(left[key], right[key])) return false
+  }
+  for (const key in right) if (Object.hasOwn(right, key) && !absent(right[key])) count--
+  return count === 0
+}
+
 /**
  * Who sees what changed (design section 4.2): a project's visibility or members, a person removed or rejoined, the set of
  * Leads (the Leads conversation's members), a conversation's audience, or a project removed. Readers reload in full.
@@ -103,7 +136,7 @@ const withoutReading = (data: unknown) => {
  * group's write concerned, by its agents and its work before and after, so an agent leaving its last group wakes its host.
  */
 export function hostMarker(kind: PartKind, before: unknown, after: unknown, machineOf: ReadonlyMap<string, string>, stamp: number): { host?: HostColumns } {
-  if (kind === 'machine') return canonical(withoutReading(before)) === canonical(withoutReading(after)) ? {} : { host: { hostChangedAt: new Date(stamp) } }
+  if (kind === 'machine') return sameData(withoutReading(before), withoutReading(after)) ? {} : { host: { hostChangedAt: new Date(stamp) } }
   if (kind !== 'group') return {}
   const machines = ([before, after] as Array<GroupData | undefined>).flatMap(g => g
     ? [...g.agentIds.flatMap(id => machineOf.get(id) ?? []), ...(g.assignment ? [g.assignment.execution.machineId] : [])] : [])
@@ -138,7 +171,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       if (!prior) {
         writes.push({ op: 'insert', kind, key, data: part.data, ordinal: stamp + added++ / 1000, first, ...host(kind, undefined, part.data) })
         if (kind !== 'group' && kind !== 'start' && kind !== 'progress') referencesChanged = true
-      } else if (canonical(prior.data) !== canonical(part.data)) {
+      } else if (!sameData(prior.data, part.data)) {
         writes.push({ op: 'update', kind, key, seen: prior.version, data: part.data, ...host(kind, prior.data, part.data) })
       }
     }
@@ -159,7 +192,7 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
   }
   const epoch = parts.visibilityEpoch + (visibilityChanged(loaded.state, next) ? 1 : 0)
   const head: HeadColumns = { groupCounter: Math.max(parts.groupCounter, next.groupCounter ?? 0), visibilityEpoch: epoch, sequenceBase: parts.sequenceBase }
-  if (canonical(parts.head.data) !== canonical(after.head.data) || head.groupCounter !== parts.groupCounter || epoch !== parts.visibilityEpoch) {
+  if (!sameData(parts.head.data, after.head.data) || head.groupCounter !== parts.groupCounter || epoch !== parts.visibilityEpoch) {
     writes.push({ op: 'update', kind: 'head', key: 'head', seen: parts.head.version, data: after.head.data, head })
   }
   if (canonical(indexesOf(loaded.state)) !== canonical(indexesOf(next))) referencesChanged = true
