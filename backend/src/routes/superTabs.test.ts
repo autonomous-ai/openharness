@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { Prisma } from '@prisma/client'
 import { errorHandler } from '../middlewares/errorHandler.js'
 import { SuperTabError } from '../superTabs/model.js'
-import { superTabRoutes } from './superTabs.js'
+import { HOT_BODY_LIMIT, superTabRoutes } from './superTabs.js'
 
 describe('Super Tab route failures', () => {
   let app: FastifyInstance
@@ -48,5 +48,53 @@ describe('Super Tab route failures', () => {
     expect(res.statusCode).toBe(503)
     expect(res.headers['retry-after']).toBe('2')
     expect(res.json().error.code).toBe('SWARM_BUSY')
+  })
+})
+
+describe('Super Tab body limits (roadmap 2.8)', () => {
+  let app: FastifyInstance
+  let reached: string[]
+  beforeEach(async () => {
+    reached = []
+    app = Fastify()
+    app.setErrorHandler(errorHandler)
+    app.addHook('onRequest', async request => { request.user = { sub: 'u1', email: 'u1@example.com', autonomousEnv: 'prod', role: 'user' } as never })
+    const handled = (name: string) => async () => { reached.push(name); return {} }
+    const store = { native: { append: handled('native'), open: handled('open') }, delivery: handled('delivery'), stopped: handled('stopped') }
+    await app.register(superTabRoutes, { store: store as never, github: null, reads: {} as never, hosts: { changes: handled('changes') } as never })
+    await app.ready()
+  })
+  afterEach(async () => { await app.close() })
+
+  const id = (n: number, size = 160) => `${String(n).padStart(6, '0')}${'a'.repeat(size - 6)}`
+  /** Free text at its longest in characters, each the widest a person types: three UTF-8 bytes ('ệ'). */
+  const text = (length: number) => 'ệ'.repeat(length)
+  /** The largest body each hot route accepts, from its schema's limits. */
+  const largest = {
+    changes: { url: '/api/super-tabs/hosts/m1/changes', name: 'changes',
+      body: { cursor: 'c'.repeat(512), full: false, held: Object.fromEntries(Array.from({ length: 500 }, (_, n) => [id(n), 'e'.repeat(64)])) } },
+    native: { url: '/api/super-tabs/tab-1/native/ctx-1', name: 'native',
+      body: { turnId: id(3), kind: 'answer', previousEventId: id(4), text: text(16_000), truncated: false, interrupted: false } },
+    delivery: { url: '/api/super-tabs/tab-1/agents/agent-1/deliveries/delivery-1', name: 'delivery',
+      body: { type: 'ack', claimId: id(4), receipt: text(2000), uncertain: false } },
+    stopped: { url: '/api/super-tabs/tab-1/stopped', name: 'stopped', body: { assignmentId: id(2), receipt: text(2000) } },
+  }
+  const post = (url: string, payload: string) => app.inject({ method: 'POST', url, payload, headers: { 'content-type': 'application/json' } })
+
+  for (const [route, { url, name, body }] of Object.entries(largest)) {
+    it(`takes the largest valid ${route} body and refuses one past the limit`, async () => {
+      const json = JSON.stringify(body)
+      expect((await post(url, json)).statusCode).toBe(200)
+      expect(reached).toEqual([name])
+      const over = await post(url, `${json}${' '.repeat(HOT_BODY_LIMIT + 1 - Buffer.byteLength(json))}`)
+      expect(over.statusCode).toBe(413)
+      expect(reached).toEqual([name])
+    })
+  }
+
+  it('keeps the limit within the largest valid hot body with room for growth: under twice it', () => {
+    const sizes = Object.values(largest).map(r => Buffer.byteLength(JSON.stringify(r.body)))
+    expect(Math.max(...sizes)).toBeLessThan(HOT_BODY_LIMIT)
+    expect(HOT_BODY_LIMIT).toBeLessThan(2 * Math.max(...sizes))
   })
 })

@@ -88,10 +88,10 @@ const APP_STATES = new Set(['open', 'closed', 'missing'])
 // semver-ish token (or longer than 64 chars) is dropped rather than stored.
 const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
 
-// Daily presence (`machine_daily_presence`): how often an OPEN adapter socket refreshes its row's
-// `lastSeenAt`. Rides the node role's existing 15s heartbeat (plus every app ping) rather than a
-// timer of its own — this is just the floor between two Mongo writes, so a machine that is up all
-// day costs ~300 upserts, not ~6000. Connect and close always write regardless.
+// How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
+// heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
+// Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. Connect and close always
+// write regardless.
 const MACHINE_PRESENCE_WRITE_MS = 5 * 60_000
 
 // Daily presence of the PERSON (`user_daily_presence`): the daemon reports its own loopback clients —
@@ -310,8 +310,8 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     .catch(() => null))?.gridName ?? null
   send({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: currentName?.trim() || seededName, gridName } } })
 
-  // Daily presence row for the machine, mirroring the user/device variants in webWs/deviceWs. The
-  // guard only advances on a SUCCESSFUL write, so a transient DB failure is retried on the next
+  // The machine's last-seen stamp (plus the fleet's connect total), mirroring the user/device variants in
+  // webWs/deviceWs. The guard only advances on a SUCCESSFUL write, so a transient DB failure is retried on the next
   // heartbeat instead of being silently skipped until the interval elapses again. Heartbeats also
   // skip while a write is still in flight: `onHeartbeat` fires from two 15s sources (node role
   // interval + app ping), and before the connect write lands `presenceWriteDue` would say "due" —
