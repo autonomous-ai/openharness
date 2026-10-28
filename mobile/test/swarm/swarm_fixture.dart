@@ -254,3 +254,68 @@ Future<void> until(bool Function() done) async {
   }
   if (!done()) throw StateError('never happened');
 }
+
+/// A leaderboard read's answer as the backend sends it
+/// (`backend/src/superTabs/leaderboard/contract.ts`), built by hand.
+Map<String, dynamic> scoreData(
+  String personId, {
+  required int points,
+  required int rank,
+  String? medal,
+  int shipped = 0,
+  int? medianAskToShipMs,
+  int unblocked = 0,
+  int unblockedMs = 0,
+  int? medianAnswerMs,
+  int lentMachines = 0,
+  int lentMs = 0,
+  int streakDays = 0,
+}) => {
+  'personId': personId,
+  'points': points,
+  'rank': rank,
+  'medal': medal,
+  'shipped': {'count': shipped, 'medianAskToShipMs': medianAskToShipMs},
+  'unblocked': {
+    'count': unblocked,
+    'agentMs': unblockedMs,
+    'medianAnswerMs': medianAnswerMs,
+  },
+  'lent': {'machines': lentMachines, 'agentMs': lentMs},
+  'streakDays': streakDays,
+};
+
+Map<String, dynamic> leaderboardData({
+  int week = 1792454400000,
+  int shipped = 19,
+  List<Map<String, dynamic>>? people,
+}) => {
+  'projectId': 'project-1',
+  'week': week,
+  'goal': {
+    'openRequests': 4,
+    'thisWeek': {'shipped': shipped, 'points': 76, 'medianAskToShipMs': null},
+    'lastWeek': {'shipped': 11, 'points': 40, 'medianAskToShipMs': null},
+  },
+  'people':
+      people ??
+      [
+        scoreData(
+          'diego',
+          points: 28,
+          rank: 1,
+          medal: 'gold',
+          shipped: 8,
+          medianAskToShipMs: 3 * 3600000,
+          unblocked: 1,
+          unblockedMs: 6 * 60000,
+          medianAnswerMs: 4 * 60000,
+          lentMachines: 2,
+          lentMs: 40 * 3600000,
+          streakDays: 3,
+        ),
+        scoreData('ken', points: 21, rank: 2, medal: 'silver', shipped: 3),
+        scoreData('dee', points: 0, rank: 4),
+      ],
+  'waiting': {'total': 0, 'people': <Object>[]},
+};
