@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -78,6 +78,56 @@ describe('adminRunner', () => {
       message: 'could not delete the account harnessteam: macOS did not allow it (eDSPermissionError). Nothing was removed' })
     expect(await fixture({ code: 3, stderr: '' }).run(() => ({ script: '' }), 'p', 'sudo'))
       .toEqual({ ok: false, code: 'FAILED', message: 'The script stopped (exit 3).', status: 3 })
+  })
+
+  describe('on Linux', () => {
+    function linux(answer: { code: number | null; stdout?: string; stderr?: string }, graphical: boolean) {
+      const parent = mkdtempSync(join(tmpdir(), 'team-admin-'))
+      cleanup.push(parent)
+      const stage = join(parent, 'stage')
+      const seen: { script?: string } = {}
+      const runner = vi.fn<GuestRunner>(async (_command, args) => {
+        seen.script = readFileSync(args.at(-1)!, 'utf8')
+        return { code: answer.code, stdout: answer.stdout ?? '', stderr: answer.stderr ?? '' }
+      })
+      const run = adminRunner({ runner, platform: 'linux', graphical, makeStage: () => { mkdirSync(stage); return stage } })
+      return { run, runner, stage, seen }
+    }
+
+    it('runs the staged script with pkexec in a desktop session, and removes the stage', async () => {
+      const f = linux({ code: 0, stdout: 'harness: done\n' }, true)
+      expect(await f.run((dir) => ({ script: `#!/bin/sh\necho ${dir}\n` }), 'p')).toEqual({ ok: true, stdout: 'harness: done\n' })
+      const [command, args] = f.runner.mock.calls[0]!
+      expect(command).toBe('pkexec')
+      expect(args).toEqual(['/bin/sh', join(f.stage, 'run.sh')])
+      expect(f.seen.script).toBe(`#!/bin/sh\necho ${f.stage}\n`)
+      expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('reads pkexec\'s 126 and 127 as a cancelled prompt, and keeps the script\'s own reason and status', async () => {
+      for (const code of [126, 127]) {
+        expect(await linux({ code }, true).run(() => ({ script: '' }), 'p'))
+          .toEqual({ ok: false, code: 'CANCELLED', message: 'The administrator prompt was cancelled.' })
+      }
+      expect(await linux({ code: 3, stderr: 'harness: no tmux every account can run: install it (apt install tmux / dnf install tmux)\n' }, true)
+        .run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'FAILED', status: 3, message: 'no tmux every account can run: install it (apt install tmux / dnf install tmux)' })
+    })
+
+    it('without a desktop session, answers that it needs a terminal and runs nothing', async () => {
+      const f = linux({ code: 0 }, false)
+      expect(await f.run(() => ({ script: '' }), 'p'))
+        .toEqual({ ok: false, code: 'NO_PROMPT', message: 'No administrator prompt here: run harness team setup in a terminal.' })
+      expect(f.runner).not.toHaveBeenCalled()
+      expect(existsSync(f.stage)).toBe(false)
+    })
+
+    it('runs it with sudo in the terminal when asked, desktop session or not', async () => {
+      const f = linux({ code: 0, stdout: 'ok\n' }, false)
+      expect(await f.run(() => ({ script: '' }), 'Harness wants it.', 'sudo')).toEqual({ ok: true, stdout: 'ok\n' })
+      expect(f.runner.mock.calls[0]![0]).toBe('sudo')
+      expect(f.runner.mock.calls[0]![1]).toEqual(['-k', '-p', 'Harness wants it.\nPassword for %u: ', '/bin/sh', join(f.stage, 'run.sh')])
+    })
   })
 
   it('removes the stage when building the script throws', async () => {
