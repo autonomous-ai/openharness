@@ -248,12 +248,15 @@ export class SuperTabNativeStore {
   }
 }
 
-/** Removal followed by rejoining must not revive an old terminal binding. */
+/** Removal followed by rejoining must not revive an old terminal binding. Only what this change ended is revoked: what
+ *  ended earlier was revoked by the change that ended it, and no context opens without access (open; validate checks it
+ *  again at every use). Most commands change no access and read nothing here: rebuilding every viewer and every member
+ *  outside every private conversation on each command kept prod Mongo busy (2026-10-28). */
 export async function revokeNativeContexts(tx: Transaction, before: SuperTabState, after: SuperTabState) {
   const conditions: Prisma.SuperTabNativeContextWhereInput[] = []
   for (const member of before.people) {
     const current = after.people.find(p => p.id === member.id)
-    if (!current || current.generation !== member.generation || current.role === 'viewer') conditions.push({ userId: member.id })
+    if (!current || current.generation !== member.generation || (current.role === 'viewer' && member.role !== 'viewer')) conditions.push({ userId: member.id })
   }
   // A removed agent's contexts, and those of an agent given a replacement terminal: they name the old terminal, and its
   // waiting turns are cancelled with them, so a claim racing the change conflicts on their rows (rule b).
@@ -263,13 +266,12 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
   }
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
-    if (!current || current.archived) conditions.push({ conversationId: group.id })
+    if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })
     // No terminal opens in the Leads conversation (open), so it holds no context to revoke.
     else if (!isLeads(current)) {
       for (const member of after.people) {
-        if (!canReadGroup(after, { kind: 'person', userId: member.id, email: member.email }, current)) {
-          conditions.push({ conversationId: group.id, userId: member.id })
-        }
+        const reader = { kind: 'person' as const, userId: member.id, email: member.email }
+        if (canReadGroup(before, reader, group) && !canReadGroup(after, reader, current)) conditions.push({ conversationId: group.id, userId: member.id })
       }
       const removed = group.agentIds.filter(id => !current.agentIds.includes(id))
       if (removed.length) conditions.push({ conversationId: group.id, agentId: { in: removed } })
