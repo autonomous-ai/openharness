@@ -21,9 +21,13 @@ import {
   fireCampaignDevice,
   getCampaignDevice,
   listCampaignSubscriptions,
+  resetBffBreakers,
 } from './autonomousBff.js'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  resetBffBreakers()
+})
 
 describe('Autonomous campaign catalog', () => {
   it('reads billable ids and prices from each monthly frequencies entry', async () => {
@@ -242,5 +246,36 @@ describe('Autonomous campaign catalog', () => {
 
     await expect(fireCampaignDevice('prod', 'sso-access', 'device-1')).resolves.toBeUndefined()
     expect(fetchMock).toHaveBeenCalledOnce()
+  })
+})
+
+describe('a billing service that keeps failing', () => {
+  it('is answered for at once instead of waiting out its timeout on every call', async () => {
+    const fetchMock = vi.fn(async () => { throw new Error('connect ETIMEDOUT') })
+    vi.stubGlobal('fetch', fetchMock)
+    for (let i = 0; i < 5; i++) await expect(fetchCampaignPlans('prod')).rejects.toMatchObject({ statusCode: 503, code: 'BILLING_SERVICE_UNAVAILABLE' })
+    const asked = fetchMock.mock.calls.length
+
+    await expect(getCampaignDevice('prod', 'sso-access', 'device-1')).rejects.toMatchObject({ statusCode: 503, code: 'BILLING_SERVICE_UNAVAILABLE' })
+
+    expect(fetchMock.mock.calls.length).toBe(asked)
+  })
+
+  it('keeps staging and production apart', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: URL) => {
+      if (String(url).startsWith('https://bff.example')) throw new Error('connect ETIMEDOUT')
+      return new Response(JSON.stringify({ data: [] }), { status: 200 })
+    }))
+    for (let i = 0; i < 5; i++) await expect(fetchCampaignPlans('prod')).rejects.toMatchObject({ code: 'BILLING_SERVICE_UNAVAILABLE' })
+
+    await expect(fetchCampaignPlans('stag')).resolves.toEqual([])
+  })
+
+  it('does not take answers it gave for an outage', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 404 }))
+    vi.stubGlobal('fetch', fetchMock)
+    for (let i = 0; i < 10; i++) await expect(getCampaignDevice('prod', 'sso-access', 'device-1')).rejects.toMatchObject({ code: 'BILLING_DEVICE_NOT_FOUND' })
+
+    expect(fetchMock).toHaveBeenCalledTimes(10)
   })
 })
