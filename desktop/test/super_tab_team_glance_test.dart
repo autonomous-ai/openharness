@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/agent_details.dart';
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/team_glance.dart';
 
@@ -123,6 +124,16 @@ Future<ConversationServer> _swarm(
 Finder _row(String id) => find.byKey(ValueKey('super-member-$id'));
 Finder _line(String id, String text) =>
     find.descendant(of: _row(id), matching: find.text(text));
+
+/// The agents a machine lists for [state], as one row's value.
+String? _stateRow(Finder machine, String state) {
+  final row = find.descendant(
+    of: machine,
+    matching: find.ancestor(of: find.text(state), matching: find.byType(SuperTabDetailRow)),
+  );
+  if (row.evaluate().isEmpty) return null;
+  return (row.evaluate().first.widget as SuperTabDetailRow).value;
+}
 
 Future<void> _openGlance(WidgetTester tester) async {
   await tester.tap(find.byTooltip('Team at a glance'));
@@ -292,14 +303,8 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(
-          find.descendant(of: studio, matching: find.text('Lead · Idle')),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: studio, matching: find.text('Atlas · Idle')),
-          findsOneWidget,
-        );
+        // Agents by what they are doing, one row per state, as label and value (Ken, 2026-10-28).
+        expect(_stateRow(studio, 'Idle'), 'Lead, Atlas');
         final laptop = find.byKey(const ValueKey('glance-machine-m2'));
         expect(
           find.descendant(
@@ -431,10 +436,7 @@ void main() {
           ),
           findsOneWidget,
         );
-        expect(
-          find.descendant(of: studio, matching: find.text('Finn · Assigned')),
-          findsOneWidget,
-        );
+        expect(_stateRow(studio, 'Assigned'), 'Finn');
         expect(find.textContaining('which is offline'), findsNothing);
         expect(
           find.byKey(const ValueKey('glance-machine-m1-team')),
@@ -480,12 +482,45 @@ void main() {
         );
         await _openGlance(tester);
         expect(
-          find.text('Hugo runs effort xhigh; its start asked for high.'),
+          find.text('Hugo runs at xhigh effort; it was started at high.'),
           findsOneWidget,
         );
         expect(find.textContaining('Nico runs'), findsNothing);
         expect(find.textContaining('Echo runs'), findsNothing);
       },
     );
-  });
+  
+    testWidgets('busy agents on one offline machine are one warning, their names folded', (tester) async {
+      final names = ['Milo', 'Kai', 'Iris', 'Ellis', 'Nova'];
+      await _swarm(
+        tester,
+        machines: [_machine('m1', 'Mac Studio', max: 8), _machine('m2', 'MacBook Pro', max: 8, age: _offline)],
+        agents: [for (final name in names) _agent(name, 'm2')],
+        tasks: [for (final name in names) _task(name, 'working')],
+      );
+      await _openGlance(tester);
+      expect(find.text('5 agents are busy on MacBook Pro, which is offline.'), findsOneWidget);
+      expect(find.textContaining('Milo is busy'), findsNothing);
+      expect(find.text('Milo, Kai, Iris and 2 more'), findsOneWidget);
+      await tester.tap(find.text('Milo, Kai, Iris and 2 more'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Milo, Kai, Iris, Ellis, Nova'),
+        findsNWidgets(2),
+        reason: 'the unfolded warning, and the machine\'s Assigned row',
+      );
+    });
+
+    testWidgets('agents on another effort than they started with are one warning, in plain words', (tester) async {
+      await _swarm(
+        tester,
+        agents: [_agent('Robin', 'm1', effort: 'xhigh'), _agent('Sage', 'm1', effort: 'xhigh')],
+        starts: [_start('Robin', 'high'), _start('Sage', 'high')],
+      );
+      await _openGlance(tester);
+      expect(find.text('2 agents run at another effort than they were started with.'), findsOneWidget);
+      expect(find.text('Robin (xhigh, started at high), Sage (xhigh, started at high)'), findsOneWidget);
+      expect(find.textContaining('runs effort'), findsNothing);
+    });
+});
 }

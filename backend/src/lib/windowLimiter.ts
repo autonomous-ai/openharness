@@ -1,6 +1,6 @@
 /**
- * A per-account fixed-window limiter, process-local by design: it spreads a route's budget, it is not
- * the budget (the provider's own credit limit is).
+ * A fixed-window limiter in this process. Routes use lib/rateLimit.ts, which counts across every pod and falls back to
+ * this while the shared counter is unavailable.
  */
 export interface WindowLimiter {
   /** Counts one request for [key] and says whether it is within the window's allowance. */

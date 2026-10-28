@@ -288,11 +288,16 @@ void main() {
       final heard = now
           .subtract(const Duration(seconds: 4))
           .millisecondsSinceEpoch;
-      // River (Ken's Lead, 2026-10-28): a Product Manager reads people's private chats, so no share ever opens it.
+      // Every member watches the current Product Manager, view only (Ken, 2026-10-28), though the backend marks it
+      // confidential: until its invitation arrives, its computer is the one to update.
+      final pm = snapshot(receivedAt: heard, lead: true, confidential: true);
+      expect(superTabTerminalPrivate(pm, pm.agent('river')!), isFalse);
       expect(
-        reason(snapshot(receivedAt: heard, lead: true), 'river'),
-        'River is the Product Manager and reads private chats, so only '
-        'scholes@autonomous.ai can watch its terminal.',
+        reason(pm, 'river'),
+        'River runs on $_computer, scholes@autonomous.ai’s computer. Its '
+        'terminal is not shared with you yet: Harness there shares it with '
+        'Swarm members once it is up to date and running. Ask '
+        'scholes@autonomous.ai to update and restart Harness, then Retry.',
       );
       // Marked confidential by the backend: in a private chat, or a Product Manager before.
       final private = reason(

@@ -5,15 +5,15 @@ import { setTimeout as delay } from 'node:timers/promises'
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => {}) }))
 
 const db = vi.hoisted(() => ({
-  productUsagePreference: { findUnique: vi.fn(), upsert: vi.fn() },
-  analyticsMachineState: { findFirst: vi.fn() },
-  productUsageReceipt: { create: vi.fn(), findUnique: vi.fn() },
+  productUsagePreference: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+  analyticsMachineState: { findFirst: vi.fn(), findMany: vi.fn() },
+  productUsageReceipt: { findMany: vi.fn(), createMany: vi.fn() },
   productUsageTotal: { upsert: vi.fn(), update: vi.fn(), groupBy: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
   userDailyPresence: { deleteMany: vi.fn() }, userDailyClientPresence: { deleteMany: vi.fn() },
   userDailyRemoteUsage: { deleteMany: vi.fn() }, userDailyDevicePresence: { deleteMany: vi.fn() },
   machineDailyPresence: { deleteMany: vi.fn() }, agentDailyPresence: { deleteMany: vi.fn() },
   productUsageActivity: { upsert: vi.fn(), update: vi.fn(), deleteMany: vi.fn() },
-  user: { findUnique: vi.fn() },
+  user: { findUnique: vi.fn(), findMany: vi.fn() },
   $transaction: vi.fn(), $runCommandRaw: vi.fn(),
 }))
 vi.mock('./prisma.js', () => ({ prisma: db }))
@@ -27,7 +27,7 @@ it('commits release and platform margins under the same unlinked receipt and dis
   expect(await ingestProductUsage('PRIVATE_ACCOUNT', { ...report, context }, now)).toEqual({ accepted: true })
   expect(db.$transaction).toHaveBeenCalledOnce()
   expect(db.$runCommandRaw.mock.calls[0][0].updates).toHaveLength(6)
-  const stored = JSON.stringify([db.productUsageReceipt.create.mock.calls, db.$runCommandRaw.mock.calls])
+  const stored = JSON.stringify([db.productUsageReceipt.createMany.mock.calls, db.$runCommandRaw.mock.calls])
   expect(stored).not.toContain('PRIVATE_ACCOUNT')
   expect(stored).not.toContain('1.2.73:macos')
   expect(stored).toContain('breakdown:release:desktop:1.2.73:turns_started')
@@ -36,6 +36,12 @@ it('commits release and platform margins under the same unlinked receipt and dis
   expect(db.$transaction).not.toHaveBeenCalled()
 })
 
+/** Every account a batch asks about has [email]. */
+const accounts = (email: string) => db.user.findMany.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) =>
+  where.id.in.map(id => ({ id, email })))
+const choices = (...saved: Array<{ userId: string; enabled: boolean; revision: number }>) => db.productUsagePreference.findMany.mockResolvedValueOnce(saved)
+const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r }); return { promise, resolve } }
+const receipts = () => db.productUsageReceipt.createMany.mock.calls.flatMap(([{ data }]) => data.map((r: { id: string }) => r.id))
 const report: ProductUsageReport = { schemaVersion: 1, revision: 0, id: 'cf1c5a03-388c-4265-b5fb-a4c3d47e407f', day: '2026-10-13', counters: { turns_started: 4, turns_ended: 3 } }
 const now = new Date('2026-10-13T12:00:00Z')
 beforeEach(() => {
@@ -44,6 +50,11 @@ beforeEach(() => {
   db.$transaction.mockImplementation((fn: (tx: typeof db) => unknown) => fn(db))
   db.productUsagePreference.findUnique.mockResolvedValue(null)
   db.analyticsMachineState.findFirst.mockResolvedValue(null)
+  db.productUsagePreference.findMany.mockResolvedValue([])
+  db.analyticsMachineState.findMany.mockResolvedValue([])
+  db.productUsageReceipt.findMany.mockResolvedValue([])
+  db.productUsageReceipt.createMany.mockImplementation(async ({ data }) => ({ count: data.length }))
+  accounts('person@example.com')
   resetActivityMarksForTests()
   resetStaffAccountsForTests()
   db.user.findUnique.mockResolvedValue({ createdAt: new Date('2026-10-01T08:00:00Z'), email: 'person@example.com' })
@@ -54,7 +65,7 @@ describe('kept apart', () => {
     (command as { updates: Array<{ q: { metric: string } }> }).updates.map(update => update.q.metric))
 
   it('keeps the team\'s own accounts under staff:, with their margins and late marks', async () => {
-    db.user.findUnique.mockResolvedValue({ createdAt: new Date('2026-10-01T08:00:00Z'), email: 'Dee@Autonomous.AI' })
+    accounts('Dee@Autonomous.AI')
     const context = { surface: 'phone', release: '1.0.7', platform: 'ios', channel: 'production' } as const
     expect(await ingestProductUsage('team-account', { ...report, day: '2026-10-12', context }, now)).toEqual({ accepted: true })
     expect(stored()).toEqual(expect.arrayContaining(['staff:turns_started', 'staff:breakdown:release:phone:1.0.7:turns_started',
@@ -67,7 +78,7 @@ describe('kept apart', () => {
     expect(await ingestProductUsage('someone', { ...report, context }, now)).toEqual({ accepted: true })
     expect(stored()).toEqual(['testing:turns_started', 'testing:turns_ended'])
     // A build's channel decides it: no account is read for it.
-    expect(db.user.findUnique).not.toHaveBeenCalled()
+    expect(db.user.findMany).not.toHaveBeenCalled()
   })
 
   it('leaves everyone else\'s totals as they were, and asks for an account once', async () => {
@@ -76,14 +87,14 @@ describe('kept apart', () => {
     await ingestProductUsage('person', { ...report, id: 'cf1c5a03-388c-4265-b5fb-a4c3d47e4080', context }, now)
     expect(stored().filter(metric => metric.includes(':') && !metric.startsWith('breakdown:'))).toEqual([])
     expect(stored()).toContain('turns_started')
-    expect(db.user.findUnique).toHaveBeenCalledOnce()
+    expect(db.user.findMany).toHaveBeenCalledOnce()
   })
 
   it('reads no account for signed-out setup counts', async () => {
     expect(await ingestSetupUsage({ id: 'cf1c5a03-388c-4265-b5fb-a4c3d47e4081', day: '2026-10-13',
       counters: { setup_phone_first_open: 1 } }, now)).toEqual({ accepted: true })
     expect(stored()).toEqual(['setup_phone_first_open'])
-    expect(db.user.findUnique).not.toHaveBeenCalled()
+    expect(db.user.findMany).not.toHaveBeenCalled()
   })
 })
 
@@ -154,21 +165,32 @@ describe('preference', () => {
 })
 
 describe('aggregate ingestion', () => {
-  it('rechecks permission after waiting for another report without caching an enabled choice', async () => {
-    let release!: () => void
-    const gate = new Promise<void>(resolve => { release = resolve })
-    // Four reports fill this process's write slots; the fifth waits for one.
-    for (let i = 0; i < 4; i++) db.$transaction.mockImplementationOnce(async fn => { await gate; return fn(db) })
-    const first = [0, 1, 2, 3].map(i => ingestProductUsage(`account-${i}`, { ...report, id: `receipt-${i}` }, now))
+  it('rechecks permission inside the batch, so a choice turned off while a report waited refuses it', async () => {
+    const gate = deferred()
+    db.$transaction.mockImplementationOnce(async fn => { await gate.promise; return fn(db) })
+    const first = ingestProductUsage('account-1', { ...report, id: 'receipt-1' }, now)
+    await new Promise(resolve => setImmediate(resolve))
     const queued = ingestProductUsage('opted-out-while-queued', { ...report, id: 'another-receipt' }, now)
-    await Promise.resolve()
-    expect(db.$transaction).toHaveBeenCalledTimes(4)
-    for (let i = 0; i < 4; i++) db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: true, revision: 0 })
-    db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: false, revision: 1 })
-    release()
-    expect(await Promise.all(first)).toEqual(Array(4).fill({ accepted: true }))
-    expect(await queued).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
-    expect(db.productUsageReceipt.create).toHaveBeenCalledTimes(4)
+    choices()
+    choices({ userId: 'opted-out-while-queued', enabled: false, revision: 1 })
+    gate.resolve()
+    expect(await first).toEqual({ accepted: true })
+    expect(await queued).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED', enabled: false, revision: 1 })
+    expect(receipts()).toEqual(['receipt-1'])
+  })
+  it('reports that arrive while a batch commits share the next transaction, with their totals summed', async () => {
+    const gate = deferred()
+    db.$transaction.mockImplementationOnce(async fn => { await gate.promise; return fn(db) })
+    const first = ingestProductUsage('account-0', { ...report, id: 'receipt-0' }, now)
+    await new Promise(resolve => setImmediate(resolve))
+    const next = [1, 2, 3].map(i => ingestProductUsage(`account-${i}`, { ...report, id: `receipt-${i}` }, now))
+    gate.resolve()
+    expect(await Promise.all([first, ...next])).toEqual(Array(4).fill({ accepted: true }))
+    expect(db.$transaction).toHaveBeenCalledTimes(2)
+    expect(db.productUsagePreference.findMany.mock.calls[1][0].where.userId.in).toEqual(['account-1', 'account-2', 'account-3'])
+    expect(receipts()).toEqual(['receipt-0', 'receipt-1', 'receipt-2', 'receipt-3'])
+    expect(db.$runCommandRaw.mock.calls[1][0].updates.map((u: { q: { metric: string }; u: unknown }) => [u.q.metric, u.u]))
+      .toEqual([['turns_started', { $inc: { value: 12 } }], ['turns_ended', { $inc: { value: 9 } }]])
   })
   it('stores only totals and an unlinked receipt, in one transaction', async () => {
     expect(await ingestProductUsage('private-account', report, now)).toEqual({ accepted: true })
@@ -180,15 +202,20 @@ describe('aggregate ingestion', () => {
         { q: { dayUtc: { $date: '2026-10-13T00:00:00.000Z' }, metric: 'turns_ended' }, u: { $inc: { value: 3 } }, upsert: true },
       ],
     })
-    const stored = JSON.stringify([db.$runCommandRaw.mock.calls, db.productUsageReceipt.create.mock.calls])
+    expect(db.productUsageReceipt.createMany).toHaveBeenCalledExactlyOnceWith({ data: [
+      { id: report.id, expiresAt: new Date('2026-11-18T00:00:00.000Z') }] })
+    const stored = JSON.stringify([db.$runCommandRaw.mock.calls, db.productUsageReceipt.createMany.mock.calls])
     for (const forbidden of ['private-account', 'userId', 'machineId', 'agentId', 'revision', 'counters', 'receivedAt']) expect(stored).not.toContain(forbidden)
   })
   it('rejects opted-out and stale queued uploads without receipts or counters', async () => {
-    db.productUsagePreference.findUnique.mockResolvedValue({ enabled: false, revision: 1 })
+    choices({ userId: 'a', enabled: false, revision: 1 })
     expect(await ingestProductUsage('a', report, now)).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
-    db.productUsagePreference.findUnique.mockResolvedValue({ enabled: true, revision: 2 })
+    choices({ userId: 'a', enabled: true, revision: 2 })
     expect(await ingestProductUsage('a', report, now)).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
-    expect(db.productUsageReceipt.create).not.toHaveBeenCalled()
+    // A machine switched off before any saved choice is off too.
+    db.analyticsMachineState.findMany.mockResolvedValueOnce([{ userId: 'a' }])
+    expect(await ingestProductUsage('a', report, now)).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED', enabled: false })
+    expect(db.productUsageReceipt.createMany).not.toHaveBeenCalled()
     expect(db.$runCommandRaw).not.toHaveBeenCalled()
   })
   it.each(['2026-09-08', '2026-10-14', '2026-02-30', 'bad'])('refuses expired/future/invalid day %s', async day => {
@@ -196,14 +223,24 @@ describe('aggregate ingestion', () => {
     expect(db.$transaction).not.toHaveBeenCalled()
   })
   it('accepts a previously committed receipt without incrementing again', async () => {
-    db.productUsageReceipt.create.mockRejectedValue({ code: 'P2002' })
-    db.productUsageReceipt.findUnique.mockResolvedValue({ id: report.id })
+    db.productUsageReceipt.findMany.mockResolvedValue([{ id: report.id }])
     expect(await ingestProductUsage('a', report, now)).toEqual({ accepted: true })
+    expect(db.productUsageReceipt.createMany).not.toHaveBeenCalled()
     expect(db.$runCommandRaw).not.toHaveBeenCalled()
+  })
+  it('a report sent again while its first copy waits in the same batch counts once', async () => {
+    const gate = deferred()
+    db.$transaction.mockImplementationOnce(async fn => { await gate.promise; return fn(db) })
+    const first = ingestProductUsage('a', { ...report, id: 'receipt-0' }, now)
+    await new Promise(resolve => setImmediate(resolve))
+    const twice = [ingestProductUsage('a', report, now), ingestProductUsage('a', report, now)]
+    gate.resolve()
+    expect(await Promise.all([first, ...twice])).toEqual(Array(3).fill({ accepted: true }))
+    expect(receipts()).toEqual(['receipt-0', report.id])
+    expect(db.$runCommandRaw.mock.calls[1][0].updates[0].u).toEqual({ $inc: { value: 4 } })
   })
   it('does not mistake a rolled-back aggregate creation race for a received report', async () => {
     db.$runCommandRaw.mockRejectedValue({ code: 'P2002' })
-    db.productUsageReceipt.findUnique.mockResolvedValue(null)
     await expect(ingestProductUsage('a', report, now)).rejects.toMatchObject({ code: 'P2002' })
     expect(db.$transaction).toHaveBeenCalledTimes(4)
     expect(delay).toHaveBeenCalledTimes(3)
@@ -212,8 +249,8 @@ describe('aggregate ingestion', () => {
     db.$runCommandRaw.mockRejectedValueOnce({ code })
     expect(await ingestProductUsage('private-account', report, now)).toEqual({ accepted: true })
     expect(db.$transaction).toHaveBeenCalledTimes(2)
-    expect(db.productUsagePreference.findUnique).toHaveBeenCalledTimes(2)
-    expect(db.productUsageReceipt.create.mock.calls[0]).toEqual(db.productUsageReceipt.create.mock.calls[1])
+    expect(db.productUsagePreference.findMany).toHaveBeenCalledTimes(2)
+    expect(db.productUsageReceipt.createMany.mock.calls[0]).toEqual(db.productUsageReceipt.createMany.mock.calls[1])
     expect(delay).toHaveBeenCalledExactlyOnceWith(expect.any(Number))
     expect(vi.mocked(delay).mock.calls[0][0]).toBeGreaterThanOrEqual(25)
     expect(vi.mocked(delay).mock.calls[0][0]).toBeLessThan(75)
@@ -222,16 +259,16 @@ describe('aggregate ingestion', () => {
     db.$runCommandRaw.mockRejectedValueOnce(new Error('Error code 24 (LockTimeout): Unable to acquire IX lock, labels: {"TransientTransactionError"}'))
     expect(await ingestProductUsage('a', report, now)).toEqual({ accepted: true })
     expect(db.$transaction).toHaveBeenCalledTimes(2)
-    expect(db.productUsageReceipt.create.mock.calls[0]).toEqual(db.productUsageReceipt.create.mock.calls[1])
+    expect(db.productUsageReceipt.createMany.mock.calls[0]).toEqual(db.productUsageReceipt.createMany.mock.calls[1])
     expect(delay).toHaveBeenCalledOnce()
   })
   it('rechecks a sharing-off choice before retrying the transaction', async () => {
     db.$runCommandRaw.mockRejectedValueOnce({ code: 'P2034' })
-    db.productUsagePreference.findUnique.mockResolvedValueOnce({ enabled: true, revision: 0 })
-      .mockResolvedValueOnce({ enabled: false, revision: 1 })
+    choices({ userId: 'a', enabled: true, revision: 0 })
+    choices({ userId: 'a', enabled: false, revision: 1 })
     expect(await ingestProductUsage('a', report, now)).toMatchObject({ accepted: false, reason: 'CHOICE_CHANGED' })
     expect(db.$transaction).toHaveBeenCalledTimes(2)
-    expect(db.productUsageReceipt.create).toHaveBeenCalledOnce()
+    expect(db.productUsageReceipt.createMany).toHaveBeenCalledOnce()
   })
   it('bounds persistent conflicts and does not retry unrelated storage errors', async () => {
     db.$transaction.mockRejectedValue({ code: 'P2034' })
@@ -259,9 +296,9 @@ describe('aggregate ingestion', () => {
     } finally { clock.mockRestore() }
   })
   it('fails closed when the preference cannot be checked', async () => {
-    db.productUsagePreference.findUnique.mockRejectedValue(new Error('unavailable'))
+    db.productUsagePreference.findMany.mockRejectedValue(new Error('unavailable'))
     await expect(ingestProductUsage('a', report, now)).rejects.toThrow()
-    expect(db.productUsageReceipt.create).not.toHaveBeenCalled()
+    expect(db.productUsageReceipt.createMany).not.toHaveBeenCalled()
   })
 })
 
@@ -343,9 +380,9 @@ it('bounds duplicate repair work and refuses to claim readiness without a unique
 it('setup ingestion never reads an account and expires after yesterday', async () => {
   const setup = { id: report.id, day: report.day, counters: { setup_desktop_sign_in_ok: 1 } }
   expect(await ingestSetupUsage(setup, now)).toEqual({ accepted: true })
-  expect(db.productUsagePreference.findUnique).not.toHaveBeenCalled()
-  expect(db.analyticsMachineState.findFirst).not.toHaveBeenCalled()
-  expect(JSON.stringify(db.productUsageReceipt.create.mock.calls)).not.toContain('setup_desktop')
+  expect(db.productUsagePreference.findMany).not.toHaveBeenCalled()
+  expect(db.analyticsMachineState.findMany).not.toHaveBeenCalled()
+  expect(JSON.stringify(db.productUsageReceipt.createMany.mock.calls)).not.toContain('setup_desktop')
   expect(await ingestSetupUsage({ ...setup, day: '2026-10-11' }, now)).toMatchObject({ reason: 'EXPIRED' })
   expect(await ingestSetupUsage({ ...setup, day: '2026-10-12' }, now)).toMatchObject({ accepted: true })
 })
@@ -353,14 +390,13 @@ it('setup ingestion never reads an account and expires after yesterday', async (
 it('Hub totals share the setup path: unlinked receipt, atomic totals, a retried receipt counts once', async () => {
   const hub = { id: report.id, day: report.day, counters: { hub_view_harness_visitor: 3, hub_fork: 1 } }
   expect(await ingestSetupUsage(hub, now)).toEqual({ accepted: true })
-  expect(db.productUsagePreference.findUnique).not.toHaveBeenCalled()
+  expect(db.productUsagePreference.findMany).not.toHaveBeenCalled()
   expect(db.$runCommandRaw.mock.calls[0][0].updates).toEqual([
     { q: { dayUtc: { $date: '2026-10-13T00:00:00.000Z' }, metric: 'hub_view_harness_visitor' }, u: { $inc: { value: 3 } }, upsert: true },
     { q: { dayUtc: { $date: '2026-10-13T00:00:00.000Z' }, metric: 'hub_fork' }, u: { $inc: { value: 1 } }, upsert: true },
   ])
   db.$runCommandRaw.mockClear()
-  db.productUsageReceipt.create.mockRejectedValue({ code: 'P2002' })
-  db.productUsageReceipt.findUnique.mockResolvedValue({ id: report.id })
+  db.productUsageReceipt.findMany.mockResolvedValue([{ id: report.id }])
   expect(await ingestSetupUsage(hub, now)).toEqual({ accepted: true })
   expect(db.$runCommandRaw).not.toHaveBeenCalled()
   expect(await ingestSetupUsage({ ...hub, day: '2026-10-11' }, now)).toMatchObject({ reason: 'EXPIRED' })
