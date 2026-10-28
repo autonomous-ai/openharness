@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GridFleetRpc, GridOutputCapture, parseGridFleetRequest } from './gridFleetRpc.js'
+import { withGridCallsPaused } from './gridCalls.js'
 import { encryptDownFrame, encryptRpcResult } from './e2ee/applicationFrames.js'
 
 const directories: string[] = []
@@ -22,6 +23,19 @@ describe('paired Grid fleet commands', () => {
     const args=['--local','chat','$(echo secret); `pwd`',"single'quote",'line\nline']
     const result=await rpc.run('owner','one',{args,timeoutMs:3000})
     expect(result.code).toBe(7);expect(result.ok).toBe(false);expect(JSON.parse(result.stdout)).toEqual(args)
+  })
+  it('waits while an install holds grid calls back (gridCalls.ts)', async () => {
+    const started=join(mkdtempSync(join(tmpdir(), 'grid-fleet-started-')), 'started')
+    const rpc=fixture(`require('node:fs').writeFileSync(${JSON.stringify(started)}, '');process.exit(0)`)
+    let finish: () => void = () => {}
+    const install=withGridCallsPaused(() => new Promise<void>((resolve) => { finish = resolve }))
+    const call=rpc.run('owner','paused',{args:['ls'],timeoutMs:10_000})
+    // A Node child takes about half a second to start on a busy Mac: give it well over that.
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    expect(existsSync(started)).toBe(false)
+    finish(); await install
+    expect((await call).ok).toBe(true)
+    expect(existsSync(started)).toBe(true)
   })
   it('keeps timeout failures even when a child handles SIGTERM with exit zero', async () => {
     const rpc=fixture("process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)")

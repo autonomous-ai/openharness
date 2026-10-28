@@ -121,11 +121,20 @@ function busyOnDuplicate(error: unknown): never {
  *  `github` is the Harness GitHub App (github/tokens.ts): read from the environment unless given, null when off. */
 /** Full-state reads of clients from before Swarms were stored by parts (design 4.11): every old client reads one of them
  *  before or right after any action, so it meets this at once. */
+/**
+ * The body limit of the routes hosts and agents call every second or every turn (roadmap 2.8), in place of Fastify's 1 MiB:
+ * a body is parsed whole on the event loop before its schema is checked. Each route's largest valid body, from its schema's
+ * limits with free text in three-byte characters (routes/superTabs.test.ts): host changes with 500 held Swarms 116 KB, a
+ * recorded turn 48 KB, a delivery ack or stop receipt 6 KB. Commands and machine readings keep the default: a task at its
+ * schema's limits reaches 700 KB.
+ */
+export const HOT_BODY_LIMIT = 128 * 1024
 const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, UPDATE_REQUIRED.message, UPDATE_REQUIRED.code, UPDATE_REQUIRED.status)
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js')])
+  const [bus, { announceSwarmDeliveries }, { tellSessionViewers }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'),
+    import('./harnessLinks.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -139,7 +148,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
       // Its observer sockets may be on any instance.
-      accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) } })
+      accessChanged: tabId => { void bus.publishSwarmAccessChanged(tabId) },
+      sessionsConfidential: sessions => { void tellSessionViewers(sessions) } })
 }
 
 export async function superTabRoutes(app: FastifyInstance, options: { store?: SuperTabStore; github?: GitHubTokens | null; reads?: SwarmReads; hosts?: HostReads;
@@ -174,7 +184,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, { cursor: req.query.cursor, full: req.query.full === '1' })))
   // The same read for a host that holds etags (`held`, design 4.10): too many for a URL, so in a body.
   app.post<{ Params: z.infer<typeof hostParams>; Body: z.infer<typeof hostChangesBody> }>('/api/super-tabs/hosts/:machineId/changes',
-    { preHandler: [validateParams(hostParams), validateBody(hostChangesBody)] },
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(hostParams), validateBody(hostChangesBody)] },
     (req, reply) => respond(reply, () => hosts.changes(req.user!, req.params.machineId, req.body)))
   // A read-only token for a queued start's project repository, for its host to clone and fetch the folder before the agent
   // exists, so that the machine owner's own git login is never used for another person's project (docs/swarm-github-app.md).
@@ -247,13 +257,13 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: [validateParams(machineParams), validateBody(machineObservationSchema)] },
     (req, reply) => respond(reply, () => store.observeMachine(req.user!, req.params.tabId, req.params.machineId, req.body)))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof openNativeSchema> }>('/api/super-tabs/:tabId/native',
-    { preHandler: [validateParams(tabParams), validateBody(openNativeSchema)] },
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(tabParams), validateBody(openNativeSchema)] },
     (req, reply) => respond(reply, () => store.native.open(req.user!, req.params.tabId, req.body)))
   app.get<{ Params: z.infer<typeof nativeParams> }>('/api/super-tabs/:tabId/native/:contextId',
     { preHandler: validateParams(nativeParams) },
     (req, reply) => respond(reply, () => store.native.read(req.user!, req.params.tabId, req.params.contextId)))
   app.post<{ Params: z.infer<typeof nativeParams>; Body: z.infer<typeof nativeEventSchema> }>('/api/super-tabs/:tabId/native/:contextId',
-    { preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(nativeParams), validateBody(nativeEventSchema)] },
     (req, reply) => respond(reply, () => store.native.append(req.user!, req.params.tabId, req.params.contextId, req.body).catch(busyOnDuplicate)))
   app.get('/api/super-tabs/routing-policy', (req, reply) => respond(reply, () => store.accountPolicy(req.user!)))
   app.post<{ Body: z.infer<typeof savePolicy> }>('/api/super-tabs/routing-policy', { preHandler: validateBody(savePolicy) },
@@ -353,7 +363,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
       const issued = await github.issue({ tabId: grant.tabId, agentId: grant.agentId, assignmentId: grant.assignmentId, repository })
       // A Harness Team account has no git identity of its own: its commits are the app's, as its pull requests are
       // (github/app.ts commitIdentity). A person's machine keeps its owner's, as before.
-      const commitAs = isTeamSession(req.user) ? await github.app.commitIdentity() : null
+      const commitAs = isTeamSession(req.user) ? await github.app.commitIdentity(issued.token) : null
       return { ...issued, ...attribution(grant), ...(commitAs ? { commitAs } : {}) }
     }))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof operation> }>('/api/super-tabs/:tabId/commands',
@@ -441,12 +451,12 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     { preHandler: validateParams(deliveryParams) },
     (req, reply) => respond(reply, () => store.deliveries(req.user!, req.params.tabId, req.params.agentId)))
   app.post<{ Params: z.infer<typeof deliveryActionParams>; Body: z.infer<typeof deliveryAction> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
-    { preHandler: [validateParams(deliveryActionParams), validateBody(deliveryAction)] },
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(deliveryActionParams), validateBody(deliveryAction)] },
     (req, reply) => respond(reply, () => store.delivery(req.user!, req.params.tabId, req.params.agentId, req.params.deliveryId, req.body)))
   app.get<{ Params: z.infer<typeof deliveryActionParams> }>('/api/super-tabs/:tabId/agents/:agentId/deliveries/:deliveryId',
     { preHandler: validateParams(deliveryActionParams) },
     (req, reply) => respond(reply, () => store.deliveryReceipt(req.user!, req.params.tabId, req.params.agentId, req.params.deliveryId)))
   app.post<{ Params: z.infer<typeof tabParams>; Body: z.infer<typeof stop> }>('/api/super-tabs/:tabId/stopped',
-    { preHandler: [validateParams(tabParams), validateBody(stop)] },
+    { bodyLimit: HOT_BODY_LIMIT, preHandler: [validateParams(tabParams), validateBody(stop)] },
     (req, reply) => respond(reply, () => store.stopped(req.user!, req.params.tabId, req.body.assignmentId, req.body.receipt)))
 }

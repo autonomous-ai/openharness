@@ -198,6 +198,7 @@ describe('the team account\'s copy of the runtime', () => {
     mkdirSync(join(stage, 'cli'), { recursive: true })
     mkdirSync(home)
     writeFileSync(join(stage, 'node', 'bin', 'node'), '#!/bin/sh\necho node "$@"\n', { mode: 0o755 })
+    writeFileSync(join(stage, 'node', 'bin', 'npm'), '#!/bin/sh\n', { mode: 0o755 })
     writeFileSync(join(stage, 'cli', 'cli.js'), '// cli')
     writeFileSync(join(stage, 'cli', 'package.json'), '{"type":"module"}')
     // A second run replaces what the first laid down.
@@ -207,6 +208,9 @@ describe('the team account\'s copy of the runtime', () => {
     expect(existsSync(join(runtime, 'node-v1.next'))).toBe(false)
     // On the account's PATH, so Codex's `#!/usr/bin/env node` launcher starts in its terminals.
     expect(readlinkSync(join(home, '.local', 'bin', 'node'))).toBe(`${runtime}/node-v1/bin/node`)
+    // And npm, for a Builder's packages and tests; npx is linked only where the Node has it.
+    expect(readlinkSync(join(home, '.local', 'bin', 'npm'))).toBe(`${runtime}/node-v1/bin/npm`)
+    expect(existsSync(join(home, '.local', 'bin', 'npx'))).toBe(false)
     expect(readFileSync(join(home, '.harness', 'cli', 'cli.js'), 'utf8')).toBe('// cli')
     expect(existsSync(join(home, '.harness', 'cli', 'notify.mjs'))).toBe(false)
     expect(statSync(join(home, '.harness')).mode & 0o777).toBe(0o700)

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -438,6 +438,23 @@ describe('one machine: a Mac and its Harness Team account', () => {
     // A Lead that already named the team account's folder keeps it.
     f.run({ type: 'agent.start', request: { ...f.request(group, 'mate-mac'), cwd: '/team-swarm/lead' } }, owner, f.pooled('mate-mac'))
     expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
+  })
+
+  // 2026-10-28: every Mac read "has no Harness Team account yet" beside the account that took its teammates' work.
+  it('reads a Mac as its Harness Team account does, since that is where its teammates\' work runs', () => {
+    const f = oneMachine()
+    f.machine('mate-mac').observation = reading('computer')
+    f.machine('mate-team').observation = reading('team', PASSED)
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
+    f.machine('mate-team').observation = reading('team', FAILED)
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
+    // The account itself reads as itself; a Mac whose account is no longer signed in, or outside the Swarms it is tried in,
+    // reads as a Mac without one.
+    expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
+    try { expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull() } finally { delete process.env.SWARM_TEAM_ACCOUNT_OWNERS }
   })
 
   it('once the team account is removed, its pool left behind takes nothing: the Mac is a Mac without one again', () => {

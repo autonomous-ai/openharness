@@ -24,8 +24,13 @@ export const WS_LIMITS = {
   web: 1024 * 1024,
   /** PCM chunks are ~640 B (20 ms @ 16 kHz); device JSON RPCs are tiny. */
   device: 256 * 1024,
-  /** App-proxy frames ride these sockets: 8 MiB of body → ~11.2 MiB once base64'd into JSON. */
+  /** App-proxy frames ride the manager socket: an 8 MiB WebSocket message → ~11.2 MiB once base64'd into JSON. Its `up`
+   *  frames come from the machine-manager, outside this repo, in the adapter's vocabulary. */
   manager: 16 * 1024 * 1024,
+  /** No app-proxy frames: the CLI's events and RPC replies (cli/src/gateway). Measured for roadmap 2.8, these are not
+   *  bounded below this: a Claude or Codex history page is up to ~5.4 MiB sealed, and history of the engines the core
+   *  reads itself and images inline in a user message have no byte cap at all. A frame past this closes the link (1009)
+   *  and drops every remote client of that machine, so it stays until the CLI caps those replies. */
   adapter: 16 * 1024 * 1024,
   /** Sealed shared-tab frames between daemons are capped at 128 KiB by the relay; leave room for the envelope. */
   agentMessages: 256 * 1024,

@@ -266,6 +266,19 @@ export function teamPoolOf(state: SuperTabState, pool: ContributedMachine, live?
     .reduce<ContributedMachine | undefined>((best, m) => !best || (m.observation?.receivedAt ?? -1) >= (best.observation?.receivedAt ?? -1) ? m : best, undefined)
 }
 
+/**
+ * Whether [pool] takes teammates' work, as a Swarm's reads say it: a Mac whose Harness Team account is in this Swarm runs
+ * that work there (teamMachineFor), so it reads as its account does. Read as itself, every Mac read "has no Harness
+ * Team account yet" next to the very account that took the work, and a Lead took that to mean the Mac could not
+ * (2026-10-28). Any other machine, and a Mac without one, reads as itself.
+ */
+export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, now: number, teamMachines: readonly string[],
+  otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
+  const team = !pool.hostMachineId && teamAccountSwarm(state) ? teamPoolOf(state, pool, teamMachines) : undefined
+  const subject = team ?? pool
+  return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
+}
+
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {
