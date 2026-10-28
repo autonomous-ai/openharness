@@ -473,9 +473,11 @@ describe('contributed machine executor', () => {
       : { ok: args.join(' ') === 'status --porcelain', stdout: cwd === '/work/running' ? ' M src/a.ts\n' : '', stderr: '' })
     const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
     await machine.tick()
-    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(3))
+    f.advance(); await machine.tick()
+    const body = f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3] as Record<string, unknown>
     expect(body.harnessUncommitted).toEqual({ running: true, clean: false })
-    expect(git.mock.calls.map(c => c[0]).sort()).toEqual(['/work/broken', '/work/clean', '/work/running'])
+    expect([...new Set(git.mock.calls.map(c => c[0]))].sort()).toEqual(['/work/broken', '/work/clean', '/work/running'])
   })
 
   it('reads each session\'s folder at most once a minute', async () => {
@@ -484,10 +486,79 @@ describe('contributed machine executor', () => {
     const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
     const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
     await machine.tick()
+    await vi.waitFor(() => expect(git).toHaveBeenCalledOnce())
     f.advance(); await machine.tick()
     expect(git).toHaveBeenCalledTimes(1)
     f.step(60_000); await machine.tick()
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(2))
+  })
+
+  // 2026-10-28: git status one folder after another took 20 s for the Mac Studio's 29 worktrees, inside the pass that
+  // sends the machine's reading.
+  it('never holds the reading up for git: a folder still being read is sent on a later pass', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+    let answer!: (value: { ok: boolean; stdout: string; stderr: string }) => void
+    const git = vi.fn(() => new Promise<{ ok: boolean; stdout: string; stderr: string }>(resolve => { answer = resolve }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+    await machine.tick()
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
+    expect(posts()).toHaveLength(1)
+    expect(posts()[0]).not.toHaveProperty('harnessUncommitted')
+    answer({ ok: true, stdout: ' M a.ts\n', stderr: '' })
+    await vi.waitFor(async () => {
+      f.advance(); await machine.tick()
+      expect(posts().at(-1)).toHaveProperty('harnessUncommitted', { running: true })
+    })
+  })
+
+  it('reads four folders at a time at most', async () => {
+    const f = fixture()
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f']
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => ids.includes(id) ? { agentId: id, cwd: `/work/${id}` } as never : undefined)
+    f.pool.harnessIds = ids
+    let reading = 0, most = 0
+    const waiting: Array<() => void> = []
+    const git = vi.fn(() => new Promise<{ ok: boolean; stdout: string; stderr: string }>(resolve => {
+      most = Math.max(most, ++reading)
+      waiting.push(() => { reading--; resolve({ ok: true, stdout: '', stderr: '' }) })
+    }))
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+    await machine.tick()
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(4))
+    waiting.shift()!()
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(5))
+    while (waiting.length) { waiting.shift()!(); await new Promise(done => setTimeout(done, 0)) }
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(6))
+    waiting.shift()?.()
+    expect(most).toBe(4)
+  })
+
+  it('reads a session\'s folder again only once its screen changed, or after ten minutes', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+    const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    let shown = 900
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git, progress: () => ({ running: shown }) } as never)
+    const pass = async (ms: number) => { f.step(ms); await machine.tick(); await new Promise(done => setTimeout(done, 0)) }
+    await pass(0)
+    await vi.waitFor(() => expect(git).toHaveBeenCalledOnce())
+    // An idle session: its files have not changed since the read.
+    for (let i = 0; i < 5; i++) await pass(60_000)
+    expect(git).toHaveBeenCalledOnce()
+    shown = 400_000
+    await pass(60_000)
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(2))
+    // Changed again, but read under a minute ago.
+    shown = 400_500
+    await pass(30_000)
     expect(git).toHaveBeenCalledTimes(2)
+    await pass(30_000)
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(3))
+    await pass(9 * 60_000)
+    expect(git).toHaveBeenCalledTimes(3)
+    await pass(60_000)
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(4))
   })
 
   it('drops uncommitted changes alone for a backend that refuses them, and offers them again ten minutes later', async () => {
@@ -503,7 +574,9 @@ describe('contributed machine executor', () => {
     const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/')).map(c => c[3] as Record<string, unknown>)
     const fields = (post: Record<string, unknown>) => ['harnessUncommitted', 'harnessProgress'].filter(key => key in post)
     await machine.tick()
-    expect(posts().map(fields)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
+    await vi.waitFor(() => expect(git).toHaveBeenCalledOnce())
+    f.advance(); await machine.tick()
+    expect(posts().map(fields)).toEqual([['harnessProgress'], ['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
     f.advance(); await machine.tick()
     expect(posts().map(fields).at(-1)).toEqual(['harnessProgress'])
     f.step(600_000); await machine.tick()
@@ -1139,6 +1212,139 @@ describe('contributed machine executor', () => {
       expect(posts(f)).toHaveLength(2)
     })
   })
+
+  // 2026-10-28: the Mac Studio's 15-second reading went out only at the end of a pass that also ran git in 22 session
+  // folders and launched agents; it arrived 31 s apart, past 45 s under load, and every agent there showed as Down.
+  describe('the beat while a pass is slow', () => {
+    const posts = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    /** A pass that stops at its launch, until `launched` is called. */
+    function stuck(f: ReturnType<typeof fixture>) {
+      let launched!: () => void
+      f.start.mockImplementation(() => new Promise(resolve => { launched = () => resolve({ ok: true }) }) as never)
+      const pass = f.machine.tick()
+      return { pass, launched: () => launched() }
+    }
+    const beat = async (f: ReturnType<typeof fixture>, ms: number) => { f.step(ms); f.machine.beat(); await new Promise(done => setTimeout(done, 0)) }
+
+    it('re-sends the last reading on its own once a slow pass has sent none for fifteen seconds', async () => {
+      const f = fixture()
+      const { pass, launched } = stuck(f)
+      await vi.waitFor(() => expect(f.start).toHaveBeenCalledOnce())
+      expect(posts(f)).toHaveLength(1)
+      await beat(f, 14_999)
+      expect(posts(f)).toHaveLength(1)
+      await beat(f, 1)
+      expect(posts(f)).toHaveLength(2)
+      expect(posts(f)[1]![2]).toBe(posts(f)[0]![2])
+      expect(posts(f)[1]![3]).toEqual(posts(f)[0]![3])
+      // The beat counts from the last send, a re-send included.
+      await beat(f, 14_999)
+      expect(posts(f)).toHaveLength(2)
+      await beat(f, 1)
+      expect(posts(f)).toHaveLength(3)
+      launched(); await pass
+    })
+
+    it('never re-sends while passes keep up: the pass sends its own reading', async () => {
+      const f = fixture(); f.pool.starts.length = 0
+      await f.machine.tick()
+      for (let i = 0; i < 4; i++) await beat(f, 16_000)
+      expect(posts(f)).toHaveLength(1)
+    })
+
+    it('leaves out whether folders have uncommitted changes, which only a fresh read may vouch for', async () => {
+      const f = fixture()
+      vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running' ? { agentId: id, cwd: '/work/running' } as never : undefined)
+      const git = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+      const machine = new ContributedMachines(f.core, 'host', { ...f.deps, git } as never)
+      f.pool.starts.length = 0
+      await machine.tick()
+      await vi.waitFor(() => expect(git).toHaveBeenCalledOnce())
+      f.step(16_000); await machine.tick()
+      expect(posts(f).at(-1)![3]).toHaveProperty('harnessUncommitted', { running: false })
+      f.pool.starts.push({ id: 'start', dispatched: false })
+      f.start.mockImplementation(() => new Promise(() => {}) as never)
+      f.step(16_000); void machine.tick()
+      await vi.waitFor(() => expect(f.start).toHaveBeenCalledOnce())
+      const sent = posts(f).at(-1)![3] as Record<string, unknown>
+      f.step(15_000); machine.beat()
+      await vi.waitFor(() => expect(posts(f).length).toBeGreaterThan(3))
+      const { harnessUncommitted: _uncommitted, ...rest } = sent
+      expect(posts(f).at(-1)![3]).toEqual(rest)
+    })
+
+    it('stops re-sending once a pass has run for three minutes, so a stuck daemon shows as offline', async () => {
+      const f = fixture()
+      const { pass, launched } = stuck(f)
+      await vi.waitFor(() => expect(f.start).toHaveBeenCalledOnce())
+      for (let i = 0; i < 11; i++) await beat(f, 15_000)
+      // 2:45 into the pass: eleven beats.
+      expect(posts(f)).toHaveLength(12)
+      await beat(f, 15_000)
+      await beat(f, 15_000)
+      expect(posts(f)).toHaveLength(12)
+      launched(); await pass
+    })
+
+    it('has one re-send in flight at most, and says why one failed', async () => {
+      const f = fixture()
+      const { pass, launched } = stuck(f)
+      await vi.waitFor(() => expect(f.start).toHaveBeenCalledOnce())
+      let answer!: (value: unknown) => void
+      f.backend.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      await beat(f, 15_000)
+      await beat(f, 15_000)
+      expect(posts(f)).toHaveLength(2)
+      answer({ revision: 2 }); await new Promise(done => setTimeout(done, 0))
+      f.backend.mockRejectedValueOnce(new SuperTabHostError('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403))
+      await beat(f, 1_000)
+      expect(posts(f)).toHaveLength(3)
+      expect(f.log).toHaveBeenCalledWith(expect.stringContaining('Read the current machine contribution.'))
+      launched(); await pass
+    })
+
+    it('never lets a re-send land after a newer reading: the pass waits for one in flight, and none starts while it sends', async () => {
+      const f = fixture(); f.pool.starts.length = 0
+      await f.machine.tick()
+      expect(posts(f)).toHaveLength(1)
+      // The next pass is slow to measure, and a re-send goes meanwhile; the backend holds it.
+      let measured!: () => void
+      f.capabilities.mockImplementationOnce(() => new Promise(resolve => { measured = () => resolve({ ok: true, resources: {}, tools: { git: true } }) }) as never)
+      let answer!: (value: unknown) => void
+      f.step(16_000); const pass = f.machine.tick()
+      await vi.waitFor(() => expect(f.capabilities).toHaveBeenCalledTimes(2))
+      f.backend.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+      f.machine.beat()
+      expect(posts(f)).toHaveLength(2)
+      measured()
+      await new Promise(done => setTimeout(done, 10))
+      expect(posts(f)).toHaveLength(2)
+      answer({ revision: 2 })
+      await pass
+      expect(posts(f)).toHaveLength(3)
+      // While the pass sends its reading, no re-send starts.
+      let taken!: (value: unknown) => void
+      f.backend.mockImplementation(async (_core, method, path) => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] })
+        : method === 'POST' ? new Promise(resolve => { taken = resolve }) : { revision: 1 })
+      f.step(16_000); const sending = f.machine.tick()
+      await vi.waitFor(() => expect(posts(f)).toHaveLength(4))
+      f.step(15_000); f.machine.beat()
+      expect(posts(f)).toHaveLength(4)
+      taken({ revision: 3 }); await sending
+    })
+
+    it('re-sends nothing for a Swarm that no longer lists this machine', async () => {
+      const f = fixture(); f.pool.starts.length = 0
+      await f.machine.tick()
+      const pools = f.backend.getMockImplementation()!
+      f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes') ? hostForm([], { tabs: ['tab'] }) : pools(core, method, path, body))
+      f.step(5_000); await f.machine.tick()
+      f.backend.mockImplementation(async (core, method, path, body) => path.includes('/hosts/host/changes') ? new Promise(() => {}) : pools(core, method, path, body))
+      f.step(5_000); void f.machine.tick()
+      await beat(f, 15_000)
+      expect(posts(f)).toHaveLength(1)
+    })
+  })
 })
 
 describe('removed machine cleanup', () => {
@@ -1248,6 +1454,33 @@ describe('removed machine cleanup', () => {
     await host.clean('tab', 'removal')
     expect(m.acks()).toHaveLength(1)
     await expect(host.clean('../escape', 'other')).rejects.toThrow('Invalid machine removal.')
+  })
+
+  // 2026-10-28: once a cleanup has waited past the backend's fallback, its owner can add the machine again and the backend
+  // drops the cleanup (backend machines.ts cleanupOverdue). A cleanup that starts after that must not delete the new Swarm folders.
+  it.each([['added again', {}], ['added again and being removed under a newer removal', { removal: { id: 'newer', state: 'cleaning' } }]])(
+    'deletes nothing and confirms nothing once this machine was %s', async (_why, listed) => {
+    const m = machine()
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot, ...listed }] }) : { parts: [] })
+    const host = m.open()
+    await host.clean('tab', 'removal')
+    for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
+    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.acks()).toEqual([])
+    expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
+    // Settled: the next poll's row, if any, does not run it again.
+    await host.clean('tab', 'removal')
+    expect(m.backend.mock.calls.filter(c => c[1] === 'GET')).toHaveLength(1)
+  })
+
+  it('cleans up while the Swarm still lists this machine under this very removal', async () => {
+    const m = machine()
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot, removal: { id: 'removal', state: 'cleaning' } }] }) : { parts: [] })
+    await m.open().clean('tab', 'removal')
+    for (const gone of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(gone), gone).toBe(false)
+    expect(m.acks()).toHaveLength(1)
   })
 
   it('keeps a person\'s own worktree of the same repository even when the registry now lists it as the agent\'s folder', async () => {

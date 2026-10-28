@@ -63,6 +63,7 @@ import {
   P2pSignalRateGuard,
   terminalP2pPolicy,
 } from './p2pSignaling.js'
+import { ShortTurnGuard } from './shortTurnGuard.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -249,6 +250,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     if (nowMs - turnWindowStart >= 60_000) { turnWindowStart = nowMs; turnWindowCount = 0 }
     return ++turnWindowCount <= TURN_WRITES_PER_MINUTE
   }
+  const shortTurns = new ShortTurnGuard()
   const p2pSignalRate = new P2pSignalRateGuard()
   // A machine appends its own key once per sign-in, a removal when someone asks for one: a few a minute
   // is generous, and it keeps a looping daemon from rebuilding the log on every frame.
@@ -528,6 +530,13 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         // (measured 2026-09-17: 42 such frames in one second credited to one agent). It still relays,
         // it is just not a turn today. A frame with no (or a malformed) agentId has nothing to
         // attribute the turn to and is not counted.
+        // A machine starting turns in a loop (lib/shortTurnGuard.ts): past the cap its turn starts are neither counted
+        // nor relayed for a while. Everything else it sends still is.
+        const verdict = shortTurns.admit()
+        if (verdict !== 'relay') {
+          if (verdict === 'pause_started') logger.warn('machine is starting turns in a loop; holding its turn starts for 60 s', { machineId, userId })
+          return
+        }
         const now = new Date()
         const agentId = typeof f.agentId === 'string' && TURN_AGENT_ID_RE.test(f.agentId) ? f.agentId : undefined
         if (agentId && allowTurnWrite(now.getTime())) {

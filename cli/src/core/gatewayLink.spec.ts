@@ -808,6 +808,14 @@ describe('account HTTP owned by the gateway', () => {
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'GET', path: '/api/auth/me' }, 25_000)
     await link.ops.backend('PATCH', '/api/machines/m1', { name: 'Laptop' })
     expect(call).toHaveBeenLastCalledWith(GATEWAY_CALLS.backend, { method: 'PATCH', path: '/api/machines/m1', body: { name: 'Laptop' } }, 25_000)
+    // A busy answer's Retry-After crosses to the core, so the daemon can pass it on to the Desktop's reports.
+    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT' } }
+    call.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_000 })
+    expect(await link.ops.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: busy, retryAfterMs: 90_000 })
+    for (const junk of [-1, Number.NaN, 'PRIVATE', null]) {
+      call.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: junk })
+      expect(await link.ops.backend('POST', '/api/product-usage/report', {})).toEqual({ status: 429, body: busy })
+    }
     call.mockResolvedValueOnce({ name: 'private-grid' })
     expect(await link.ops.mintGridName()).toBe('private-grid')
     call.mockResolvedValueOnce({})

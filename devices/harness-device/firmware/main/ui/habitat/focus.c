@@ -916,6 +916,9 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     int title_run = s->count;
     ht_arc_title_face(s, ht_rgb(FOCUS_FG), f->recipient && *f->recipient ? f->recipient : "\xe2\x80\xa6",
                       &ht_arc_inter_prop);
+    // A Swarm face's chat, smaller and grey on the curve under it, in the gap above the pet (option A, 2026-10-28).
+    static const ht_arc_face_t chat_face = {.prop = &ht_lv_inter_20, .mid = 12};
+    if (f->chat && *f->chat) ht_arc_inner_face(s, ht_rgb(HT_THEME_SECONDARY), f->chat, &chat_face);
 
     // The engine's mark, where the octopus stands. An unknown engine leaves the place empty.
     int engine = ht_focus_engine_index(f->engine);

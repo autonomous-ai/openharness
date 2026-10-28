@@ -8,6 +8,8 @@
 import { createHash, randomBytes } from 'crypto'
 import { env } from '../config/env.js'
 import { pub } from './bus.js'
+import { createCircuitBreaker, CircuitOpenError, type CircuitBreaker } from './circuitBreaker.js'
+import { logger } from '../utils/logger.js'
 import {
   autonomousEnvironmentConfig,
   isAutonomousEnvironment,
@@ -247,7 +249,44 @@ export class SsoTokenError extends Error {
   }
 }
 
+// Per account plane, like the profile check (lib/ssoAuth.ts): a token service that keeps failing is answered for at once.
+const tokenBreakers = new Map<AutonomousEnvironment, CircuitBreaker>()
+
+function tokenBreaker(autonomousEnv: AutonomousEnvironment): CircuitBreaker {
+  let breaker = tokenBreakers.get(autonomousEnv)
+  if (!breaker) {
+    breaker = createCircuitBreaker({
+      name: `sso-token:${autonomousEnv}`,
+      isFailure: (err) => !(err instanceof SsoTokenError) || err.code === 'TOKEN_SERVICE_UNAVAILABLE',
+      onStateChange: (state) => {
+        if (state === 'open') logger.warn('[sso] token service unreachable; failing fast', { autonomousEnv })
+        else logger.info('[sso] token service circuit', { autonomousEnv, state })
+      },
+    })
+    tokenBreakers.set(autonomousEnv, breaker)
+  }
+  return breaker
+}
+
+/** Test seam. */
+export function resetSsoTokenBreakers(): void {
+  tokenBreakers.clear()
+}
+
 async function requestTokens(
+  grant: Record<string, string>,
+  autonomousEnv: AutonomousEnvironment,
+  clientId?: SsoClientId,
+): Promise<SsoTokens> {
+  try {
+    return await tokenBreaker(autonomousEnv).run(() => postTokenRequest(grant, autonomousEnv, clientId))
+  } catch (err) {
+    if (err instanceof CircuitOpenError) throw new SsoTokenError('SSO token service unavailable', 'TOKEN_SERVICE_UNAVAILABLE')
+    throw err
+  }
+}
+
+async function postTokenRequest(
   grant: Record<string, string>,
   autonomousEnv: AutonomousEnvironment,
   clientId?: SsoClientId,

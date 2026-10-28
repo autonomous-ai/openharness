@@ -296,6 +296,47 @@ void main() {
     },
   );
 
+  // Local Team account run, 2026-10-28: after `harness team remove` its pool stays listed, and the Mac's owner read
+  // "Harness Team account offline" with no way to set one up again.
+  testWidgets(
+    'a removed Harness Team account leaves its Mac a Mac without one: not set up, and Set up for its owner',
+    (tester) async {
+      final app = createApp(connected: true)..macOSForTest = true;
+      app.machineStates['m']!.localOnly = true;
+      final server = _swarm();
+      server.state['machines'] = [
+        _pool(
+          'm',
+          contributor: 'owner',
+          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
+        ),
+        _pool(
+          'm-team',
+          contributor: 'owner',
+          host: 'm',
+          teamWork: _refused('TEAM_ACCOUNT_REQUIRED'),
+        ),
+      ];
+      final c = server.controller(account: 'owner');
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, app: app, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_problemText(tester, 'm'), "Teammates' agents paused: not set up");
+      expect(
+        find.byKey(const ValueKey('super-machine-team-setup-m')),
+        findsOneWidget,
+      );
+      await _unmount(tester, c);
+      app.dispose();
+    },
+  );
+
   testWidgets('the line stays away when it would say nothing new', (
     tester,
   ) async {
