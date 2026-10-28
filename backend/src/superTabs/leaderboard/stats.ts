@@ -8,7 +8,7 @@ import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { canReadProject, projectOf } from '../projects.js'
 import { waitedOn, waitsNow } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
-import type { Leaderboard, Medal, PersonScore, WeekGoal } from './contract.js'
+import type { Leaderboard, Medal, ModelShare, PersonScore, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
 export const UNBLOCK_POINTS = 1
@@ -37,10 +37,14 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const landed = requests.filter(g => g.requesterId && g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
   const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
+  // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
+  const landedBy = byKey(landed, g => g.requesterId!)
+  const answersBy = byKey(shared.flatMap(g => g.ledger?.unblocks ?? []), u => u.personId)
+  const machinesBy = byKey(visibleMachines, m => m.contributorId)
   const score = (personId: string, start: number) => {
-    const shippedHere = landed.filter(g => g.requesterId === personId && inWeek(g.ledger!.shippedAt!, start))
-    const answers = shared.flatMap(g => g.ledger?.unblocks ?? []).filter(u => u.personId === personId && inWeek(u.at, start))
-    const machines = visibleMachines.filter(m => m.contributorId === personId)
+    const shippedHere = (landedBy.get(personId) ?? []).filter(g => inWeek(g.ledger!.shippedAt!, start))
+    const answers = (answersBy.get(personId) ?? []).filter(u => inWeek(u.at, start))
+    const machines = (machinesBy.get(personId) ?? [])
       .map(m => m.lent?.find(l => l.week === start)?.agentMs ?? 0).filter(ms => ms > 0)
     const freedMs = sum(answers.map(u => u.waitedMs)), lentMs = sum(machines)
     const points = shippedHere.length * SHIPPED_POINTS + answers.length * UNBLOCK_POINTS
@@ -58,7 +62,7 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   }
   const today = Math.floor(Math.min(now, week + WEEK_MS - 1) / DAY_MS)
   const scored = players.map(p => ({ personId: p.id, email: p.email, ...score(p.id, week),
-    streakDays: streak(new Set(landed.filter(g => g.requesterId === p.id).map(g => Math.floor(g.ledger!.shippedAt! / DAY_MS))), today) }))
+    streakDays: streak(new Set((landedBy.get(p.id) ?? []).map(g => Math.floor(g.ledger!.shippedAt! / DAY_MS))), today) }))
     .sort((a, b) => b.points - a.points || a.email.localeCompare(b.email))
   const people: PersonScore[] = scored.map(({ email: _email, ...entry }) => {
     const rank = 1 + scored.filter(other => other.points > entry.points).length
@@ -69,7 +73,18 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     goal: { openRequests: requests.filter(open).length, thisWeek: goal(week), lastWeek: goal(week - WEEK_MS) },
     people,
     waiting: waitingNow(state, shared),
+    models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
   }
+}
+
+/** The attempts started in the week starting [start], by the kind of model they ran on. */
+function modelShare(requests: Conversation[], start: number): ModelShare {
+  const runs = requests.flatMap(g => g.ledger?.runs ?? []).filter(r => r.at >= start && r.at < start + WEEK_MS)
+  const reviewed = runs.filter(r => r.firstReview !== undefined)
+  const count = (list: typeof runs, grid: boolean) => list.filter(r => !!r.grid === grid).length
+  const passed = reviewed.filter(r => r.firstReview)
+  return { attempts: runs.length, grid: count(runs, true), reviewed: { grid: count(reviewed, true), subscription: count(reviewed, false) },
+    passedFirst: { grid: count(passed, true), subscription: count(passed, false) } }
 }
 
 /** Shared work still to land: not shipped, cancelled, stopped or archived. */
@@ -98,6 +113,15 @@ function streak(days: Set<number>, today: number): number {
 
 const askToShip = (groups: Conversation[]): number[] =>
   groups.flatMap(g => g.ledger?.askedAt != null ? [g.ledger.shippedAt! - g.ledger.askedAt] : [])
+function byKey<T>(items: T[], key: (item: T) => string): Map<string, T[]> {
+  const out = new Map<string, T[]>()
+  for (const item of items) {
+    const list = out.get(key(item))
+    if (list) list.push(item)
+    else out.set(key(item), [item])
+  }
+  return out
+}
 const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0)
 function median(values: number[]): number | null {
   if (!values.length) return null

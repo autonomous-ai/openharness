@@ -96,6 +96,7 @@ import '../settings/experimental_features.dart';
 import '../core/local_key_value_store.dart';
 import '../core/harness_file_store.dart';
 import '../super_tabs/attachment_upload.dart';
+import '../super_tabs/avatar_upload.dart';
 import '../super_tabs/client.dart';
 import '../super_tabs/controller.dart';
 import '../super_tabs/view_store.dart';
@@ -1754,6 +1755,7 @@ class AppNotifier extends ChangeNotifier {
     storage: localStore ?? HarnessFileStore.shared,
     viewStorage: localStore ?? swarmViewStore(),
     upload: uploadWith(() => api),
+    avatarUpload: uploadAvatarWith(() => api),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
     discoveryInterval: kUnderTest ? Duration.zero : const Duration(seconds: 15),
