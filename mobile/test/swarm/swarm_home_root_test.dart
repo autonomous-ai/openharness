@@ -138,6 +138,10 @@ void main() {
     await pump(tester);
     await tester.tap(key('swarm-menu'));
     await tester.pumpAndSettle();
+    // Under the projects, Your models and Your devices: Harness is below
+    // the fold of this Swarm's long drawer.
+    await tester.ensureVisible(key('swarm-drawer-harness'));
+    await tester.pumpAndSettle();
     await tester.tap(key('swarm-drawer-harness'));
     await tester.pumpAndSettle();
     expect(find.text('the terminal'), findsOneWidget);

@@ -3,11 +3,12 @@ import 'package:flutter/foundation.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 
-/// What a closed chat held: its messages, oldest first, and where the
-/// earlier ones start.
+/// What a closed chat held: its messages, oldest first, where the earlier
+/// ones start, and the reaction counter they were read with.
 typedef SwarmChatKept = ({
   List<SuperTabMessage> messages,
   SuperTabPage? before,
+  int? reactionSeq,
 });
 
 /// The chats last read on this phone, so one opened again shows at once what
@@ -37,7 +38,11 @@ abstract final class SwarmChatCache {
   static SwarmChatKept? take(SwarmReader reader, String id) {
     final kept = _kept[(reader, id)];
     if (kept == null || !_holds(reader, id, kept.generation)) return null;
-    return (messages: kept.messages, before: kept.before);
+    return (
+      messages: kept.messages,
+      before: kept.before,
+      reactionSeq: kept.reactionSeq,
+    );
   }
 
   /// Keeps chat [id] as [reader] read it — its newest [page] of [messages],
@@ -48,6 +53,7 @@ abstract final class SwarmChatCache {
     String id, {
     required List<SuperTabMessage> messages,
     required SuperTabPage? before,
+    int? reactionSeq,
   }) {
     _kept.remove((reader, id));
     if (messages.length > page) {
@@ -55,7 +61,12 @@ abstract final class SwarmChatCache {
       before = SuperTabPage.of(messages.first);
     }
     if (messages.isNotEmpty && _holds(reader, id, reader.generation)) {
-      _kept[(reader, id)] = _Kept(messages, before, reader.generation);
+      _kept[(reader, id)] = _Kept(
+        messages,
+        before,
+        reader.generation,
+        reactionSeq,
+      );
       while (_kept.length > size) {
         _kept.remove(_kept.keys.first);
       }
@@ -109,9 +120,10 @@ abstract final class SwarmChatCache {
 }
 
 class _Kept {
-  _Kept(this.messages, this.before, this.generation);
+  _Kept(this.messages, this.before, this.generation, this.reactionSeq);
   final List<SuperTabMessage> messages;
   final SuperTabPage? before;
+  final int? reactionSeq;
 
   /// The reader's [SwarmReader.generation] it was read under.
   final int generation;
