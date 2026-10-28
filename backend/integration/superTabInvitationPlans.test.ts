@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { invitedSwarms } from '../src/superTabs/invitedSwarms.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { logger } from '../src/utils/logger.js'
 import { PROFILE_STAGES, queryShape } from './bench/profile.js'
@@ -29,6 +30,8 @@ const devOwner: AuthUser = { ...owner, autonomousEnv: 'dev' }
 const invited: AuthUser = { sub: '100000000000000000000009', email: ' Invited@Example.com ', autonomousEnv: 'prod', role: 'user' }
 /** Other Swarms of the environment, each with a member, a machine and someone else invited: what prod's planner raced over. */
 const OTHERS = 400
+/** The index the read names: by Swarm id within an email, the order Prisma's read capped them in. */
+const INVITED = { autonomousEnv: 1, invitedEmails: 1, _id: 1 }
 
 beforeAll(async () => {
   replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
@@ -117,7 +120,7 @@ describe('a person\'s invitation list (Ken\'s prod profile, 2026-10-28)', () => 
     const [read] = reads
     expect(read!.shape, JSON.stringify(read)).not.toContain('$expr')
     expect(read!.multiPlanned, JSON.stringify(read)).toBe(false)
-    expect(read!.plans).toEqual(['IXSCAN { autonomousEnv: 1, invitedEmails: 1 }'])
+    expect(read!.plans).toEqual(['IXSCAN { autonomousEnv: 1, invitedEmails: 1, _id: 1 }'])
     // Alpha, Beta, and the expired one: its expiry is in the Swarm's head, read after.
     expect(read!.docsExamined, JSON.stringify(read)).toBeLessThanOrEqual(3)
   })
@@ -125,14 +128,57 @@ describe('a person\'s invitation list (Ken\'s prod profile, 2026-10-28)', () => 
   // A rollback or a database whose index was never built: naming a missing index fails the read, so it reads without it.
   it('answers without the index when the database lacks it, and says so', async () => {
     const said = vi.spyOn(logger, 'error')
-    await db.$runCommandRaw({ dropIndexes: 'SuperTab', index: { autonomousEnv: 1, invitedEmails: 1 } })
-    try {
+    await withoutIndex(async () => {
       const listed = await store.invitations(invited)
       expect(listed.map(i => i.tabId).sort()).toEqual(open.map(i => i.tabId).sort())
-      expect(said).toHaveBeenCalledWith(expect.stringContaining('lacks the invitedEmails index'), { index: { autonomousEnv: 1, invitedEmails: 1 } })
-    } finally {
-      said.mockRestore()
-      await db.$runCommandRaw({ createIndexes: 'SuperTab', indexes: [{ key: { autonomousEnv: 1, invitedEmails: 1 }, name: 'SuperTab_autonomousEnv_invitedEmails_idx' }] })
-    }
+      expect(said).toHaveBeenCalledWith(expect.stringContaining('lacks the invitedEmails index'), { index: INVITED })
+    }).finally(() => said.mockRestore())
+  })
+})
+
+/** Runs `body` while the database lacks the index the read names, as after a rollback. */
+async function withoutIndex(body: () => Promise<void>) {
+  const listed = await db.$runCommandRaw({ listIndexes: 'SuperTab' }) as unknown as { cursor: { firstBatch: Array<{ key: Record<string, number>; name: string }> } }
+  const index = listed.cursor.firstBatch.find(i => JSON.stringify(i.key) === JSON.stringify(INVITED))!
+  await db.$runCommandRaw({ dropIndexes: 'SuperTab', index: index.name })
+  try {
+    await body()
+  } finally {
+    await db.$runCommandRaw({ createIndexes: 'SuperTab', indexes: [{ key: INVITED, name: index.name }] })
+  }
+}
+
+// Review of #2020: Prisma's read sorted by Swarm id before taking 100. A read capped in another order lists another 100,
+// and so other invitations, once more than 100 Swarms invite one address.
+describe('more than 100 Swarms invite one address', () => {
+  const CROWD = 105
+  beforeAll(async () => {
+    // Stored in reverse id order: a read that takes the index's or the collection's own order takes the wrong 100.
+    await db.superTab.createMany({ data: Array.from({ length: CROWD }, (_, i) => ({ id: `crowd-${String(CROWD - 1 - i).padStart(3, '0')}`, ownerId: owner.sub,
+      autonomousEnv: 'prod', memberIds: [owner.sub], invitedEmails: ['crowd@example.com'], machineIds: [], workspaceId: 'workspace-crowd',
+      format: 2, state: { version: 2 } })) })
+  })
+  const first100 = Array.from({ length: 100 }, (_, i) => `crowd-${String(i).padStart(3, '0')}`)
+  /** The Swarms the read before #2020 listed: Prisma's own `has` filter and cap. */
+  const prismaRead = async () => (await db.superTab.findMany({ where: { autonomousEnv: 'prod', invitedEmails: { has: 'crowd@example.com' } }, take: 100,
+    select: { id: true } })).map(r => r.id)
+
+  it('reads the first 100 by Swarm id, as Prisma did, from the index without sorting them all', async () => {
+    let ids: string[] = []
+    const reads = await profiled('SuperTab', async () => { ids = (await invitedSwarms(db, 'prod', 'crowd@example.com', 100)).map(r => r.id) })
+    expect(ids).toEqual(first100)
+    expect(await prismaRead()).toEqual(first100)
+    expect(reads).toHaveLength(1)
+    expect(reads[0]!.multiPlanned, JSON.stringify(reads[0])).toBe(false)
+    expect(reads[0]!.plans).toEqual(['IXSCAN { autonomousEnv: 1, invitedEmails: 1, _id: 1 }'])
+    expect(reads[0]!.docsExamined, JSON.stringify(reads[0])).toBeLessThanOrEqual(100)
+  })
+
+  it('reads the same 100 in the same order without the index', async () => {
+    const said = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    await withoutIndex(async () => {
+      expect((await invitedSwarms(db, 'prod', 'crowd@example.com', 100)).map(r => r.id)).toEqual(first100)
+      expect(await prismaRead()).toEqual(first100)
+    }).finally(() => said.mockRestore())
   })
 })
