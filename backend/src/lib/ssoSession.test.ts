@@ -13,7 +13,6 @@ const fakes = vi.hoisted(() => {
   let failCreate = false
   const field = (s: Record<string, unknown>, k: string, v: unknown): boolean => {
     if (v !== null && typeof v === 'object' && 'isSet' in v) return (k in s && s[k] !== undefined) === (v as { isSet: boolean }).isSet
-    if (v !== null && typeof v === 'object' && 'lt' in v) return s[k] instanceof Date && (s[k] as Date) < (v as { lt: Date }).lt
     if (v === null) return s[k] === null || s[k] === undefined
     return k in s && s[k] === v
   }
@@ -50,11 +49,6 @@ const fakes = vi.hoisted(() => {
     }),
     updateMany: vi.fn(async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
       const rows = sessions.filter((s) => matches(s, where)); rows.forEach((r) => Object.assign(r, data)); return { count: rows.length }
-    }),
-    deleteMany: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
-      const gone = sessions.filter((s) => matches(s, where))
-      for (const row of gone) sessions.splice(sessions.indexOf(row), 1)
-      return { count: gone.length }
     }),
   }
   const machine = { findMany: vi.fn(async () => []), findFirst: vi.fn(async () => null), updateMany: vi.fn(async () => ({ count: 0 })) }
@@ -148,7 +142,7 @@ vi.mock('./sso.js', async (importOriginal) => {
 import { clearSsoProfileCache, authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { refreshHarnessSession, revokeHarnessSession } from './harnessSession.js'
 import { decryptMachineCredential } from './machineCredential.js'
-import { SSO_OUTAGE_GRACE_MS, SSO_RECHECK_MS, deleteEndedSessions, ssoAccessTokenFor } from './ssoSession.js'
+import { SSO_OUTAGE_GRACE_MS, SSO_RECHECK_MS, ensureHarnessSessionExpiry, ssoAccessTokenFor } from './ssoSession.js'
 import { authRoutes } from '../routes/auth.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
@@ -545,18 +539,19 @@ describe('billing, which still needs an SSO access token', () => {
 })
 
 describe('old sessions', () => {
-  it('deletes rows ended or idle-expired more than 30 days ago, and keeps the rest', async () => {
-    const now = Date.now()
-    const day = 24 * HOUR
-    fakes.sessions.push(
-      { id: 'live', expiresAt: new Date(now + day) },
-      { id: 'revoked-recently', expiresAt: new Date(now + day), revokedAt: new Date(now - day) },
-      { id: 'revoked-long-ago', expiresAt: new Date(now + day), revokedAt: new Date(now - 31 * day) },
-      { id: 'expired-recently', expiresAt: new Date(now - day) },
-      { id: 'expired-long-ago', expiresAt: new Date(now - 31 * day) },
-    )
-    expect(await deleteEndedSessions(new Date(now))).toBe(2)
-    expect(fakes.sessions.map((s) => s.id)).toEqual(['live', 'revoked-recently', 'expired-recently'])
+  it('an ended session expires at once, so the expiry index deletes it 30 days on, like one that ran out idle', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { data } = await signIn(ASK_COMPUTER)
+    expect((fakes.sessions[0]!.expiresAt as Date).getTime()).toBeGreaterThan(Date.now() + 89 * 24 * HOUR)
+    await revokeHarnessSession(String(data.refreshToken))
+    expect((fakes.sessions[0]!.expiresAt as Date).getTime()).toBe(Date.now())
+
+    // MongoDB's own expiry: a row goes 30 days after its `expiresAt`.
+    const runCommandRaw = vi.fn(async () => ({ ok: 1 }))
+    await ensureHarnessSessionExpiry({ $runCommandRaw: runCommandRaw } as never)
+    expect(runCommandRaw).toHaveBeenCalledWith({ createIndexes: 'harness_sessions', indexes: [
+      { key: { expiresAt: 1 }, name: 'harness_session_expiry', expireAfterSeconds: 30 * 24 * 60 * 60 },
+    ] })
   })
 })
 

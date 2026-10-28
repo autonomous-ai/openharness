@@ -174,7 +174,7 @@ describe('appendDeviceKey', () => {
     await appendDeviceKey(USER, await addEntry(box2, 'machine', MID2, 'box2'), { kind: 'machine', machineId: MID2, harnessSessionId: 'sess-qr' })
     await appendDeviceKey(USER, await removeEntry(box2.pub, box1), { kind: 'machine', machineId: MID1 })
     expect(m.publishDown).toHaveBeenCalledWith(MID2, expect.objectContaining({ frame: expect.objectContaining({ type: 'machine_revoked' }) }))
-    expect(m.revoke).toHaveBeenCalledWith({ where: { id: 'sess-qr', userId: USER, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: expect.any(Date), ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null } })
+    expect(m.revoke).toHaveBeenCalledWith({ where: { id: 'sess-qr', userId: USER, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: expect.any(Date), expiresAt: expect.any(Date), ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null } })
   })
 
   it('refuses a machine signing a removal with another machine key', async () => {
@@ -206,7 +206,7 @@ describe('appendDeviceKey', () => {
     await appendDeviceKey(USER, await addEntry(phone, 'viewer', '', 'phone'), { kind: 'viewer', harnessSessionId: 'sess-1' })
     await appendDeviceKey(USER, await addEntry(box1, 'machine', MID1, 'box1'), { kind: 'machine', machineId: MID1 })
     await appendDeviceKey(USER, await removeEntry(phone.pub, box1), { kind: 'machine', machineId: MID1 })
-    expect(m.revoke).toHaveBeenCalledWith({ where: { id: 'sess-1', userId: USER, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: expect.any(Date), ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null } })
+    expect(m.revoke).toHaveBeenCalledWith({ where: { id: 'sess-1', userId: USER, OR: [{ revokedAt: null }, { revokedAt: { isSet: false } }] }, data: { revokedAt: expect.any(Date), expiresAt: expect.any(Date), ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null } })
     expect(m.publishDown).not.toHaveBeenCalled()
   })
 

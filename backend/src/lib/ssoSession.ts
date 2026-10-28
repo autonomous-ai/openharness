@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import type { HarnessSession } from '@prisma/client'
+import type { HarnessSession, PrismaClient } from '@prisma/client'
 import { pub } from './bus.js'
 import { prisma } from './prisma.js'
 import { decryptMachineCredential, encryptMachineCredential } from './machineCredential.js'
@@ -37,7 +37,7 @@ import { logger } from '../utils/logger.js'
 
 export const SSO_RECHECK_MS = 60 * 60_000
 export const SSO_OUTAGE_GRACE_MS = 7 * 24 * 60 * 60_000
-/** How long ended and idle-expired sessions are kept before [deleteEndedSessions] deletes them. */
+/** How long ended and idle-expired sessions are kept before their expiry index deletes them ([ensureHarnessSessionExpiry]). */
 export const ENDED_SESSION_KEEP_MS = 30 * 24 * 60 * 60_000
 /** Longer than a renewal can take (two SSO calls, each bounded by `SSO_PROFILE_TIMEOUT_MS`). */
 const RENEW_LOCK_SEC = 60
@@ -83,9 +83,10 @@ export function ssoSessionData(grant: SsoGrant, autonomousEnv: AutonomousEnviron
   }
 }
 
-/** A session ending: it is revoked, and the SSO tokens it held are deleted with it. */
+/** A session ending: it is revoked, the SSO tokens it held are deleted with it, and it expires now — so the expiry
+ *  index deletes the row [ENDED_SESSION_KEEP_MS] later ([ensureHarnessSessionExpiry]). */
 export function endedSessionData(now = new Date()) {
-  return { revokedAt: now, ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null }
+  return { revokedAt: now, expiresAt: now, ssoRefresh: null, ssoAccess: null, ssoAccessExpiresAt: null }
 }
 
 type Renewal =
@@ -209,9 +210,11 @@ export async function ssoAccessTokenFor(sessionId: string, userId: string): Prom
   throw unavailable()
 }
 
-/** Delete sessions that ended, or ran out idle, more than [ENDED_SESSION_KEEP_MS] before [now]. How many went. */
-export async function deleteEndedSessions(now = new Date()): Promise<number> {
-  const before = new Date(now.getTime() - ENDED_SESSION_KEEP_MS)
-  const { count } = await prisma.harnessSession.deleteMany({ where: { OR: [{ revokedAt: { lt: before } }, { expiresAt: { lt: before } }] } })
-  return count
+/**
+ * Sessions are deleted [ENDED_SESSION_KEEP_MS] after they expire: idle past their lifetime, or ended
+ * ([endedSessionData] expires them). Nothing else deletes them. Run by the worker at start (worker.ts).
+ */
+export async function ensureHarnessSessionExpiry(db: Pick<PrismaClient, '$runCommandRaw'>): Promise<void> {
+  await db.$runCommandRaw({ createIndexes: 'harness_sessions', indexes: [{ key: { expiresAt: 1 }, name: 'harness_session_expiry',
+    expireAfterSeconds: ENDED_SESSION_KEEP_MS / 1000 }] })
 }
