@@ -519,6 +519,17 @@ describe('host form (design 4.10)', () => {
     expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
   })
 
+  it('sleeps through the Lent hours a reading credits to the machine\'s running workers', async () => {
+    const s = await hostScene()
+    await reading(s.tabId, (await fullRead(s.tabId)).generation)
+    const { cursor, generation } = await fullRead(s.tabId)
+    await reading(s.tabId, generation)
+    const lent = await db.$transaction(async tx => (await parts.loadActive(tx, s.tabId)).machines.find(m => m.key === machine)!.data!.contribution?.lent)
+    expect(lent?.[0]?.agentMs).toBeGreaterThan(0)
+    clock = Date.now()
+    expect((await host(cursor)).body.data).toMatchObject({ tabs: [], removedTabIds: [] })
+  })
+
   it('names a Swarm that no longer lists the machine', async () => {
     const s = await hostScene()
     clock = NOW

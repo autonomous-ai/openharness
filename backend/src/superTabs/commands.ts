@@ -2,7 +2,7 @@ import { admitMachineStart, expireRemoval, expireRemovals, failTeamWork, machine
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
-  activeWork, actorKey, agent, agentRole, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
+  activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing, swarmGridName, AGENT_ONLY,
   type Actor, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
@@ -17,7 +17,8 @@ import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
-import { recordAnswer, recordAsked, recordStatus } from './leaderboard/record.js'
+import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAnswer, recordAsked, recordMerged, recordStatus } from './leaderboard/record.js'
+import { WEEK_MS } from './leaderboard/week.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -77,6 +78,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.project'), machineId: id, project }).strict(),
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
+  z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
@@ -106,6 +108,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
+  // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
+  z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
+    mergedAt: z.iso.datetime().optional() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -114,6 +119,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.startSettled'), startId: id, warning: z.string().max(2000).nullable() }).strict(),
   z.object({ type: z.literal('agent.startFailed'), startId: id, error: text }).strict(),
   z.object({ type: z.literal('agent.stopLease'), agentId: id, releaseId: id }).strict(),
+  z.object({ type: z.literal('agent.stopRefused'), agentId: id, releaseId: id }).strict(),
   z.object({ type: z.literal('agent.remove'), agentId: id, releaseId: id.optional() }).strict(),
   z.object({ type: z.literal('agent.release'), agentId: id, decision: z.enum(['keep', 'stop']) }).strict(),
   z.object({ type: z.literal('agent.sessionClosed'), agentId: id, harnessId: id }).strict(),
@@ -235,7 +241,6 @@ export interface CommandContext {
   /** The files `message.send` names, each checked by the store: uploaded by this actor to this conversation, and unused. */
   attachments?: Attachment[]
   /** Route decisions this tab recorded in the last hour, counted by the store. */
-  recentRoutes?: number
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
   /** Starts on the machine being contributed that the store found abandoned: never contributed, never dispatched,
@@ -372,7 +377,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills') && command.askedIn) {
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -958,6 +963,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind === 'agent') controls(state, actor)
       state.paused = command.paused
       break
+    case 'tab.tidy': {
+      // The Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day, as rules are.
+      if (!(actor.kind === 'person' && actor.userId === state.ownerId)) {
+        const asked = actor.kind === 'agent' && ledProject(state, actor.agentId) && command.askedIn && context.askedIn
+        if (!asked || asked.author.kind !== 'person' || asked.author.id !== state.ownerId || asked.source || context.now - asked.createdAt > RULE_MESSAGE_MS) {
+          fail('OWNER_REQUIRED', 'Only the Swarm owner, or a Lead passing on a chat message the owner wrote in the last day, turns tidying on or off.', 403)
+        }
+      }
+      if (command.enabled) delete state.tidy
+      else state.tidy = false
+      break
+    }
     case 'tab.routingPolicy':
       if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can change its routing policy.', 403)
       if (command.policy && Object.keys(command.policy).length) state.routingPolicy = command.policy
@@ -1047,6 +1064,27 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const group = open(state, command.conversationId)
       if (command.personId) group.requesterId = requester(state, groupProject(state, group), command.personId)
       else delete group.requesterId
+      break
+    }
+    case 'conversation.merged': {
+      chatOnly(command.conversationId)
+      controls(state, actor, command.conversationId)
+      // An archived group still takes the record: a backfill names work finished days ago.
+      const group = conversation(state, command.conversationId)
+      // It awards points, so only the group's Lead or an owner records it; reading the group is not enough.
+      const owners = [state.ownerId, groupProject(state, group).ownerId]
+      if (!(actor.kind === 'agent' && group.leadId === actor.agentId) && !(actor.kind === 'person' && owners.includes(actor.userId))) {
+        fail('MERGE_RECORDER', 'Only the Lead or an owner records a merge.', 403)
+      }
+      if (group.reviewOf) fail('REVIEW_SHIPS_NOTHING', 'A review group ships nothing. Record the merge on the group it reviews.', 400)
+      const mergedAt = command.mergedAt === undefined ? context.now : Date.parse(command.mergedAt)
+      if (mergedAt > context.now || mergedAt <= context.now - (LEDGER_WEEKS - 1) * WEEK_MS) {
+        fail('MERGE_TIME', 'Record a merge from the last four weeks, not one still to come.', 400)
+      }
+      const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
+      appendPullRequestUrls(group, [command.pullRequestUrl])
+      recordMerged(group, mergedAt)
+      if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
       break
     }
     case 'conversation.audience': {
@@ -1296,7 +1334,24 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (target.workDecision === 'stop' && command.decision !== 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (command.decision === 'stop' && target.workDecision !== 'stop') target.releaseId = operationId
+      // A stop its Lead or a person asks for is theirs, even over the idle check's: its host no longer withdraws it.
+      if (command.decision === 'stop') delete target.idleStop
       target.workDecision = command.decision
+      if (command.decision === 'keep') target.keptAt = context.now
+      break
+    }
+    case 'agent.stopRefused': {
+      // Only the idle check's stop, and only its host: the session's folder had changes by the time it would close it
+      // (review of #1807). The worker is as it was, idle again from now. A stop its Lead or a person asked for stays.
+      const target = agent(state, command.agentId)
+      if (actor.kind !== 'agent' || actor.agentId !== target.id || target.workDecision !== 'stop' || command.releaseId !== target.releaseId || !target.idleStop) {
+        fail('STALE_RELEASE', 'Only the execution host can withdraw the current idle stop.', 403)
+      }
+      if (target.idleStop.previous) target.workDecision = target.idleStop.previous
+      else delete target.workDecision
+      delete target.releaseId
+      delete target.idleStop
+      target.keptAt = context.now
       break
     }
     case 'agent.stopLease': {
@@ -1494,7 +1549,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Only the pick is checked, so an older CLI that still lists a ruled-out candidate records an allowed pick.
       ruled(member ? agentTarget(state, member) : chosen, command.conversationId, `${who} routed to ${chosen.title}`)
       requireWorkerDecisions(state, actor, open(state, command.conversationId), chosen.kind === 'member' ? chosen.agentId : undefined)
-      if ((context.recentRoutes ?? 0) >= 30) fail('RATE_LIMITED', 'This Super Tab routed 30 tasks in the last hour. Wait before routing again.', 429)
       const via = decision.via === 'jev' ? `Jev ${Math.round((decision.p ?? 0) * 100)}%`
         : decision.via === 'only' ? 'only candidate' : 'by policy order'
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId, record: decision })

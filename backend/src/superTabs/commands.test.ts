@@ -559,6 +559,38 @@ describe('tab.routingPolicy', () => {
   })
 })
 
+describe('tab.tidy', () => {
+  it('is on until the Swarm owner turns it off, and back on', () => {
+    const f = fixture()
+    expect(f.state.tidy).toBeUndefined()
+    f.run({ type: 'tab.tidy', enabled: false })
+    expect(f.state.tidy).toBe(false)
+    f.run({ type: 'tab.tidy', enabled: true })
+    expect(f.state.tidy).toBeUndefined()
+  })
+  it('refuses a collaborator and a Lead that quotes no message of the owner', () => {
+    const f = fixture()
+    f.invite('collaborator')
+    expect(() => f.run({ type: 'tab.tidy', enabled: false }, peer)).toThrow('Only the Swarm owner')
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    expect(() => f.run({ type: 'tab.tidy', enabled: false }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })).toThrow('Only the Swarm owner')
+    expect(f.state.tidy).toBeUndefined()
+  })
+  it('lets a Lead pass on a chat message the owner wrote in the last day, and no older one', () => {
+    const f = fixture()
+    const lead = f.add('lead-harness', 'owner', 'lead', true)
+    const asLead: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const ownerAuthor = { kind: 'person' as const, id: 'owner', name: 'owner', membershipGeneration: f.state.people[0]!.generation }
+    const askedIn = { conversationId: 'lead', messageId: 'm1' }
+    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
+      { askedIn: { author: ownerAuthor, source: false, createdAt: 1000 - 25 * 3_600_000 } })).toThrow('Only the Swarm owner')
+    expect(() => f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead,
+      { askedIn: { author: { ...ownerAuthor, kind: 'agent', id: lead }, source: false, createdAt: 900 } })).toThrow('Only the Swarm owner')
+    f.run({ type: 'tab.tidy', enabled: false, askedIn }, asLead, { askedIn: { author: ownerAuthor, source: false, createdAt: 900 } })
+    expect(f.state.tidy).toBe(false)
+  })
+})
+
 const candidate = (id: string, patch: Record<string, unknown> = {}) => ({ id, kind: 'new', machineId: 'machine', engine: 'claude',
   model: 'opus', effort: 'high', quality: 3, cost: 3, title: `Title ${id}`, label: `Label ${id}`, ...patch })
 const record = (patch: Record<string, unknown> = {}) => ({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.' },
@@ -590,7 +622,7 @@ function routed() {
 describe('route.record and route.override', () => {
   it('records a lead decision as a route message with its id', () => {
     const f = routed()
-    const effects = f.run({ type: 'route.record', conversationId: 'lead', decision: record() } as Command, f.leadActor, { recentRoutes: 0 })
+    const effects = f.run({ type: 'route.record', conversationId: 'lead', decision: record() } as Command, f.leadActor, {})
     expect(effects.result.routeDecisionId).toBeTruthy()
     expect(effects.routeDecisions).toEqual([{ op: 'create', id: effects.result.routeDecisionId, conversationId: 'lead', record: expect.objectContaining({ pick: 'c0' }) }])
     expect(effects.messages[0]).toMatchObject({ text: 'Routed to Title c0 — Jev 82% · "Schema change."',
@@ -599,7 +631,7 @@ describe('route.record and route.override', () => {
   })
   it('keeps the context Jev was given with the record, bounded, and still takes a record without it', () => {
     const f = routed()
-    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, {})
     expect(run(record({ context: { chars: 9000, missing: ['messages', 'activity'] } })).routeDecisions[0]).toMatchObject({ record: { context: { chars: 9000, missing: ['messages', 'activity'] } } })
     expect(run(record()).routeDecisions[0]).toMatchObject({ record: { pick: 'c0' } })
     for (const context of [{ chars: -1, missing: [] }, { chars: 1.5, missing: [] }, { chars: 40_000, missing: [] }, { chars: 10 },
@@ -610,7 +642,7 @@ describe('route.record and route.override', () => {
   })
   it('keeps the size and each candidate\'s quota fit, and still takes a record without them', () => {
     const f = routed()
-    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const run = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, {})
     const fit = { status: 'short', coverage: -0.2, effectiveCost: 1.5, expiring: 0, spend: { '5-hour': 45, weekly: 6 }, account: 'remote-1:codex' }
     const sized = (size: unknown, patch: Record<string, unknown> = {}) => record({ assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.', size },
       candidates: [candidate('c0', { fit: { ...fit, ...patch } }), candidate('c1', { model: 'sonnet', quality: 2, cost: 2, fit: { status: 'unknown', coverage: null, effectiveCost: 2, expiring: 0, spend: {} } })] })
@@ -626,9 +658,9 @@ describe('route.record and route.override', () => {
     const f = routed()
     const route = (decision: unknown, actor: Actor, context: Partial<CommandContext>) =>
       f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, actor, context)
-    expect(() => route(record({ pick: 'c5' }), f.leadActor, { recentRoutes: 0 })).toThrow()
-    expect(() => route(record(), f.workerActor, { recentRoutes: 0 })).toThrow('coordinating lead')
-    expect(() => route(record(), f.leadActor, { recentRoutes: 30 })).toThrow('30 tasks')
+    expect(() => route(record({ pick: 'c5' }), f.leadActor, {})).toThrow()
+    expect(() => route(record(), f.workerActor, {})).toThrow('coordinating lead')
+    expect(() => route(record(), f.leadActor, {})).not.toThrow()
   })
   it('lets a writer change an open decision with a reason and tells the lead', () => {
     const f = routed()
@@ -708,7 +740,7 @@ describe('decisions linked to work', () => {
   it('gives the policy-order row the Lead’s reason and why the order decided', () => {
     const f = routed()
     const order = (patch: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: 'lead', decision: record({ via: 'order', p: null, ...patch }) } as Command,
-      f.leadActor, { recentRoutes: 0 }).messages[0]!
+      f.leadActor, {}).messages[0]!
     expect(order({ fallback: 'unavailable', why: 'Jev unavailable (BUSY); first in the policy order.' })).toMatchObject({
       text: 'Routed to Title c0 — by policy order · "Schema change."', source: { why: 'Schema change.', fallback: 'unavailable' } })
     expect(order({ fallback: 'unsure' }).source).toMatchObject({ fallback: 'unsure' })
@@ -940,7 +972,9 @@ it('blocks routing and starts until a finished worker is kept or stopped', () =>
     requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
   expect(() => f.run(route, f.leadActor)).toThrow('reuse, keep or stop')
   expect(() => f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) })).toThrow('reuse, keep or stop')
-  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor)
+  f.run({ type: 'agent.release', agentId: f.worker, decision: 'keep' }, f.leadActor, { now: 5000 })
+  // A kept worker is idle from the keep, not from its task's end (tidy.ts).
+  expect(f.state.agents.find(a => a.id === f.worker)!.keptAt).toBe(5000)
   expect(f.run(route, f.leadActor).routeDecisions).toHaveLength(1)
   expect(f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId).toBeTruthy()
 })
@@ -1332,7 +1366,7 @@ describe('the owner\'s rules', () => {
   })
   it('refuses a recorded pick that breaks a hard rule, but not a ruled-out candidate that was not picked', () => {
     const f = routed()
-    const route = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, { recentRoutes: 0 })
+    const route = (decision: unknown) => f.run({ type: 'route.record', conversationId: 'lead', decision } as Command, f.leadActor, {})
     f.run(set({ kind: 'forbidModel', model: 'sonnet' }, 'No Sonnet.'))
     expect(route(record()).result.routeDecisionId).toBeTruthy()
     expect(() => route(record({ pick: 'c1' }))).toThrow('The owner\'s rule "No Sonnet." rules out Claude sonnet.')
@@ -1398,7 +1432,7 @@ describe('the owner\'s rules in a Swarm of projects', () => {
     const f = projects(), app = projectIdOf(f, f.app)
     f.run(forbid(app, 'sonnet')); f.run(forbid(app, 'test-model'))
     expect(f.state.rules!.map(r => r.projectId)).toEqual([app, app])
-    const route = (conversationId: string, actor: Actor) => f.run({ type: 'route.record', conversationId, decision: record({ pick: 'c1' }) } as Command, actor, { recentRoutes: 0 })
+    const route = (conversationId: string, actor: Actor) => f.run({ type: 'route.record', conversationId, decision: record({ pick: 'c1' }) } as Command, actor, {})
     expect(route(f.site, f.siteLead).result.routeDecisionId).toBeTruthy()
     expect(() => route(f.app, f.lead)).toThrow('The owner\'s rule "No sonnet." rules out Claude sonnet.')
     const siteWorker = f.add('site-worker', 'owner', f.site)
@@ -2603,5 +2637,40 @@ describe('the morning digest setting (digest.ts)', () => {
     expect(() => f.run({ type: 'project.digest', projectId: 'lead', time: '08:00', timeZone: 'Mars/Olympus' })).toThrow('Name a time zone such as Asia/Ho_Chi_Minh.')
     expect(() => f.run(commandSchema.parse({ type: 'project.digest', projectId: 'lead', time: '24:00', timeZone: 'UTC' }))).toThrow()
     expect(digest()).toBeUndefined()
+  })
+})
+
+describe('agent.stopRefused', () => {
+  /** A worker the idle check marked for stopping (tidy.ts), as it was before: awaiting its Lead's decision. */
+  function idleStopped() {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), worker = f.add('worker', 'owner', f.group())
+    const target = f.state.agents.find(a => a.id === worker)!
+    Object.assign(target, { workDecision: 'stop', releaseId: 'idle-release', idleStop: { previous: 'awaiting' } })
+    const asWorker: Actor = { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }
+    return { f, lead, worker, asWorker, member: () => f.state.agents.find(a => a.id === worker)! }
+  }
+
+  it('lets the worker\'s own host withdraw an idle stop its folder\'s changes forbid, restarting its idle time', () => {
+    const t = idleStopped()
+    t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker, { now: 7000 })
+    expect(t.member()).toMatchObject({ workDecision: 'awaiting', keptAt: 7000 })
+    expect(t.member().releaseId).toBeUndefined()
+    expect(t.member().idleStop).toBeUndefined()
+  })
+
+  it('refuses another agent, a stale stop, and a stop its Lead asked for', () => {
+    const t = idleStopped()
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })).toThrow('Only the execution host')
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'older' }, t.asWorker)).toThrow('Only the execution host')
+    delete t.member().idleStop
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
+    expect(t.member().workDecision).toBe('stop')
+  })
+
+  it('keeps a stop its Lead asked for after the idle check made it', () => {
+    const t = idleStopped()
+    t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })
+    expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
+    expect(t.member().workDecision).toBe('stop')
   })
 })

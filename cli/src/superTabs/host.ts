@@ -1,5 +1,5 @@
 import { OBSERVER_VALID_MS, publishObservers } from './observers.js'
-import { ContributedMachines, type MachineDeps } from './machines.js'
+import { ContributedMachines, uncommittedIn, type MachineDeps } from './machines.js'
 import { SwarmGrids } from './swarmGrids.js'
 import { retainContributions } from './retention.js'
 import { configurationObservation } from './configuration.js'
@@ -478,6 +478,16 @@ export class SuperTabHost {
             command: { type: 'agent.stopLease', agentId: agent.id, releaseId: agent.releaseId },
           })).result)
           if (typeof leased.durationMs !== 'number' || !Number.isFinite(leased.durationMs) || leased.durationMs <= 0 || leased.durationMs > 120_000) throw new Error('The host could not reserve this native close. Remove a stuck contribution or update its backend.')
+          // The idle check's stop trusted a report up to a minute old (machines.ts): an edit since, or a folder git cannot
+          // read now, withdraws it instead (review of #1807). Read after the lease, whose answer can take minutes, so it
+          // is the last thing before the close. A stop its Lead asked for closes as before.
+          if (member.idleStop && (!native.cwd || await uncommittedIn(native.cwd, this.machineDeps.git) !== false)) {
+            // A failed withdrawal retries with backoff, reading the folder again; the unused lease simply expires.
+            await backend(this.core, 'POST', `/api/super-tabs/${tabId}/commands`, { operationId: `idle-stop-withdrawn-${agent.releaseId ?? agent.id}`,
+              asAgentId: agent.id, command: { type: 'agent.stopRefused', agentId: agent.id, releaseId: agent.releaseId } })
+            attempt.retryAt = Infinity
+            return
+          }
           result = await this.core.agents.closeSwarm({ agentId: agent.harnessId, expiresAt: leaseRequestedAt + leased.durationMs,
             creationId: identity.creationId, sessionId: identity.sessionId, createdAt: identity.createdAt })
         }
@@ -492,6 +502,9 @@ export class SuperTabHost {
         operationId: `release-${agent.releaseId ?? agent.id}`, asAgentId: agent.id, command: { type: 'agent.remove', agentId: agent.id, releaseId: agent.releaseId },
       })
       attempt.retryAt = Infinity
+      // Its worktree goes now that it is stopped for good, not after the weekly sweep's idle week (machines.ts).
+      await this.contributed().removeStoppedWorktree(tabId, agent.harnessId)
+        .catch(error => this.log(`Kept the worktree of a stopped worker: ${error instanceof Error ? error.message : String(error)}`))
     } catch (error) {
       attempt.failures++
       // Five attempts total; permanent ownership/identity refusals never acquire another lease for this runtime.
@@ -662,6 +675,10 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
+    for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
+      for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)
+    }
     // A wait outlives a list that failed or was skipped: that says nothing of the delivery. It goes when a list that was read no
     // longer has the delivery, or when its agent is no longer here.
     for (const [key, retry] of this.deliveryRetries) {

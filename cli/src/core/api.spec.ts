@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
-import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
+import { CLOUD_DOWN, CLOUD_FALLBACKS, CONNECTOR_VAULT_OFF, CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, accountIdentity, AGENT_ACTIONS_OFF, AGENT_CLEANUP_FALLBACKS, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, STORE_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARED_MACHINES_FALLBACKS, SHARED_MACHINES_OFF, SHARING_FALLBACKS, MESSAGES_FALLBACKS, TAB_KEY_OFF, TAB_RELAY_OFF, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps, type SwarmAgentDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
 const row = (agentId: string) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: '/work/app' }) as RegisteredSession
@@ -9,127 +9,20 @@ describe('the core API services stand on', () => {
   it('allows a bounded batch of GitHub reads to finish outside the core', () => {
     expect(LONG_ANSWERS.projects).toEqual({ git_pull_requests_status: 120_000 })
   })
-  it('closes only the original Swarm-started native session and treats an absent session as gone', async () => {
-    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
-    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
-    const deps = coreDeps(), byAgent = vi.fn(() => session as RegisteredSession | undefined)
-    const closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
-    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent, creationStatus })
-    expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'worker', sessionId: 'native', createdAt: request.createdAt, mode: 'now', onlyIfOriginalLaunch: true, expiresAt: request.expiresAt })
-    closeAgent.mockClear()
-    byAgent.mockReturnValue({ ...session, startedBy: undefined })
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
-    byAgent.mockReturnValue({ ...session, registeredAt: 2000 })
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'AGENT_CHANGED' })
-    byAgent.mockReturnValue({ ...session, sessionId: 'replacement' })
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'AGENT_CHANGED' })
-    byAgent.mockReturnValue(session)
-    creationStatus.mockResolvedValueOnce({ creationId: request.creationId, state: 'created', agentId: 'other' })
-    expect(await core.agents.closeSwarm!(request)).toMatchObject({ error: 'NOT_SWARM_STARTED' })
-    expect(closeAgent).not.toHaveBeenCalled()
-    const withoutCreation = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], closeAgent })
-    expect(await withoutCreation.agents.closeSwarm!(request)).toEqual({ error: 'NOT_SWARM_STARTED' })
-    const noLifecycle = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent } as CoreApiDeps['registry'], creationStatus })
-    expect(await noLifecycle.agents.closeSwarm!(request)).toEqual({ error: 'UNSUPPORTED' })
-    for (const partial of [{ agentId: 'worker' }, { ...request, creationId: '' }, { ...request, sessionId: undefined }, { ...request, createdAt: undefined }]) {
-      expect(await core.agents.closeSwarm!(partial)).toEqual({ error: 'NOT_SWARM_STARTED' })
-    }
-    byAgent.mockReturnValue(undefined)
-    expect(await core.agents.closeSwarm!({ agentId: 'worker' })).toEqual({ closed: true })
-  })
-
-  // A machine restart stops Swarm sessions; reopened, each keeps its harness, conversation and registeredAt but is marked
-  // resume-only. On 2026-10-23 such a worker could no longer be stopped by the Swarm ("not started by the Swarm").
-  it('closes a Swarm session reopened on its own conversation, and refuses one whose conversation changed during the lookup', async () => {
-    const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', expiresAt: Date.now() + 120_000, createdAt: new Date(1000).toISOString() }
-    const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const, resumeOnly: true as const }
-    const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const creationStatus = vi.fn(async () => ({ creationId: request.creationId, state: 'created' as const, agentId: 'worker' }))
-    const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
-    expect(await core.agents.closeSwarm!(request)).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledOnce()
-    closeAgent.mockClear()
-    creationStatus.mockImplementationOnce(async () => {
-      session.sessionId = 'personal-resume'
-      return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' }
-    })
-    expect(await core.agents.closeSwarm!(request)).toEqual({ error: 'AGENT_CHANGED' })
-    expect(closeAgent).not.toHaveBeenCalled()
-  })
-
-  // The Super Tab host keeps a Swarm Lead alive and closes the sessions its backend ends (owner, 2026-10-23). The core
-  // decides what a service may do: reopen only a stopped Lead the host's retention names, close only a member it names.
-  it('reopens only a stopped Swarm Lead, and says a live one is up', async () => {
-    const deps = coreDeps(), resumeAgent = vi.fn(async () => ({ ok: true as const, session: row('stopped'), resumed: true }))
-    const leads = vi.fn(() => new Set(['stopped', 'live']))
-    const core = createCoreApi({ ...deps, resumeAgent, swarmMembers: { leads, harnesses: () => new Set() } })
-    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: true })
-    expect(resumeAgent).toHaveBeenCalledWith('stopped')
-    expect(await core.agents.keepLeadAlive!('live')).toEqual({ ok: true })
-    leads.mockReturnValue(new Set(['live']))
-    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'NOT_A_LEAD', detail: 'Only a stopped Product Manager of a Swarm project is reopened.' })
-    leads.mockReturnValue(new Set(['gone']))
-    expect(await core.agents.keepLeadAlive!('gone')).toMatchObject({ ok: false, error: 'NOT_A_LEAD' })
-    expect(resumeAgent).toHaveBeenCalledTimes(1)
-    leads.mockReturnValue(new Set(['stopped']))
-    resumeAgent.mockResolvedValueOnce({ ok: false, error: 'AGENT_BUSY', detail: 'busy' } as never)
-    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'AGENT_BUSY', detail: 'busy' })
-    resumeAgent.mockResolvedValueOnce({ ok: false, error: 'RESUME_FAILED' } as never)
-    expect(await core.agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'RESUME_FAILED' })
-    expect(await createCoreApi(deps).agents.keepLeadAlive!('stopped')).toEqual({ ok: false, error: 'UNSUPPORTED' })
-  })
-
-  it('closes now only a Super Tab member the host retains, and treats an absent one as closed', async () => {
-    const base = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const deps = { ...base, registry: { ...base.registry, byAgent: (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined } as CoreApiDeps['registry'] }
-    const harnesses = vi.fn(() => new Set(['live']))
-    const core = createCoreApi({ ...deps, closeAgent, swarmMembers: { leads: () => new Set(), harnesses } })
-    expect(await core.agents.closeMember!('live')).toEqual({ closed: true })
-    expect(closeAgent).toHaveBeenCalledWith({ agentId: 'live', sessionId: 's-live', createdAt: new Date(1000).toISOString(), mode: 'now' })
-    expect(await core.agents.closeMember!('absent')).toEqual({ closed: true })
-    harnesses.mockReturnValue(new Set())
-    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
-    harnesses.mockImplementation(() => { throw new Error('Super Tab retention is unreadable.') })
-    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
-    expect(closeAgent).toHaveBeenCalledTimes(1)
-    expect(await createCoreApi({ ...deps, closeAgent }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
-    expect(await createCoreApi({ ...deps, swarmMembers: { leads: () => new Set(), harnesses: () => new Set(['live']) } }).agents.closeMember!('live')).toEqual({ error: 'UNSUPPORTED' })
-  })
-
-  // The review of #1635: an agent removed before its host wrote a roster naming it is no member there; the exact receipt of
-  // the Swarm's start proves it is the Swarm's own to close, and a receipt naming another harness proves nothing.
-  it('closes a member the retention does not name only when its start receipt names it', async () => {
-    const base = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
-    const creationStatus = vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const, agentId: 'live' }))
-    const deps = { ...base, closeAgent, creationStatus, swarmMembers: { leads: () => new Set<string>(), harnesses: () => new Set<string>() },
-      registry: { ...base.registry, byAgent: (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined } as CoreApiDeps['registry'] }
-    const core = createCoreApi(deps)
-    expect(await core.agents.closeMember!('live')).toEqual({ error: 'NOT_A_MEMBER' })
-    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ closed: true })
-    expect(creationStatus).toHaveBeenCalledWith('super-start')
-    creationStatus.mockResolvedValueOnce({ creationId: 'super-start', state: 'created', agentId: 'another' })
-    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
-    creationStatus.mockResolvedValueOnce(null as never)
-    expect(await core.agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
-    expect(await createCoreApi({ ...deps, creationStatus: undefined }).agents.closeMember!('live', 'super-start')).toEqual({ error: 'NOT_A_MEMBER' })
-    expect(closeAgent).toHaveBeenCalledTimes(1)
-  })
-
-  it('refuses missing or expired close leases, including expiry during the creation lookup', async () => {
-    let now = 1000
-    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
-    try {
-      const request = { agentId: 'worker', creationId: 'super-original-creation', sessionId: 'native', createdAt: new Date(1000).toISOString(), expiresAt: 1100 }
-      const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const }))
-      const session = { ...row('worker'), sessionId: 'native', registeredAt: 1000, startedBy: 'agent' as const }
-      const creationStatus = vi.fn(async () => { now = 1200; return { creationId: request.creationId, state: 'created' as const, agentId: 'worker' } })
-      const core = createCoreApi({ ...deps, registry: { ...deps.registry, byAgent: () => session } as CoreApiDeps['registry'], closeAgent, creationStatus })
-      for (const expiresAt of [undefined, NaN, 999]) expect(await core.agents.closeSwarm!({ ...request, expiresAt })).toEqual({ error: 'STOP_LEASE_EXPIRED' })
-      expect(await core.agents.closeSwarm!(request)).toEqual({ error: 'STOP_LEASE_EXPIRED' })
-      expect(closeAgent).not.toHaveBeenCalled()
-    } finally { clock.mockRestore() }
+  // The Swarm decides which of its agents it may close or reopen (superTabs/inCore/agents.ts); the core hands it what it
+  // reads them by, and has none of those members while the Swarm is off.
+  it('offers the Swarm\'s agent members only when handed them, built on the core\'s own registry, receipts, close and resume', async () => {
+    const deps = coreDeps(), closeAgent = vi.fn(async () => ({ closed: true as const })), resumeAgent = vi.fn(async () => ({ ok: true as const }))
+    const creationStatus = vi.fn(async () => null)
+    const off = createCoreApi(deps).agents
+    expect([off.closeSwarm, off.keepLeadAlive, off.closeMember]).toEqual([undefined, undefined, undefined])
+    const swarm = { closeSwarm: vi.fn(async () => ({ closed: true as const })), keepLeadAlive: vi.fn(async () => ({ ok: true as const })), closeMember: vi.fn(async () => ({ closed: true as const })) }
+    let given: SwarmAgentDeps | null = null
+    const on = createCoreApi({ ...deps, closeAgent, resumeAgent, creationStatus, swarmAgents: (agentDeps) => { given = agentDeps; return swarm } }).agents
+    expect([on.closeSwarm, on.keepLeadAlive, on.closeMember]).toEqual([swarm.closeSwarm, swarm.keepLeadAlive, swarm.closeMember])
+    expect(given!.byAgent('live')).toEqual(row('live'))
+    expect(given!.stoppedIds()).toEqual(['stopped'])
+    expect([given!.closeAgent, given!.resumeAgent, given!.creationStatus]).toEqual([closeAgent, resumeAgent, creationStatus])
   })
 
   it('exposes an optional native-turn observer without importing feature state', () => {

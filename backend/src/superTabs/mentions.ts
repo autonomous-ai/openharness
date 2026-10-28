@@ -60,15 +60,24 @@ export async function markDone(tx: Tx, tabId: string, id: string, personId: stri
   await tx.superTabMention.updateMany({ where: { id, tabId, personId, ...waiting }, data: { resolvedAt: new Date(now), resolvedBy: 'done' } })
 }
 
-/** The person's own unexpired tags in conversations they can still read, newest first. The badge counts this same list.
+/** The person's own unexpired tags in conversations they can still read, newest first, each with its conversation. The badge
+ *  counts this same list. Ordinary loads leave quiet (dormant) conversations out of the state, so the ones a tag is in are
+ *  read here: the count and the list check the same conversations whichever state they get.
  *  ponytail: capped at 500 per state; page it if a person ever gets more in 30 days. */
 async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
   person(state, actor.userId)
   const rows = await tx.superTabMention.findMany({ where: { tabId, personId: actor.userId, createdAt: { gt: new Date(now - MENTION_EXPIRY_MS) },
     ...(open ? waiting : { resolvedAt: { not: null } }) }, orderBy: { createdAt: 'desc' }, take: 500 })
-  return rows.filter(row => {
-    const group = state.conversations.find(c => c.id === row.conversationId)
-    return !!group && !isLeads(group) && canReadGroup(state, actor, group)
+  const groups = new Map(state.conversations.map(c => [c.id, c]))
+  const missing = [...new Set(rows.map(r => r.conversationId))].filter(id => !groups.has(id))
+  if (missing.length) {
+    for (const row of await tx.swarmGroup.findMany({ where: { tabId, deleted: false, key: { in: missing } }, select: { key: true, data: true } })) {
+      groups.set(row.key, row.data as unknown as Conversation)
+    }
+  }
+  return rows.flatMap(row => {
+    const group = groups.get(row.conversationId)
+    return group && !isLeads(group) && canReadGroup(state, actor, group) ? [{ row, group }] : []
   })
 }
 
@@ -77,11 +86,10 @@ export async function mentionsWaiting(tx: Tx, tabId: string, state: SuperTabStat
 }
 
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {
-  const rows = await readable(tx, tabId, state, actor, now, open)
-  const messages = rows.length ? await tx.superTabMessage.findMany({ where: { tabId, id: { in: rows.map(r => r.messageId) } },
+  const tagged = await readable(tx, tabId, state, actor, now, open)
+  const messages = tagged.length ? await tx.superTabMessage.findMany({ where: { tabId, id: { in: tagged.map(t => t.row.messageId) } },
     select: { id: true, text: true, author: true } }) : []
-  return rows.map(row => {
-    const group = state.conversations.find(c => c.id === row.conversationId)!
+  return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
     const author = message?.author as { name?: string; displayName?: string } | undefined
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,

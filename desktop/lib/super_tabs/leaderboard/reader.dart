@@ -5,9 +5,9 @@ import 'package:flutter/foundation.dart';
 import '../controller.dart';
 import 'model.dart';
 
-/// Reads one project's leaderboard while the column is shown, and again every
-/// minute: the board sums a week, so it moves slowly. A failed refresh keeps the
-/// last board and says why.
+/// Reads one project's leaderboard while Humans are shown, and again every
+/// [every]: the board sums a week, so it moves slowly. A failed refresh keeps
+/// the last board and says why.
 class SuperTabLeaderboardReader extends ChangeNotifier {
   SuperTabLeaderboardReader({
     required this.tabId,
@@ -51,7 +51,7 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     return refresh();
   }
 
-  /// Stops the minute refresh while the column is not shown; the board stays.
+  /// Stops the refresh while Humans are not shown; the board stays.
   void hide() {
     _timer?.cancel();
     _timer = null;
@@ -71,11 +71,18 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
       if (read != _read) return;
       board = SuperTabLeaderboard.fromJson(answer);
       error = null;
-    } catch (failure) {
+    } on SuperTabFailure catch (failure) {
       if (read != _read) return;
-      error = failure is SuperTabFailure
-          ? failure.message
-          : "Couldn't read the leaderboard.";
+      // A server from before the leaderboard has none: Humans just list names.
+      if (failure.statusCode == 404) {
+        board = null;
+        error = null;
+      } else {
+        error = failure.message;
+      }
+    } catch (_) {
+      if (read != _read) return;
+      error = "Couldn't read the leaderboard.";
     }
     _notify();
   }

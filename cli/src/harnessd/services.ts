@@ -14,6 +14,7 @@
  */
 import { SERVICE_EXIT_RESTART, describeStaged, heartbeatGraceMs, isCoreMessage, isUpdaterMessage, type StagedUpdate } from './protocol.js'
 import { describeExit, type CoreHandle } from './supervisor.js'
+import { SWARM_ENV, swarmOn } from './swarmSwitch.js'
 
 export interface ServiceSpec {
   /** The process's name: what the master logs it as and the process is titled (`harnessd <name>`). */
@@ -524,6 +525,15 @@ export function servicesTheMasterRuns(env: NodeJS.ProcessEnv, known: readonly st
   return new Set(said.split(',').map((name) => name.trim()).filter((name) => known.includes(name)))
 }
 
+/** The Swarm switch (harnessd/swarmSwitch.ts): off, the Swarm's service is left out of every process the master starts. */
+export { SWARM_ENV, swarmOn }
+const SWARM_SERVICES: ReadonlySet<string> = new Set(['superTabs'])
+
+/** The services of `known` that run on this computer, wherever they run: all of them, but the Swarm's while it is off. */
+export function servicesOn(env: NodeJS.ProcessEnv, known: readonly string[]): string[] {
+  return swarmOn(env) ? [...known] : known.filter((name) => !SWARM_SERVICES.has(name))
+}
+
 /**
  * The processes to run the services in: every service this build knows, unless `HARNESSD_SERVICES`
  * names a subset, by service (`search,workspaces`) or by process (`edge`, every service it hosts); `none`
@@ -539,8 +549,9 @@ export function serviceSpecs(env: NodeJS.ProcessEnv, hosts: Readonly<Record<stri
   const named = env.HARNESSD_SERVICES === undefined ? null
     : new Set(env.HARNESSD_SERVICES.split(',').map((name) => name.trim()).filter((name) => name && name !== 'none'))
   const heap = Number(env.HARNESSD_SERVICE_HEAP_LIMIT_MIB)
+  const on = new Set(servicesOn(env, Object.values(hosts).flatMap((host) => host.services)))
   return Object.entries(hosts).flatMap(([name, host]) => {
-    const services = host.services.filter((service) => !named || named.has(service) || named.has(name))
+    const services = host.services.filter((service) => on.has(service) && (!named || named.has(service) || named.has(name)))
     // A process on demand named outright runs from the start, as every service named does (a test, support).
     const onDemand = host.onDemand && !named ? { onDemand: true } : {}
     const { onDemand: _given, ...rest } = host

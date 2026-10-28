@@ -1368,6 +1368,9 @@ model SwarmGroup {
   hostMachineIds     String[]  @default([])
   /// A short hash of the fields host rows read (read/hostRows.ts); a post leaves it. Missing on a part written before it.
   hostDigest         String?
+  /// Its task is done or cancelled: all the archive pass reads (superTabs/archive.ts). Marked at worker startup on a part
+  /// written before it (markFinishedGroups).
+  workFinished       Boolean   @default(false)
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
@@ -1376,6 +1379,7 @@ model SwarmGroup {
   @@index([tabId, projectId, dormant, lastActivityAt])
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
+  @@index([workFinished, archived, lastActivityAt])
   @@index([executionMachineId])
 }
 

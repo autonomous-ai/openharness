@@ -17,10 +17,6 @@ export const decisionOf = (row: SuperTabRouteDecision): RouteDecision => ({
 /** The decision with the times the log shows: when it was recorded and when its outcome was. */
 export const timedDecisionOf = (row: SuperTabRouteDecision) => ({ ...decisionOf(row), createdAt: row.createdAt, outcomeAt: row.outcomeAt })
 
-export async function recentRoutes(tx: Tx, tabId: string, now: number): Promise<number> {
-  return tx.superTabRouteDecision.count({ where: { tabId, createdAt: { gte: new Date(now - 60 * 60_000) } } })
-}
-
 export async function readDecision(tx: Tx, tabId: string, id: string): Promise<RouteDecision | undefined> {
   const row = await tx.superTabRouteDecision.findFirst({ where: { id, tabId } })
   return row ? decisionOf(row) : undefined

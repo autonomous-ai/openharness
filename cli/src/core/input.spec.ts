@@ -14,6 +14,7 @@ import { createInput, createMessageRequest, deviceInputDeps, heldScreen, message
 import { createScreens } from './engines/screens.js'
 import { screenFor } from '../engines/screens.js'
 import { readerEngine } from '../engines/worker/protocol.js'
+import { typesWhileBusy } from '../superTabs/inCore/deliveries.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
@@ -63,6 +64,7 @@ function deps(over: Partial<InputDeps> = {}) {
     agentIdFor: (sessionId) => agents.get(sessionId)?.agentId ?? sessionId,
     commandcode: (sessionId) => sessionId === 'cc-s' ? normalizer as unknown as CommandCodeNormalizer : undefined,
     emit: vi.fn(),
+    typesWhileBusy,
     ...over,
   }
   return { deps: base, calls, device, normalizer, setPane: (next: string | null) => { pane = next } }
@@ -87,6 +89,14 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.beforeTeamWrite!(agents.get(id)!, 'team:service:superTabs:busy')).toBeNull()
     expect(await wired.injectTeam!(id, 'chat follow-up', 'team:service:superTabs:busy')).toBe(ok)
     expect(await wired.injectTeam!(id, 'peer message', 'team:peer')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
+  })
+
+  // HARNESS_SWARM=off: no maker's typed delivery is queued while the agent works; each waits for idle, as Agent Messages' do.
+  it('waits for idle with every typed delivery when none is handed a busy queue', async () => {
+    const t = deps({ typesWhileBusy: undefined }), wired = sessionInputDeps(t.deps, () => lock(t.calls))
+    t.setPane('Working (esc to interrupt)\n' + READY_PANE)
+    expect(await wired.injectTeam!('a1', 'chat follow-up', 'team:service:superTabs:busy')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_idle' })
+    expect(t.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
   })
 
   it.each([

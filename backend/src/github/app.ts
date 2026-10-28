@@ -7,13 +7,15 @@
  * crypto signs the app's JWT. Nothing here logs a token or the private key.
  */
 import { createPrivateKey, hkdfSync, sign, type KeyObject } from 'node:crypto'
-import type { GitHubRepository } from './repository.js'
+import { githubRepository, type GitHubRepository } from './repository.js'
 
 /** What a Swarm agent's token may do, and nothing more: push to and read the repository, open and update pull requests,
  *  and read checks and workflow runs to see whether its pull request passes. */
 export const TOKEN_PERMISSIONS = { contents: 'write', pull_requests: 'write', checks: 'read', actions: 'read', metadata: 'read' } as const
 /** What preparing an agent's folder may do before the agent has a task: clone and fetch the repository, nothing more. */
 export const PREPARE_PERMISSIONS = { contents: 'read', metadata: 'read' } as const
+/** What the Swarm's tidying reads before it archives a finished group: whether its pull requests are merged or closed. */
+export const PULL_READ_PERMISSIONS = { pull_requests: 'read', metadata: 'read' } as const
 export type TokenPermissions = Readonly<Record<string, 'read' | 'write'>>
 
 /** A refusal with the code clients act on; `details` adds fields beside it, such as the install link. */
@@ -85,6 +87,8 @@ export class GitHubApp {
   private signed: { jwt: string; until: number } | null = null
   private readonly installations = new Map<string, { id: number | null; until: number }>()
   private readonly branches = new Map<string, { value: DefaultBranch; until: number }>()
+  /** A repository's name now, by the name asked for (lower case): null when it was not renamed. */
+  private readonly renames = new Map<string, { repository: GitHubRepository | null; until: number }>()
 
   constructor(readonly config: GitHubAppConfig, options: GitHubAppOptions = {}) {
     this.fetch = options.fetch ?? fetch
@@ -157,6 +161,63 @@ export class GitHubApp {
     return id
   }
 
+  /**
+   * The installation that covers [repository], with the repository under the name GitHub knows it by now; null when the
+   * app is not installed there. A repository renamed on GitHub still answers to its old name for git, but not for the
+   * app's installation lookup, and a Swarm project's repository address is set once: a project made from a checkout
+   * whose remote still had the old name could never get a token (2026-10-27, autonomous-harness renamed openharness).
+   */
+  async resolve(repository: GitHubRepository): Promise<{ installation: number; repository: GitHubRepository } | null> {
+    const direct = await this.installation(repository)
+    if (direct !== null) return { installation: direct, repository }
+    const current = await this.currentName(repository)
+    if (!current) return null
+    const renamed = await this.installation(current)
+    return renamed === null ? null : { installation: renamed, repository: current }
+  }
+
+  /** [repository]'s name now when it was renamed, else null: read with a read-only token of its owner's installation of
+   *  the app, which GitHub answers by the repository's id once it moved. The token is revoked at once. */
+  private async currentName(repository: GitHubRepository): Promise<GitHubRepository | null> {
+    const key = repository.fullName.toLowerCase()
+    const known = this.renames.get(key)
+    if (known && known.until > this.now()) return known.repository
+    let current: GitHubRepository | null = null
+    try {
+      const owner = await this.ownerInstallation(repository.owner)
+      if (owner !== null) {
+        const minted = await this.call('POST', `/app/installations/${owner}/access_tokens`, `Bearer ${this.jwt()}`, { permissions: { metadata: 'read' } })
+        const token = (minted.body as Record<string, unknown>).token
+        if (minted.status === 201 && typeof token === 'string') {
+          try {
+            const read = await this.call('GET', `/repos/${repository.owner}/${repository.name}`, `Bearer ${token}`)
+            const fullName = (read.body as Record<string, unknown>).full_name
+            const found = read.status === 200 && typeof fullName === 'string' ? githubRepository(`https://github.com/${fullName}`) : null
+            if (found && found.fullName.toLowerCase() !== key) current = found
+          } finally {
+            await this.revoke(token).catch(() => {})
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof GitHubAppError && error.code === 'GITHUB_APP_MISCONFIGURED') throw error
+      // GitHub did not say: the repository reads as not installed, as it did before.
+    }
+    this.renames.set(key, { repository: current, until: this.now() + (current ? INSTALLATION_TTL_MS : NOT_INSTALLED_TTL_MS) })
+    return current
+  }
+
+  /** The app's installation on [owner], an organization or a user, or null. */
+  private async ownerInstallation(owner: string): Promise<number | null> {
+    for (const path of [`/orgs/${owner}/installation`, `/users/${owner}/installation`]) {
+      const answer = await this.call('GET', path, `Bearer ${this.jwt()}`)
+      if (answer.status === 401) throw this.misconfigured()
+      const id = (answer.body as Record<string, unknown>).id
+      if (answer.status === 200 && typeof id === 'number') return id
+    }
+    return null
+  }
+
   /** A token for [repository] alone, with TOKEN_PERMISSIONS alone. */
   async createToken(installationId: number, repository: GitHubRepository, permissions: TokenPermissions = TOKEN_PERMISSIONS): Promise<{ token: string; expiresAt: string }> {
     const answer = await this.call('POST', `/app/installations/${installationId}/access_tokens`, `Bearer ${this.jwt()}`,
@@ -184,6 +245,20 @@ export class GitHubApp {
     const answer = await this.call('DELETE', '/installation/token', `Bearer ${token}`)
     if (answer.status === 204 || answer.status === 401) return
     throw new GitHubAppError('GITHUB_UNAVAILABLE', `GitHub did not revoke the token (HTTP ${answer.status}).`, 502)
+  }
+
+  /** Whether pull request [number] is open, merged or closed (GET /repos/{owner}/{repo}/pulls/{number}); null when GitHub
+   *  cannot say, which a caller must read as possibly open. */
+  async pullRequestState(repository: GitHubRepository, number: number, token: string): Promise<'open' | 'merged' | 'closed' | null> {
+    try {
+      const answer = await this.call('GET', `/repos/${repository.owner}/${repository.name}/pulls/${number}`, `Bearer ${token}`)
+      const body = answer.body as Record<string, unknown>
+      if (answer.status !== 200 || !['open', 'closed'].includes(String(body.state))) return null
+      return body.state === 'open' ? 'open' : typeof body.merged_at === 'string' ? 'merged' : 'closed'
+    } catch (error) {
+      if (error instanceof GitHubAppError) return null
+      throw error
+    }
   }
 
   /** The default branch and whether pushing to it straight needs a pull request, read with the agent's own token

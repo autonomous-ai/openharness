@@ -1563,9 +1563,15 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
       borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
       clipBehavior: Clip.antiAlias,
+      // No chevron (Dee, 2026-10-27): a click expands the machine, and its
+      // details are in the right-click menu, or a long press on a touch screen.
       child: InkWell(
         key: ValueKey('super-machine-${view.id}'),
-        onTap: () => unawaited(_openDetails(view)),
+        onTap: () {
+          c.toggleMachineExpanded(view.id);
+          _changed();
+        },
+        onLongPress: () => unawaited(_openDetails(view)),
         onSecondaryTapUp: (event) =>
             unawaited(_menu(view, event.globalPosition)),
         hoverColor: grid.AppSurface.hoverFill,
@@ -1580,16 +1586,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             Tooltip.dismissAllToolTips();
           }
         },
-        child: _MachineLine(
-          view: view,
+        child: Semantics(
           expanded: expanded,
-          onToggle: () {
-            c.toggleMachineExpanded(view.id);
-            _changed();
-          },
-          onSetUpTeam: view.setUpTeam
-              ? () => showTeamAccountSetup(context, widget.app!)
-              : null,
+          child: _MachineLine(
+            view: view,
+            onSetUpTeam: view.setUpTeam
+                ? () => showTeamAccountSetup(context, widget.app!)
+                : null,
+          ),
         ),
       ),
     );
@@ -2065,18 +2069,11 @@ class _Allowance {
   );
 }
 
-/// The same leading icon/name and trailing status/disclosure columns as projects.
+/// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
-  const _MachineLine({
-    required this.view,
-    required this.expanded,
-    required this.onToggle,
-    this.onSetUpTeam,
-  });
+  const _MachineLine({required this.view, this.onSetUpTeam});
 
   final _MachineView view;
-  final bool expanded;
-  final VoidCallback onToggle;
 
   /// This Mac's row, without its Harness Team account: Set up under the paused line.
   final VoidCallback? onSetUpTeam;
@@ -2203,28 +2200,6 @@ class _MachineLine extends StatelessWidget {
                   arrived: view.arrived,
                 ),
               ),
-            ),
-          ),
-          Semantics(
-            expanded: expanded,
-            button: true,
-            child: IconButton(
-              key: ValueKey('super-machine-toggle-${view.id}'),
-              icon: Icon(
-                expanded ? AppIcons.chevronDown : AppIcons.chevronRight,
-                size: AppIcons.inlineSize,
-              ),
-              color: DesktopChrome.muted,
-              style: const ButtonStyle(
-                minimumSize: WidgetStatePropertyAll(Size.square(32)),
-                padding: WidgetStatePropertyAll(EdgeInsets.all(6)),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.standard,
-                overlayColor: WidgetStatePropertyAll(Colors.transparent),
-                backgroundColor: WidgetStatePropertyAll(Colors.transparent),
-              ),
-              tooltip: '${expanded ? 'Collapse' : 'Expand'} $name',
-              onPressed: onToggle,
             ),
           ),
         ],

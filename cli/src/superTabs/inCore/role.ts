@@ -1,5 +1,5 @@
 /** The same role lookup in a separate Super Tab process. Missing/older services grant no skill. */
-import { isSwarmRole, isSwarmSkillMode, type SwarmSkillGrant } from '../lib/swarmSkills.js'
+import { isSwarmRole, isSwarmSkillMode, type SwarmSkillGrant } from '../../lib/swarmSkills.js'
 
 export function swarmRoleThrough(call: (type: string, payload: Record<string, unknown>) => Promise<Record<string, unknown>>) {
   return async (harnessId: string): Promise<SwarmSkillGrant | null | undefined> => {

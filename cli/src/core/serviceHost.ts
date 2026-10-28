@@ -270,6 +270,16 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
     closeConnection(connection: string): void {
       for (const [closed, asked] of answering) if (asked === connection) closed.abort()
     },
+    /**
+     * Leave a service this computer turned off (harnessd/services.ts `servicesOn`) off: nothing of it is started, its
+     * port stays empty, and its requests are answered `SERVICE_UNAVAILABLE`, as for one that did not start.
+     */
+    leaveOff(name: string, requests: readonly string[]): void {
+      claim(name, requests)
+      off.add(name)
+      if (Object.hasOwn(ports, name)) ports[name as PortName] = null
+      log(`[services] ${name} is turned off on this computer`)
+    },
     /** Run `handler` once, when `name` is switched off. */
     onOff(name: string, handler: () => void): void {
       offHandlers.set(name, [...offHandlers.get(name) ?? [], handler])
