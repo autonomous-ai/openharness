@@ -11,15 +11,23 @@ import 'team_glance.dart';
 /// its own card ([spread]). Nothing counted reads "All idle" or "No agents
 /// yet". Too long for its row (the drawer's), it wraps between its parts,
 /// never inside one, so no part — down least of all — is cut off.
+///
+/// Counted from the Home kept ([kept]), it reads "Updating…" instead: counts
+/// kept are not now — "6 working · 25 down" at launch, "22 working · 3 down"
+/// a read later (owner's iPhone, 2026-10-28).
 class SwarmTeamLine extends StatelessWidget {
   const SwarmTeamLine(
     this.glance, {
     super.key,
     this.size = 13.5,
     this.spread = false,
+    this.kept = false,
   });
 
   final SwarmTeamGlance glance;
+
+  /// Counted from the Home kept, not read again yet ([swarmHomeKept]).
+  final bool kept;
 
   /// The words' size: 13.5 under a row's title, 13 in the drawer, 14 alone.
   final double size;
@@ -36,9 +44,9 @@ class SwarmTeamLine extends StatelessWidget {
       height: 1.35,
     );
     final parts = glance.parts;
-    if (parts.isEmpty) {
+    if (kept || parts.isEmpty) {
       return Text(
-        glance.line,
+        kept ? 'Updating…' : glance.line,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: style,

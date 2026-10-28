@@ -15,6 +15,7 @@ import 'swarm_choices.dart';
 import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
+import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
 import 'swarm_pm_chat.dart';
 import 'swarm_profile_sheet.dart';
@@ -425,6 +426,7 @@ class _SwarmPageState extends State<SwarmPage> {
           title: project.name,
           detail: SwarmTeamLine(
             swarmTeamGlance(snapshot, projectId: project.id),
+            kept: swarmHomeKept(_session?.inbox.reader(swarmId)),
           ),
           onTap: () => _openProject(context, swarmId, project.id),
         ),
@@ -439,15 +441,7 @@ bool _updating(SwarmInbox inbox) =>
     inbox.swarms.isNotEmpty &&
     !inbox.noComputer &&
     (!inbox.loaded ||
-        inbox.swarms.any((swarm) => _kept(inbox.reader(swarm.id))));
-
-/// [reader] holds the view kept ([SwarmHomeCache]), and no read of its own:
-/// a first load moves its generation.
-bool _kept(SwarmReader? reader) =>
-    reader != null &&
-    reader.generation == 0 &&
-    reader.snapshot != null &&
-    reader.error == null;
+        inbox.swarms.any((swarm) => swarmHomeKept(inbox.reader(swarm.id))));
 
 /// Why Needs you is empty.
 enum _EmptyNeeds {
