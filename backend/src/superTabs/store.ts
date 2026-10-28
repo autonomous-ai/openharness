@@ -1781,16 +1781,17 @@ export class SuperTabStore {
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
       // go, its cleanup waits for this host, as the next sweep would have done (machines.ts expireRemovals).
-      expireRemovals(state, now)
+      const ended = expireRemovals(state, now)
       const stamp = clock.next()
       // A reading writes only its machine's part, and an agent's part only when its presence changes (spec); a group's only
-      // when a task there is lost.
+      // when a task there is lost or a removal ends.
       const saved = async (lost: MessageDraft[] = []) => {
-        const sequences = numberMessages(state, lost, now)
-        const touches = judgedMachines(loaded.state, state, lost).filter(t => t.key !== machineId)
+        const rows = [...ended, ...lost]
+        const sequences = numberMessages(state, rows, now)
+        const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
-        await this.writeMessages(tx, tabId, state, lost, sequences)
+        await this.writeMessages(tx, tabId, state, rows, sequences)
         return { version }
       }
       if (!state.machines?.includes(pool)) return saved()
