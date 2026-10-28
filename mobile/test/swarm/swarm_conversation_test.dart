@@ -371,22 +371,25 @@ void main() {
     expect(r.swarm.commands.last['replyTo'], 'm1');
   });
 
-  test('the mention picker reads the name typed after an @ at the end', () async {
-    final r = rig();
-    r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
-    final c = await open(r.reader);
+  test(
+    'the mention picker reads the name typed after an @ at the end',
+    () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {'messages': <Object>[], 'next': null};
+      final c = await open(r.reader);
 
-    c.draft = 'hey';
-    expect(c.mentionQuery, isNull);
-    c.draft = 'hey @';
-    expect(c.mentionQuery, '');
-    c.draft = '@No';
-    expect(c.mentionQuery, 'No');
-    c.draft = 'mail me@home';
-    expect(c.mentionQuery, isNull, reason: 'an @ inside a word is not one');
-    c.draft = 'hey @No then';
-    expect(c.mentionQuery, isNull);
-  });
+      c.draft = 'hey';
+      expect(c.mentionQuery, isNull);
+      c.draft = 'hey @';
+      expect(c.mentionQuery, '');
+      c.draft = '@No';
+      expect(c.mentionQuery, 'No');
+      c.draft = 'mail me@home';
+      expect(c.mentionQuery, isNull, reason: 'an @ inside a word is not one');
+      c.draft = 'hey @No then';
+      expect(c.mentionQuery, isNull);
+    },
+  );
 
   test('a name picked for the @ being typed takes its place, and the post '
       'goes to that agent', () async {
@@ -685,28 +688,31 @@ void main() {
       first.dispose();
     }
 
-    test('shows at once what was read, and reads only what came after', () async {
-      final r = rig();
-      r.swarm.routes[messages] = (_) => {
-        'messages': [message('m2', 2), message('m1', 1)],
-        'next': {'sequence': 1, 'id': 'm1'},
-      };
-      await readAndClose(r.reader);
+    test(
+      'shows at once what was read, and reads only what came after',
+      () async {
+        final r = rig();
+        r.swarm.routes[messages] = (_) => {
+          'messages': [message('m2', 2), message('m1', 1)],
+          'next': {'sequence': 1, 'id': 'm1'},
+        };
+        await readAndClose(r.reader);
 
-      final c = SwarmConversation(r.reader, 'g1');
-      addTearDown(c.dispose);
+        final c = SwarmConversation(r.reader, 'g1');
+        addTearDown(c.dispose);
 
-      expect([for (final m in c.messages) m.id], ['m1', 'm2']);
-      expect(c.hasOlder, isTrue);
-      expect(c.state, SwarmChatState.loaded);
-      r.swarm.routes['$messages?after=2'] = (_) => {
-        'messages': [message('m3', 3)],
-        'next': null,
-      };
-      await c.load();
-      expect(r.swarm.paths.last, '$messages?after=2');
-      expect([for (final m in c.messages) m.id], ['m1', 'm2', 'm3']);
-    });
+        expect([for (final m in c.messages) m.id], ['m1', 'm2']);
+        expect(c.hasOlder, isTrue);
+        expect(c.state, SwarmChatState.loaded);
+        r.swarm.routes['$messages?after=2'] = (_) => {
+          'messages': [message('m3', 3)],
+          'next': null,
+        };
+        await c.load();
+        expect(r.swarm.paths.last, '$messages?after=2');
+        expect([for (final m in c.messages) m.id], ['m1', 'm2', 'm3']);
+      },
+    );
 
     test('more than a page newer reads the latest page instead', () async {
       final r = rig();
@@ -775,11 +781,9 @@ void main() {
 
       expect(await openSwarmPmChat(r.reader, project), 'pm-1');
 
-      expect(
-        r.swarm.calls.skip(read).map((call) => call.method),
-        ['POST'],
-        reason: 'nothing read before the chat opens',
-      );
+      expect(r.swarm.calls.skip(read).map((call) => call.method), [
+        'POST',
+      ], reason: 'nothing read before the chat opens');
       final sent = r.swarm.calls.singleWhere((call) => call.method == 'POST');
       expect(sent.body!['operationId'], 'pm-chat-$project-$me-gen-$me');
       expect(sent.body!['command'], {

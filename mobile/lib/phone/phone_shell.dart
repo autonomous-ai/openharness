@@ -7,6 +7,7 @@ import 'package:harness_mobile/state/app_state.dart';
 
 import '../notify/system_notices.dart';
 import '../p2p/phone_terminal_p2p.dart';
+import '../swarm/swarm_attachment_store.dart';
 import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_home_root.dart';
@@ -62,6 +63,10 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
   /// going or changing state.
   late final _swarmComputers = AppSwarmComputers(widget.notifier);
 
+  /// Keeps Swarm's picture files to the signed-in account: emptied on sign-out, Swarm off, another
+  /// account and a Swarm's removal.
+  late final SwarmAttachmentKeeper _swarmFiles;
+
   /// What the stack's root shows: Swarm Home while Swarm is on, until the person goes to Harness.
   late final _home = SwarmHomeChoice(_swarm.features);
 
@@ -99,6 +104,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       // whether any is online.
       computers: _swarmComputers,
     )..foreground = state == null || _inFront(state);
+    _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
     // A tap that launched the app is read before this shell exists, so its value is already set and
     // no listener will ever fire for it: take it once the navigator is up.
@@ -137,6 +143,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     );
     _swarmNotices.openedSwarm.removeListener(_openNoticedSwarm);
     _home.dispose();
+    _swarmFiles.dispose();
     _swarm.dispose();
     _swarmComputers.dispose();
     _linkedMachineId.dispose();
