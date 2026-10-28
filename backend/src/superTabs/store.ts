@@ -188,6 +188,16 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
 const openDeliveries = (tx: Transaction, tabId: string, agentId: string) => tx.superTabDelivery.findMany({
   where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, orderBy: { createdAt: 'asc' }, take: 100 })
 
+/** The grants a held answer checks again: the agent's own and those of the agents that sent what it allowed. */
+function grantsOf(state: SuperTabState, agentId: string, allowed: SuperTabDelivery[]) {
+  const grants: Record<string, AgentGrant> = {}
+  for (const id of [agentId, ...allowed.filter(d => d.authorKind === 'agent').map(d => d.authorId)]) {
+    const found = state.agents.find(a => a.id === id)
+    if (found) grants[id] = { contributorId: found.contributorId, machineId: found.machineId, machineOwnerId: found.machineOwnerId, hostGrant: found.hostGrant ?? null }
+  }
+  return { swarm: { workspaceId: state.workspaceId, environment: state.environment }, grants }
+}
+
 const sameIds = (rows: SuperTabDelivery[], ids: string[]) => rows.length === ids.length && rows.every(r => ids.includes(r.id))
 
 /** Whose full poll `deliveries` remembers: the caller, and a team session apart, as it may act only for its own machine's
@@ -263,12 +273,19 @@ export interface SuperTabStoreHooks {
 /** Which agent, of which Swarm, on which machine, has a delivery to read. */
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
 
+/** What of a Swarm an agent's grant is checked against (SuperTabStore.grantHolds). */
+export type SwarmGrant = Pick<SuperTabState, 'workspaceId' | 'environment'>
+/** What of an agent its grant is checked against: who lent which machine to whom, under which share grant. */
+export type AgentGrant = Pick<Agent, 'contributorId' | 'machineId' | 'machineOwnerId' | 'hostGrant'>
+
 /** A caller's last full delivery poll: when it succeeded and, when it found deliveries open, what it found. */
 export interface Polled {
   at: number
   /** The open deliveries it read, those of them it let reach the agent, and the Swarm's main stamp (cache.ts) read before
-   *  it loaded: while all three are unchanged, a held delivery is answered from one indexed read (deliveries). */
-  open?: { stamp: number; seen: string[]; allowed: string[] }
+   *  it loaded: while all three are unchanged, a held delivery is answered without loading the Swarm (deliveries). The
+   *  grants of the agent and of the agents that sent what it allowed, by agent id, are checked again on every such answer:
+   *  they rest on Workspaces, machines and shares, which no Swarm write records. */
+  open?: { stamp: number; seen: string[]; allowed: string[]; swarm: SwarmGrant; grants: Record<string, AgentGrant> }
 }
 
 /** Where `deliveries` remembers each caller's last full poll. Either call may throw: the poll then runs in full. */
@@ -562,12 +579,18 @@ export class SuperTabStore {
   /** Every path that serves an agent's host checks this, so it also holds the Workspace check: the agent acts for its
    *  contributor, who must still be in the Swarm's Workspace. Its host need not be, as it need not be in the Swarm. */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
+    await this.grantHolds(tx, state, target, () => person(state, target.contributorId))
+  }
+
+  /** What an agent's grant rests on outside the Swarm: its contributor's Workspace membership, its machine and, lent, the
+   *  machine's share. `inSwarm` checks the contributor is still in it, at the point the full check always did. */
+  private async grantHolds(tx: Transaction, state: SwarmGrant, target: AgentGrant, inSwarm: () => void): Promise<void> {
     await requireWorkspaceAccess(tx, state, target.contributorId)
     const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
       autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     if (target.contributorId !== machine.userId) {
-      person(state, target.contributorId)
+      inSwarm()
       const contributor = await tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } })
       const share = await tx.machineShare.findUnique({ where: { machineId: machine.machineId } })
       if (!contributor || contributor.autonomousEnv !== state.environment || !share || share.ownerId !== machine.userId ||
@@ -1990,12 +2013,31 @@ export class SuperTabStore {
       // the same open deliveries at the same main stamp are allowed as the full poll found them. Anything a Swarm write
       // revokes moves the stamp; anything else (a machine, a share, a Workspace) is checked again within SWEEP_EVERY_MS.
       const seen = last.open, stamp = seen && (await this.view([tabId])).mainStamp(tabId)
-      if (seen && stamp === seen.stamp && sameIds(open, seen.seen)) return open.filter(d => seen.allowed.includes(d.id))
+      if (seen?.grants[agentId] && stamp === seen.stamp && sameIds(open, seen.seen)) return this.heldDeliveries(user, agentId, open, seen)
     }
     const view = await this.view([tabId]), stamp = view.mainStamp(tabId)
-    const { open, allowed } = await this.fullDeliveries(user, tabId, agentId, view)
+    const { open, allowed, state } = await this.fullDeliveries(user, tabId, agentId, view)
     await this.polls.set(key, { at: this.now(), ...open.length && stamp !== undefined
-      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id) } } : {} }).catch(pollMemoryFailed)
+      ? { open: { stamp, seen: open.map(d => d.id), allowed: allowed.map(d => d.id), ...grantsOf(state, agentId, allowed) } } : {} })
+      .catch(pollMemoryFailed)
+    return allowed
+  }
+
+  /** The open deliveries the last full poll allowed, while the Swarm is as it read it: the grants it checked are checked
+   *  again, as the full poll does: the agent's refuses the poll, a sender's withholds what it sent (senderAllowed). */
+  private async heldDeliveries(user: AuthUser, agentId: string, open: SuperTabDelivery[], seen: NonNullable<Polled['open']>) {
+    const target = seen.grants[agentId]!, inSwarm = () => {}
+    const team = await this.teamHost(this.db, user)
+    if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    await this.grantHolds(this.db, seen.swarm, target, inSwarm)
+    const senders = new Map<string, Promise<boolean>>()
+    const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm)
+      .then(() => true, error => { if (error instanceof SuperTabError) return false; throw error })).get(id)!
+    const allowed: SuperTabDelivery[] = []
+    for (const delivery of open) {
+      if (!seen.allowed.includes(delivery.id)) continue
+      if (delivery.authorKind !== 'agent' || seen.grants[delivery.authorId] && await sent(delivery.authorId)) allowed.push(delivery)
+    }
     return allowed
   }
 
@@ -2089,7 +2131,7 @@ export class SuperTabStore {
     for (const delivery of open) {
       if (this.deliveryAllowed(state, delivery) && await this.senderAllowed(tx, state, delivery)) allowed.push(delivery)
     }
-    return { open, allowed }
+    return { open, allowed, state }
   }
 
   /** A withdrawn host can retire its own journal without regaining shared

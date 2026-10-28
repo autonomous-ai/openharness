@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { PrismaClient, type Prisma } from '@prisma/client'
+import { PrismaClient, type Prisma, type SuperTabDelivery } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, type Polled, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import { SWEEP_EVERY_MS } from '../src/superTabs/liveness.js'
@@ -662,6 +662,9 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 // A delivery its host cannot type yet (a permission prompt, a draft, an idle wait) stays claimed and held, possibly for hours,
 // while the host polls each second (Diego, 10-28): the poll answers it from one indexed read while nothing it relied on moved.
 describe('the delivery poll of an agent with a held delivery', () => {
+  // The open deliveries, then the grant the host speaks for its agent under, read outside the Swarm (store.ts grantHolds):
+  // its contributor's Workspace membership, its machine and, lent by host to owner here, the contributor and the share.
+  const HELD_READS = ['SuperTabDelivery.findMany', 'SwarmWorkspaceMember.findUnique', 'Machine.findFirst', 'User.findUnique', 'MachineShare.findUnique']
   /** A person's message to the Lead, read by a full poll, claimed and held by its host. */
   const held = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
@@ -672,7 +675,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     return row!
   }
 
-  it('answers the next poll from one indexed read, without loading the Swarm, and returns the held row', async () => {
+  it('answers the next poll without loading the Swarm: its open deliveries and its host\'s grant, each one indexed read', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
     const row = await held(f)
@@ -681,11 +684,11 @@ describe('the delivery poll of an agent with a held delivery', () => {
     counted.ops.length = 0
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.lead)
-    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
+    expect(counted.ops).toEqual(HELD_READS)
     expect(rows.map(r => [r.id, r.status, r.holdReason])).toEqual([[row.id, 'claimed', 'team_waiting_user']])
   })
 
-  it('answers a worker\'s held delivery from the same one read', async () => {
+  it('answers a worker\'s held delivery from the same reads', async () => {
     const counted = counting()
     const f = await swarm({ client: counted.client })
     const sent = await f.execute({ type: 'message.send', conversationId: f.group, text: 'Status?', replyTo: null, recipientIds: [f.worker] })
@@ -696,7 +699,7 @@ describe('the delivery poll of an agent with a held delivery', () => {
     counted.ops.length = 0
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.worker)
-    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
+    expect(counted.ops).toEqual(HELD_READS)
     // Its assignment's delivery is open beside it, as the full poll found.
     expect(rows.map(r => r.id)).toEqual(full.map(r => r.id))
     expect(rows.find(r => r.id === row.id)!.holdReason).toBe('team_waiting_draft')
@@ -709,6 +712,29 @@ describe('the delivery poll of an agent with a held delivery', () => {
     const next = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'And now?', replyTo: null, recipientIds: [] })
     f.clock.now += 1_000
     expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.messageId)).toEqual([row.messageId, next.result.messageId])
+  })
+
+  /** Another open delivery beside `row`, written alone, as a write that changes no Swarm part would: the stamp stays. */
+  const beside = (row: SuperTabDelivery, changes: Partial<SuperTabDelivery> = {}) => db.superTabDelivery.create({ data: {
+    ...row, id: randomUUID(), messageId: randomUUID(), status: 'queued', claimId: null, holdReason: null, holdSince: null,
+    createdAt: new Date(row.createdAt.getTime() + 1), updatedAt: undefined, ...changes } })
+
+  it('reads in full for a delivery the last full poll never saw, even with the stamp unchanged', async () => {
+    const f = await swarm()
+    const row = await held(f)
+    f.clock.now += 1_000
+    const added = await beside(row)
+    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).toEqual([row.id, added.id])
+  })
+
+  it('never returns an open delivery the full poll did not let reach the agent', async () => {
+    const f = await swarm()
+    const row = await held(f)
+    const stale = await beside(row, { membershipGeneration: 'an-earlier-membership' })
+    f.clock.now += 1_000
+    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).toEqual([row.id])
+    f.clock.now += 1_000
+    expect((await f.timed.deliveries(host, f.tab, f.lead)).map(r => r.id)).not.toContain(stale.id)
   })
 
   // A Swarm write is what revokes a member, an agent or a conversation's audience: it moves the stamp the held answer was read at.
@@ -750,6 +776,21 @@ describe('the delivery poll of an agent with a held delivery', () => {
       await expect(f.timed.deliveries(host, f.tab, f.lead)).rejects.toMatchObject({ code: 'CONTRIBUTION_REVOKED' })
     } finally {
       await db.machineShare.update({ where: { machineId: 'lead-host' }, data: { emails: share.emails } })
+    }
+  })
+
+  // A Workspace removal is read outside the Swarm, as a machine share is (superTabs.test.ts): the next poll meets it.
+  it('refuses on the next poll once the agent\'s contributor is out of the Swarm\'s Workspace', async () => {
+    const f = await swarm()
+    await held(f)
+    const { workspaceId } = (await f.timed.read(owner, f.tab)).state
+    const id = `${workspaceId}:${owner.sub}`
+    await db.swarmWorkspaceMember.update({ where: { id }, data: { removedAt: new Date(), removedBy: owner.sub } })
+    try {
+      f.clock.now += 1_000
+      await expect(f.timed.deliveries(host, f.tab, f.lead)).rejects.toMatchObject({ code: 'WORKSPACE_ACCESS_REVOKED' })
+    } finally {
+      await db.swarmWorkspaceMember.update({ where: { id }, data: { removedAt: null, removedBy: null } })
     }
   })
 

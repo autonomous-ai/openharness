@@ -45,9 +45,10 @@ describe('the delivery poll memory every server shares', () => {
   })
 
   // A held delivery is answered from what the last full poll found open (store.ts deliveries), on whichever server polls next.
-  it('gives back the open deliveries a full poll found, and the stamp it found them at', async () => {
+  it('gives back the open deliveries a full poll found, the stamp it found them at and the grants it checked', async () => {
     const redis = fakeRedis()
-    const found = { at: 1_234, open: { stamp: 7, seen: ['d1', 'd2'], allowed: ['d2'] } }
+    const found = { at: 1_234, open: { stamp: 7, seen: ['d1', 'd2'], allowed: ['d2'], swarm: { workspaceId: 'w1', environment: 'prod' },
+      grants: { a1: { contributorId: 'u1', machineId: 'm1', machineOwnerId: 'u2', hostGrant: 'g1' }, a2: { contributorId: 'u2', machineId: 'm2', machineOwnerId: 'u2', hostGrant: null } } } }
     await redisPollMemory(redis).set('tab:agent:user', found)
     expect(await redisPollMemory(redis).get('tab:agent:user')).toEqual(found)
   })
@@ -61,7 +62,7 @@ describe('the delivery poll memory every server shares', () => {
 
   it('reads a remembered poll whose open deliveries are malformed as never remembered', async () => {
     const redis = fakeRedis()
-    await redis.set('swarm:polled:tab:agent:user', JSON.stringify({ at: 1, open: { stamp: 'x', seen: [], allowed: [] } }), 'PX', 30_000)
+    await redis.set('swarm:polled:tab:agent:user', JSON.stringify({ at: 1, open: { stamp: 7, seen: [], allowed: [], swarm: { environment: 'prod' }, grants: { a1: { machineId: 'm1' } } } }), 'PX', 30_000)
     expect(await redisPollMemory(redis).get('tab:agent:user')).toBeUndefined()
   })
 

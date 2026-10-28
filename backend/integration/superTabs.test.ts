@@ -732,7 +732,8 @@ describe('private swarm projects on the real control API', () => {
     await execute({ ...message('Tests passed'), conversationId: group } as Command)
     now += 899_999
     expect(await updates()).toEqual([])
-    now++
+    // As above: the Lead's open deliveries are answered from its last full poll for 30 s, so the request lands within that.
+    now += 30_000
     expect(await updates()).toHaveLength(1)
   })
 })
