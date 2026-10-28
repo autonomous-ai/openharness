@@ -138,7 +138,7 @@ async function privateScene() {
   await writeLegacySwarm(db, { state: { ...structuredClone(s.state), id: tabId } as SuperTabState, revision: 10 })
   const report = await migrateSwarm(db, tabId)
   if (!report.ok) throw new Error(report.error)
-  return { tabId, privateId, secretGroup: s.secretGroup, web: s.web, lead: s.lead }
+  return { tabId, privateId, secret: s.secret, secretGroup: s.secretGroup, web: s.web, lead: s.lead }
 }
 const groupKeys = (read: { groups: Array<{ key: string }> }) => read.groups.map(g => g.key)
 
@@ -183,6 +183,29 @@ describe('reads through the cache', () => {
       command: { type: 'message.send', conversationId: created, text: 'from B', replyTo: null, recipientIds: [] } })
     const messages = await a.store.messages(people.owner, tabId, created, {})
     expect(messages.messages.map(m => m.text)).toEqual(['from B'])
+  })
+
+  it('shows a removal on one process to the removed person\'s next read on another: from a project, then the Swarm', async () => {
+    const { tabId, privateId, secret, secretGroup } = await privateScene()
+    const a = pod(), b = pod()
+    const sharing = (memberIds: string[]) => a.store.execute(people.owner, tabId, { operationId: `sharing-${randomUUID()}`,
+      command: { type: 'project.sharing', projectId: secret, visibility: 'private', memberIds } })
+    await sharing([peerActor.userId])
+    const before = await b.reads.firstLoad(people.peer, tabId)
+    expect(groupKeys(before)).toContain(secretGroup)
+    expect((await b.store.messages(people.peer, tabId, secretGroup, {})).messages).toBeDefined()
+    await sharing([])
+    expect(groupKeys(await b.reads.firstLoad(people.peer, tabId))).not.toContain(secretGroup)
+    // Who may read what changed: the change feed sends the reader back to a full read rather than a delta.
+    expect(await b.reads.changes(people.peer, tabId, before.cursor)).toEqual({ reload: true })
+    await expect(b.store.messages(people.peer, tabId, secretGroup, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // Warm again, then removed from the Swarm on A: every read on B refuses at once.
+    const last = await b.reads.firstLoad(people.peer, tabId)
+    expect(groupKeys(last)).toContain(privateId)
+    await a.store.execute(people.owner, tabId, { operationId: `remove-${randomUUID()}`, command: { type: 'member.remove', userId: peerActor.userId } })
+    await expect(b.reads.firstLoad(people.peer, tabId)).rejects.toMatchObject({ code: expect.stringMatching(/NOT_FOUND|FORBIDDEN/) })
+    await expect(b.reads.changes(people.peer, tabId, last.cursor)).rejects.toMatchObject({ code: expect.stringMatching(/NOT_FOUND|FORBIDDEN/) })
+    await expect(b.store.messages(people.peer, tabId, privateId, {})).rejects.toMatchObject({ code: expect.stringMatching(/NOT_FOUND|FORBIDDEN/) })
   })
 
   it('never shows one reader what only another may read, whichever reads first', async () => {
