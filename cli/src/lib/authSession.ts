@@ -1,5 +1,5 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, hostname } from 'os'
 import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 
@@ -294,6 +294,19 @@ async function withLock<T>(action: () => Promise<T>): Promise<T> {
 type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number }
 
 /**
+ * What this computer asks the backend for in place of SSO tokens, when it signs in and when it renews an SSO sign-in:
+ * a Harness session of its own (backend lib/ssoSession.ts), so an ordinary request never waits on the account
+ * service. A backend from before it answers with the SSO tokens as ever, and those are kept.
+ */
+export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: hostname().slice(0, 80) })
+
+/** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
+ *  session already (`hnr_`, `htr_`) renews as one, and a QR or team sign-in is a session of its own kind. */
+export function asksForHarnessSession(session: AuthSession): boolean {
+  return session.kind !== 'team' && session.method !== 'qr' && !/^(hnr|htr)_/.test(session.refreshToken ?? '')
+}
+
+/**
  * The sentence an `UNAVAILABLE` refresh failure carries — and why it names `harness login` even
  * though it is classified as a service problem.
  *
@@ -332,6 +345,7 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
         refreshToken: current.refreshToken,
         autonomousEnv: current.autonomousEnv,
         ...(current.clientId ? { clientId: current.clientId } : {}),
+        ...(asksForHarnessSession(current) ? { harnessSession: harnessSessionRequest() } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })

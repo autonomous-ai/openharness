@@ -49,7 +49,8 @@ import { infoBlockFooter } from './lib/infoBlockFooter.js'
 import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { ancestorsOnce, removeSignIn, SIGN_OUT_BUTTON_FLAG, signOutAsked, type Asker, type SignOutAsked } from './lib/signOut.js'
-import { AUTH_DIR, AuthSessionError, AuthSessionManager, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { AUTH_DIR, AuthSessionError, AuthSessionManager, harnessSessionRequest, knownSsoClientId, newSignInEpoch, readAuthSession, readSignedOut, ssoClientIdFor, updateAuthSession, writeAuthSession, type AuthSession } from './lib/authSession.js'
+import { revokeHarnessRefresh } from './team/handoff.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
 import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
@@ -834,6 +835,8 @@ async function browserSignIn(
         tx: start.tx,
         // The utm_* and rid auth.autonomous.ai carried back: how the account came (PR #785).
         ...(callbackResult.attribution ? { attribution: callbackResult.attribution } : {}),
+        // A Harness session in place of the SSO tokens (backend lib/ssoSession.ts); an older backend sends those.
+        harnessSession: harnessSessionRequest(),
       })
       if (!exchanged.token) throw new Error('SSO exchange returned no access token')
     } catch (err) {
@@ -1327,6 +1330,9 @@ async function updateCommand(force: boolean): Promise<void> {
  * It runs BEFORE the harness session is cleared, because `grid logout` tears down every serve child
  * on this box first, while the token that makes their deregistration authoritative still exists.
  */
+/** How long signing out waits for the server to end a Harness session. */
+const SIGN_OUT_REVOKE_TIMEOUT_MS = 5_000
+
 async function logout(): Promise<void> {
   const chain = ancestorsOnce()
   const asked = personAsked('logout', chain)
@@ -1336,7 +1342,14 @@ async function logout(): Promise<void> {
   // Before removeSignIn: see the note above on serve children. Its exit code is deliberately
   // dropped — this command cannot fail — and its own words have already reached the terminal.
   const gridOut = await passThroughToGridLogout([])
+  // A Harness session ends on the server too, while its refresh token is still here; an SSO sign-in is not ours to end.
+  // Best effort and bounded: signing out of this computer never waits on, or fails over, the network.
+  const refreshToken = readAuthSession()?.refreshToken
+  const endedOnServer = await revokeHarnessRefresh((path, body) => postJson(path, body, {}, AbortSignal.timeout(SIGN_OUT_REVOKE_TIMEOUT_MS)), refreshToken)
   removeSignIn('logout', asked, chain)
+  if (!endedOnServer && /^(hnr|htr)_/.test(refreshToken ?? '')) {
+    console.log('Could not end this sign-in on the server; it can no longer be used from here, and ends on its own after 90 days unused.')
+  }
   rmSync(MACHINE_NAME_FILE, { force: true })
   // Same reason as the name above: the cached machine list describes the account that just left, and the
   // local `/api/machines` fallback would otherwise hand it to whoever signs in next on this computer.
