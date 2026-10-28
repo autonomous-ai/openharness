@@ -53,14 +53,25 @@ const connectionStableAfter = Duration(minutes: 1);
 /// ([rememberAppVersionForSockets]). Null until then, and a socket dialled before says no version.
 String? declaredAppVersion;
 
+/// The read behind [declaredAppVersion] while it is out; null natively before start-up and in tests.
+Future<void>? appVersionRead;
+
 /// Reads this build's version for [declaredAppVersion]; a build that cannot say leaves it null.
-Future<void> rememberAppVersionForSockets() async {
-  try {
-    declaredAppVersion = await runningAppVersion();
-  } catch (_) {
-    // Sockets go on saying what they are, without a version.
-  }
+Future<void> rememberAppVersionForSockets() {
+  final read = () async {
+    try {
+      declaredAppVersion = await runningAppVersion();
+    } catch (_) {
+      // Sockets go on saying what they are, without a version.
+    }
+  }();
+  appVersionRead = read;
+  return read;
 }
+
+/// How long a backend dial waits for [appVersionRead]: the browser reads its version from the
+/// host's release file, and a socket dialled before that read lands would carry none.
+const _appVersionWait = Duration(seconds: 1);
 
 /// The backend's refusals of a `machine_select` that no redial can change: the machine left the
 /// account or was never shared with it, it belongs to another environment, or its subscription stops
@@ -467,6 +478,17 @@ class WsConn {
         }
         uri = local;
       } else {
+        final versionRead = appVersionRead;
+        if (versionRead != null && declaredAppVersion == null) {
+          await versionRead.timeout(
+            _appVersionWait,
+            // Waited out once: a read that never ends must not hold every later dial too.
+            onTimeout: () {
+              if (identical(appVersionRead, versionRead)) appVersionRead = null;
+            },
+          );
+          if (_closing) return;
+        }
         final base = Uri.parse(
           '$wsBaseUrl/api/${_directObserver ? 'observer-ws' : 'web-ws'}',
         );

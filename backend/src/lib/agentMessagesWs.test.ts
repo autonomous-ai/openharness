@@ -63,6 +63,15 @@ describe('blind shared-tab relay WebSocket', () => {
       machineId: 'ken-mac', code: 4409, reason: 'Replaced by a newer connection', aliveMs: 1_500 })])
   })
 
+  // Review of #2029: as the observer's, the shared tab's lines never carry its id.
+  it('keeps the shared tab id out of its connect and disconnect lines', async () => {
+    await connect(req(`share=${SHARE}&machine=ken-mac&client=relay`))
+    ws.emit('close', 1000, Buffer.alloc(0))
+    const lines = m.info.mock.calls.filter(c => String(c[0]).startsWith('agent-messages'))
+    expect(lines.map(c => c[0])).toEqual(['agent-messages connected', 'agent-messages disconnected'])
+    expect(JSON.stringify(lines)).not.toContain(SHARE)
+  })
+
   it('upgrades a refused connection and closes it 4403, authenticating as a daemon', async () => {
     m.admits.mockResolvedValue(false)
     await connect(req(`share=${SHARE}&machine=ken-mac&autonomousEnv=stag`))
