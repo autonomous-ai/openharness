@@ -193,8 +193,20 @@ export const PRODUCT_USAGE_LAUNCH_ENGINES = ['opencode', 'claude', 'codex', 'oth
 export type ProductUsageLaunchEngine = typeof PRODUCT_USAGE_LAUNCH_ENGINES[number]
 /** Whether that engine had a credential on this computer, by presence only (cli/src/lib/engineAccount.ts). */
 export const PRODUCT_USAGE_ENGINE_ACCOUNTS = ['signed_in', 'signed_out', 'unknown'] as const
+/** A Store install's or update's refusal by its code (dsh/install.ts, dsh/update.ts, dsh/lock.ts, services/store.ts, and
+ * the core's answers for a service, core/serviceLinks.ts): the 11 Windows installs of 2026-10-28 were all `other`, with
+ * nothing to say which. Every refusal is counted, so each family adds up to its `_failed`. A list of its own: these
+ * never answer a launch, and in the launch list each would have joined all twelve launch families. Codes only. */
+export const STORE_ERROR_CODES = ['invalid_dsh', 'dsh_busy', 'setup_failed', 'doctor_failed', 'git_unavailable',
+  'shell_unavailable', 'clone_failed', 'invalid_manifest', 'invalid_source', 'source_not_found', 'package_id_mismatch',
+  'package_kind_mismatch', 'viewer_unavailable', 'linked_install', 'not_installed', 'update_failed', 'bundled_package',
+  'remove_failed', 'internal', 'service_failed', 'service_unavailable', 'owner_required', 'unsupported',
+  'unsupported_on_remote', 'unlisted', 'none'] as const
+export type StoreErrorCode = typeof STORE_ERROR_CODES[number]
+export const STORE_ERROR_FAMILIES = ['store_install_error_code', 'store_update_error_code'] as const
 export const PRODUCT_USAGE_LAUNCH_METRICS = [
   ...LAUNCH_ERROR_FAMILIES.flatMap(family => LAUNCH_ERROR_CODES.map(code => `${family}_${code}` as const)),
+  ...STORE_ERROR_FAMILIES.flatMap(family => STORE_ERROR_CODES.map(code => `${family}_${code}` as const)),
   ...PRODUCT_USAGE_LAUNCH_ENGINES.map(engine => `first_launch_engine_${engine}` as const),
   ...(['claude', 'codex'] as const).flatMap(engine => PRODUCT_USAGE_ENGINE_ACCOUNTS.map(account => `first_launch_${engine}_${account}` as const)),
 ] as const

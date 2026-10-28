@@ -822,14 +822,18 @@ describe('RemoteRelayPool keeps background (isolated) clients cheap', () => {
     }
   })
 
-  it('the window pool has no cooldown: a person clicking again always gets a fresh dial', async () => {
+  it('the window pool backs a failed machine off, but an explicit redial always gets a fresh dial', async () => {
     const pool = new RemoteRelayPool(...ctorArgs) as unknown as {
       connect: (machineId: string, env: string, frame: unknown) => Promise<unknown>
       dial: (...args: unknown[]) => Promise<unknown>
     }
     const dial = vi.spyOn(pool, 'dial').mockRejectedValue(new Error('relay connect timed out'))
     await expect(pool.connect('m1', 'env', select)).rejects.toThrow()
+    // The app's next select a moment later is answered from the failure (remoteRelayRefusal.spec.ts).
     await expect(pool.connect('m1', 'env', select)).rejects.toThrow()
+    expect(dial).toHaveBeenCalledTimes(1)
+    // A redial the app asks for explicitly is dialled at once.
+    await expect(pool.connect('m1', 'env', { ...select, payload: { ...select.payload, forceReconnect: true } })).rejects.toThrow()
     expect(dial).toHaveBeenCalledTimes(2)
   })
 })

@@ -136,8 +136,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
     + (resumeAt ? `It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC, unless you hand it on first. `
       + 'If another account or engine has allowance now, assign it there now with its branch and last progress note, or cancel it.'
       : 'Assign it to another agent now, or cancel it.')
-  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
-    { id: stableId('work-lost', assignment.id, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
+  // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
+  const loss = String(now)
+  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
+    { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
       text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }]
     .map(row => reachable(state, row))
 }
