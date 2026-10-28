@@ -566,6 +566,83 @@ void main() {
     );
 
     testWidgets(
+      'Harness Monitor is told when it is out of sight, so its page stops reading the fleet',
+      (tester) async {
+        final app = await open(tester, dsh: harnessMonitorId);
+        final controller = platform.controllers.single;
+        const url = 'http://127.0.0.1:4179/';
+        controller.delegate!
+          ..onPageStarted!(url)
+          ..onPageFinished!(url);
+        await tester.pump();
+        // What the page last heard: `data-host-visible` on its root, then the event it listens for.
+        bool? told() {
+          for (final script in controller.scripts.reversed) {
+            final match = RegExp(
+              r"dataset\.hostVisible='(true|false)';document\.dispatchEvent\(new Event\('harness-host-visibility'\)\)",
+            ).firstMatch(script);
+            if (match != null) return match[1] == 'true';
+          }
+          return null;
+        }
+
+        expect(told(), isTrue, reason: 'a page that loads in front is told so');
+        final monitorTab = app.activeSwarm.id;
+
+        app.newSwarm(name: 'Other');
+        await tester.pump();
+        expect(told(), isFalse, reason: 'another tab in front');
+
+        app.selectSwarm(monitorTab);
+        await tester.pump();
+        expect(told(), isTrue);
+
+        app.appLifecycleChanged(AppLifecycleState.inactive);
+        await tester.pump();
+        expect(told(), isTrue, reason: 'a window behind another app can still be seen');
+        app.appLifecycleChanged(AppLifecycleState.hidden);
+        await tester.pump();
+        expect(told(), isFalse, reason: 'a minimised or hidden window cannot');
+        app.appLifecycleChanged(AppLifecycleState.resumed);
+        await tester.pump();
+        expect(told(), isTrue);
+
+        final stamps = controller.scripts.length;
+        app.notifyListeners();
+        await tester.pump();
+        expect(controller.scripts, hasLength(stamps), reason: 'nothing new to say, nothing said');
+
+        // A reload is a new page: it hears where it stands.
+        controller.delegate!
+          ..onPageStarted!(url)
+          ..onPageFinished!(url);
+        await tester.pump();
+        expect(controller.scripts.length, greaterThan(stamps));
+        expect(told(), isTrue);
+        await tester.pump(const Duration(milliseconds: 300));
+      },
+    );
+
+    testWidgets('a viewer other than the Monitor is not told anything', (
+      tester,
+    ) async {
+      final app = await open(tester);
+      final controller = platform.controllers.single;
+      const url = 'http://127.0.0.1:4179/';
+      controller.delegate!
+        ..onPageStarted!(url)
+        ..onPageFinished!(url);
+      await tester.pump();
+      app.newSwarm(name: 'Other');
+      await tester.pump();
+      expect(
+        controller.scripts.where((s) => s.contains('hostVisible')),
+        isEmpty,
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+    });
+
+    testWidgets(
       'a viewer that refuses is tried again by itself; a cancelled navigation shows nothing',
       (tester) async {
         await open(tester);
