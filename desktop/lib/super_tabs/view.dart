@@ -1146,22 +1146,26 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
-  /// Opens the conversation a tag is in, at its message, replying to it. Older
-  /// pages are read first, until the message is among them; one that is not
-  /// found says so, and the list stays.
+  /// Opens the conversation a tag is in, at its message, replying to it. What
+  /// is held is looked in first, then what arrived after it, then older pages,
+  /// until the message is among them; one that is not found says so, and the
+  /// list stays.
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    SuperTabMessage? message;
-    // Up to 50 pages (5,000 messages) back.
-    for (var page = 0; page < 50; page++) {
-      await c.loadMessages(id, older: c.messages(id).isNotEmpty);
+    SuperTabMessage? held() => c
+        .messages(id)
+        .where((m) => m.id == mention.messageId)
+        .firstOrNull;
+    var message = held();
+    // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
+    // is after it, so the first read is up to the latest; the rest go back.
+    for (var page = 0; message == null && page < 50; page++) {
+      final older = page > 0;
+      if (older && !c.hasOlder(id)) break;
+      await c.loadMessages(id, older: older);
       if (!mounted) return;
-      message = c
-          .messages(id)
-          .where((m) => m.id == mention.messageId)
-          .firstOrNull;
-      if (message != null || !c.hasOlder(id)) break;
+      message = held();
     }
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
