@@ -18,6 +18,8 @@ import 'model.dart';
 import 'pm_chat_rows.dart';
 import 'section_heading.dart';
 import 'workgroup_name.dart';
+import 'workspace_menu.dart';
+import 'workspaces.dart';
 import 'project_github.dart';
 
 /// The Swarm's Product Managers' conversation, listed as a channel among the projects.
@@ -48,6 +50,10 @@ class ProjectSidebar extends StatelessWidget {
     this.onOpenPmChat,
     this.readLocal,
     this.now = DateTime.now,
+    this.workspaces,
+    this.onWorkspaceSettings,
+    this.onNewWorkspace,
+    this.onNewSwarmIn,
   });
   final SuperTabController controller;
   final ValueChanged<String> onSelect;
@@ -76,6 +82,15 @@ class ProjectSidebar extends StatelessWidget {
   /// the clock its readings' ages are counted against.
   @visibleForTesting
   final DateTime Function() now;
+
+  /// The person's Workspaces for the menu at the top: the app's account's
+  /// unless a test gives its own.
+  final SwarmWorkspaces? workspaces;
+  final ValueChanged<SwarmWorkspace>? onWorkspaceSettings;
+  final VoidCallback? onNewWorkspace;
+
+  /// Starts a new Swarm in a Workspace.
+  final ValueChanged<SwarmWorkspace>? onNewSwarmIn;
 
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
@@ -652,11 +667,23 @@ class ProjectSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
     final pmChats = _pmChats(snapshot?.projects ?? const []);
+    final workspaces =
+        this.workspaces ??
+        (app == null ? null : SwarmWorkspaces.of(app!.superTabs));
     return Material(
       color: DesktopChrome.surface,
       child: ListView(
         padding: const EdgeInsets.all(8),
         children: [
+          if (workspaces != null && app != null)
+            SwarmWorkspaceMenu(
+              workspaces: workspaces,
+              tabId: controller.tabId,
+              onOpenSwarm: app!.openSuperTab,
+              onSettings: onWorkspaceSettings,
+              onNewWorkspace: onNewWorkspace,
+              onNewSwarm: onNewSwarmIn,
+            ),
           if (onNewProject != null)
             _navigationRow(
               key: 'super-new-project',

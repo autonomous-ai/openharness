@@ -5,14 +5,16 @@ import 'package:harness/core/machine_resources.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
+import 'package:harness/super_tabs/client.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machine_status.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/section_heading.dart';
+import 'package:harness/super_tabs/workspaces.dart';
 
 import 'support/super_tab_fixture.dart';
-import 'swarm_state_test.dart' show createApp;
+import 'swarm_state_test.dart' show MemoryStore, createApp;
 
 Finder inRow(String key, Finder finder) =>
     find.descendant(of: find.byKey(ValueKey(key)), matching: finder);
@@ -41,6 +43,7 @@ Future<void> pumpSidebar(
   VoidCallback? onYourDevices,
   DateTime Function()? now,
   Future<MachineResources?> Function(String)? readLocal,
+  SwarmWorkspaces? workspaces,
 }) async {
   await tester.binding.setSurfaceSize(Size(width, 1000));
   await tester.pumpWidget(
@@ -70,6 +73,7 @@ Future<void> pumpSidebar(
             devicesSelected: controller.devicesSelected,
             readLocal: readLocal,
             now: now ?? DateTime.now,
+            workspaces: workspaces,
           ),
         ),
       ),
@@ -501,6 +505,54 @@ void main() {
     await disposeSidebar(tester, controller);
     await reopened.flush();
     reopened.dispose();
+  });
+
+  testWidgets('the Workspace menu leads the sidebar, and a Swarm picked there '
+      'opens as a tab', (tester) async {
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final app = createApp(connected: true);
+    addTearDown(app.dispose);
+    final controller = await projectSidebar(ConversationServer());
+    final client = SuperTabClient(
+      transport: (method, path, {body}) async => switch (path) {
+        '/api/super-tabs/workspaces' => {
+          'workspaces': [
+            {
+              'id': 'w1',
+              'name': 'Autonomous',
+              'role': 'owner',
+              'revision': 1,
+              'swarms': [
+                {'id': 'tab', 'name': 'openharness', 'member': true},
+                {'id': 'other', 'name': 'lamp-os', 'member': true},
+              ],
+            },
+          ],
+        },
+        _ => {'invitations': []},
+      },
+      storage: MemoryStore(),
+    )..bind('owner');
+    final workspaces = SwarmWorkspaces(client);
+    addTearDown(workspaces.dispose);
+    await pumpSidebar(tester, controller, app, workspaces: workspaces);
+    final menu = find.byKey(const ValueKey('super-workspace-menu'));
+    expect(
+      inRow('super-workspace-menu', find.text('Autonomous')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(menu).dy,
+      lessThan(
+        tester.getTopLeft(find.byKey(const ValueKey('super-new-project'))).dy,
+      ),
+    );
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('lamp-os'));
+    await tester.pumpAndSettle();
+    expect(app.swarms.where((s) => s.superTabId == 'other'), hasLength(1));
+    await disposeSidebar(tester, controller);
   });
 
   group('Local models', () {
