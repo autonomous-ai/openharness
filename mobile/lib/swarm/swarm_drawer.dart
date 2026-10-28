@@ -3,14 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'identity.dart';
 import 'model.dart';
 import 'swarm_conversation.dart';
+import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
 import 'swarm_inbox.dart';
+import 'swarm_leaderboard.dart';
+import 'swarm_models_page.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_session.dart';
@@ -22,9 +26,10 @@ import 'team_glance.dart';
 /// approved prototype draws it: its title and a close button; Swarm Home
 /// with what waits on the person; the projects, each with its initial and
 /// its team in a line — its name opens the project, its arrow lists its
-/// chats: Chat with PM, the project chat, then its work, what waits on the
-/// person first; then the way back to Harness (the terminals), and Settings
-/// at its foot. A row closes the drawer before it opens anything.
+/// chats: Chat with PM, the project chat, its leaderboard, then its work,
+/// what waits on the person first; then Your models and Your devices, read
+/// only; then the way back to Harness (the terminals), and Settings at its
+/// foot. A row closes the drawer before it opens anything.
 class SwarmDrawer extends StatefulWidget {
   const SwarmDrawer({
     super.key,
@@ -72,6 +77,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     final tty = Tty.of(context);
     final session = widget.session;
     final inbox = session?.inbox;
+    final navigator = Navigator.of(context);
     void close() => Scaffold.of(context).closeDrawer();
     void then(VoidCallback action) {
       close();
@@ -165,6 +171,38 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                       ],
                       _ => const <Widget>[],
                     },
+                  // The Swarm's models and the account's computers, read
+                  // only, as Desktop's sidebar has them under its projects.
+                  const _Caption(''),
+                  SwarmDrawerRow(
+                    key: const ValueKey('swarm-drawer-models'),
+                    leading: const _Glyph(LucideIcons.brain300),
+                    title: 'Your models',
+                    trailing: true,
+                    onTap: () => then(
+                      () => navigator.push(
+                        phoneRoute(
+                          (_) => const SwarmModelsPage(),
+                          listensForItself: true,
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (SwarmScope.computersOf(context) != null)
+                    SwarmDrawerRow(
+                      key: const ValueKey('swarm-drawer-devices'),
+                      leading: const _Glyph(LucideIcons.laptop300),
+                      title: 'Your devices',
+                      trailing: true,
+                      onTap: () => then(
+                        () => navigator.push(
+                          phoneRoute(
+                            (_) => const SwarmDevicesPage(),
+                            listensForItself: true,
+                          ),
+                        ),
+                      ),
+                    ),
                   if (widget.onHarness case final harness?) ...[
                     const _Caption(''),
                     SwarmDrawerRow(
@@ -236,9 +274,10 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     ];
   }
 
-  /// An open project's chats: Chat with PM, the project chat, then its work
-  /// — what waits on the person first, the rest by latest activity. Worked
-  /// out only while it is open: a closed project costs its row alone.
+  /// An open project's chats: Chat with PM, the project chat, its
+  /// leaderboard, then its work — what waits on the person first, the rest
+  /// by latest activity. Worked out only while it is open: a closed project
+  /// costs its row alone.
   List<Widget> _chats(
     SwarmSession session,
     String swarmId,
@@ -269,6 +308,13 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
         onTap: () => then(() => widget.onPm(swarmId, project.id)),
       ),
       if (lead != null) chat(lead, 'Project chat'),
+      SwarmDrawerRow(
+        key: ValueKey('swarm-drawer-leaderboard-$swarmId-${project.id}'),
+        title: 'Leaderboard',
+        sub: true,
+        onTap: () =>
+            then(() => openSwarmLeaderboard(context, swarmId, project.id)),
+      ),
       for (final g in work)
         if (waits.contains(g.id)) chat(g, g.label),
       for (final g in work)
@@ -415,6 +461,7 @@ class SwarmDrawerRow extends StatelessWidget {
     this.badge,
     this.selected = false,
     this.sub = false,
+    this.trailing = false,
     required this.onTap,
   });
 
@@ -426,6 +473,9 @@ class SwarmDrawerRow extends StatelessWidget {
 
   /// A chat under its project.
   final bool sub;
+
+  /// Opens a page of its own: a chevron at its right.
+  final bool trailing;
   final VoidCallback? onTap;
 
   /// Every row but a chat under its project clears this, for a thumb.
@@ -485,6 +535,14 @@ class SwarmDrawerRow extends StatelessWidget {
                 if (badge case final badge?) ...[
                   const SizedBox(width: 12),
                   badge,
+                ],
+                if (trailing) ...[
+                  const SizedBox(width: 12),
+                  Icon(
+                    LucideIcons.chevronRight300,
+                    size: 18,
+                    color: AppPalette.textFaint,
+                  ),
                 ],
               ],
             ),

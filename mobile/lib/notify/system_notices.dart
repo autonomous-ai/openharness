@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'package:harness_mobile/core/last_opened_agent.dart';
@@ -40,6 +41,10 @@ abstract interface class SwarmNotices {
 
   /// Takes the notice [key] names back down: its need was met somewhere else.
   Future<void> cancelSwarm(String key);
+
+  /// Shows [count] on the app icon: what the Swarms ask of the person, the
+  /// drawer's waiting count. Zero takes it off.
+  Future<void> setSwarmBadge(int count);
 
   /// The Swarm notice tapped last — what the shell opens. Reset to null by
   /// whoever acts on it.
@@ -103,6 +108,9 @@ class SilentSystemNotices implements SystemNotices, SwarmNotices {
 
   @override
   Future<void> cancelSwarm(String key) async {}
+
+  @override
+  Future<void> setSwarmBadge(int count) async {}
 }
 
 /// Whether the OS lets this app post notices right now — Settings ▸ Notifications reads it. Null
@@ -134,6 +142,9 @@ const _swarmPayload = 'swarm:';
 
 /// The Android channel, iOS thread and iOS category of Swarm notices.
 const _swarmChannel = 'swarm-needs-you';
+
+/// `harness/app_badge` — the app icon's count (Swift: `AppBadgeChannel` in `ios/Runner/AppDelegate.swift`).
+const _appBadge = MethodChannel('harness/app_badge');
 
 /// The real centre, through flutter_local_notifications.
 ///
@@ -235,7 +246,7 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
           .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin
           >()
-          ?.requestPermissions(alert: true, sound: true);
+          ?.requestPermissions(alert: true, sound: true, badge: true);
       final android = await _plugin
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
@@ -367,6 +378,18 @@ class LocalSystemNotices implements SystemNotices, SwarmNotices {
       await _plugin.cancel(id: swarmNoticeIdFor(key));
     } catch (error) {
       appLog.warn('notify', 'swarm cancel failed', error: error);
+    }
+  }
+
+  /// iOS only: Android has no count of its own on the icon — launchers draw a dot from the
+  /// notices posted.
+  @override
+  Future<void> setSwarmBadge(int count) async {
+    if (defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await _appBadge.invokeMethod<void>('set', count);
+    } catch (error) {
+      appLog.warn('notify', 'swarm badge failed', error: error);
     }
   }
 

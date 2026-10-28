@@ -11,6 +11,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_drawer.dart';
+import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -424,6 +425,41 @@ void main() {
         find.byType(SwarmConversationPage),
       );
       expect((page.swarmId, page.conversationId), (tab, 'g1'));
+    });
+
+    testWidgets("a project's leaderboard opens from its chats", (tester) async {
+      await pump(tester, backend());
+      await openDrawer(tester);
+      expect(key('swarm-drawer-leaderboard-$tab-$project'), findsNothing);
+      await tester.tap(key('swarm-drawer-chats-$tab-$project'));
+      await tester.pumpAndSettle();
+
+      expect(
+        inside(
+          'swarm-drawer-leaderboard-$tab-$project',
+          find.text('Leaderboard'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        y(tester, 'swarm-drawer-chat-$leadChat'),
+        lessThan(y(tester, 'swarm-drawer-leaderboard-$tab-$project')),
+        reason: 'after Chat with PM and the project chat',
+      );
+      expect(
+        y(tester, 'swarm-drawer-leaderboard-$tab-$project'),
+        lessThan(y(tester, 'swarm-drawer-chat-g1')),
+        reason: 'before the work',
+      );
+
+      await tester.tap(key('swarm-drawer-leaderboard-$tab-$project'));
+      await tester.pumpAndSettle();
+
+      final page = tester.widget<SwarmLeaderboardPage>(
+        find.byType(SwarmLeaderboardPage),
+      );
+      expect((page.swarmId, page.projectId), (tab, project));
+      expect(key('swarm-drawer-home'), findsNothing, reason: 'it closed');
     });
 
     testWidgets("Chat with PM opens the person's own chat with that "

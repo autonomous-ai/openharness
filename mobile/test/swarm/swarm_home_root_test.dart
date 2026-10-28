@@ -138,6 +138,20 @@ void main() {
     await pump(tester);
     await tester.tap(key('swarm-menu'));
     await tester.pumpAndSettle();
+    // Under the person's own row, the projects, Your models and Your
+    // devices: Harness is below the fold of this Swarm's long drawer, and
+    // not built until the drawer scrolls to it.
+    await tester.scrollUntilVisible(
+      key('swarm-drawer-harness'),
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(SwarmDrawer),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(key('swarm-drawer-harness'));
     await tester.pumpAndSettle();
     expect(find.text('the terminal'), findsOneWidget);
