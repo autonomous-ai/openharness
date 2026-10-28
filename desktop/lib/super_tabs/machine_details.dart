@@ -186,7 +186,9 @@ typedef SuperTabAllowanceWindow = ({String window, String left, String? reset});
 /// (`5-hour: 44% remaining · resets in 2h 10m`) or this computer's (`5-hour — 44% remaining · resets in 2h 10m`, after
 /// a `Limiting window:` line, which the windows themselves already say). Other lines are left out.
 List<SuperTabAllowanceWindow> superTabAllowanceWindows(Iterable<String> lines) {
-  final window = RegExp(r'^(.+?)(?: — |: )(\S+%) remaining(?: · (resets in .+))?$');
+  final window = RegExp(
+    r'^(.+?)(?: — |: )(\S+%) remaining(?: · (resets in .+))?$',
+  );
   return [
     for (final line in lines)
       if (!line.startsWith('Limiting window: '))
