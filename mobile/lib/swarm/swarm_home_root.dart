@@ -4,9 +4,9 @@ import '../phone/out_of_sight.dart';
 import '../settings/experimental_features.dart';
 
 /// What the root of the phone's stack shows. While Settings ▸ Experimental ▸
-/// Swarm is on, Swarm Home, until the person goes to Harness from its drawer
-/// (or something opens an agent); while it is off, the terminal, as it always
-/// was. Turning Swarm on makes Swarm Home the root again.
+/// Swarm is on, Swarm Home, until something opens an agent; while it is off,
+/// the terminal, as it always was. Turning Swarm on makes Swarm Home the root
+/// again.
 ///
 /// The shell's, for its lifetime: the root is built once, inside the
 /// navigator's `onGenerateRoute`, so it listens rather than being handed a

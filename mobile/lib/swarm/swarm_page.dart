@@ -50,10 +50,7 @@ void openSwarmHome(BuildContext context) {
 /// the menu and its title in one line, as the approved prototype draws it.
 /// Reads the account's [SwarmSession] from the shell; with none, says why.
 class SwarmPage extends StatefulWidget {
-  const SwarmPage({super.key, this.onHarness, this.onSettings});
-
-  /// Harness at the root of the stack, from the drawer ([SwarmDrawer]).
-  final VoidCallback? onHarness;
+  const SwarmPage({super.key, this.onSettings});
 
   /// Settings over Swarm Home, from the drawer.
   final void Function(BuildContext context)? onSettings;
@@ -151,7 +148,6 @@ class _SwarmPageState extends State<SwarmPage> {
                     unawaited(_openPm(swarmId, projectId)),
                 onChat: (swarmId, conversationId) =>
                     openSwarmConversation(context, swarmId, conversationId),
-                onHarness: widget.onHarness,
                 onSettings: widget.onSettings,
                 onProfile: (swarmId) =>
                     unawaited(showSwarmProfile(context, swarmId: swarmId)),

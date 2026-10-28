@@ -216,12 +216,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     setState(() => _canPop = false);
   }
 
-  /// Harness, from Swarm Home's drawer: the terminal at the root.
-  void _showHarness() {
-    _navigator.currentState?.popUntil((route) => route.isFirst);
-    _home.showHarness();
-  }
-
   /// Swarm Home, from the terminal's Swarm mark or Find: back to the root.
   void _showSwarm() {
     _navigator.currentState?.popUntil((route) => route.isFirst);
@@ -451,7 +445,6 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               openAgent: _openAgentRequest,
             ),
             swarm: (_) => SwarmPage(
-              onHarness: _showHarness,
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier),
             ),
