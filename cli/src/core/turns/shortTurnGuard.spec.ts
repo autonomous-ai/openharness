@@ -87,6 +87,28 @@ describe('short-turn guard', () => {
     expect(guard.holding('s1')).toBe(0)
   })
 
+  it('forgets an agent that ended, and keeps the others', () => {
+    const { guard, turns } = setup()
+    turns('s1', 10)
+    turns('s2', 10)
+    guard.forget('s1')
+    expect(guard.holding('s1')).toBe(0)
+    expect(guard.size).toBe(1)
+    expect(guard.holding('s2')).toBeGreaterThan(0)
+  })
+
+  it('an agent that keeps turning is never the oldest, however many others come', () => {
+    const { guard, turns } = setup()
+    turns('looping', 10)
+    for (let i = 0; i < 999; i++) turns(`other-${i}`, 1)
+    turns('looping', 1)
+    turns('newest', 1)
+    expect(guard.size).toBe(1_000)
+    // Still remembered: its next hold doubles rather than starting again at 30 s.
+    turns('looping', 9)
+    expect(guard.holding('looping')).toBe(60_000)
+  })
+
   it('keeps at most 1000 agents, forgetting the oldest', () => {
     const { guard, turns } = setup()
     turns('first', 10)

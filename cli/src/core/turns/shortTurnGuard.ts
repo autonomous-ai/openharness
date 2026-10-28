@@ -17,7 +17,8 @@ export const SHORT_TURN_MS = 10_000
 export const LOOP_TURNS = 10
 const HOLD_FIRST_MS = 30_000
 const HOLD_MAX_MS = 30 * 60_000
-/** Sessions remembered; past it the oldest is forgotten. A daemon runs tens of agents. */
+/** Sessions remembered; past it the one that turned least recently is forgotten. A daemon runs tens of agents, and a
+ *  session that ends is forgotten with the rest of its state (agents/forget.ts), so this is only the backstop. */
 const KEPT = 1_000
 
 interface Turns { agentId: string; startedAt?: number; endedAt?: number; streak: number; trips: number; holdUntil: number }
@@ -34,12 +35,11 @@ export function createShortTurnGuard({ now, log }: ShortTurnGuardDeps) {
 
     /** A turn started now (never a replayed one). */
     started(sessionId: string, agentId: string): void {
-      let turns = sessions.get(sessionId)
-      if (!turns) {
-        turns = { agentId, streak: 0, trips: 0, holdUntil: 0 }
-        sessions.set(sessionId, turns)
-        if (sessions.size > KEPT) sessions.delete(sessions.keys().next().value!)
-      }
+      // Moved to the newest end: an agent still turning, a looping one above all, is never the one forgotten.
+      const turns = sessions.get(sessionId) ?? { agentId, streak: 0, trips: 0, holdUntil: 0 }
+      sessions.delete(sessionId)
+      sessions.set(sessionId, turns)
+      if (sessions.size > KEPT) sessions.delete(sessions.keys().next().value!)
       turns.agentId = agentId
       // Not back to back: the count starts again, the backoff stays (a held agent's pause is its hold).
       if (turns.endedAt === undefined || now() - turns.endedAt >= SHORT_TURN_MS) turns.streak = 0
@@ -58,6 +58,11 @@ export function createShortTurnGuard({ now, log }: ShortTurnGuardDeps) {
       turns.holdUntil = now() + hold
       turns.streak = 0
       log(`[turn-guard] loop session=${sid(sessionId)} agent=${sid(turns.agentId)} turns=${LOOP_TURNS} hold=${hold / 1000}s`)
+    },
+
+    /** The session ended: its turns and any hold go with it. */
+    forget(sessionId: string): void {
+      sessions.delete(sessionId)
     },
 
     /** How long automatic input to the agent is still held, in ms; 0 when it is not. */

@@ -1830,6 +1830,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   conversationOwners.settle()
   const forgetSession = createForgetSession({
     owners: conversationOwners,
+    shortTurns,
     forgetAttach: attach.forget,
     onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,
