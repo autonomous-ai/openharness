@@ -152,6 +152,32 @@ void main() {
     expect(log.failures.single, contains('Swarm files'));
   });
 
+  test('a sign-out whose files the phone refuses to delete is logged, and '
+      'tried again until they go', () async {
+    final log = _Log();
+    final before = appLog;
+    appLog = log;
+    addTearDown(() => appLog = before);
+    final keeper = SwarmAttachmentKeeper(
+      host,
+      store: store,
+      retry: const Duration(milliseconds: 20),
+    );
+    addTearDown(keeper.dispose);
+    await host.session!.inbox.refresh();
+    await store.file(picture);
+    final allow = denyDeletes(root);
+    addTearDown(allow);
+
+    account.value = null;
+
+    await until(() => log.failures.isNotEmpty);
+    expect(log.failures.first, contains('Swarm files'));
+    expect(keptUnder(root), isNotEmpty);
+    allow();
+    await until(() => keptUnder(root).isEmpty);
+  });
+
   test('let go of, it hears nothing more', () async {
     final keeper = await keeping();
     keeper.dispose();

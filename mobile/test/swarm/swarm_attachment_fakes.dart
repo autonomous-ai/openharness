@@ -95,3 +95,17 @@ List<String> keptUnder(io.Directory root) => !root.existsSync()
         for (final entry in root.listSync(recursive: true))
           if (entry is io.File) entry.path.substring(root.path.length + 1),
       ];
+
+/// The one account folder under [root] made read-only, so what is in it
+/// cannot be deleted, as a phone can refuse; returns the undo, which the
+/// caller also runs in its tear-down so the folder can be cleaned up.
+void Function() denyDeletes(io.Directory root) {
+  final folders = root.listSync().whereType<io.Directory>().toList();
+  if (folders.length != 1) {
+    throw StateError('Expected one account folder, found ${folders.length}.');
+  }
+  void mode(String bits) =>
+      io.Process.runSync('chmod', [bits, folders.single.path]);
+  mode('500');
+  return () => mode('700');
+}

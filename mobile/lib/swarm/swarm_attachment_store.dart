@@ -43,9 +43,13 @@ class SwarmAttachmentStore {
   /// The account files are kept for; null while nobody's are.
   String? _account;
 
-  /// Whether [keepOnly] has run: until it has, the folder may hold what an
-  /// earlier run left, whoever's it was.
+  /// Whether [keepOnly] has emptied all but [_account]'s files: until it
+  /// has, the folder may hold what an earlier run, or another account, left.
   bool _kept = false;
+
+  /// Whether [_account]'s own files are to go too: a [clear] that failed.
+  /// The next [keepOnly] empties them.
+  bool _clearOwed = false;
 
   /// The fetches under way. Emptying waits for them, so none writes into a
   /// folder already emptied, and the cache is never closed under one.
@@ -77,29 +81,46 @@ class SwarmAttachmentStore {
       (await (_cache ??= _cacheFor(account))).getSingleFile(url.toString());
 
   /// Keeps [accountId]'s files and empties every other account's; with null
-  /// (nobody signed in, or Swarm off) empties everything.
+  /// (nobody signed in, or Swarm off) empties everything. A file that could
+  /// not go throws, after the rest went; the next call tries again.
   Future<void> keepOnly(String? accountId) => _serially(() async {
-    if (_kept && accountId == _account) return;
-    _kept = true;
-    _account = accountId;
+    if (accountId != _account) {
+      _account = accountId;
+      _kept = _clearOwed = false;
+    }
+    if (_kept && !_clearOwed) return;
     await _close();
     final root = await _root();
-    if (!await root.exists()) return;
-    final keep = accountId == null ? null : _name(accountId);
-    await for (final entry in root.list(followLinks: false)) {
-      if (entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty) == keep) {
-        continue;
+    if (await root.exists()) {
+      final keep = accountId == null || _clearOwed ? null : _name(accountId);
+      (Object, StackTrace)? failed;
+      await for (final entry in root.list(followLinks: false)) {
+        if (entry.uri.pathSegments.lastWhere((s) => s.isNotEmpty) == keep) {
+          continue;
+        }
+        try {
+          await _delete(entry);
+        } catch (error, stack) {
+          failed ??= (error, stack);
+        }
       }
-      await _delete(entry);
+      if (failed case (final error, final stack)) {
+        Error.throwWithStackTrace(error, stack);
+      }
     }
+    _kept = true;
+    _clearOwed = false;
   });
 
-  /// Empties the account's files: a Swarm left its list.
+  /// Empties the account's files: a Swarm left its list. One that could not
+  /// go throws, and the next [keepOnly] empties them.
   Future<void> clear() => _serially(() async {
     await _close();
     final account = _account;
     if (account == null) return;
+    _clearOwed = true;
     await _delete(await _folderOf(account));
+    _clearOwed = false;
   });
 
   /// Runs [change] after the changes before it and the fetches under way. One
@@ -145,10 +166,11 @@ class SwarmAttachmentStore {
   static String _name(String account) =>
       base64Url.encode(utf8.encode(account)).replaceAll('=', '');
 
+  /// Deletes [entry]; one already gone is no failure, any other is thrown.
   static Future<void> _delete(FileSystemEntity entry) async {
     try {
       await entry.delete(recursive: true);
-    } on FileSystemException {
+    } on PathNotFoundException {
       // Already gone.
     }
   }
@@ -163,14 +185,28 @@ final swarmAttachments = SwarmAttachmentStore();
 /// The shell's, for its lifetime; at start it empties what no one now signed
 /// in left behind.
 class SwarmAttachmentKeeper {
-  SwarmAttachmentKeeper(this.host, {SwarmAttachmentStore? store})
-    : store = store ?? swarmAttachments {
+  SwarmAttachmentKeeper(
+    this.host, {
+    SwarmAttachmentStore? store,
+    this.retry = const Duration(minutes: 1),
+  }) : store = store ?? swarmAttachments {
     host.addListener(_hostChanged);
     _hostChanged();
   }
 
   final SwarmHost host;
   final SwarmAttachmentStore store;
+
+  /// How long after a failed emptying it is tried again; twice as long after
+  /// each failure in a row, up to [_retryAtMost].
+  final Duration retry;
+
+  static const _retryAtMost = Duration(hours: 1);
+
+  /// The wait before the next try, while emptying keeps failing.
+  Duration? _wait;
+  Timer? _again;
+  bool _disposed = false;
 
   SwarmSession? _session;
 
@@ -185,7 +221,7 @@ class SwarmAttachmentKeeper {
       _listed = null;
       session?.inbox.addListener(_listChanged);
     }
-    _logged(store.keepOnly(session?.accountId));
+    _emptying(store.keepOnly(session?.accountId));
     _listChanged();
   }
 
@@ -196,23 +232,40 @@ class SwarmAttachmentKeeper {
     final before = _listed;
     _listed = listed;
     if (before != null && !listed.containsAll(before)) {
-      _logged(store.clear());
+      _emptying(store.clear());
     }
   }
 
-  /// Emptying runs on its own; one that fails says so in the app's log.
-  static void _logged(Future<void> emptying) => unawaited(
-    emptying.catchError(
-      (Object error, StackTrace stack) => appLog.failure(
-        'swarm',
-        'Swarm files could not be emptied',
-        error: error,
-        stackTrace: stack,
-      ),
+  /// Emptying runs on its own. One that fails says so in the app's log and is
+  /// tried again ([retry]): for the account signed in then, which also
+  /// empties what a failed [SwarmAttachmentStore.clear] left.
+  void _emptying(Future<void> emptying) => unawaited(
+    emptying.then(
+      (_) {
+        _wait = null;
+      },
+      onError: (Object error, StackTrace stack) {
+        appLog.failure(
+          'swarm',
+          'Swarm files could not be emptied',
+          error: error,
+          stackTrace: stack,
+        );
+        if (_disposed) return;
+        final next = _wait == null ? retry : _wait! * 2;
+        final wait = _wait = next > _retryAtMost ? _retryAtMost : next;
+        _again?.cancel();
+        _again = Timer(
+          wait,
+          () => _emptying(store.keepOnly(host.session?.accountId)),
+        );
+      },
     ),
   );
 
   void dispose() {
+    _disposed = true;
+    _again?.cancel();
     host.removeListener(_hostChanged);
     _session?.inbox.removeListener(_listChanged);
   }

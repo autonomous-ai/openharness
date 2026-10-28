@@ -162,6 +162,62 @@ void main() {
     expect(keptUnder(root), isNotEmpty);
   });
 
+  group('a delete the phone refuses', () {
+    void Function() deny() {
+      final allow = denyDeletes(root);
+      addTearDown(allow);
+      return allow;
+    }
+
+    test('on sign-out says so, and empties on the next try', () async {
+      await store.keepOnly('person-a');
+      await store.file(picture);
+      final allow = deny();
+
+      await expectLater(
+        store.keepOnly(null),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(keptUnder(root), isNotEmpty);
+
+      allow();
+      await store.keepOnly(null);
+
+      expect(keptUnder(root), isEmpty);
+    });
+
+    test('on another account says so, and empties the first on the next '
+        'try', () async {
+      await store.keepOnly('person-a');
+      await store.file(picture);
+      final allow = deny();
+
+      await expectLater(
+        store.keepOnly('person-b'),
+        throwsA(isA<FileSystemException>()),
+      );
+
+      allow();
+      await store.keepOnly('person-b');
+
+      expect(keptUnder(root), isEmpty);
+    });
+
+    test('on clear says so, and the next keeping of the same account '
+        'empties it', () async {
+      await store.keepOnly('person-a');
+      await store.file(picture);
+      final allow = deny();
+
+      await expectLater(store.clear(), throwsA(isA<FileSystemException>()));
+
+      allow();
+      await store.keepOnly('person-a');
+
+      expect(keptUnder(root), isEmpty);
+    });
+  });
+
   test('a refused fetch keeps nothing and says so', () async {
     await store.keepOnly('person-a');
     storage.status = 404;
