@@ -1629,6 +1629,39 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.deliveries(host, tab, worker)).toEqual([])
   })
 
+  it('lists N shares of one Swarm with one Swarm load', async () => {
+    const { tab } = await fixture()
+    const builders = [randomUUID(), randomUUID(), randomUUID()]
+    for (const [i, harnessId] of builders.entries()) {
+      await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId, name: `Builder ${i}`, configuration: config, lead: false })
+    }
+    await invite(tab, 'viewer')
+    const shares = builders.map(agentId => ({ id: agentId, superTabId: tab, machineId: 'test-host', agentId, ownerId: host.sub }))
+    const outside = { id: 'outside', superTabId: tab, machineId: 'test-host', agentId: 'another-session', ownerId: host.sub }
+    const ordinary = { ...shares[0]!, id: 'ordinary', superTabId: null }
+    // A machine list of 40 shares from one Swarm loaded that Swarm once per share (Diego, 2026-10-27).
+    const load = vi.spyOn(store, 'load')
+    onTestFinished(() => load.mockRestore())
+    expect((await store.visibleShares(peer, [shares[0]!, outside, ordinary, shares[1]!, shares[2]!])).map(s => s.id))
+      .toEqual([shares[0]!.id, 'ordinary', shares[1]!.id, shares[2]!.id])
+    expect(load).toHaveBeenCalledTimes(1)
+  })
+
+  it('a share whose machine is gone leaves the same Swarm\'s other shares open', async () => {
+    const { tab } = await fixture()
+    await db.machine.create({ data: { machineId: 'gone-host', userId: host.sub, apiKey: 'fixture-gone-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId: 'gone-host', ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email, peer.email] } })
+    const [here, gone] = [randomUUID(), randomUUID()]
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'test-host', harnessId: here, name: 'Here', configuration: config, lead: false })
+    await run(tab, { type: 'agent.add', conversationId: 'lead', machineId: 'gone-host', harnessId: gone, name: 'Gone', configuration: config, lead: false })
+    await invite(tab, 'viewer')
+    await db.machine.update({ where: { machineId: 'gone-host' }, data: { deletedAt: new Date() } })
+    const shares = [{ superTabId: tab, machineId: 'gone-host', agentId: gone, ownerId: host.sub },
+      { superTabId: tab, machineId: 'test-host', agentId: here, ownerId: host.sub }]
+    expect(await store.visibleShares(peer, shares)).toEqual([shares[1]])
+    expect(await store.mayOpenShare(peer, shares[0]!)).toBe(false)
+  })
+
   it('derives session-only observer access from accepted membership and removes it with that membership', async () => {
     const { tab } = await fixture()
     // A Builder's terminal: nobody but its machine's owner watches a Lead (Critical 1).

@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto'
 const mocks = vi.hoisted(() => ({
   prisma: { harnessShare: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn(), updateMany: vi.fn() },
     machine: { findFirst: vi.fn(), findMany: vi.fn() }, user: { findMany: vi.fn(), findUnique: vi.fn() } },
-  mayOpenShare: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
+  mayOpenShare: vi.fn(), visibleShares: vi.fn(), presence: vi.fn(), changed: vi.fn(), listChanged: vi.fn(), auth: vi.fn(),
 }))
-vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayOpenShare = mocks.mayOpenShare } }))
+vi.mock('../superTabs/store.js', () => ({ SuperTabStore: class { mayOpenShare = mocks.mayOpenShare; visibleShares = mocks.visibleShares } }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('../lib/bus.js', () => ({ getAgentPresenceMany: mocks.presence, publishShareChanged: mocks.changed,
   publishDeviceMachineListChanged: mocks.listChanged }))
@@ -26,6 +26,7 @@ describe('account-bound harness invitations', () => {
   beforeEach(async () => {
     vi.resetAllMocks()
     mocks.mayOpenShare.mockResolvedValue(true)
+    mocks.visibleShares.mockImplementation(async (_user: unknown, shares: unknown[]) => shares)
     mocks.auth.mockResolvedValue(owner)
     mocks.prisma.machine.findFirst.mockResolvedValue(machine)
     mocks.prisma.machine.findMany.mockResolvedValue([machine])
@@ -214,7 +215,9 @@ describe('account-bound harness invitations', () => {
     expect(mocks.mayOpenShare).toHaveBeenCalledWith(ken, share)
     mocks.mayOpenShare.mockResolvedValue(false)
     expect(await recipientShare('share', ken)).toBeNull()
+    mocks.visibleShares.mockResolvedValue([])
     expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+    expect(mocks.visibleShares).toHaveBeenCalledWith(ken, [share])
   })
 
   it('asks the Swarms about an ordinary share too: a confidential session refuses it (final review, Critical 1)', async () => {
@@ -225,7 +228,9 @@ describe('account-bound harness invitations', () => {
     mocks.mayOpenShare.mockResolvedValue(false)
     expect(await recipientShare('share', ken)).toBeNull()
     expect(mocks.mayOpenShare).toHaveBeenCalledWith(ken, share)
+    mocks.visibleShares.mockResolvedValue([])
     expect((await app.inject({ method: 'GET', url: '/api/harness-shares', headers: auth })).json().data.machines).toEqual([])
+    expect(mocks.visibleShares).toHaveBeenCalledWith(ken, [share])
   })
 
 })

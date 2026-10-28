@@ -61,10 +61,7 @@ export async function harnessShareRoutes(app: FastifyInstance): Promise<void> {
       recipientEmail: req.user!.email.trim().toLowerCase(), autonomousEnv: req.user!.autonomousEnv,
       revokedAt: null, expiresAt: { gt: new Date() },
     }, orderBy: { createdAt: 'asc' }, take: 1000 })
-    const visible: typeof shares = []
-    for (const share of shares) {
-      if (await new SuperTabStore(prisma).mayOpenShare(req.user!, share)) visible.push(share)
-    }
+    const visible = await new SuperTabStore(prisma).visibleShares(req.user!, shares)
     const machines = await prisma.machine.findMany({ where: {
       machineId: { in: [...new Set(visible.map(s => s.machineId))] },
       autonomousEnv: req.user!.autonomousEnv, ...machineAlive,
