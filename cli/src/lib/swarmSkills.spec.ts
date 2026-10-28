@@ -77,6 +77,8 @@ describe('built-in Swarm skills', () => {
   const callLead = '- Call a person only for judgement, taste, knowledge or hands, one named person per call: decision.ask for a choice, handsOn.ask for a device, a sign-in or an approval (the steps and what you do next), a mention for anything else. Give a group that needs a person a partner (conversation.partner), picked from the areas in status. Nothing private goes in a request; that goes through Chat with PM. Told a request has waited 2 hours: ask someone else or go on with the recommendation, and say which.\n'
   const callBuilder = '- A question for a person always mentions them (--mention) or goes to them as a decision or a hands-on request; a question in chat that mentions nobody notifies nobody. For a device, a sign-in or an approval, ask with handsOn.ask (the steps and what you do next) and keep working on the rest; never ask the same thing twice.\n'
   const twoHours = '- A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).\n'
+  // A failed start is never left (the round-device group, 2026-10-27; superTabs/start.ts): the Lead's alone, in both modes.
+  const failedStart = '- A failed start is retried elsewhere or reported, never left: when one fails, resume it; it starts once on the route\'s next machine, or tells the group and its requester.\n'
   it.each([
     ['lead', 'b9254e4bb5c633a73e1b87e6ca6690915e1c3a7bb55db0d3d093e6710dd719db'],
     ['dev', 'e78ce31a71f169d8956a2acd46e8bb43b79bd654b80b0fe3c33dbced9d2c3c75'],
@@ -103,13 +105,23 @@ describe('built-in Swarm skills', () => {
       expect(text.split(requests)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(callLead)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(callBuilder)).toHaveLength(role === 'dev' ? 2 : 1)
-      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(text.replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
         .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
     }
   })
   it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(text).toContain(`reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
+  })
+  it('adds the failed-start line right after each Lead skill\'s local models line, and to no other role', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`${local}${failedStart}- The brief is all a Builder gets.`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`${localDefault}${failedStart}- The brief is all a Builder gets;`)
+    for (const mode of ['orchestration', 'default'] as const) for (const role of ['dev', 'review'] as const) {
+      expect(readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')).not.toContain(failedStart)
+    }
   })
   it('adds the terminal line where each Lead skill keeps work moving, right after the silent-worker rule', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -198,7 +210,8 @@ describe('built-in Swarm skills', () => {
     expect(text.split(requestsLast)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(callLead)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(callBuilder)).toHaveLength(role === 'dev' ? 2 : 1)
-    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+    expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(text.replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
       .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(callLead, '').replace(callBuilder, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
