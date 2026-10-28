@@ -11,6 +11,7 @@ import { DRIVERS } from './bench/bench.js'
 import { machineId, seedAccounts } from './bench/fixtures.js'
 import { plan } from './bench/plan.js'
 import { seedSwarm, AGENT_CONFIGURATION, type Swarm } from './bench/seed.js'
+import { poolRows } from './hostRows.test-support.js'
 
 // The harness shares list (routes/harnessShares.ts) against a Swarm-sized database. Prod 2026-10-28: CLI daemons' list calls
 // took half the backend's busy time in spike minutes (p95 13.4 s), each share loading its whole Swarm to check it. Every
@@ -189,7 +190,7 @@ describe('the harness shares list as permissions change', () => {
     const db = database.db
     store = new SuperTabStore(db)
     for (const user of [owner, host, a, b]) await db.user.create({ data: { id: user.sub, externalId: `perm-${user.sub}`, email: user.email, autonomousEnv: 'prod' } })
-    for (const [machine, user] of [['grant-host', host], ['own-host', owner]] as const) {
+    for (const [machine, user] of [['grant-host', host], ['own-host', owner], ['a-mac', a]] as const) {
       await db.machine.create({ data: { machineId: machine, userId: user.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
     }
   })
@@ -209,17 +210,21 @@ describe('the harness shares list as permissions change', () => {
     const agents: Record<string, string> = {}
     const shares: Record<string, { name: string; to: AuthUser }> = {}
     /** Adds agent `name` to `conversationId` on the host's machine through the owner's grant, and shares it with both members. */
-    const shared = async (name: string, conversationId = 'lead', lead = false, [machine, machineOwner] = ['grant-host', host] as const,
-      claimedOwner: AuthUser = machineOwner) => {
-      const harnessId = `perm-${n}-${name}`
-      agents[name] = (await run({ type: 'agent.add', conversationId, machineId: machine, harnessId, name: `Builder ${name}`,
-        configuration: AGENT_CONFIGURATION, lead })).result.agentId as string
+    /** Shares session `harnessId` on `machine`, as `claimedOwner` names it, with both members, under agent name `name`. */
+    const shareWithBoth = async (name: string, machine: string, harnessId: string, claimedOwner: AuthUser) => {
       for (const to of [a, b]) {
         const id = randomUUID()
         shares[id] = { name, to }
         await db.harnessShare.create({ data: { id, superTabId: tab, ownerId: claimedOwner.sub, machineId: machine, agentId: harnessId,
           recipientEmail: to.email, autonomousEnv: 'prod', name, ownerPublicKey: 'fixture-key', expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } })
       }
+    }
+    const shared = async (name: string, conversationId = 'lead', lead = false, [machine, machineOwner] = ['grant-host', host] as const,
+      claimedOwner: AuthUser = machineOwner) => {
+      const harnessId = `perm-${n}-${name}`
+      agents[name] = (await run({ type: 'agent.add', conversationId, machineId: machine, harnessId, name: `Builder ${name}`,
+        configuration: AGENT_CONFIGURATION, lead })).result.agentId as string
+      await shareWithBoth(name, machine, harnessId, claimedOwner)
     }
     await shared('X')
     await shared('Y')
@@ -236,7 +241,7 @@ describe('the harness shares list as permissions change', () => {
       expect((await store.openableShares(as, rows)).map(share => share.id).sort(), `${as.email}: the store's batch and each share alone`).toEqual([...alone].sort())
       return mine.filter(id => listed.has(id)).map(id => shares[id]!.name).sort().join('')
     }
-    return { tab, run, agents, sees, shared }
+    return { tab, run, agents, sees, shared, shareWithBoth, n }
   }
 
   /** Marks agent `agentId` of this Swarm confidential in another Swarm too, as a registration there would have left it. */
@@ -332,5 +337,26 @@ describe('the harness shares list as permissions change', () => {
     const { shared, sees } = await swarmWithShares()
     await shared('V', 'lead', false, ['grant-host', host], owner)
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
+  })
+
+  it('lists a member\'s Buddy to that member alone, never to another, as each share alone does', async () => {
+    // A Buddy is in its owner's private chat (buddies.ts), so its session is confidential: only its machine's person watches it.
+    const { tab, sees, shareWithBoth, n } = await swarmWithShares()
+    const execute = (command: Command, as: AuthUser, hostMachineId?: string) =>
+      store.execute(as, tab, { operationId: randomUUID(), command }, undefined, hostMachineId)
+    await execute({ type: 'machine.contribute', machineId: 'a-mac', name: 'A Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 }, a)
+    const generation = (await poolRows(store, a, 'a-mac')).find(p => p.tabId === tab)!.machine.generation
+    await store.observeMachine(a, tab, 'a-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    await execute({ type: 'tab.buddies', enabled: true }, owner)
+    const startId = String((await execute({ type: 'buddy.create', projectId: 'lead', machineId: 'a-mac', engine: 'claude' }, a)).result.startId)
+    // Started by A's host, as a running host does.
+    const harnessId = `perm-${n}-buddy`
+    await execute({ type: 'agent.startDispatch', startId }, a, 'a-mac')
+    await execute({ type: 'agent.started', startId, harnessId, configuration: { ...AGENT_CONFIGURATION, engine: 'claude' } }, a, 'a-mac')
+    await execute({ type: 'agent.startSettled', startId, warning: null }, a, 'a-mac')
+    await shareWithBoth('B', 'a-mac', harnessId, a)
+    expect([await sees(a), await sees(b)]).toEqual(['BXYZ', 'XYZ'])
   })
 })
