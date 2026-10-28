@@ -1330,6 +1330,34 @@ void main() {
       expect(key('swarm-need-decision:d1'), findsOneWidget);
     });
 
+    testWidgets('read again in full, what waits is read again before Home '
+        'says nothing needs you; a failure ends the skeleton', (tester) async {
+      final fake = deciding()
+        ..routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+          'decisions': [decision],
+        };
+      final host = await pump(tester, fake);
+      expect(key('swarm-need-decision:d1'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) =>
+          throw SuperTabFailure('INTERNAL', 'Broken', statusCode: 500);
+      final asked = hold(fake, '/api/super-tabs/$tab/decisions?state=open');
+      unawaited(host.session!.inbox.refresh());
+      await frames(tester);
+
+      expect(key('swarm-need-decision:d1'), findsNothing);
+      expect(key('swarm-needs-loading'), findsOneWidget);
+      expect(find.text('Nothing needs you.'), findsNothing);
+
+      asked.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-needs-loading'), findsNothing);
+      expect(find.text('Nothing needs you.'), findsNothing);
+      expect(key('swarm-needs-unread'), findsOneWidget);
+    });
+
     testWidgets('a tag marked done leaves "Nothing needs you", with no '
         'skeleton between', (tester) async {
       final fake = deciding();

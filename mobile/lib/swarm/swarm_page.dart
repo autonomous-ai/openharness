@@ -11,7 +11,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
-import 'swarm_asks.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
@@ -408,15 +407,15 @@ enum _EmptyNeeds {
 bool _unread(SwarmReader? reader) =>
     reader == null || (reader.snapshot == null && reader.error == null);
 
-/// Why [inbox]'s Needs you is empty. Every Swarm is looked at, so each
-/// one's asks are seen read ([_asksStillReading]) while they hold something.
+/// Why [inbox]'s Needs you is empty: still reading while a Swarm, or what
+/// waits on the person in it since it was last read in full, is not read yet.
 _EmptyNeeds _emptyNeeds(SwarmInbox inbox) {
   var reading = false, unread = false;
   for (final swarm in inbox.swarms) {
     switch (inbox.reader(swarm.id)) {
       case SwarmReader(snapshot: _?):
         if (inbox.asks(swarm.id) case final asks?) {
-          if (_asksStillReading(asks)) {
+          if (asks.loading) {
             reading = true;
           } else if (asks.error != null) {
             unread = true;
@@ -431,28 +430,6 @@ _EmptyNeeds _emptyNeeds(SwarmInbox inbox) {
   if (reading) return _EmptyNeeds.reading;
   return unread ? _EmptyNeeds.unread : _EmptyNeeds.none;
 }
-
-/// Whether [asks] is still to read what waits on the person. A stand-in:
-/// the data layer's `SwarmAsks.loading` (its own task) replaces this body
-/// once it lands. Until then: its Swarm's counts say something waits, and it
-/// holds no ask and no error yet. Once seen read it stays read
-/// ([_asksRead]): a Done or an answer empties it before the Swarm's counts
-/// catch up, and no read is under way then.
-bool _asksStillReading(SwarmAsks asks) {
-  if (_asksRead[asks] ?? false) return false;
-  final snapshot = asks.reader.snapshot;
-  if (snapshot == null) return false;
-  final reading =
-      snapshot.decisionsWaiting + snapshot.mentionsWaiting > 0 &&
-      asks.decisions.isEmpty &&
-      asks.mentions.isEmpty &&
-      asks.error == null;
-  if (!reading) _asksRead[asks] = true;
-  return reading;
-}
-
-/// The asks seen read ([_asksStillReading]), held no longer than they are.
-final _asksRead = Expando<bool>('asks read');
 
 /// No session: Swarm is off, or nobody is signed in on this phone.
 class _Unavailable extends StatelessWidget {
