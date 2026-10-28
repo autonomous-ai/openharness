@@ -293,6 +293,23 @@ void main() {
         DefaultTextStyle.of(delete).style.color,
         Theme.of(delete).colorScheme.error,
       );
+      // Actions read as links in the line: no fill or rim at rest, a focus
+      // ring when the keyboard is on them.
+      for (final label in ['Retry', 'Delete']) {
+        final button = find.ancestor(
+          of: find.text(label),
+          matching: find.byType(TextButton),
+        );
+        final fill = tester
+            .widget<Material>(
+              find.descendant(of: button, matching: find.byType(Material)),
+            )
+            .color;
+        expect(fill?.a ?? 0, 0, reason: '$label has a fill at rest');
+        final side = tester.widget<TextButton>(button).style!.side!;
+        expect(side.resolve({})!.color.a, 0, reason: '$label has a rim');
+        expect(side.resolve({WidgetState.focused})!.color.a, greaterThan(0));
+      }
 
       await tester.tap(find.text('Delete'));
       await tester.pumpAndSettle();

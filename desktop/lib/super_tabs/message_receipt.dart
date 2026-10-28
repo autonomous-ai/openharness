@@ -310,13 +310,26 @@ Widget _receiptAction(
   Color? color,
 }) => TextButton(
   onPressed: onPressed,
-  style: TextButton.styleFrom(
-    foregroundColor: color ?? DesktopChrome.accent,
-    padding: const EdgeInsets.symmetric(horizontal: 2),
-    minimumSize: const Size(0, 32),
-    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    textStyle: style,
-  ),
+  // Quiet, as inline controls are: no fill or rim at rest, the shared hover
+  // wash, and the focus ring for the keyboard.
+  style:
+      TextButton.styleFrom(
+        foregroundColor: color ?? DesktopChrome.accent,
+        backgroundColor: Colors.transparent,
+        padding: const EdgeInsets.symmetric(horizontal: 2),
+        minimumSize: const Size(0, 32),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: style,
+      ).copyWith(
+        side: WidgetStateProperty.resolveWith(
+          (states) => BorderSide(
+            width: grid.AppDesktop.focusWidth,
+            color: states.contains(WidgetState.focused)
+                ? DesktopChrome.focusRing
+                : Colors.transparent,
+          ),
+        ),
+      ),
   child: Text(label),
 );
 
