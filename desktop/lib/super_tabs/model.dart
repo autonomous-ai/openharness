@@ -393,6 +393,9 @@ class SuperTabSnapshot {
     Map<String, dynamic>? best;
     for (final m in teamPoolsOf(machineId)) {
       if (m['removal'] != null) continue;
+      // Removed (`harness team remove` deletes its machine): the server reads a live account never so, and the Mac is a
+      // Mac without one again, which its owner can set up from its row (local Team account run, 2026-10-28).
+      if (m['teamWork'] case {'code': 'TEAM_ACCOUNT_REQUIRED'}) continue;
       if (best == null || reported(m) >= reported(best)) best = m;
     }
     return best;
