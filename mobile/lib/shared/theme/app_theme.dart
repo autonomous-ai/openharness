@@ -972,6 +972,14 @@ ThemeData buildAppTheme({Brightness brightness = Brightness.light}) {
       style: _outlinedButtonStyle(scheme),
     ),
     textButtonTheme: TextButtonThemeData(style: _textButtonStyle()),
+    iconButtonTheme: IconButtonThemeData(
+      style: ButtonStyle(
+        tapTargetSize: _touchTarget,
+        visualDensity: _touchDensity,
+        // Material's 40-point drawing, given back the step [_touchDensity] takes.
+        minimumSize: const WidgetStatePropertyAll(Size(40, 40 + _densityStep)),
+      ),
+    ),
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
@@ -1275,6 +1283,10 @@ abstract final class AppControl {
   /// A bottom sheet's top corners: the card radius (12). Desktop has no
   /// sheets; the design system's Phone section lists this as phone-only.
   static const double sheetRadius = AppCard.radius;
+
+  /// A row inside a sheet or a card of rows, Desktop's row radius: one step
+  /// tighter than the sheet around it.
+  static const double rowRadius = 10;
 
   /// Every bottom sheet's shape, the theme's and each caller's.
   static const ShapeBorder sheetShape = RoundedRectangleBorder(
@@ -1759,6 +1771,18 @@ const double kFieldIconSize = 18;
 
 StadiumBorder get _buttonShape => const StadiumBorder();
 
+// Every themed button reaches the phone's 44-point touch target on its own,
+// without a `TouchTarget` at the call site: Material's padded target lays the
+// button out at least 48 tall and sends a tap anywhere in that box to it, and
+// one density step down makes that 44 (`minTouchTarget`). The density step
+// also takes 4 off the button's own box and vertical padding, so the styles
+// below give it back: the button is DRAWN exactly as before. Its layout box is
+// what grows, so a row holding a 32-point button is at least 44 tall.
+const MaterialTapTargetSize _touchTarget = MaterialTapTargetSize.padded;
+const VisualDensity _touchDensity = VisualDensity(vertical: -1);
+const double _densityStep = 4;
+const EdgeInsets _densityPadding = EdgeInsets.symmetric(vertical: _densityStep);
+
 /// The primary action: a solid accent capsule.
 /// A filled button that destroys something.
 ///
@@ -1777,15 +1801,12 @@ ButtonStyle dangerButtonStyle() => FilledButton.styleFrom(
 );
 
 ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
-  minimumSize: Size(0, AppControl.heightScaled),
-  padding: AppControl.paddingScaled,
+  minimumSize: Size(0, AppControl.heightScaled + _densityStep),
+  padding: AppControl.paddingScaled + _densityPadding,
   shape: _buttonShape,
   textStyle: _buttonTextStyle,
-  // Material pads every button out to a 48px tap target — on a desktop app
-  // that leaves a 32px button floating in a 48px box and wrecks every row it
-  // sits in.
-  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  visualDensity: VisualDensity.standard,
+  tapTargetSize: _touchTarget,
+  visualDensity: _touchDensity,
   // Its own wash, not [AppSurface.hoverFill]: this button already carries the
   // accent as a FILL, so the hover has to read against that rather than against
   // the page. White at 12% lifts the accent a step without turning it into a
@@ -1797,24 +1818,24 @@ ButtonStyle _filledButtonStyle() => FilledButton.styleFrom(
 /// The secondary action: a hairline rim, no fill — Apple's "bordered" button.
 ButtonStyle _outlinedButtonStyle(ColorScheme scheme) =>
     OutlinedButton.styleFrom(
-      minimumSize: Size(0, AppControl.heightScaled),
-      padding: AppControl.paddingScaled,
+      minimumSize: Size(0, AppControl.heightScaled + _densityStep),
+      padding: AppControl.paddingScaled + _densityPadding,
       shape: _buttonShape,
       textStyle: _buttonTextStyle,
       side: BorderSide(color: scheme.outline),
       foregroundColor: scheme.onSurface,
-      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.standard,
+      tapTargetSize: _touchTarget,
+      visualDensity: _touchDensity,
     );
 
 /// The tertiary action: text only, for the quiet way out of a dialog.
 ButtonStyle _textButtonStyle() => TextButton.styleFrom(
-  minimumSize: Size(0, AppControl.heightScaled),
-  padding: AppControl.paddingSmallScaled,
+  minimumSize: Size(0, AppControl.heightScaled + _densityStep),
+  padding: AppControl.paddingSmallScaled + _densityPadding,
   shape: _buttonShape,
   textStyle: _buttonTextStyle,
-  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  visualDensity: VisualDensity.standard,
+  tapTargetSize: _touchTarget,
+  visualDensity: _touchDensity,
   // ⚠️ Without this a text button has NO hover state at all.
   //
   // `splashFactory: NoSplash` turns Material's ripple off app-wide — right, it
