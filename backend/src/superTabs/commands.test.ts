@@ -1190,6 +1190,109 @@ describe('Reviewer role', () => {
     expect(f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head 789' }, builderActor).messages[0]!.recipients).toEqual([lead])
   })
 
+  describe('a review the Swarm opens by itself', () => {
+    const pr = 'https://github.com/example/project/pull/42'
+    /** reviewed() with the project's repository, the Builder working, and a second Reviewer `fresh` that is not in the group. */
+    function ready(engine: 'claude' | 'codex' = 'claude') {
+      const setup = reviewed()
+      const { f, leadActor, group, builder } = setup
+      f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: 'https://github.com/Example/project.git' }
+      const startId = f.run({ type: 'agent.start', request: request('lead', { role: 'reviewer', engine, name: 'Second reviewer' }), ...via } as Command, leadActor,
+        { contribution, ...decisionIn('lead') }).result.startId as string
+      f.run({ type: 'agent.startDispatch', startId }, leadActor, { contribution })
+      const fresh = f.run({ type: 'agent.started', startId, harnessId: 'native-fresh', configuration: { ...config, engine } }, leadActor, { contribution }).result.agentId as string
+      const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+      const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
+      const markReady = (result: string | null, actor: Actor = builderActor) =>
+        f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'review', result }, actor)
+      const reviews = () => f.state.conversations.filter(c => c.reviewOf === group)
+      return { ...setup, fresh, built, builderActor, markReady, reviews }
+    }
+
+    it('opens "Review: <group>" with the handoff, the checks and the link, assigns a free Reviewer and adds it to the reviewed group', () => {
+      const { f, lead, group, reviewer, fresh, markReady, reviews } = ready()
+      f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+      const handoff = `Ready: yes. Revision a1b2c3..d4e5f6. Unverified: nothing.\n${pr}`
+      const effects = markReady(handoff)
+      expect(reviews()).toHaveLength(1)
+      const review = reviews()[0]!
+      expect(review).toMatchObject({ title: 'Review: Offline editing', number: 2, assignment: { agentId: fresh, status: 'working' },
+        checks: [{ description: 'Verdict with the reviewed revision', independent: false, evidence: null, passedBy: null }] })
+      expect(review.brief).toContain('Save edits while offline.')
+      expect(review.brief).toContain('- Reconnect preserves the edits.')
+      expect(review.brief).toContain(handoff)
+      expect(review.brief).toContain(`Pull request: ${pr}`)
+      expect(review.brief).not.toContain('Privacy first')
+      expect(f.state.conversations.find(c => c.id === group)!.agentIds).toContain(fresh)
+      const toReviewer = effects.messages.find(m => m.conversationId === review.id && m.recipients.includes(fresh))!
+      expect(toReviewer.text).toBe(`${review.brief}\n\nAcceptance checks:\n- Verdict with the reviewed revision`)
+      const toLead = effects.messages.filter(m => m.conversationId === review.id && m.recipients.includes(lead))
+      expect(toLead.map(m => m.text)).toEqual(['Review opened by itself for #1: Second reviewer reviews it. Cancel it here if it is not needed.'])
+    })
+
+    it('prefers a free Reviewer on another engine than the Engineer\'s', () => {
+      // The Engineer runs on Codex (config). `reviewer` comes first but runs on Codex too; `fresh` runs on Claude.
+      const { f, fresh, reviewer, markReady, reviews } = ready('claude')
+      f.state.agents.find(a => a.id === reviewer)!.configuration.engine = 'codex'
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
+    it('opens nothing without a link to a pull request of the project\'s repository, or when the Lead marks it ready', () => {
+      const { f, lead, markReady, reviews } = ready()
+      markReady('Ready. Revision abc.')
+      markReady('Ready. https://github.com/example/other/pull/42')
+      markReady(`Ready. ${pr}`, { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' })
+      expect(reviews()).toHaveLength(0)
+      f.state.projects![0]!.repository = { machineId: 'host', cwd: '/repo', repositoryUrl: null }
+      markReady(`Ready again. ${pr}`)
+      expect(reviews()).toHaveLength(0)
+    })
+
+    it('opens no second review while the first has no verdict, and the Reviewer is woken as before', () => {
+      const { markReady, reviews, reviewer, lead } = ready()
+      markReady(`Ready. ${pr}`)
+      const again = markReady(`Ready, head 2. ${pr}`)
+      expect(reviews()).toHaveLength(1)
+      expect(again.messages.map(m => m.recipients)).toEqual([[lead, reviewer]])
+    })
+
+    it('puts privacy first when the task or the handoff touches sharing, access or confidentiality', () => {
+      const { markReady, reviews } = ready()
+      markReady(`Ready. Readers without access to the project no longer see its groups. ${pr}`)
+      expect(reviews()[0]!.brief.startsWith('Privacy first:')).toBe(true)
+    })
+
+    it('waits for a Reviewer when none is free, and tells the Lead to route and start one', () => {
+      const { f, lead, leadActor, reviewer, fresh, markReady, reviews } = ready()
+      for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
+      const effects = markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment).toBeNull()
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
+        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one, or cancel it here.'])
+    })
+
+    it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {
+      const { f, group, builderActor, built, reviewer, fresh, markReady, reviews } = ready('codex')
+      markReady(`Ready. ${pr}`)
+      const first = reviews()[0]!
+      expect(first.assignment!.agentId).toBe(reviewer)
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      // A verdict that asks for fixes still passes the review's own check: it says a verdict was given (swarm-review).
+      f.run({ type: 'work.check', conversationId: first.id, assignmentId: first.assignment!.id, checkId: first.checks[0]!.id, passed: true,
+        evidence: 'Ready: with fixes — revision d4e5f6, one Important finding.' }, reviewerActor)
+      f.run({ type: 'work.status', conversationId: first.id, assignmentId: first.assignment!.id, status: 'done', result: 'Changes needed.' }, reviewerActor)
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
+      // Now only `fresh` runs on another engine than the Engineer's; the earlier head's Reviewer is still preferred.
+      f.state.agents.find(a => a.id === reviewer)!.configuration.engine = 'codex'
+      f.state.agents.find(a => a.id === fresh)!.configuration.engine = 'claude'
+      markReady(`Fixed: one finding, head 778899. ${pr}`)
+      const delta = reviews().find(c => c.id !== first.id)!
+      expect(delta.assignment!.agentId).toBe(reviewer)
+      expect(delta.brief).toContain(`Delta review: #${first.number} reviewed the earlier head. Review only the changes since.`)
+    })
+  })
+
   it('does not wake a Reviewer that is stopping', () => {
     const { f, lead, leadActor, group, reviewer, builder } = reviewed()
     f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)

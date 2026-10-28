@@ -23,6 +23,7 @@ import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerg
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
+import { openReview, openReviewOf, projectPullRequest } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
@@ -1783,6 +1784,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           (actor.kind !== 'agent' || id !== actor.agentId) && state.agents.some(a => a.id === id && agentRole(a) === 'reviewer' && a.workDecision !== 'stop'))
         const asked = !command.ask ? '' : effects.result.notAsked ? `\n\n${effects.result.notAsked}` : `\n\nAsked ${person(state, command.ask.personId).email}.`
         message(group.id, `${label}${command.result ? `\n\n${command.result}` : ''}${asked}`, [...(tellLead ? [lead] : []), ...reviewers], null, SYSTEM_ROW)
+        // The Engineer's own Ready for review with a pull request of the project opens its review (autoReview.ts).
+        const pullRequest = command.status === 'review' && actor.kind === 'agent' && actor.agentId === assignment.agentId && !group.reviewOf
+          && !group.audience && !openReviewOf(state, group) ? projectPullRequest(state, group, command.result) : null
+        const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, author: sender,
+          mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines) })
+        if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {
           appendPullRequestUrls(group, [command.result, ...group.checks.map(check => check.evidence)])
