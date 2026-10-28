@@ -118,8 +118,9 @@ const envSchema = z.object({
   SSO_PROFILE_CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000),
   // While the profile service cannot answer (down, slow, circuit open), a token this process validated up to this long
   // past its TTL keeps working, so an SSO outage does not sign out people who are working (lib/ssoProfileCache.ts).
-  // Never past the token's own expiry, never for a token the service rejected. 0 turns it off.
-  SSO_PROFILE_STALE_GRACE_MS: z.coerce.number().int().min(0).default(600_000),
+  // Never past the token's own expiry, never for a token the service rejected. The cost: during an outage a token revoked
+  // at the SSO keeps working this long. Off (0) until the owner decides; 600000 (10 min) is the value it was built for.
+  SSO_PROFILE_STALE_GRACE_MS: z.coerce.number().int().min(0).default(0),
   // Forces the SSO account picker so users can switch accounts (not silently auto-login the last one).
   // Set to '' to disable, or 'login' to force re-entering credentials.
   SSO_PROMPT: z.string().default('select_account'),
