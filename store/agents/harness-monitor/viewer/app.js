@@ -27,7 +27,7 @@ const state = {
   preset: Object.hasOwn(PRESETS, saved.preset) ? saved.preset : 'overview',
   visible: new Set(Array.isArray(saved.visible) ? saved.visible : PRESETS.overview), widths: {},
   selected: null, inspecting: null, busy: new Set(), nodes: new Map(), shown: [],
-  frozen: false, connected: false, receivedAt: 0, review: null, workspaceInspection: null,
+  frozen: false, connected: false, receivedAt: 0, observedAt: 0, review: null, workspaceInspection: null,
 }
 for (const col of COLUMNS) state.widths[col.key] = Math.max(64, Math.min(600, Number(saved.widths?.[col.key]) || col.width))
 const text = (node, value) => { if (node.textContent !== String(value)) node.textContent = value }
@@ -240,7 +240,7 @@ function render() {
   text(dom.empty.lastElementChild, !ready ? 'Open harnesses will appear here.' : filtered ? 'Try another search, machine, or status.' : 'Harnesses appear here while they are open, including when idle.')
   const active = state.rows.filter(isLive).length
   text(dom.count, state.filter === 'stopped' ? `${state.shown.length} stopped harnesses` : `${filtered ? state.shown.length + ' of ' : ''}${active} open ${active === 1 ? 'harness' : 'harnesses'}`)
-  text(dom.updated, state.frozen ? 'Updates frozen' : state.receivedAt ? 'Updated ' + age(state.receivedAt) : 'Connecting…')
+  text(dom.updated, state.frozen ? 'Updates frozen' : state.observedAt ? 'Updated ' + age(state.observedAt) : 'Connecting…')
   text(dom.live, state.frozen ? 'Frozen' : !state.connected ? 'Reconnecting' : state.snapshot?.status === 'starting' ? 'Connecting' : !currentSnapshot() ? 'Unavailable' : 'Live')
   dom.live.classList.toggle('inactive', state.frozen || !state.connected || !currentSnapshot())
   if (ready) summary()
@@ -451,7 +451,7 @@ dom.freeze.onclick = () => {
   syncLive(); render()
 }
 function applySnapshot(snapshot) {
-  state.snapshot = snapshot; state.rows = (snapshot.rows ?? []).filter(row => row.online !== false); state.receivedAt = observedAt(snapshot)
+  state.snapshot = snapshot; state.rows = (snapshot.rows ?? []).filter(row => row.online !== false); state.receivedAt = Date.now(); state.observedAt = observedAt(snapshot)
   const machines = new Map((snapshot.machines ?? []).map(m => [m.machineId, m.name]))
   for (const row of state.rows) machines.set(row.machineId, row.machine)
   const signature = JSON.stringify([...machines])
