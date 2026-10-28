@@ -461,6 +461,7 @@ export class SuperTabStore {
     const groupIds = [...named.groupIds ?? []], startIds = [...named.startIds ?? []], agentIds: string[] = [], startAgentIds: string[] = []
     const start = 'startId' in command ? state.starts?.find(s => s.id === command.startId) : undefined
     if (start) groupIds.push(start.request.conversationId)
+    const projectIds = [...named.projectIds ?? []]
     const decisionId = routeDecisionOf(command)
     if (decisionId) {
       const decision = await readDecision(tx, tabId, decisionId)
@@ -471,6 +472,8 @@ export class SuperTabStore {
     if (command.type === 'decision.answer') {
       const asked = await readAskedDecision(tx, tabId, command.decisionId)
       if (asked) groupIds.push(asked.conversationId)
+      // Left to the PM: the person's Chat with PM in that project, quiet or not, takes the PM's line.
+      if (asked && command.delegate) projectIds.push(asked.projectId)
     }
     if (command.type === 'delivery.resolve') {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
@@ -487,7 +490,7 @@ export class SuperTabStore {
       const machines = new Set((state.machines ?? []).filter(m => m.contributorId === command.userId).map(m => m.machineId))
       agentIds.push(...state.agents.filter(a => a.contributorId === command.userId || machines.has(a.machineId)).map(a => a.id))
     }
-    return { groupIds, startIds, agentIds, startAgentIds, projectIds: named.projectIds }
+    return { groupIds, startIds, agentIds, startAgentIds, projectIds }
   }
 
   /** Writes what changed between the loaded state and `next`, and touches the parts the change relied on. */

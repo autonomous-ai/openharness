@@ -57,16 +57,24 @@ ConversationServer swarm() {
 
 Future<SuperTabController> showView(
   WidgetTester tester,
-  ConversationServer server,
-) async {
+  ConversationServer server, {
+  Map<String, dynamic>? initial,
+  Brightness brightness = Brightness.dark,
+}) async {
   await tester.binding.setSurfaceSize(const Size(1200, 900));
   addTearDown(() => tester.binding.setSurfaceSize(null));
-  final c = server.controller(account: 'peer');
+  final c = server.controller(account: 'peer', initial: initial);
   addTearDown(c.dispose);
+  // The chrome's tokens follow the app's brightness, as the app sets it.
+  final before = grid.AppTheme.brightness.value;
+  grid.AppTheme.brightness.value = brightness;
+  addTearDown(() => grid.AppTheme.brightness.value = before);
   await c.refresh();
   await tester.pumpWidget(
     MaterialApp(
-      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      // A new key for each view: a restart builds the whole view again.
+      key: UniqueKey(),
+      theme: grid.buildAppTheme(brightness: brightness),
       builder: (context, child) => RepaintBoundary(key: _picture, child: child),
       home: Scaffold(
         body: SuperTabView(
@@ -90,6 +98,17 @@ Finder notificationsEntry() =>
     find.byKey(const ValueKey('super-notifications'));
 Finder option(String id, int index) =>
     find.byKey(ValueKey('super-decision-$id-$index'));
+Finder letPmDecide(String id) =>
+    find.byKey(ValueKey('super-decision-$id-delegate'));
+Finder notNow(String id) => find.byKey(ValueKey('super-decision-$id-later'));
+Finder pmPanel() => find.byKey(const ValueKey('super-pm-decisions'));
+Finder inPanel(String text) =>
+    find.descendant(of: pmPanel(), matching: find.text(text));
+
+Future<void> openPmChat(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+  await tester.pumpAndSettle();
+}
 
 void main() {
   setUpAll(() async {
@@ -329,6 +348,125 @@ void main() {
     );
   });
 
+  group('a decision the reader does not want to answer', () {
+    test('Let PM decide sends a delegated answer, and the answer reads as the PM\'s', () async {
+      final server = swarm()..ask(['Ship how?'], recommended: 1);
+      final controller = server.controller(account: 'peer');
+      addTearDown(controller.dispose);
+      final decisions = SuperTabDecisions.of(controller);
+      await controller.refresh();
+      await decisions.load();
+
+      expect(await decisions.delegate(decisions.open.single), isTrue);
+
+      expect(server.posts.last['command'], {
+        'type': 'decision.answer',
+        'decisionId': 'decision-1',
+        'delegate': true,
+      });
+      expect(decisions.open, isEmpty);
+      expect(decisions.answered.single.choice, 1);
+      expect(decisions.answered.single.delegated, isTrue);
+    });
+
+    testWidgets(
+      'Chat with PM offers Let PM decide and Not now on each card, and no Let PM decide without a recommended option',
+      (tester) async {
+        final server = swarm()
+          ..ask(['Ship how?'], conversationId: 'pm-chat')
+          ..ask(['Which colour?'], conversationId: 'pm-chat');
+        server.decisions.last['recommended'] = null;
+        await showView(tester, server);
+        await openPmChat(tester);
+        expect(inPanel('Decisions for you (2)'), findsOneWidget);
+        expect(letPmDecide('decision-1'), findsOneWidget);
+        expect(notNow('decision-1'), findsOneWidget);
+        expect(letPmDecide('decision-2'), findsNothing);
+        expect(notNow('decision-2'), findsOneWidget);
+
+        await tester.tap(letPmDecide('decision-1'));
+        await tester.pumpAndSettle();
+
+        expect(server.posts.last['command'], {
+          'type': 'decision.answer',
+          'decisionId': 'decision-1',
+          'delegate': true,
+        });
+        expect(inPanel('Ship how?'), findsNothing);
+        // The answered list says the PM decided, never that the reader chose.
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        expect(find.text('PM decided: Behind a flag'), findsOneWidget);
+        expect(find.text('You chose: Behind a flag'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Not now folds the card into one line, still folded after a restart, until a new decision arrives',
+      (tester) async {
+        final server = swarm()..ask(['Ship how?'], conversationId: 'pm-chat');
+        await showView(tester, server);
+        await openPmChat(tester);
+
+        await tester.tap(notNow('decision-1'));
+        await tester.pumpAndSettle();
+
+        expect(inPanel('Decisions for you (1)'), findsOneWidget);
+        expect(inPanel('Ship how?'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('super-pm-decisions-show')),
+          findsOneWidget,
+        );
+        expect(
+          server.posts.where((p) => p['command']?['type'] == 'decision.answer'),
+          isEmpty,
+        );
+
+        // A restart reads what this computer saved for the reader.
+        final restarted = await showView(tester, server, initial: server.saved);
+        await openPmChat(tester);
+        expect(inPanel('Decisions for you (1)'), findsOneWidget);
+        expect(inPanel('Ship how?'), findsNothing);
+        // The Decisions list still holds it, with no Not now there.
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        expect(find.text('Ship how?'), findsOneWidget);
+        expect(notNow('decision-1'), findsNothing);
+
+        server.ask(['Name it?'], conversationId: 'pm-chat');
+        await restarted.refresh();
+        await openPmChat(tester);
+        expect(inPanel('Decisions for you (2)'), findsOneWidget);
+        expect(inPanel('Name it?'), findsOneWidget);
+        expect(inPanel('Ship how?'), findsNothing);
+      },
+    );
+
+    testWidgets('Hide folds the whole section, and Show opens it again', (
+      tester,
+    ) async {
+      final server = swarm()
+        ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+      await showView(tester, server);
+      await openPmChat(tester);
+
+      await tester.tap(find.byKey(const ValueKey('super-pm-decisions-hide')));
+      await tester.pumpAndSettle();
+      expect(inPanel('Decisions for you (2)'), findsOneWidget);
+      expect(inPanel('Ship how?'), findsNothing);
+      expect(inPanel('Name it?'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('super-pm-decisions-show')));
+      await tester.pumpAndSettle();
+      expect(inPanel('Ship how?'), findsOneWidget);
+      expect(inPanel('Name it?'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-pm-decisions-hide')),
+        findsOneWidget,
+      );
+    });
+  });
+
   testWidgets('screenshots for review', (tester) async {
     final server = swarm()
       ..ask([
@@ -352,4 +490,43 @@ void main() {
     await tester.pumpAndSettle();
     await shot(tester, 'chat-with-pm');
   }, skip: shots == null);
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'screenshots of Let PM decide, Not now and Hide, ${brightness.name}',
+      (tester) async {
+        final server = swarm()
+          ..ask([
+            'For a Mac in a Swarm without the Desktop app, start agents with the CLI only?',
+          ], conversationId: 'pm-chat')
+          ..ask(
+            ['Which name for the setting?'],
+            conversationId: 'pm-chat',
+            recommended: 1,
+          );
+        server.decisions.first['options'] = ['Yes', 'No'];
+        server.decisions.first['unblocks'] = 'Starting agents on that Mac';
+        server.decisions.last['options'] = ['Offline mode', 'Work offline'];
+        server.decisions.last['unblocks'] = 'The settings copy';
+        final name = brightness.name;
+        await showView(tester, server, brightness: brightness);
+        await openPmChat(tester);
+        await shot(tester, 'pm-decisions-$name');
+        await tester.tap(notNow('decision-2'));
+        await tester.pumpAndSettle();
+        await shot(tester, 'pm-decisions-not-now-$name');
+        await tester.tap(find.byKey(const ValueKey('super-pm-decisions-hide')));
+        await tester.pumpAndSettle();
+        await shot(tester, 'pm-decisions-hidden-$name');
+        await tester.tap(find.byKey(const ValueKey('super-pm-decisions-show')));
+        await tester.pumpAndSettle();
+        await tester.tap(letPmDecide('decision-1'));
+        await tester.pumpAndSettle();
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await shot(tester, 'pm-decided-$name');
+      },
+      skip: shots == null,
+    );
+  }
 }

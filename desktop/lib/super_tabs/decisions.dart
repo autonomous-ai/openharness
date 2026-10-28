@@ -20,18 +20,32 @@ class SuperTabDecision {
       options = List.unmodifiable([
         for (final option in row['options'] as List? ?? const []) '$option',
       ]),
-      recommended = (row['recommended'] as num?)?.toInt() ?? 0,
+      recommended = (row['recommended'] as num?)?.toInt(),
       unblocks = row['unblocks'] as String? ?? '',
       choice = (row['choice'] as num?)?.toInt(),
+      delegated = row['delegated'] == true,
       note = row['note'] as String?,
       createdAt = DateTime.tryParse(row['createdAt'] as String? ?? '');
   final String id, batchId, projectId, projectName, conversationId;
   final String conversationTitle, askerName, question, unblocks;
   final List<String> options;
-  final int recommended;
 
-  /// The option the reader chose; null while it is open.
+  /// The option the asker recommends; null, or not one of [options], when it
+  /// recommends none.
+  final int? recommended;
+
+  /// Whether Let PM decide can answer it: only with a recommended option.
+  bool get canDelegate {
+    final r = recommended;
+    return r != null && r >= 0 && r < options.length;
+  }
+
+  /// The option the reader chose, or the PM chose for them ([delegated]);
+  /// null while it is open.
   final int? choice;
+
+  /// The reader left it to the PM, who took the recommended option.
+  final bool delegated;
   final String? note;
   final DateTime? createdAt;
 }
@@ -74,6 +88,26 @@ class SuperTabDecisions extends ChangeNotifier {
     for (final d in open)
       if (d.projectId == projectId) d,
   ];
+
+  /// Those of [openIn] the reader has not set aside with Not now or Hide.
+  List<SuperTabDecision> shownIn(String projectId) {
+    final aside = controller.decisionsAside;
+    return [
+      for (final d in openIn(projectId))
+        if (!aside.contains(d.id)) d,
+    ];
+  }
+
+  /// Not now and Hide: folded in Chat with PM until the reader shows them
+  /// again; a decision asked later still shows.
+  void setAside(Iterable<SuperTabDecision> decisions) =>
+      controller.setDecisionsAside(decisions.map((d) => d.id), aside: true);
+
+  /// Show: every open decision of [projectId] in its Chat with PM again.
+  void showAgain(String projectId) => controller.setDecisionsAside(
+    openIn(projectId).map((d) => d.id),
+    aside: false,
+  );
 
   void _changed() {
     final snapshot = controller.snapshot;
@@ -138,6 +172,7 @@ class SuperTabDecisions extends ChangeNotifier {
       if (epoch != _epoch) return;
       open = nextOpen;
       answered = nextAnswered;
+      controller.keepDecisionsAside({for (final d in open) d.id});
       error = null;
       _failedAt = null;
     } catch (_) {
@@ -149,7 +184,18 @@ class SuperTabDecisions extends ChangeNotifier {
 
   /// The reader's one-tap answer. Any reader may answer what was asked of
   /// them, so this does not wait behind the composer's pending send.
-  Future<bool> answer(SuperTabDecision decision, int choice) async {
+  Future<bool> answer(SuperTabDecision decision, int choice) =>
+      _answer(decision, {'choice': choice});
+
+  /// Let PM decide: the backend answers with the recommended option on the
+  /// reader's behalf, recorded as the PM's choice, never as theirs.
+  Future<bool> delegate(SuperTabDecision decision) =>
+      _answer(decision, {'delegate': true});
+
+  Future<bool> _answer(
+    SuperTabDecision decision,
+    Map<String, dynamic> answer,
+  ) async {
     answering.add(decision.id);
     notifyListeners();
     try {
@@ -161,7 +207,7 @@ class SuperTabDecisions extends ChangeNotifier {
           'command': {
             'type': 'decision.answer',
             'decisionId': decision.id,
-            'choice': choice,
+            ...answer,
           },
         },
       );

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
@@ -64,6 +65,9 @@ class SuperTabController extends ChangeNotifier {
       );
       expandedMachines.addAll(
         (initial['expandedMachines'] as List? ?? const []).whereType<String>(),
+      );
+      _decisionsAside.addAll(
+        (initial['decisionsAside'] as List? ?? const []).whereType<String>(),
       );
       devicesSelected = initial['devicesSelected'] == true;
       projectsGroupOpen = initial['projectsGroupOpen'] as bool? ?? true;
@@ -315,6 +319,30 @@ class SuperTabController extends ChangeNotifier {
       closedOpenProjects.add(projectId);
     }
     _changed();
+  }
+
+  /// Open decisions the reader set aside in Chat with PM (Not now, Hide):
+  /// saved on this computer for this reader, so they stay folded after a
+  /// restart. A decision asked later is not among them, so it shows.
+  final _decisionsAside = <String>{};
+  Set<String> get decisionsAside => UnmodifiableSetView(_decisionsAside);
+
+  void setDecisionsAside(Iterable<String> ids, {required bool aside}) {
+    var changed = false;
+    for (final id in ids) {
+      changed |= aside ? _decisionsAside.add(id) : _decisionsAside.remove(id);
+    }
+    if (!changed) return;
+    _saveSoon();
+    _changed();
+  }
+
+  /// Forgets the set-aside decisions that are no longer open, so the saved
+  /// set holds only what still waits.
+  void keepDecisionsAside(Set<String> open) {
+    final before = _decisionsAside.length;
+    _decisionsAside.removeWhere((id) => !open.contains(id));
+    if (_decisionsAside.length != before) _saveSoon();
   }
 
   void toggleProjectsGroup() {
@@ -782,6 +810,7 @@ class SuperTabController extends ChangeNotifier {
     'selectedId': selectedId,
     'expandedProjects': expandedProjects.toList(),
     'expandedMachines': expandedMachines.toList(),
+    'decisionsAside': _decisionsAside.toList(),
     'devicesSelected': devicesSelected,
     'projectsGroupOpen': projectsGroupOpen,
     'machinesGroupOpen': machinesGroupOpen,
