@@ -231,6 +231,12 @@ describe('contributed machine executor', () => {
     f.machine.stop(); f.advance(); await f.machine.tick()
     expect(f.open).toHaveBeenCalledOnce()
   })
+  it('launches a Buddy\'s start, which the backend lists apart so that a host from before Buddies never does', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true }])
+  })
   it('probes common tools plus pending-start requirements and publishes failures without calling them missing', async () => {
     const f = fixture()
     Object.assign(f.pool.starts[0]!, { request: { requirements: { tools: ['docker'] } } })

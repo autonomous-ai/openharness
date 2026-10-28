@@ -74,6 +74,9 @@ export interface Agent {
   confidential?: true
   /** Set by its contributor or its project's Lead (profile.ts); absent shows the pattern Desktop draws from its name. */
   avatar?: import('./profile.js').Avatar
+  /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
+   *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
+  buddyOf?: { personId: string; generation: string }
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -94,6 +97,8 @@ export interface AgentStartRequest {
   gridModel?: string
   gridName?: string
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
+  /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
+  buddyOf?: { personId: string; generation: string }
 }
 export interface AgentStart {
   poolGeneration?: string
@@ -112,6 +117,8 @@ export interface AgentStart {
   /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
    *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
+  /** When a person asked for it: only a Buddy's start keeps it, which fails if its machine never takes it (liveness.ts). */
+  requestedAt?: number
   /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
   preparing?: true
   error: string | null
@@ -176,8 +183,8 @@ export function renderWorkTask(task: WorkTask): string {
 
 export interface Conversation {
   id: string
-  /** The Swarm-wide Leads conversation (syncLeads); absent on every project conversation. */
-  kind?: 'leads'
+  /** The Swarm-wide Leads conversation (syncLeads), or a person's Buddy chat (buddies.ts); absent on every other conversation. */
+  kind?: 'leads' | 'buddy'
   projectId?: string
   /** Stable, tab-local workgroup reference. Lead has no number. */
   number?: number
@@ -209,6 +216,8 @@ export interface Conversation {
   lostAttempt?: { id: string; agentId: string; machineId?: string; engine?: string }
   /** Counts reaction changes here (reactions.ts), so readers see a new reaction on an older message. */
   reactionSeq?: number
+  /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
+  proposals?: string[]
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
@@ -259,6 +268,8 @@ export interface SuperTabState {
   paused: boolean
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
+  /** Buddies (buddies.ts): on once the owner turns them on; absent is off. Turning them off removes every Buddy. */
+  buddies?: true
   people: Person[]
   agents: Agent[]
   conversations: Conversation[]
@@ -401,12 +412,14 @@ export function conversation(state: SuperTabState, id: string): Conversation {
 
 export const isLeads = (group: Conversation): boolean => group.kind === 'leads'
 
-const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true }
+const KNOWN_KINDS: Record<NonNullable<Conversation['kind']>, true> = { leads: true, buddy: true }
+/** Conversation kinds this release knows; one of another kind is kept aside unchanged (parkLaterConversations, parts/shape.ts). */
+export const knownKind = (group: Pick<Conversation, 'kind'>): boolean => group.kind == null || Object.hasOwn(KNOWN_KINDS, group.kind)
 /** During a rolling deploy the previous release reads what the next one wrote. A conversation kind it does not know
  *  belongs to no project it can check, so it waits here unchanged, and the release that knows it puts it back. */
 export function parkLaterConversations(state: SuperTabState): void {
   const all = [...state.conversations, ...state.parkedConversations ?? []]
-  const known = (c: Conversation) => c.kind == null || Object.hasOwn(KNOWN_KINDS, c.kind)
+  const known = knownKind
   state.conversations = all.filter(known)
   const parked = all.filter(c => !known(c))
   if (parked.length) state.parkedConversations = parked
@@ -569,6 +582,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (actor.kind !== 'person' || actor.userId !== state.ownerId) visible.invitations = []
   for (const start of visible.starts ?? []) {
     if (start.error && !readsRawReason(actor, start, state.conversations.find(c => c.id === start.request.conversationId))) start.error = publicReason(start.error)
+  }
+  // A Buddy brainstorms; where agents run and how work is routed are none of its business (buddies.ts).
+  if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && a.buddyOf)) {
+    visible.machines = []
+    delete visible.rules
+    delete visible.routingPolicy
   }
   const seen = seenMachineIds(visible)
   visible.conversations = visible.conversations.map(c => withSeenRequirement(c, seen))

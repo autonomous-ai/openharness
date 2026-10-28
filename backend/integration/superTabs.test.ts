@@ -9,7 +9,8 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { ABANDONED_START_MS, SuperTabStore } from '../src/superTabs/store.js'
+import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
+import { HostReads } from '../src/superTabs/read/host.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
@@ -125,6 +126,74 @@ afterAll(async () => {
   await app?.close()
   await db?.$disconnect()
   await replica?.stop()
+})
+
+describe('delivery authority dependencies', () => {
+  it('refuses a native delivery to another receiver when the terminal agent has a private PM chat', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Terminal source', brief: '', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Terminal agent', configuration: config, lead: false })).result.agentId)
+    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const turn = await store.native.append(host, tab, contextId, { turnId: 'private-terminal', kind: 'prompt', previousEventId: null,
+      text: 'Typed before the session became private.', truncated: false, interrupted: false }) as { eventId: string }
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: lead } })
+    expect(delivery.nativeContextId).toBe(contextId)
+    expect(delivery.agentId).not.toBe(worker)
+    // An older stored registration can carry privacy through group membership without a confidential mark or a revoked
+    // context. Only the terminal agent's groups reveal it; the receiver is the Lead in the public source conversation.
+    const state = await storedState(tab)
+    expect(state.agents.find(a => a.id === worker)!.confidential).toBeUndefined()
+    state.conversations.push({ ...structuredClone(state.conversations.find(c => c.id === group)!), id: randomUUID(), title: 'Private PM chat',
+      agentIds: [worker], leadId: null, assignment: null, audience: { people: [{ id: owner.sub, generation: state.people.find(p => p.id === owner.sub)!.generation }] } })
+    await saveState(tab, state)
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
+    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+  })
+
+  it('refuses an older agent without a project when its private project cannot deliver to an outsider', async () => {
+    const { tab, lead } = await fixture()
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Private legacy project', visibility: 'private', brief: '' })).result.projectId)
+    const group = String((await run(tab, { type: 'conversation.create', projectId, title: 'Legacy source', brief: '', checks: [] })).result.conversationId)
+    const sender = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Legacy sender', configuration: config, lead: false })).result.agentId)
+    const state = await storedState(tab)
+    const legacy = state.agents.find(a => a.id === sender)!
+    delete legacy.projectId
+    await saveState(tab, state)
+    // A stale cross-project delivery from before migration must not acquire the public receiver's project identity.
+    const sent = await run(tab, message('Stale legacy delivery.'))
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
+    await db.superTabDelivery.update({ where: { id: delivery.id }, data: { authorKind: 'agent', authorId: sender,
+      authorGeneration: legacy.membershipGeneration } })
+    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+  })
+
+  it('refuses a claim when its person sender is removed after the authority read', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const sent = await run(tab, message('Sent before removal.'), peer)
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
+    let removed = false
+    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (removed) return
+      removed = true
+      // Remove the authority part independently of delivery cancellation, so only the sender touch can reject a stale
+      // authorization decision. The other fixture paths already cover commands cancelling the delivery row itself.
+      await swarmTransaction(db, async tx => {
+        const member = await tx.swarmMember.findFirstOrThrow({ where: { tabId: tab, key: peer.sub } })
+        await guardedWrite(tx, tab, { op: 'remove', kind: 'member', key: peer.sub, seen: member.version,
+          data: member.data as unknown as SuperTabState['people'][number] }, parts.clock.next())
+      })
+    }))
+    await expect(raced.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    expect(removed).toBe(true)
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('queued')
+  })
 })
 
 describe('durable group pull request links', () => {
@@ -2468,6 +2537,93 @@ describe('Lead safety on the host roster', () => {
     expect(await rows()).toEqual([closing(lead, leadHarness)])
     await confirm(lead, leadHarness)
     expect(await rows()).toEqual([])
+  })
+})
+
+describe('grant checks of the host roster', () => {
+  /** A machine of `host`'s shared with the owner and peer, and a Swarm of the owner's with the peer in it, on its own
+   *  machine so no other test's Swarm shows up in its host reads. */
+  async function sharedMachine() {
+    const machineId = `grants-${randomUUID()}`
+    await db.machine.create({ data: { machineId, userId: host.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machineShare.create({ data: { machineId, ownerId: host.sub, autonomousEnv: 'prod', emails: [owner.email, peer.email] } })
+    const tab = (await store.create(owner, randomUUID(), 'Grants')).id
+    await invite(tab)
+    const add = async (tabId: string, name: string, by: AuthUser, lead = false) => (await run(tabId, { type: 'agent.add', conversationId: 'lead', machineId,
+      harnessId: randomUUID(), name, configuration: config, lead }, by)).result.agentId as string
+    return { machineId, tab, add }
+  }
+  /** Each database call a host read makes, as `Model.operation`, through a store on a client that counts them. */
+  function counted() {
+    const calls: string[] = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      calls.push(`${model}.${operation}`)
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const count = (call: string) => calls.filter(c => c === call).length
+    return { store: new SuperTabStore(client), count }
+  }
+  const agentIds = (rows: Array<{ tabId: string; agent?: { id: string } }>, tab: string) => rows.filter(r => r.tabId === tab && r.agent).map(r => r.agent!.id).sort()
+
+  it('reads the machine, its share, and each contributor and their Workspace membership once per host read, not once per agent', async () => {
+    const { machineId, tab, add } = await sharedMachine()
+    const agents = [await add(tab, 'Lead', owner, true)]
+    for (let i = 0; i < 4; i++) agents.push(await add(tab, `Owner worker ${i}`, owner))
+    for (let i = 0; i < 3; i++) agents.push(await add(tab, `Peer worker ${i}`, peer))
+    const { store: counting, count } = counted()
+    expect(agentIds(await rosterRows(counting, host, machineId), tab)).toEqual(agents.sort())
+    // Eight agents of two contributors on one machine: the read's own machine check, one share, two people, two memberships.
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
+      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 2, memberships: 2 })
+  })
+
+  it('checks agents of one contributor checked at once with one read of each lookup', async () => {
+    const { tab, add } = await sharedMachine()
+    const agents = [await add(tab, 'Peer worker 1', peer), await add(tab, 'Peer worker 2', peer), await add(tab, 'Peer worker 3', peer)]
+    const { state } = await store.read(owner, tab)
+    const { store: counting, count } = counted()
+    const reads = new GrantReads()
+    await Promise.all(agents.map(id => counting.agentGrant(counting.db, state, state.agents.find(a => a.id === id)!, reads)))
+    expect({ machines: count('Machine.findFirst'), shares: count('MachineShare.findUnique'), contributors: count('User.findUnique'),
+      memberships: count('SwarmWorkspaceMember.findUnique') }).toEqual({ machines: 1, shares: 1, contributors: 1, memberships: 1 })
+  })
+
+  it('keeps nothing between two host reads of one store: a share revoked between them drops the rows on the next', async () => {
+    const { machineId, tab, add } = await sharedMachine()
+    const mine = [await add(tab, 'Lead', owner, true), await add(tab, 'Owner worker', owner)]
+    const theirs = [await add(tab, 'Peer worker 1', peer), await add(tab, 'Peer worker 2', peer)]
+    const hosts = new HostReads(counted().store)
+    const roster = async () => agentIds((await hosts.changes(host, machineId, { full: true })).tabs.flatMap(t => 'roster' in t ? t.roster : []), tab)
+    expect(await roster()).toEqual([...mine, ...theirs].sort())
+    const before = await db.machineShare.findUniqueOrThrow({ where: { machineId } })
+    await db.machineShare.update({ where: { machineId }, data: { emails: [owner.email], grantVersions: nextMachineShareGrants(before, [owner.email], null) } })
+    expect(await roster()).toEqual(mine.sort())
+  })
+
+  it('still drops only the rows of a contributor whose share was revoked', async () => {
+    const { machineId, tab, add } = await sharedMachine()
+    const mine = [await add(tab, 'Lead', owner, true), await add(tab, 'Owner worker', owner)]
+    await add(tab, 'Peer worker 1', peer)
+    await add(tab, 'Peer worker 2', peer)
+    const before = await db.machineShare.findUniqueOrThrow({ where: { machineId } })
+    await db.machineShare.update({ where: { machineId }, data: { emails: [owner.email], grantVersions: nextMachineShareGrants(before, [owner.email], null) } })
+    expect(agentIds(await rosterRows(counted().store, host, machineId), tab)).toEqual(mine.sort())
+  })
+
+  it('still drops a contributor\'s rows only in the Swarms of the Workspace they left', async () => {
+    const { machineId, tab, add } = await sharedMachine()
+    const mine = [await add(tab, 'Lead', owner, true), await add(tab, 'Owner worker', owner)]
+    await add(tab, 'Peer worker 1', peer)
+    await add(tab, 'Peer worker 2', peer)
+    // The peer's own Swarm, in the peer's own Workspace, on the same machine.
+    const theirs = (await store.create(peer, randomUUID(), 'Peer Swarm')).id
+    const peers = [await add(theirs, 'Peer Lead', peer, true), await add(theirs, 'Peer helper', peer)]
+    const workspaceId = (await db.superTab.findUniqueOrThrow({ where: { id: tab } })).workspaceId!
+    expect((await db.superTab.findUniqueOrThrow({ where: { id: theirs } })).workspaceId).not.toBe(workspaceId)
+    await db.swarmWorkspaceMember.update({ where: { id: `${workspaceId}:${peer.sub}` }, data: { removedAt: new Date() } })
+    const rows = await rosterRows(counted().store, host, machineId)
+    expect(agentIds(rows, tab)).toEqual(mine.sort())
+    expect(agentIds(rows, theirs)).toEqual(peers.sort())
   })
 })
 

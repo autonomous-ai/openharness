@@ -30,6 +30,7 @@ import 'workgroup_name.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
+import 'buddies.dart';
 import 'decisions.dart';
 import 'decisions_view.dart';
 import 'route_row.dart';
@@ -370,14 +371,28 @@ class _SuperTabViewState extends State<SuperTabView>
         scroll.position.extentAfter >= 40) {
       return;
     }
-    _following[id] = true;
+    _follow(id, true);
     if (_newAfter.containsKey(id)) setState(() => _newAfter.remove(id));
     c.markRead(id, through: sequence);
   }
 
+  /// Whether [id]'s list follows its end; the controller keeps a reader's
+  /// rows while they read back.
+  void _follow(String id, bool following) {
+    _following[id] = following;
+    c.readingBack(id, !following);
+  }
+
   void _jumpToLatest() {
-    _followEnd(c.selectedId);
+    final id = c.selectedId;
     _focus.requestFocus();
+    if (!c.hasNewer(id)) return _followEnd(id);
+    // More are waiting than were read: the latest page first, then its end.
+    unawaited(
+      c.showLatest(id).then((_) {
+        if (mounted && c.selectedId == id) _followEnd(id);
+      }),
+    );
   }
 
   @override
@@ -972,6 +987,7 @@ class _SuperTabViewState extends State<SuperTabView>
                       .where(
                         (group) =>
                             group.archived &&
+                            !c.hiddenByBuddies(group) &&
                             group.projectId == c.selected?.projectId &&
                             group.title.toLowerCase().contains(query),
                       )
@@ -1108,6 +1124,13 @@ class _SuperTabViewState extends State<SuperTabView>
     });
     widget.onCloseTerminal?.call();
     _closeSidebar();
+    if (c.buddiesOn && c.buddyChat(projectId) == null) {
+      // No Buddy here yet: the shortcut offers to add one.
+      if (c.canWrite) {
+        unawaited(showAddBuddy(context, c, projectId: projectId));
+      }
+      return Future.value(false);
+    }
     return c.openPmChat(projectId);
   }
 
@@ -1132,22 +1155,27 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
-  /// Opens the conversation a tag is in, at its message, replying to it. Older
-  /// pages are read first, until the message is among them; one that is not
-  /// found says so, and the list stays.
+  /// Opens the conversation a tag is in, at its message, replying to it. What
+  /// is held is looked in first, then what arrived after it, then older pages,
+  /// until the message is among them; one that is not found says so, and the
+  /// list stays.
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    SuperTabMessage? message;
-    // Up to 50 pages (5,000 messages) back.
-    for (var page = 0; page < 50; page++) {
-      await c.loadMessages(id, older: c.messages(id).isNotEmpty);
+    SuperTabMessage? held() =>
+        c.messages(id).where((m) => m.id == mention.messageId).firstOrNull;
+    var message = held();
+    // The tag is what to see, not the rows read back: the first read goes up
+    // to the latest, never only a few pages below them.
+    if (message == null) c.readingBack(id, false);
+    // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
+    // is after it, so the first read is up to the latest; the rest go back.
+    for (var page = 0; message == null && page < 50; page++) {
+      final older = page > 0;
+      if (older && !c.hasOlder(id)) break;
+      await c.loadMessages(id, older: older);
       if (!mounted) return;
-      message = c
-          .messages(id)
-          .where((m) => m.id == mention.messageId)
-          .firstOrNull;
-      if (message != null || !c.hasOlder(id)) break;
+      message = held();
     }
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -1170,7 +1198,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // Stop following the end: the tagged message is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
-      _following[id] = false;
+      _follow(id, false);
     });
     _revealTarget(id, 0);
     _focus.requestFocus();
@@ -1287,7 +1315,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // Stop following the end: the original is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
-      _following[id] = false;
+      _follow(id, false);
     });
     _revealTarget(
       id,
@@ -1375,6 +1403,27 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isPmChat(SuperTabConversation group) =>
       c.pmChat(group.projectId)?.id == group.id;
 
+  /// Whom a Buddy's proposal speaks for, by name; null for other messages.
+  String? _proposalOwner(SuperTabMessage message) =>
+      message.proposalOwnerId == null
+      ? null
+      : buddyPersonName(c, message.proposalOwnerId!);
+
+  /// The reader's own chat with their Buddy.
+  bool _isBuddyChat(SuperTabConversation group) =>
+      c.buddyChat(group.projectId)?.id == group.id;
+
+  /// The name of the reader's Buddy that [group] is the chat with, or
+  /// "your Buddy" while it has none (removed, or starting). Null when [group]
+  /// is no Buddy chat of the reader's.
+  String? _buddyName(SuperTabConversation? group) {
+    if (group == null || !_isBuddyChat(group)) return null;
+    final agent = c.buddy(group.projectId);
+    return agent == null
+        ? 'your Buddy'
+        : c.snapshot!.agentName(agent.id, fallback: agent.name);
+  }
+
   /// The open conversation's name, or what the pane shows instead of one,
   /// named as the sidebar names it: "# openharness", or a workgroup's
   /// [SuperTabWorkgroupName].
@@ -1394,7 +1443,11 @@ class _SuperTabViewState extends State<SuperTabView>
         ? '# $kProductManagersChannel'
         : _isPmChat(group)
         ? kChatWithPm
-        : null;
+        : _buddyName(group) == null
+        ? null
+        : c.buddy(group.projectId) == null
+        ? 'Your Buddy'
+        : '${_buddyName(group)} · Your Buddy';
     if (name == null) return SuperTabWorkgroupName(group!, style: style);
     return Text(
       name,
@@ -1417,6 +1470,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (_isPmChat(group)) {
       return 'Message ${pmChatName(snapshot, snapshot.projectFor(group.id)!)}';
     }
+    if (_buddyName(group) case final buddy?) return 'Message $buddy';
     return 'Message ${group.title}';
   }
 
@@ -1675,6 +1729,15 @@ class _SuperTabViewState extends State<SuperTabView>
           item('Swarm routing', () => _groupAction('routing', group)),
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
+        ] else if (_isBuddyChat(group)) ...[
+          // A Buddy chat is the reader's own: the Buddy itself to remove.
+          // Nothing to rename or archive, and no way to a Chat with PM (Ken,
+          // 10-28).
+          if (editable && c.buddy(group.projectId) != null)
+            item(
+              'Remove Buddy',
+              () => unawaited(confirmRemoveBuddy(context, c, group.projectId)),
+            ),
         ] else ...[
           // A private conversation is chat only: it has no work.
           if (group.audience == null)
@@ -1707,7 +1770,11 @@ class _SuperTabViewState extends State<SuperTabView>
       builder: (context, menu, _) => AppIconButton(
         key: const ValueKey('super-group-options'),
         icon: AppIcons.ellipsisVertical,
-        tooltip: isProject ? 'Project options' : 'Workgroup options',
+        tooltip: isProject
+            ? 'Project options'
+            : _isBuddyChat(group)
+            ? 'Buddy options'
+            : 'Workgroup options',
         onPressed: () => menu.isOpen ? menu.close() : menu.open(),
       ),
     );
@@ -1775,6 +1842,7 @@ class _SuperTabViewState extends State<SuperTabView>
       child: SuperTabMessageRow(
         message: message,
         author: _shownAuthor(c, message),
+        proposalOwner: _proposalOwner(message),
         person: person,
         grouped: SuperTabMessageRow.groupsWith(message, messages.lastOrNull),
         reply: reply,
@@ -1850,6 +1918,7 @@ class _SuperTabViewState extends State<SuperTabView>
       key: ValueKey('super-message-${message.id}'),
       message: message,
       author: _shownAuthor(c, message),
+      proposalOwner: _proposalOwner(message),
       // A person is named by their address's first part, as people say it.
       mentions: [
         for (final id in message.mentions)
@@ -2168,6 +2237,8 @@ class _SuperTabViewState extends State<SuperTabView>
     final newCount = newAfter == null
         ? 0
         : messages.where((message) => message.sequence > newAfter).length;
+    // More came than were read: the count is a floor.
+    final moreNew = c.hasNewer(c.selectedId);
     final reply = _replies[c.selectedId];
     final outgoing = c.outgoing(c.selectedId);
     // A failed message says so in its own row, with what can be done.
@@ -2203,8 +2274,12 @@ class _SuperTabViewState extends State<SuperTabView>
               ],
             ),
           ),
-        // The reader's own chat with the PM shows what the PM asked them.
-        if (group != null && _isPmChat(group))
+        if (group != null && _isBuddyChat(group))
+          SuperTabBuddyBar(controller: c, chat: group),
+        // The reader's own chat with the PM shows what the PM asked them;
+        // with Buddies on, their Buddy chat does instead.
+        if (group != null &&
+            (c.buddiesOn ? _isBuddyChat(group) : _isPmChat(group)))
           SuperTabDecisionsPanel(
             decisions: SuperTabDecisions.of(c),
             projectId: group.projectId,
@@ -2215,18 +2290,28 @@ class _SuperTabViewState extends State<SuperTabView>
               : unread && c.error != null
               ? _firstReadFailed(c.error!)
               : messages.isEmpty && outgoing.isEmpty
-              ? Center(
-                  child: Text(
-                    c.accessRevoked
-                        ? 'Conversation unavailable.'
-                        : group == null
-                        ? 'Loading conversation…'
-                        : c.snapshot!.isProjectLead(group.id)
-                        ? 'Discuss the plan with your product manager.'
-                        : _isPmChat(group)
-                        ? 'Only you and the Product Manager read this chat.'
-                        : 'Start the conversation.',
-                    style: DesktopChrome.text(color: DesktopChrome.muted),
+              ? Padding(
+                  // The pane's side padding, as the composer has: a long line
+                  // wraps inside it, centered.
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: grid.AppDesktop.panelPadding,
+                  ),
+                  child: Center(
+                    child: Text(
+                      c.accessRevoked
+                          ? 'Conversation unavailable.'
+                          : group == null
+                          ? 'Loading conversation…'
+                          : c.snapshot!.isProjectLead(group.id)
+                          ? 'Discuss the plan with your product manager.'
+                          : _buddyName(group) != null
+                          ? "Only you and ${_buddyName(group)} read this chat. Say what you want to build; say 'send to the PM' when it's ready."
+                          : _isPmChat(group)
+                          ? 'Only you and the Product Manager read this chat.'
+                          : 'Start the conversation.',
+                      textAlign: TextAlign.center,
+                      style: DesktopChrome.text(color: DesktopChrome.muted),
+                    ),
                   ),
                 )
               : Stack(
@@ -2242,7 +2327,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         if (_jumpingToEnd) return false;
                         final id = c.selectedId;
                         final atEnd = event.metrics.extentAfter < 40;
-                        _following[id] = atEnd;
+                        _follow(id, atEnd);
                         // Once the scroll ends, so keeping the place never
                         // cuts a drag short.
                         if (event is ScrollEndNotification) {
@@ -2406,7 +2491,9 @@ class _SuperTabViewState extends State<SuperTabView>
                                     size: 16,
                                   ),
                                   label: Text(
-                                    '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
+                                    moreNew
+                                        ? '$newCount+ new messages'
+                                        : '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
                                   ),
                                 ),
                             ],

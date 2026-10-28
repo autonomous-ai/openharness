@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import type { HarnessSession, Prisma, PrismaClient } from '@prisma/client'
 import { pub } from './bus.js'
 import { prisma } from './prisma.js'
+import { ensureIndex } from './db/indexes.js'
 import { decryptMachineCredential, encryptMachineCredential } from './machineCredential.js'
 import { normalizeSsoClientId, refreshAccessToken, SsoTokenError, type SsoClientId } from './sso.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
@@ -237,9 +238,8 @@ export async function ssoAccessTokenFor(sessionId: string, userId: string): Prom
 
 /**
  * Sessions are deleted [ENDED_SESSION_KEEP_MS] after they expire: idle past their lifetime, or ended
- * ([endedSessionData] expires them). Nothing else deletes them. Run by the worker at start (worker.ts).
+ * ([endedSessionData] expires them). Nothing else deletes them. Run by the worker at start (lib/db/schemaRelease.ts).
  */
 export async function ensureHarnessSessionExpiry(db: Pick<PrismaClient, '$runCommandRaw'>): Promise<void> {
-  await db.$runCommandRaw({ createIndexes: 'harness_sessions', indexes: [{ key: { expiresAt: 1 }, name: 'harness_session_expiry',
-    expireAfterSeconds: ENDED_SESSION_KEEP_MS / 1000 }] })
+  await ensureIndex(db, 'harness_sessions', { key: { expiresAt: 1 }, name: 'harness_session_expiry', expireAfterSeconds: ENDED_SESSION_KEEP_MS / 1000 })
 }
