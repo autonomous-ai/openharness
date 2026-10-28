@@ -155,6 +155,7 @@ async function start(): Promise<void> {
   const routeLimit = createRouteRateLimit({
     perPersonPerMinute: env.ROUTE_RATE_LIMIT_PER_PERSON_MINUTE,
     perCallerPerSecond: env.ROUTE_RATE_LIMIT_PER_CALLER_SECOND,
+    perPersonPerSecond: env.ROUTE_RATE_LIMIT_PER_PERSON_SECOND,
   })
   app.addHook('onRequest', routeLimit.beforeSignIn)
   registerAuthMiddleware(app)

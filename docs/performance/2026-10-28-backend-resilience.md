@@ -7,7 +7,7 @@ Stability roadmap items 3.2 (real rate limits) and 3.5 (protection when a depend
 | Area | Before | After |
 |---|---|---|
 | Feature rate limits (agent routing, community, analytics, device keys, Grid profile, QR sign-in) | Counted in each process: the limit multiplied by processes and pods, and reset on every deploy | Counted once across every pod through one Redis call (`lib/rateLimit.ts`); per process while Redis is unavailable, with one warning each way. Limits unchanged |
-| Every signed-in request | No ceiling | Per method and route pattern (`middlewares/routeRateLimit.ts`), two ceilings in one Redis call: per second for its caller (the agent the route names, else the machine, each together with the person; else the person), and per minute for the person whatever ids it names. 429 with Retry-After. A token already refused this window is answered before it costs a sign-in, and each refusal is held 1 s |
+| Every signed-in request | No ceiling | Per method and route pattern (`middlewares/routeRateLimit.ts`), three ceilings in one Redis call: per second for its caller (the agent the route names, else the machine, each together with the person; else the person), and per second and per minute for the person whatever ids it names. 429 with Retry-After. A token already refused this window is answered before it costs a sign-in, and each refusal is held 1 s |
 | Turn starts from a machine | Each one counted and relayed | After 20 in a row each under 10 s after the last, neither counted nor relayed for 60 s, and the machine is logged once (`lib/shortTurnGuard.ts`) |
 | SSO token check | Identity check, then profile fallback, each with its own 5 s timeout (10 s in all) | One 5 s deadline for both. A circuit breaker per account plane fails at once after 5 failures in a row; a rejected token is an answer, not a failure |
 | SSO sign-in and refresh | 5 s timeout per call | The same, plus a breaker per account plane |
@@ -21,12 +21,13 @@ Stability roadmap items 3.2 (real rate limits) and 3.5 (protection when a depend
 |---|---|---|
 | `ROUTE_RATE_LIMIT_PER_CALLER_SECOND` | 50 | Signed-in requests per route and second for one caller: the agent the route names, else the machine (each with its person), else the person. 0 turns it off |
 | `ROUTE_RATE_LIMIT_PER_PERSON_MINUTE` | 12000 | Signed-in requests per route and minute for one person, whatever agents or machines they name. 0 turns it off |
+| `ROUTE_RATE_LIMIT_PER_PERSON_SECOND` | 500 | Signed-in requests per route and second for one person, whatever agents or machines they name, so made-up agent ids cannot spend the minute's budget in one second. 200 agents polling once a second land up to 400 in one second when polls arrive late. 0 turns it off |
 | `REDIS_COMMAND_TIMEOUT_MS` | 1000 | The longest one Redis command may take on the shared command connection |
 | `SSO_PROFILE_STALE_GRACE_MS` | 0 (off) | See below |
 
 The route limits are generous on purpose until per-route counts from the ingress logs are in. The busiest client that
 works as designed is an older CLI's delivery poll: one call a second per running agent. Each agent is its own caller,
-so agents polling in the same second never crowd out one another; the person's 12000 a minute is 200 agents. With the
+so agents polling in the same second never crowd out one another; the person's 12000 a minute is 200 agents, and their 500 a second leaves room for 200 agents' polls arriving late. With the
 person in every caller key, naming someone else's machine or agent spends only your own budget.
 
 **`SSO_PROFILE_STALE_GRACE_MS` needs the owner's decision.** While the SSO cannot answer (down, slow, or its breaker

@@ -13,7 +13,9 @@ import { createWindowLimiter } from '../lib/windowLimiter.js'
  *    counted together with the person, else the person alone. With the person in the key, naming someone else's
  *    machine spends only your own budget; per agent, a person's agents polling in the same second do not crowd out one
  *    another. A second is short enough that a loop cannot spend a minute's worth at once.
- *  - for the person, per minute: so new agent or machine ids, real or made up, buy nothing past it.
+ *  - for the person, per second and per minute, whatever agent or machine ids the calls name: so new ids, real or made
+ *    up, buy nothing past either. Without the per-second one, each made-up id's fresh per-second budget would let a loop
+ *    spend the whole minute's in a second.
  * The limits are far above any client that works as designed and are set by the environment; 0 turns one off.
  * Requests nobody signed in for are not counted here. Clients already back off on 429; Retry-After says when the
  * window that refused ends.
@@ -30,6 +32,7 @@ import { createWindowLimiter } from '../lib/windowLimiter.js'
 export interface RouteRateLimits {
   perPersonPerMinute: number
   perCallerPerSecond: number
+  perPersonPerSecond?: number
   refusalDelayMs?: number
   now?: () => number
 }
@@ -40,9 +43,10 @@ const MINUTE_MS = 60_000
 const SECOND_MS = 1_000
 const REMEMBERED_REFUSALS_MAX = 50_000
 
-export function createRouteRateLimit({ perPersonPerMinute, perCallerPerSecond, refusalDelayMs = 1_000, now = Date.now }: RouteRateLimits): { beforeSignIn: Hook; afterSignIn: Hook } {
-  if (perPersonPerMinute <= 0 && perCallerPerSecond <= 0) return { beforeSignIn: async () => {}, afterSignIn: async () => {} }
+export function createRouteRateLimit({ perPersonPerMinute, perCallerPerSecond, perPersonPerSecond = 0, refusalDelayMs = 1_000, now = Date.now }: RouteRateLimits): { beforeSignIn: Hook; afterSignIn: Hook } {
+  if (perPersonPerMinute <= 0 && perCallerPerSecond <= 0 && perPersonPerSecond <= 0) return { beforeSignIn: async () => {}, afterSignIn: async () => {} }
   const localPerson = createWindowLimiter(MINUTE_MS, perPersonPerMinute)
+  const localPersonSecond = createWindowLimiter(SECOND_MS, perPersonPerSecond)
   const localCaller = createWindowLimiter(SECOND_MS, perCallerPerSecond)
   const refusedUntil = new Map<string, number>()
 
@@ -97,6 +101,7 @@ export function createRouteRateLimit({ perPersonPerMinute, perCallerPerSecond, r
 
       const checks: Array<{ name: string; key: string; windowMs: number; max: number; local: ReturnType<typeof createWindowLimiter> }> = []
       if (perPersonPerMinute > 0) checks.push({ name: 'route-person', key: `${route}:${person}`, windowMs: MINUTE_MS, max: perPersonPerMinute, local: localPerson })
+      if (perPersonPerSecond > 0) checks.push({ name: 'route-person-second', key: `${route}:${person}`, windowMs: SECOND_MS, max: perPersonPerSecond, local: localPersonSecond })
       if (perCallerPerSecond > 0) {
         checks.push({ name: 'route-caller', key: `${route}:${person}${named ? `:${named}` : ''}`, windowMs: SECOND_MS, max: perCallerPerSecond, local: localCaller })
       }

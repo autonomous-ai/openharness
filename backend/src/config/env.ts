@@ -32,6 +32,9 @@ const envSchema = z.object({
   // Per person and minute, whatever agents or machines the calls name. The busiest working client is an older CLI's
   // delivery poll, one call a second per running agent: 12000 is 200 agents.
   ROUTE_RATE_LIMIT_PER_PERSON_MINUTE: z.coerce.number().int().min(0).default(12_000),
+  // Per person and second, whatever agents or machines the calls name, so made-up ids cannot spend the minute's budget
+  // at once. 200 agents polling once a second can land up to 400 in one second when polls arrive late: 500 is above it.
+  ROUTE_RATE_LIMIT_PER_PERSON_SECOND: z.coerce.number().int().min(0).default(500),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
