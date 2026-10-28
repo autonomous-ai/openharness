@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -207,9 +208,9 @@ void main() {
     expect(plugin.cancelled, [noticeIdFor(ref)]);
   });
 
-  test('asking permission asks both platforms for alerts and sound', () async {
+  test('asking permission asks both platforms for alerts, sound and the icon count', () async {
     await notices.requestPermission();
-    expect(plugin.ios.asked, [(alert: true, sound: true)]);
+    expect(plugin.ios.asked, [(alert: true, sound: true, badge: true)]);
     expect(plugin.android.asked, 1);
   });
 
@@ -251,6 +252,48 @@ void main() {
     plugin.launch = const NotificationAppLaunchDetails(false);
     await notices.cancel(ref);
     expect(notices.opened.value, isNull);
+  });
+
+  group("the app icon's count", () {
+    const channel = MethodChannel('harness/app_badge');
+    late List<MethodCall> calls;
+    var fail = false;
+
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      calls = [];
+      fail = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        if (fail) throw PlatformException(code: 'badge');
+        calls.add(call);
+        return null;
+      });
+    });
+
+    tearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    });
+
+    test('is set on the icon on iOS', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      await notices.setSwarmBadge(3);
+      await notices.setSwarmBadge(0);
+      expect(calls.map((c) => (c.method, c.arguments)), [('set', 3), ('set', 0)]);
+    });
+
+    test('is left alone on Android, whose launchers show a dot from the notices', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      await notices.setSwarmBadge(3);
+      expect(calls, isEmpty);
+    });
+
+    test('a platform that fails never throws into the Swarm', () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      fail = true;
+      await notices.setSwarmBadge(3);
+      expect(calls, isEmpty);
+    });
   });
 
   group('a plugin that fails', () {
@@ -371,7 +414,7 @@ class _FakePlugin implements FlutterLocalNotificationsPlugin {
 }
 
 class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
-  final asked = <({bool alert, bool sound})>[];
+  final asked = <({bool alert, bool sound, bool badge})>[];
   bool fail = false;
 
   @override
@@ -385,7 +428,7 @@ class _FakeIos implements IOSFlutterLocalNotificationsPlugin {
     bool providesAppNotificationSettings = false,
   }) async {
     if (fail) throw PlatformException(code: 'permission');
-    asked.add((alert: alert, sound: sound));
+    asked.add((alert: alert, sound: sound, badge: badge));
     return true;
   }
 

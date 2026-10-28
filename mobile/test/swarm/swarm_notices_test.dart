@@ -149,6 +149,56 @@ void main() {
     expect(notices.cancelled, isEmpty);
   });
 
+  group("the app icon's count", () {
+    test('is the number of needs each read, as the drawer counts them', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.settle([decision(), mention(), work('needs_human')]);
+      expect(notices.badges, [3]);
+
+      // Answered on the desktop.
+      announcer.settle([mention(), work('needs_human')]);
+      expect(notices.badges, [3, 2]);
+    });
+
+    test('is set on the first read even with nothing waiting', () {
+      // What an earlier run left on the icon goes.
+      final notices = _Recording();
+      SwarmAnnouncer(notices, quiet: (_) => false).settle(const []);
+      expect(notices.badges, [0]);
+    });
+
+    test('is not set again while it stays the same', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+
+      announcer.settle([decision()]);
+      announcer.settle([mention()]);
+
+      expect(notices.badges, [1]);
+    });
+
+    test('counts while a Swarm screen is up, where no notice is posted', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => true);
+
+      announcer.settle([decision(), mention()]);
+
+      expect(notices.badges, [2]);
+    });
+
+    test('clears when the account signs out', () {
+      final notices = _Recording();
+      final announcer = SwarmAnnouncer(notices, quiet: (_) => false);
+      announcer.settle([decision()]);
+
+      announcer.clear();
+
+      expect(notices.badges, [1, 0]);
+    });
+  });
+
   group('the tap', () {
     test('leads to the Swarm and conversation, never read as an agent', () {
       const target = (swarmId: 'tab-b', conversationId: 'g9');
@@ -183,6 +233,7 @@ void main() {
 class _Recording extends SilentSystemNotices {
   final shown = <SwarmNoticeMessage>[];
   final cancelled = <String>[];
+  final badges = <int>[];
 
   @override
   Future<void> showSwarm(SwarmNoticeMessage message) async =>
@@ -190,4 +241,7 @@ class _Recording extends SilentSystemNotices {
 
   @override
   Future<void> cancelSwarm(String key) async => cancelled.add(key);
+
+  @override
+  Future<void> setSwarmBadge(int count) async => badges.add(count);
 }

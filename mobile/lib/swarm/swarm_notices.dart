@@ -46,6 +46,11 @@ SwarmNoticeMessage swarmNotice(SwarmNeed need) {
 /// the person is already looking at it ([quiet]), and takes it down once the
 /// need is gone ([settle]): answered on the desktop, done, or no longer
 /// waiting.
+///
+/// The app icon counts the needs, as the drawer's waiting badge does, on each
+/// read and whether or not a notice was posted; it is set only when the count
+/// changes, and the first read sets it even at zero, over what an earlier run
+/// left there.
 class SwarmAnnouncer {
   SwarmAnnouncer(this.notices, {required this.quiet});
 
@@ -57,6 +62,9 @@ class SwarmAnnouncer {
   /// Keys of the notices posted and not yet taken down.
   final _posted = <String>{};
 
+  /// The count on the app icon; null before the first read.
+  int? _badge;
+
   void announce(SwarmNeed need) {
     if (quiet(need)) return;
     final notice = swarmNotice(need);
@@ -64,15 +72,21 @@ class SwarmAnnouncer {
     unawaited(notices.showSwarm(notice));
   }
 
-  /// Takes down the notices of needs not in [needs].
-  void settle(Iterable<SwarmNeed> needs) {
+  /// Takes down the notices of needs not in [needs], and counts [needs] on
+  /// the app icon.
+  void settle(List<SwarmNeed> needs) {
     final open = {for (final need in needs) need.key};
     for (final key in _posted.where((key) => !open.contains(key)).toList()) {
       _posted.remove(key);
       unawaited(notices.cancelSwarm(key));
     }
+    if (needs.length != _badge) {
+      _badge = needs.length;
+      unawaited(notices.setSwarmBadge(needs.length));
+    }
   }
 
-  /// Takes every notice down: the account that saw them signed out.
+  /// Takes every notice and the icon's count down: the account that saw them
+  /// signed out, or Swarm was turned off.
   void clear() => settle(const []);
 }

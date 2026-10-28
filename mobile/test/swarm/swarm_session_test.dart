@@ -221,6 +221,48 @@ void main() {
 
       expect(notices.cancelled, [notices.shown.single.key]);
     });
+
+    group("the app icon's count", () {
+      /// Swarm on, and the session's Swarm read once: one decision waits.
+      Future<SwarmSession> read() async {
+        await features.set(PhoneExperiment.swarm, true);
+        final s = host().session!;
+        await s.inbox.refresh();
+        await settle();
+        return s;
+      }
+
+      test('is what the drawer counts after a read', () async {
+        final s = await read();
+
+        expect(s.inbox.needs, hasLength(1));
+        expect(notices.badges.last, 1);
+      });
+
+      test('clears when the person signs out', () async {
+        await read();
+
+        account.value = null;
+
+        expect(notices.badges.last, 0);
+      });
+
+      test('clears when another account signs in', () async {
+        await read();
+
+        account.value = 'person-other';
+
+        expect(notices.badges.last, 0);
+      });
+
+      test('clears when Swarm is turned off', () async {
+        await read();
+
+        await features.set(PhoneExperiment.swarm, false);
+
+        expect(notices.badges.last, 0);
+      });
+    });
   });
 
   test('a computer coming up while Swarm has none reads at once', () {
@@ -445,4 +487,9 @@ class _Notices extends SilentSystemNotices {
 
   @override
   Future<void> cancelSwarm(String key) async => cancelled.add(key);
+
+  final badges = <int>[];
+
+  @override
+  Future<void> setSwarmBadge(int count) async => badges.add(count);
 }
