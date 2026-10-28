@@ -314,6 +314,8 @@ section says so. Every other rule in this document holds on the phone.
 Every independently tappable control reaches 44 points. A control drawn
 smaller, such as a 32-point icon button in a header, keeps its drawn size and
 extends its hit area with `TouchTarget` rather than growing the row around it.
+Themed buttons and icon buttons reach 44 on their own: they are drawn at their
+usual size, but their layout box is 44 tall, so a row holding one is at least 44.
 A screen's own primary action is drawn 44 points tall.
 
 Deliberate differences from Desktop, and only these:
