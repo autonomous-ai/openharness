@@ -76,6 +76,11 @@ export const gibibytes = (bytes: number) => `${Math.floor(Math.max(0, bytes) / G
  *  only numbers they already see in the Machines view. */
 export const memoryShort = (freeBytes: number, neededBytes: number) =>
   `Not enough free memory: ${gibibytes(freeBytes)} free, ${gibibytes(neededBytes)} needed.`
+/** The free and needed amounts of a `memoryShort` reason at the start of a host's raw reason, or null for any other. */
+export function memoryShortIn(reason: unknown): { free: string; needed: string } | null {
+  const match = typeof reason === 'string' ? /^Not enough free memory: (\d+(?:\.\d)? GiB) free, (\d+(?:\.\d)? GiB) needed\./.exec(reason) : null
+  return match ? { free: match[1]!, needed: match[2]! } : null
+}
 /** Only measured windows leave the account reader. No credentials, emails or
  * invented token counts; an unreported/custom-profile allowance is unknown. */
 export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
