@@ -73,17 +73,48 @@ class _Preview extends StatefulWidget {
 }
 
 class _PreviewState extends State<_Preview> {
-  late Future<File> _local = widget.store.file(widget.url);
+  late Future<File> _local;
+
+  /// The store's turn [_local] was asked in ([SwarmAttachmentStore.turns]):
+  /// the file is for whoever the store kept files for then, and opens full
+  /// screen only while that holds.
+  late int _turn;
 
   /// The picture could not be fetched or decoded: the chip, which still opens it.
   bool _failed = false;
 
   @override
+  void initState() {
+    super.initState();
+    widget.store.turns.addListener(_turned);
+    _ask();
+  }
+
+  @override
   void didUpdateWidget(_Preview old) {
     super.didUpdateWidget(old);
     if (old.url == widget.url && identical(old.store, widget.store)) return;
+    old.store.turns.removeListener(_turned);
+    widget.store.turns.addListener(_turned);
+    _ask();
+  }
+
+  @override
+  void dispose() {
+    widget.store.turns.removeListener(_turned);
+    super.dispose();
+  }
+
+  void _ask() {
+    _turn = widget.store.turns.value;
     _local = widget.store.file(widget.url);
     _failed = false;
+  }
+
+  /// The files kept changed hands: the picture is asked for again, for
+  /// whoever they are kept for now.
+  void _turned() {
+    if (widget.store.turns.value != _turn) setState(_ask);
   }
 
   void _fail() {
@@ -160,18 +191,26 @@ class _PreviewState extends State<_Preview> {
     );
   }
 
-  void _open(BuildContext context, File file) => unawaited(
-    Navigator.of(context).push(
-      phoneRoute(
-        (_) => SwarmAttachmentViewer(
-          name: widget.file.name,
-          file: file,
-          store: widget.store,
+  /// Opens [file] full screen, bound to the turn it was asked in, as of the
+  /// tap: the viewer is built a frame later, after a change could come.
+  void _open(BuildContext context, File file) {
+    final turn = _turn;
+    final name = widget.file.name;
+    final store = widget.store;
+    unawaited(
+      Navigator.of(context).push(
+        phoneRoute(
+          (_) => SwarmAttachmentViewer(
+            name: name,
+            file: file,
+            store: store,
+            turn: turn,
+          ),
+          listensForItself: true,
         ),
-        listensForItself: true,
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// A picture full screen, to pinch and zoom; its name and a close at the top.
@@ -186,20 +225,22 @@ class SwarmAttachmentViewer extends StatefulWidget {
     required this.name,
     required this.file,
     required this.store,
+    required this.turn,
   });
 
   final String name;
   final File file;
   final SwarmAttachmentStore store;
 
+  /// The store's turn [file] was asked in: shown only while it holds, so a
+  /// change between the tap and the first frame shows nothing either.
+  final int turn;
+
   @override
   State<SwarmAttachmentViewer> createState() => _ViewerState();
 }
 
 class _ViewerState extends State<SwarmAttachmentViewer> {
-  /// The store's turn the picture was opened in.
-  late final int _turn;
-
   /// The decoded picture, as last drawn.
   ImageProvider? _picture;
   bool _gone = false;
@@ -207,8 +248,11 @@ class _ViewerState extends State<SwarmAttachmentViewer> {
   @override
   void initState() {
     super.initState();
-    _turn = widget.store.turns.value;
     widget.store.turns.addListener(_turned);
+    if (widget.store.turns.value != widget.turn) {
+      _gone = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _close());
+    }
   }
 
   @override
@@ -218,9 +262,14 @@ class _ViewerState extends State<SwarmAttachmentViewer> {
   }
 
   void _turned() {
-    if (_gone || widget.store.turns.value == _turn) return;
+    if (_gone || widget.store.turns.value == widget.turn) return;
     setState(() => _gone = true);
     unawaited(_picture?.evict());
+    _close();
+  }
+
+  void _close() {
+    if (!mounted) return;
     final route = ModalRoute.of(context);
     if (route != null && route.isActive) {
       Navigator.of(context).removeRoute(route);

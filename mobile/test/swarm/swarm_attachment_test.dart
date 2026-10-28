@@ -309,6 +309,45 @@ void main() {
       });
     }
 
+    testWidgets('another account between the tap and the next frame: it never '
+        'shows the old picture or its name', (tester) async {
+      await pump(tester);
+      await until(tester, () => drawn(tester));
+
+      await tester.tap(preview);
+      var changed = false;
+      unawaited(store.keepOnly('person-b').whenComplete(() => changed = true));
+      // Every frame of the opening, its first (offstage) one included.
+      final opening = find.byKey(
+        const ValueKey('swarm-attachment-viewer'),
+        skipOffstage: false,
+      );
+      for (var frame = 0; frame < 8; frame++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(
+          find.descendant(
+            of: opening,
+            matching: find.byType(Image, skipOffstage: false),
+          ),
+          findsNothing,
+          reason: 'frame $frame',
+        );
+        expect(
+          find.descendant(
+            of: opening,
+            matching: find.text('screen.png', skipOffstage: false),
+          ),
+          findsNothing,
+          reason: 'frame $frame',
+        );
+      }
+      await tester.pumpAndSettle();
+      expect(opening, findsNothing);
+
+      await until(tester, () => changed);
+      await closed(tester);
+    });
+
     testWidgets('the same account kept again leaves it open', (tester) async {
       await opened(tester);
 
