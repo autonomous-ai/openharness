@@ -27,18 +27,23 @@ export interface AttachmentStore {
   /** Streams `body` into the object and answers its size. Past `cap` bytes it throws AttachmentTooLarge and leaves no object. */
   put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number): Promise<number>
 }
-/** The private bucket avatars are kept in: nobody reads an object without a link the server signed (avatarLinks.ts). */
+/** Where avatars are kept, and the link a member read carries for one (avatarLinks.ts). */
 export interface AvatarStore extends AttachmentStore {
-  /** A link that opens [objectKey] until [expiresAt] (epoch ms), and never after. */
+  /** A link that opens [objectKey]: in a private bucket until [expiresAt] (epoch ms) and never after; on the CDN, for good. */
   signedUrl(objectKey: string, expiresAt: number): Promise<string>
 }
-/** `avatars`: the private avatar bucket; without one, avatar uploads are refused and presets still work. */
-export interface Attachments { store: AttachmentStore; prefix: string; publicBase: string; avatars?: AvatarStore | null }
+/** `avatars`: where avatars are kept and how they are linked (AvatarStore); without it, avatar uploads are refused and presets
+ *  still work. `avatarPrefix`: the folder avatar keys start with, and the only one a link is signed for (avatarLinks.ts);
+ *  `prefix` when unset. */
+export interface Attachments { store: AttachmentStore; prefix: string; publicBase: string; avatars?: AvatarStore | null; avatarPrefix?: string }
+/** Avatars' folder in the attachments bucket, when they have no bucket of their own. */
+export const SHARED_AVATAR_PREFIX = 'avatars'
+export const trimPrefix = (prefix: string) => prefix.replace(/^\/+|\/+$/g, '')
 
 /** Anyone holding a link can open the file, so the key carries 128 random bits; the name segment is for people. */
 export function objectKeyFor(prefix: string, tabId: string, name: string): string {
   const safe = name.replaceAll(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._]+/, '').slice(-120) || 'file'
-  return [prefix.replace(/^\/+|\/+$/g, ''), tabId, randomBytes(16).toString('hex'), safe].filter(Boolean).join('/')
+  return [trimPrefix(prefix), tabId, randomBytes(16).toString('hex'), safe].filter(Boolean).join('/')
 }
 export const publicUrl = (base: string, objectKey: string) => `${base.replace(/\/+$/, '')}/${objectKey}`
 
@@ -150,6 +155,13 @@ export class GcsAvatarStore extends GcsAttachmentStore implements AvatarStore {
   }
 }
 
+/** Avatars in the attachments bucket, linked on its CDN as chat files are: permanent public links, so nothing is signed. */
+export class CdnAvatarStore implements AvatarStore {
+  constructor(readonly store: AttachmentStore, private readonly publicBase: string) {}
+  put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) { return this.store.put(objectKey, file, body, cap) }
+  async signedUrl(objectKey: string) { return publicUrl(this.publicBase, objectKey) }
+}
+
 export class MemoryAttachmentStore implements AttachmentStore {
   readonly objects = new Map<string, { bytes: Buffer; contentType: string; contentDisposition: string }>()
   async put(objectKey: string, file: { name: string; mime: string }, body: Readable, cap: number) {
@@ -188,8 +200,16 @@ export function attachmentsFromEnv(env: { NODE_ENV: string; SUPER_TAB_ATTACHMENT
   // Read even without a bucket, so a broken key fails the deploy that set it rather than the one that adds the bucket.
   const account = serviceAccountFrom(env.SUPER_TAB_ATTACHMENTS_CREDENTIALS)
   if (!env.SUPER_TAB_ATTACHMENTS_BUCKET) return null
-  // Avatars are member-only, so never the public attachments bucket: without a private one, uploads stay off.
-  return { store: new GcsAttachmentStore(env.SUPER_TAB_ATTACHMENTS_BUCKET, account), prefix: env.SUPER_TAB_ATTACHMENTS_PREFIX,
-    publicBase: env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE,
-    avatars: env.SUPER_TAB_AVATARS_BUCKET ? new GcsAvatarStore(env.SUPER_TAB_AVATARS_BUCKET, account) : null }
+  const base = { store: new GcsAttachmentStore(env.SUPER_TAB_ATTACHMENTS_BUCKET, account), prefix: env.SUPER_TAB_ATTACHMENTS_PREFIX,
+    publicBase: env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE }
+  // A bucket of their own wins: nobody reads it without a signed link.
+  if (env.SUPER_TAB_AVATARS_BUCKET) return { ...base, avatars: new GcsAvatarStore(env.SUPER_TAB_AVATARS_BUCKET, account), avatarPrefix: trimPrefix(base.prefix) }
+  // Prod has only the attachments bucket (Ken, 2026-10-28, option B1): avatars live there in their own folder and are linked
+  // on its CDN like chat files, so anyone who once had a picture's link keeps it (docs/swarms.md). Chat files never go in
+  // the avatar folder, and avatar links are made for that folder alone.
+  const chat = trimPrefix(base.prefix)
+  if (chat === SHARED_AVATAR_PREFIX || chat.startsWith(`${SHARED_AVATAR_PREFIX}/`)) {
+    throw new Error(`SUPER_TAB_ATTACHMENTS_PREFIX must not be ${SHARED_AVATAR_PREFIX}/ or inside it while avatars share the attachments bucket. Pick another prefix, or set SUPER_TAB_AVATARS_BUCKET.`)
+  }
+  return { ...base, avatars: new CdnAvatarStore(base.store, base.publicBase), avatarPrefix: SHARED_AVATAR_PREFIX }
 }
