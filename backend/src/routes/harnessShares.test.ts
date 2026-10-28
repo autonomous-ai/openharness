@@ -178,7 +178,7 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await put(input(), id)).statusCode).toBe(200)
     expect(mocks.prisma.user.findUnique).toHaveBeenCalledWith({ where: { email: 'ken@example.com' }, select: { id: true } })
-    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
     // Named in the log, so a burst of `machines_changed` on someone's app can be traced to the invitation behind it.
     expect(info).toHaveBeenCalledWith('harness share: told the recipient it changed', { shareId: id, recipientId: 'ken' })
   })
@@ -187,7 +187,7 @@ describe('account-bound harness invitations', () => {
     mocks.prisma.harnessShare.findUnique.mockResolvedValue({ id, recipientEmail: 'ken@example.com' })
     mocks.prisma.user.findUnique.mockResolvedValue({ id: 'ken' })
     expect((await app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })).statusCode).toBe(200)
-    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'updated' })
+    expect(mocks.listChanged).toHaveBeenCalledWith('ken', { reason: 'harness_shares' })
   })
   it('invites an address with no account yet, and survives the lookup failing, without telling anyone', async () => {
     const id = randomUUID(), remove = () => app.inject({ method: 'DELETE', url: `/api/harness-shares/${id}`, headers: auth })
