@@ -24,7 +24,7 @@ import { digestDue, digestMessageId, digestRequest, digestSince } from './digest
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
-import { groupsBy, listingDrops, quietSince } from './parts/indexed.js'
+import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
 import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
@@ -142,19 +142,22 @@ export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {})
  */
 export async function transaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Transaction) => Promise<T>,
   sleep: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<T> {
+  let hintless = false
   for (let attempt = 1; ; attempt++) {
     let committed: Array<() => void> = []
     const drops = listingDrops()
     try {
       // The cache's stamps are bumped, and awaited, once the attempt commits (cache.ts); after-commit work runs after them.
-      const result = await swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
+      const run = () => swarmTransaction(db, tx => { committed = []; pendingCommits.set(tx, committed); return body(tx) }, TRANSACTION_OPTIONS)
+      const result = await (hintless ? withoutHints(run) : run())
       for (const callback of committed) {
         try { callback() } catch (error) { logger.warn('[super-tab] after-commit callback failed', { error: error instanceof Error ? error.message : String(error) }) }
       }
       return result
     } catch (error) {
-      // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next names none.
-      if (!retryable(error) && listingDrops() === drops) throw error
+      // A read in this attempt named an index removed since the last listing (parts/indexed.ts): the next attempts name none.
+      if (listingDrops() !== drops) hintless = true
+      else if (!retryable(error)) throw error
       // An expired or unstartable transaction (P2028) is load: one more try, then the client retries after Retry-After.
       if (attempt >= (errorCode(error) === 'P2028' ? EXPIRED_TRANSACTION_ATTEMPTS : TRANSACTION_ATTEMPTS)) {
         // A unique key still taken after every retry is a real duplicate, not contention.

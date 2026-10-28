@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore, transaction } from '../src/superTabs/store.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
@@ -14,7 +14,7 @@ import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { recentDormantGroups } from '../src/superTabs/leaderboard/read.js'
 import { decisionsWaiting, listDecisions } from '../src/superTabs/decisions.js'
-import { GROUP_INDEX, groupsBy, listGroupIndexes } from '../src/superTabs/parts/indexed.js'
+import { GROUP_INDEX, groupsBy, listGroupIndexes, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
 import { logger } from '../src/utils/logger.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -329,11 +329,13 @@ describe('a hot read whose index the database lacks', () => {
   // Review of #1994: listed first, then removed (a rollback, an index replaced). The listing still names it until the next one.
   describe('removed after the last listing', () => {
     const match = () => [{ $match: { tabId: s.tabId, agentIds: s.worker } }, { $project: { _id: 0, key: 1 } }]
-    async function removed<T>(run: () => Promise<T>): Promise<T> {
+    /** Listed, then removed, then `run`; with `before`, that runs between the listing and the removal and hands `run` its result. */
+    async function removed<T, B = undefined>(...steps: [run: () => Promise<T>] | [before: () => Promise<B>, run: (started: B) => Promise<T>]): Promise<T> {
       await listGroupIndexes(db)
+      const started = steps.length === 2 ? await steps[0]() : undefined as B
       await db.$runCommandRaw({ dropIndexes: 'SwarmGroup', index: GROUP_INDEX.agents })
       try {
-        return await run()
+        return await (steps.length === 2 ? steps[1](started) : steps[0]())
       } finally {
         await db.$runCommandRaw({ createIndexes: 'SwarmGroup', indexes: [{ key: GROUP_INDEX.agents, name: 'SwarmGroup_tabId_agentIds_idx' }] })
         await listGroupIndexes(db)
@@ -349,6 +351,67 @@ describe('a hot read whose index the database lacks', () => {
 
     it('a store transaction runs again without it and answers', async () => {
       expect(await removed(() => transaction(db, tx => groupsBy(tx, 'agents', match())))).toEqual([{ key: s.web }])
+    })
+
+    // Re-check of #1994: a listing whose reply was read before the removal lands after a read dropped the listing.
+    it('a listing that started before the removal does not name it again once it lands', async () => {
+      let land!: () => void
+      const landed = new Promise<void>(resolve => { land = resolve })
+      const slow = { $runCommandRaw: async (command: Prisma.InputJsonObject) => { const reply = await db.$runCommandRaw(command); await landed; return reply } } as unknown as PrismaClient
+      const rows = await removed(async () => {
+        const late = listGroupIndexes(slow)
+        // The reply is read (index still there) before the removal below: give the command time to come back.
+        await new Promise(resolve => setTimeout(resolve, 200))
+        return { late }
+      }, async ({ late }) => {
+        expect(await groupsBy(db, 'agents', match())).toEqual([{ key: s.web }])
+        land()
+        await late
+        // A transaction opened directly, no runner to run it again: it answers only if nothing names the removed index.
+        return db.$transaction(tx => groupsBy(tx, 'agents', match()))
+      })
+      expect(rows).toEqual([{ key: s.web }])
+    })
+
+    it('a store transaction\'s rerun names no index, even if a listing names the removed one again meanwhile', async () => {
+      let attempts = 0
+      const rows = await removed(async () => transaction(db, async tx => { attempts++; return groupsBy(tx, 'agents', match()) }, async () => {
+        // Between the attempts the index comes back, is listed, and goes again (an index rebuilt during a rollout).
+        await db.$runCommandRaw({ createIndexes: 'SwarmGroup', indexes: [{ key: GROUP_INDEX.agents, name: 'SwarmGroup_tabId_agentIds_idx' }] })
+        await listGroupIndexes(db)
+        await db.$runCommandRaw({ dropIndexes: 'SwarmGroup', index: GROUP_INDEX.agents })
+      }))
+      expect(rows).toEqual([{ key: s.web }])
+      expect(attempts).toBe(2)
+    })
+
+    // The reviewer's probe (re-check of #1994): an older listing reply, read before the removal, lands after the failed attempt.
+    it('a directly opened transaction\'s rerun names no index when an older listing reply lands before it', async () => {
+      let attempts = 0
+      const rows = await removed(async () => ({ older: await db.$runCommandRaw({ listIndexes: 'SwarmGroup' }) }), ({ older }) => retryStaleIndex(async () => {
+        attempts++
+        try {
+          return await db.$transaction(tx => groupsBy(tx, 'agents', match()))
+        } finally {
+          if (attempts === 1) await listGroupIndexes({ $runCommandRaw: async () => older } as unknown as PrismaClient)
+        }
+      }))
+      expect(rows).toEqual([{ key: s.web }])
+      expect(attempts).toBe(2)
+    })
+
+    it('a directly opened transaction\'s rerun names no index, even if a listing names the removed one again meanwhile', async () => {
+      let attempts = 0
+      const rows = await removed(() => retryStaleIndex(async () => {
+        if (++attempts === 2) {
+          await db.$runCommandRaw({ createIndexes: 'SwarmGroup', indexes: [{ key: GROUP_INDEX.agents, name: 'SwarmGroup_tabId_agentIds_idx' }] })
+          await listGroupIndexes(db)
+          await db.$runCommandRaw({ dropIndexes: 'SwarmGroup', index: GROUP_INDEX.agents })
+        }
+        return db.$transaction(tx => groupsBy(tx, 'agents', match()))
+      }))
+      expect(rows).toEqual([{ key: s.web }])
+      expect(attempts).toBe(2)
     })
 
     it('the read cache\'s own transaction runs again without it and answers', async () => {

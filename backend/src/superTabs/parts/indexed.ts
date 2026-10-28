@@ -5,6 +5,7 @@
  * can pick an index that reads every quiet conversation to return none. A named index is never planned.
  * integration/superTabGroupPlans.test.ts holds each read to it under Mongo's profiler.
  */
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
 
@@ -32,7 +33,10 @@ let present = new Set<GroupIndex>()
 /** Lists SwarmGroup's indexes, outside any transaction, and says which hot reads go without theirs. The worker's
  *  `prisma db push` builds a new index at startup (Dockerfile.k8s), possibly after a server first lists them. */
 export async function listGroupIndexes(db: PrismaClient): Promise<void> {
+  const generation = drops
   const reply = await db.$runCommandRaw({ listIndexes: 'SwarmGroup' }) as unknown as { cursor: { firstBatch: Array<{ key: Record<string, unknown> }> } }
+  // A read dropped the listing while this one was on its way: its reply may predate the removal (review of #1994).
+  if (drops !== generation) return
   const fields = new Set(reply.cursor.firstBatch.map(index => Object.keys(index.key).join(',')))
   const names = Object.keys(GROUP_INDEX) as GroupIndex[]
   present = new Set(names.filter(name => fields.has(Object.keys(GROUP_INDEX[name]).join(','))))
@@ -52,15 +56,19 @@ export function watchGroupIndexes(db: PrismaClient): void {
 let drops = 0
 export const listingDrops = (): number => drops
 
+/** Set while a transaction a dropped index aborted runs again: its reads name no index, whatever a listing since says. */
+const rerun = new AsyncLocalStorage<true>()
+export const withoutHints = <T>(run: () => Promise<T>): Promise<T> => rerun.run(true, run)
+
 /** Runs a transaction opened directly (outside store.ts `transaction`) once more when a read in it dropped the listing:
- *  the second attempt names no index. */
+ *  the second attempt names no index (`withoutHints`). */
 export async function retryStaleIndex<T>(run: () => Promise<T>): Promise<T> {
   const before = drops
   try {
     return await run()
   } catch (error) {
     if (drops === before) throw error
-    return run()
+    return withoutHints(run)
   }
 }
 
@@ -73,7 +81,7 @@ export async function retryStaleIndex<T>(run: () => Promise<T>): Promise<T> {
 export async function groupsBy(tx: Transaction, index: GroupIndex, pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> {
   const run = async (hint?: Record<string, number>) => await tx.swarmGroup.aggregateRaw({ pipeline, ...hint ? { options: { hint } } : {} }) as unknown as
     Array<Record<string, unknown>>
-  if (!present.has(index)) return run()
+  if (rerun.getStore() || !present.has(index)) return run()
   try {
     return await run(GROUP_INDEX[index])
   } catch (error) {
