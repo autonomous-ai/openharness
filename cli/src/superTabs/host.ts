@@ -367,6 +367,8 @@ export class SuperTabHost {
   }
   private pollMachines() {
     void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    // Beside the pass, never behind it: a slow pass still keeps the machine's reading fresh (machines.ts beat).
+    this.contributed().beat()
     this.grids ??= new SwarmGrids(this.core, this.machineId)
     void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
   }
