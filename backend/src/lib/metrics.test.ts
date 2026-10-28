@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
-import { createMetrics, registerRequestMetrics } from './metrics.js'
+import { createMetrics, registerRequestMetrics, timeQuery } from './metrics.js'
 
 async function appWithMetrics() {
   const metrics = createMetrics()
@@ -56,5 +56,52 @@ describe('process metrics', () => {
     const text = await registry.metrics()
     expect(text).toContain('nodejs_eventloop_lag_p99_seconds')
     expect(text).toContain('# TYPE nodejs_gc_duration_seconds histogram')
+  })
+})
+
+describe('database query timing', () => {
+  /** A clock that reads `start` when the query begins and `start + tookMs` when it settles. */
+  const clock = (tookMs: number) => { const reads = [1_000, 1_000 + tookMs]; return () => reads.shift()! }
+  const sink = () => {
+    const lines: { message: string; context?: Record<string, unknown> }[] = []
+    return { lines, warn: (message: string, context?: Record<string, unknown>) => { lines.push({ message, context }) } }
+  }
+  const findByEmail = { model: 'User', operation: 'findFirst', args: { where: { email: 'person@example.com' } } }
+
+  async function queryCounts(metrics: ReturnType<typeof createMetrics>) {
+    return (await metrics.registry.metrics()).split('\n').filter(line => line.startsWith('prisma_query_duration_seconds_count'))
+  }
+
+  it('logs a query over 100 ms with its model, operation and duration, and nothing from its arguments', async () => {
+    const metrics = createMetrics()
+    const log = sink()
+    const result = await timeQuery(metrics, { ...findByEmail, query: async () => ({ id: 'u1' }) }, { now: clock(150), log })
+    expect(result).toEqual({ id: 'u1' })
+    expect(log.lines).toEqual([{ message: 'Slow database query', context: { model: 'User', operation: 'findFirst', durationMs: 150 } }])
+    expect(JSON.stringify(log.lines)).not.toContain('person@example.com')
+    expect(await queryCounts(metrics)).toEqual(['prisma_query_duration_seconds_count{model="User",operation="findFirst"} 1'])
+  })
+
+  it('does not log a query of 100 ms or less, but still times it', async () => {
+    const metrics = createMetrics()
+    const log = sink()
+    await timeQuery(metrics, { ...findByEmail, query: async () => null }, { now: clock(100), log })
+    expect(log.lines).toEqual([])
+    expect(await queryCounts(metrics)).toEqual(['prisma_query_duration_seconds_count{model="User",operation="findFirst"} 1'])
+  })
+
+  it('times a failed query and passes its error on unchanged', async () => {
+    const metrics = createMetrics()
+    const log = sink()
+    const failure = new Error('write conflict')
+    await expect(timeQuery(metrics, { ...findByEmail, query: async () => { throw failure } }, { now: clock(250), log })).rejects.toBe(failure)
+    expect(log.lines).toEqual([{ message: 'Slow database query', context: { model: 'User', operation: 'findFirst', durationMs: 250 } }])
+    expect(await queryCounts(metrics)).toEqual(['prisma_query_duration_seconds_count{model="User",operation="findFirst"} 1'])
+  })
+
+  it('labels a raw command, which has no model, as "raw"', async () => {
+    const metrics = createMetrics()
+    await timeQuery(metrics, { operation: '$runCommandRaw', args: { ping: 1 }, query: async () => ({ ok: 1 }) }, { now: clock(3), log: sink() })
+    expect(await queryCounts(metrics)).toEqual(['prisma_query_duration_seconds_count{model="raw",operation="$runCommandRaw"} 1'])
   })
 })
