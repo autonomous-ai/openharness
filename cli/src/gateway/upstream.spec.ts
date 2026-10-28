@@ -178,4 +178,35 @@ describe('UpstreamLink reconnect backoff', () => {
     expect(forced).toEqual([false, true])
     expect(nextRedialMs()).toBe(1_500)
   })
+
+  it('backs off redials while the backend refuses every token, even though each refresh succeeds', async () => {
+    await serve({ refuse: 401 })
+    let refreshes = 0
+    const auth: Auth = { accessToken: async (opts) => { if (opts?.force) refreshes++; return 'token' } }
+    const { link } = open(auth)
+
+    const waits: number[] = []
+    link.connect()
+    for (let i = 0; i < 3; i++) {
+      await untilATimerIsPending()
+      waits.push(nextRedialMs())
+    }
+
+    expect(waits).toEqual([1_500, 2_500, 4_500])
+    expect(refreshes).toBe(3)
+  })
+
+  it.each(['stop', 'close'] as const)('cancels a pending redial on %s', async (end) => {
+    await serve({ onConnection: (ws) => ws.terminate() })
+    const { link, signals } = open()
+
+    const dropped = once(signals, 'down')
+    link.connect()
+    await dropped
+    expect(vi.getTimerCount()).toBe(1)
+
+    link[end]()
+
+    expect(vi.getTimerCount()).toBe(0)
+  })
 })

@@ -113,6 +113,8 @@ export class UpstreamLink {
   private attempts = 0
   /** When the current socket opened (0 while none is open): how the backoff knows the link was stable. */
   private openedAt = 0
+  /** The pending redial, kept so a stop cancels it rather than leaving the process waiting up to 30 s. */
+  private redialTimer: NodeJS.Timeout | null = null
   private closed = false
   private queue: QueueItem[] = []
   private draining = false
@@ -175,7 +177,7 @@ export class UpstreamLink {
       // the backoff: a flat second had every signed-in machine asking /api/auth/refresh once a second
       // for as long as the backend was away.
       const delay = err instanceof AuthSessionError && err.code === 'INVALID_REFRESH' ? MAX_DELAY_MS : reconnectDelay(this.attempts++)
-      if (!this.closed) setTimeout(() => this.connect(), delay)
+      if (!this.closed) this.redialIn(delay)
       return
     }
     if (this.closed) { this.connecting = false; return }
@@ -247,7 +249,7 @@ export class UpstreamLink {
       if (this.retryingAuth) { console.log(`[backend] disconnected (${why}) — refreshing the token before reconnecting`); return }
       const delay = reconnectDelay(this.attempts++)
       console.log(`[backend] disconnected (${why}) — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
-      setTimeout(() => this.connect(), delay)
+      this.redialIn(delay)
     }
     ws.on('close', (code) => onGone(`close ${code}`))
     ws.on('error', (err) => {
@@ -265,10 +267,16 @@ export class UpstreamLink {
         void this.auth.accessToken({ force: true, failedToken: token })
           .then(() => {
             this.retryingAuth = false
+            if (this.closed) return
             // onGone has normally run by now (the close lands long before a network round trip
             // returns); if this socket is somehow still ours, let go of it before dialing again.
             if (this.ws === ws) { this.ws = null; try { ws.terminate() } catch { /* ignore */ } }
-            this.connect()
+            // The fresh token goes through the backoff like any other drop: a backend that refuses every
+            // token while the refresh keeps succeeding (an auth outage) was redialed as fast as the
+            // round trips allowed.
+            const delay = reconnectDelay(this.attempts++)
+            console.log(`[backend] token refreshed — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
+            this.redialIn(delay)
           })
           .catch((error: unknown) => {
             this.retryingAuth = false
@@ -282,7 +290,7 @@ export class UpstreamLink {
             if (this.ws === ws) { this.ws = null; try { ws.terminate() } catch { /* ignore */ } }
             const delay = reconnectDelay(this.attempts++)
             console.log(`[backend] token refresh failed (${error instanceof Error ? error.message : String(error)}) — retrying in ${Math.round(delay / 1000)}s (attempt ${this.attempts})`)
-            setTimeout(() => this.connect(), delay)
+            this.redialIn(delay)
           })
       } else if (/Unexpected server response: 40[13]\b/.test(msg)) {
         this.closed = true
@@ -298,11 +306,21 @@ export class UpstreamLink {
     })
   }
 
+  private redialIn(delay: number): void {
+    this.cancelRedial()
+    this.redialTimer = setTimeout(() => { this.redialTimer = null; this.connect() }, delay)
+  }
+
   /** Stop for good: no reconnect, whatever the socket does next (a `machine_revoked`). */
-  close(): void { this.closed = true }
+  close(): void { this.closed = true; this.cancelRedial() }
+
+  private cancelRedial(): void {
+    if (this.redialTimer) { clearTimeout(this.redialTimer); this.redialTimer = null }
+  }
 
   stop(): void {
     this.closed = true
+    this.cancelRedial()
     if (this.heartbeat) this.heartbeat.stop()
     if (this.appPing) clearInterval(this.appPing)
     try { this.ws?.close() } catch { /* ignore */ }

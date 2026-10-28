@@ -919,7 +919,10 @@ describe('BackendSocket outbound queue', () => {
       expect(statuses).toEqual([true, false])
       expect(calls).toEqual([{ force: true, failedToken: 'stale-token' }])
       expect(revoked).not.toHaveBeenCalled()
-      // And the refresh, not a backoff timer, opened the next socket — with the new token.
+      // The next socket waits out the backoff like any other drop (1–2 s for the first), then dials
+      // once, with the new token.
+      expect(wsMock.instances).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(2_000)
       expect(wsMock.instances).toHaveLength(2)
       expect(wsMock.instances[1].protocols).toEqual(['fresh-token'])
       await vi.advanceTimersByTimeAsync(60_000)
