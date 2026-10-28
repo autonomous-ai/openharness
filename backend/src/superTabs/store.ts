@@ -8,7 +8,10 @@ import { machineShareGrant, sharedVia } from '../lib/machineSharePolicy.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
 import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT, postable, type Command, type CommandContext } from './commands.js'
 import { redactCredentials } from './credentials.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, checkedType, MAX_ATTACHMENT_BYTES, objectKeyFor, publicUrl, type Attachment, type Attachments } from './attachments.js'
+import type { AvatarUpload } from './profile.js'
+import { reactionCounts, type ReactionTarget } from './reactions.js'
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl,
+  type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
@@ -40,6 +43,8 @@ import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSche
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
 type Transaction = Prisma.TransactionClient
+type ReactCommand = Extract<Command, { type: 'message.react' }>
+const reactionId = (tabId: string, actor: Actor, command: ReactCommand) => stableId(tabId, command.messageId, actorKey(actor), command.emoji)
 const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue
 type SendCommand = Extract<Command, { type: 'message.send' }>
 // Prisma on MongoDB: `usedBy: null` alone misses rows that never had the field.
@@ -183,6 +188,8 @@ const routeDecisionOf = (command: Command): string | undefined => command.type =
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
+  /** The private avatar bucket, whose links member reads sign (read/service.ts); null when avatar uploads are off. */
+  get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.native = new SuperTabNativeStore({
@@ -741,6 +748,10 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
+      if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
+      if ((command.type === 'member.avatar' || command.type === 'agent.avatar') && command.avatar?.kind === 'upload') {
+        context.avatarUpload = await this.avatarUpload(tx, tabId, actor, command.avatar.id)
+      }
       if (TEAM_WORK_COMMANDS.has(command.type)) {
         context.teamMachines = await this.teamMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true
@@ -927,6 +938,13 @@ export class SuperTabStore {
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
+      if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command)
+      if (context.avatarUpload) {
+        // Conflicts with a concurrent use of the same picture: only one command can take it.
+        const taken = await tx.superTabAttachment.updateMany({ where: { tabId, id: context.avatarUpload.id, purpose: AVATAR_PURPOSE, ...unused },
+          data: { usedBy: receiptId } })
+        if (taken.count !== 1) fail('AVATAR_UNAVAILABLE', 'Upload this picture again before using it.', 400)
+      }
       if (effects.decisions) {
         const ids = await writeDecisions(tx, tabId, effects.decisions, context.now)
         if (command.type === 'decision.ask') effects.result.decisionIds = ids
@@ -1045,30 +1063,64 @@ export class SuperTabStore {
     // A file's name is shown in the chat like its message, so it never keeps a credential either.
     const name = attachmentName.transform(value => redactCredentials(value).text).safeParse(file.name), mime = attachmentMime.safeParse(file.mime)
     if (!name.success || !mime.success) fail('INVALID_ATTACHMENT', 'Attach a file with a printable name and a content type.', 400)
-    const key = await transaction(this.db, async tx => {
-      const { actor } = await this.poster(tx, user, tabId, conversationId, asAgentId)
-      const key = actorKey(actor)
-      // Unsent files cost bucket space, so one actor gets a bounded number an hour.
+    const key = await this.uploader(tabId, tx => this.poster(tx, user, tabId, conversationId, asAgentId).then(p => p.actor))
+    const row = await this.keep(attachments.store, attachments.prefix, tabId, key, { name: name.data, conversationId },
+      async () => checkedType(mime.data, file.body), file.body, MAX_ATTACHMENT_BYTES)
+    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) } satisfies Attachment }
+  }
+
+  /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
+   *  member who may write uploads one; the command that sets it decides whose it becomes. */
+  async uploadAvatar(user: AuthUser, tabId: string, file: { body: Readable }, asAgentId?: string) {
+    // Member-only: never the public attachments bucket. Until a private one is configured, uploads stay off (presets work).
+    const avatars = this.attachments?.avatars ?? fail('AVATARS_UNAVAILABLE', 'Uploading pictures is not set up on this server yet. Pick one of the pictures instead.', 503)
+    const key = await this.uploader(tabId, async tx => {
+      const { state } = await this.load(tx, user, tabId, {})
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor, true)
+      return actor
+    })
+    const row = await this.keep(avatars, this.attachments!.prefix, tabId, key, { name: 'avatar', conversationId: '', purpose: AVATAR_PURPOSE }, async () => {
+      const peeked = await peekType(file.body)
+      if (!peeked.type || !AVATAR_TYPES.has(peeked.type)) fail('AVATAR_TYPE', 'Use a PNG, JPEG or WebP picture.', 415)
+      return { mime: peeked.type, body: peeked.body }
+    }, file.body, MAX_AVATAR_BYTES)
+    // No link: a picture is only reached through the signed links member reads carry (avatarLinks.ts).
+    return { avatar: { id: row.id } }
+  }
+
+  /** The uploading actor's key, once it may upload and is under its hourly allowance: unsent files cost bucket space. */
+  private async uploader(tabId: string, allowed: (tx: Transaction) => Promise<Actor>): Promise<string> {
+    return transaction(this.db, async tx => {
+      const key = actorKey(await allowed(tx))
       const recent = await tx.superTabAttachment.count({ where: { tabId, actorKey: key, createdAt: { gte: new Date(this.now() - 3_600_000) } } })
       if (recent >= 200) fail('RATE_LIMITED', 'You attached 200 files in the last hour. Wait before attaching more.', 429)
       return key
     })
-    const objectKey = objectKeyFor(attachments.prefix, tabId, name.data)
-    let size: number, stored = mime.data
+  }
+
+  /** Streams one file into the bucket under a random key, as the type `typed` decides from its first bytes, and records it. */
+  private async keep(bucket: AttachmentStore, prefix: string, tabId: string, actorKey: string, file: { name: string; conversationId: string; purpose?: string },
+    typed: () => Promise<{ mime: string; body: Readable }>, original: Readable, cap: number) {
+    const objectKey = objectKeyFor(prefix, tabId, file.name)
+    let size: number, mime: string
     try {
-      const checked = await checkedType(mime.data, file.body)
-      stored = checked.mime
-      size = await attachments.store.put(objectKey, { name: name.data, mime: stored }, checked.body, MAX_ATTACHMENT_BYTES)
+      const checked = await typed()
+      mime = checked.mime
+      size = await bucket.put(objectKey, { name: file.name, mime }, checked.body, cap)
     } catch (error) {
-      if (error instanceof AttachmentTooLarge) fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      if (error instanceof SuperTabError) throw error
+      if (error instanceof AttachmentTooLarge) {
+        if (file.purpose === AVATAR_PURPOSE) fail('AVATAR_TOO_LARGE', 'An avatar can be at most 1 MB.', 413)
+        fail('ATTACHMENT_TOO_LARGE', error.message, 413)
+      }
       // The client's own stream breaking is the request's; anything else is the bucket's, and the person can try again.
-      if (file.body.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
+      if (original.errored || (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('FST_'))) throw error
       logger.error('super-tab attachment storage failed', { tabId, error: error instanceof Error ? error.message : String(error) })
       fail('ATTACHMENTS_UNAVAILABLE', 'Could not store the file just now. Try again.', 503)
     }
-    const row = await this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId,
-      actorKey: key, name: name.data, mime: stored, size, objectKey } })
-    return { attachment: { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, objectKey) } satisfies Attachment }
+    return this.db.superTabAttachment.create({ data: { id: randomBytes(12).toString('hex'), tabId, conversationId: file.conversationId,
+      actorKey, name: file.name, mime, size, objectKey, ...(file.purpose ? { purpose: file.purpose } : {}) } })
   }
 
   /** The actor, once it may post in this conversation. */
@@ -1087,12 +1139,36 @@ export class SuperTabStore {
     const rows = await tx.superTabAttachment.findMany({ where: { tabId, id: { in: ids } } })
     return ids.map(id => {
       const row = rows.find(r => r.id === id)
-      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId) {
+      if (!row || row.actorKey !== actorKey(actor) || row.conversationId !== command.conversationId || row.purpose) {
         fail('ATTACHMENT_UNAVAILABLE', 'Attach this file again before sending it.', 400)
       }
       if (row.usedBy) fail('ATTACHMENT_USED', 'This file was already sent. Attach it again to send it in another message.')
       return { id: row.id, name: row.name, mime: row.mime, size: row.size, url: publicUrl(attachments.publicBase, row.objectKey) }
     })
+  }
+
+  /** The message a reaction names, when it is in that conversation and this actor may see it, and whether the actor already
+   *  reacted to it with that emoji. An agent-only notice is its recipient's alone. */
+  private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand): Promise<ReactionTarget | undefined> {
+    const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
+      select: { id: true, source: true, recipientIds: true } })
+    if (!message || (agentOnly(message.source) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
+  }
+
+  /** Writes or removes the actor's reaction row. The same reaction twice keeps one row: its id is derived. */
+  private async writeReaction(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand) {
+    const id = reactionId(tabId, actor, command)
+    if (!command.on) return void await tx.superTabReaction.deleteMany({ where: { id } })
+    const actorId = actor.kind === 'person' ? actor.userId : actor.agentId
+    await tx.superTabReaction.upsert({ where: { id }, update: {}, create: { id, tabId, conversationId: command.conversationId,
+      messageId: command.messageId, actorKind: actor.kind, actorId, emoji: command.emoji } })
+  }
+
+  /** The avatar upload a command names, when it is this actor's, an avatar and unused; otherwise the command refuses it. */
+  private async avatarUpload(tx: Transaction, tabId: string, actor: Actor, id: string): Promise<AvatarUpload | undefined> {
+    const row = await tx.superTabAttachment.findFirst({ where: { tabId, id, actorKey: actorKey(actor), purpose: AVATAR_PURPOSE, ...unused } })
+    return row ? { id: row.id, key: row.objectKey } : undefined
   }
 
   /** Keeps the project's stored texts equal to its custom set: the roles the command wrote, nothing for roles it dropped. */
@@ -1301,7 +1377,7 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId, { groupIds: [conversationId] })
       const actor = await this.actor(tx, user, state, asAgentId)
-      readConversation(state, actor, conversationId)
+      const group = readConversation(state, actor, conversationId)
       const forward = cursor.after !== undefined
       const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
         : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1320,10 +1396,15 @@ export class SuperTabStore {
       const page = rows.slice(0, 100)
       const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
       if (!forward) page.reverse()
+      const reactions = page.length ? reactionCounts(state, await tx.superTabReaction.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
+        select: { messageId: true, emoji: true, actorKind: true, actorId: true } })) : new Map()
       const deliveries = page.length ? await tx.superTabDelivery.findMany({ where: { tabId, messageId: { in: page.map(m => m.id) } },
         select: { id: true, messageId: true, agentId: true, status: true, receipt: true,
           holdReason: true, holdSince: true, deliveredAt: true, answeredAt: true, createdAt: true, updatedAt: true } }) : []
-      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], deliveries: deliveries.filter(d => d.messageId === m.id) })), next }
+      return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+        deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
+        // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
+        reactionSeq: group.reactionSeq ?? 0 }
     })
   }
 

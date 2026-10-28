@@ -54,6 +54,9 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'machine.contribute':
       if (!before.machines?.some(m => m.machineId === command.machineId)) head()
       break
+    case 'agent.avatar':
+      leadCheck(agentProject(command.agentId))
+      break
     case 'project.report': case 'project.repository': case 'project.skills':
       leadCheck(command.projectId)
       break

@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
+import 'avatar_upload.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'pm_chat.dart';
@@ -49,6 +50,7 @@ class SuperTabController extends ChangeNotifier {
     required this.request,
     required this.save,
     this.upload = refuseUpload,
+    this.avatarUpload = refuseAvatarUpload,
     this.uploadTimeout = const Duration(minutes: 2),
     Map<String, dynamic> initial = const {},
     this.pollInterval = const Duration(seconds: 3),
@@ -120,6 +122,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// Sends one file to the backend.
   final SuperTabUpload upload;
+
+  /// Sends an avatar picture (profile_actions.dart).
+  final SuperTabAvatarUpload avatarUpload;
 
   /// How long an upload may go without a byte moving before the send gives up.
   final Duration uploadTimeout;
@@ -480,6 +485,9 @@ class SuperTabController extends ChangeNotifier {
   }
 
   bool hasOlder(String id) => _before[id] != null;
+
+  /// Each conversation's reaction counter as its last page said it.
+  final _reactionSeq = <String, int>{};
   int _loadedMessageSequence(String id) =>
       _messages[id]?.reversed
           .where((m) => m.source['kind'] != 'update-request')
@@ -1314,6 +1322,15 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The same messages with the same receipts: posted text does not change.
+  /// Whether [answer] says a reaction changed in [id] since its rows were
+  /// last refreshed: a poll then reads the page shown again (backend
+  /// reactions.ts). The first answer only records where it stands.
+  bool _reactionsMoved(String id, Map<String, dynamic> answer) {
+    final seq = answer['reactionSeq'];
+    final known = _reactionSeq[id];
+    return seq is int && known != null && known != seq;
+  }
+
   static bool _sameMessages(
     List<SuperTabMessage>? shown,
     List<SuperTabMessage> next,
@@ -1321,7 +1338,9 @@ class SuperTabController extends ChangeNotifier {
     if (shown == null || shown.length != next.length) return false;
     for (var i = 0; i < next.length; i++) {
       final a = shown[i], b = next[i];
-      if (a.id != b.id || a.deliveries.length != b.deliveries.length) {
+      if (a.id != b.id ||
+          a.deliveries.length != b.deliveries.length ||
+          !_sameReactions(a.reactions, b.reactions)) {
         return false;
       }
       for (var j = 0; j < b.deliveries.length; j++) {
@@ -1330,6 +1349,20 @@ class SuperTabController extends ChangeNotifier {
     }
     return true;
   }
+
+  static bool _sameReactions(
+    List<SuperTabReactionCount> a,
+    List<SuperTabReactionCount> b,
+  ) =>
+      a.length == b.length &&
+      [
+        for (var i = 0; i < a.length; i++)
+          a[i].emoji == b[i].emoji &&
+              listEquals(
+                [for (final who in a[i].by) '${who.kind}:${who.id}'],
+                [for (final who in b[i].by) '${who.kind}:${who.id}'],
+              ),
+      ].every((same) => same);
 
   String _messagesPath(String id) =>
       '$_path/conversations/${Uri.encodeComponent(id)}/messages';
@@ -1437,16 +1470,32 @@ class SuperTabController extends ChangeNotifier {
           : await request('GET', '${_messagesPath(id)}$query');
       final arrived =
           !older && tail != null && (answer['messages'] as List).isNotEmpty;
+      final reacted = !older && _reactionsMoved(id, answer);
+      // Recorded only once the rows are refreshed: a read that fails leaves
+      // the change for the next poll.
+      final reactionSeq = older ? null : answer['reactionSeq'];
       if (!_disposed &&
           !older &&
-          !light &&
+          (!light || reacted) &&
           tail != null &&
           (answer['messages'] as List).isEmpty) {
-        // No new text: refresh delivery receipts in the page already shown.
+        // No new text: refresh delivery receipts in the page already shown,
+        // and on a light read the counts of a reaction that changed there.
         answer = await request(
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?before=${tail + 1}',
         );
+      } else if (!_disposed && reacted && arrived) {
+        // New messages and a changed reaction at once: the rows already shown
+        // need their counts too, so the latest page is read with the new ones.
+        final page = await request('GET', _messagesPath(id));
+        answer = {
+          ...answer,
+          'messages': [
+            ...page['messages'] as List,
+            ...answer['messages'] as List,
+          ],
+        };
       }
       if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
         return;
@@ -1514,6 +1563,7 @@ class SuperTabController extends ChangeNotifier {
       // An adapting read that found nothing new changes nothing on screen.
       final same = _policy.adapts && _sameMessages(_messages[id], next);
       _messages[id] = next;
+      if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
       if (older || replacing || !_before.containsKey(id)) {
         _before[id] = SuperTabPage.read(answer['next']);
       }
