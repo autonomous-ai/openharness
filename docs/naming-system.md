@@ -50,9 +50,9 @@ and **Browser**. Technical documentation may still call the terminal interface a
 | **Agent** | The agent software chosen, or the AI doing the work. | Choose Codex; the agent is running tests. |
 | **Model** | The model an agent uses. | Change the model while keeping the agent and project. |
 | **Harness** in product copy | The software product. | Open Harness. |
-| **A harness** in the workspace | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
+| **A harness** in a tab | A running agent session with its own conversation and working context. | Start three Codex harnesses. |
 | **A harness** in the Store | A reusable setup containing agent instructions, tools, and an optional viewer. | Install the Blender harness. |
-| **Tab** | A workspace group of harnesses. | Frontend and Backend tabs. |
+| **Tab** | A group of harnesses in the window. | Frontend and Backend tabs. |
 | **Swarm** | A collaborative tab containing projects, people, agents and contributed machines. Invite-only by default; its owner can enable joining by email domain or a shared link. | Open your company Swarm beside your regular tabs. |
 | **Workspace** | The level above Swarms: several Swarms on one account and the people who may be in them, each with a role (owner, admin, member or guest). A person can belong to several Workspaces. Not the Harness **Team account**, a Mac's privacy-checked account for teammates' work. System name: workspace. | Create the Swarm in your company Workspace. |
 | **Project in a Swarm** | An initiative with its own product manager, repository, sharing and workgroups. | Discuss Lamp OS with its product manager; expand it to follow a workgroup. |
@@ -88,7 +88,7 @@ answers, lookups and work under 15 minutes itself, and routes the rest.
 
 Use lowercase *harness* and *tab* in ordinary sentences. The action and context
 distinguish the two uses of *harness*: install or update a package in the Store;
-start, pause, or stop a running harness in the workspace. Keep **agent** for choosing
+start, pause, or stop a running harness in a tab. Keep **agent** for choosing
 the agent software and describing the AI's actions. Preserve **New Harness** as the
 existing action name.
 
@@ -116,7 +116,7 @@ the Swarm has several (`Finn (web-2)`) and a count of new messages. Hovering say
 **Chat with PM**, and ⇧⌘K opens the current project's.
 **Your devices** opens the Devices dashboard and its existing agent conversation inside the
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
-their standalone Devices workspace. The navigation, conversation and people panes have
+their standalone Devices view. The navigation, conversation and people panes have
 draggable dividers; their default side widths are 300 and 280 pixels, respecting saved resizes.
 The right pane is a stable directory of all humans and agents in the current Swarm that the
 viewer can access. Selecting a project, workgroup or Devices does not filter that directory;
@@ -148,7 +148,7 @@ Cmd-S opens the existing lead creation form for a new Swarm and its first projec
 reuses that form inside the current Swarm. Store uses Cmd-Control-S. Existing ordinary tabs keep
 their behavior. The internal `superTab` identifiers, `harness super-tab` protocol and stored account
 settings remain compatible; the older internal `Swarm` layout class still represents an ordinary
-workspace tab. The word *tab* can also name the keyboard key or a browser tab; context
+tab. The word *tab* can also name the keyboard key or a browser tab; context
 distinguishes them.
 
 A project belongs to a computer; identical paths on different computers do not
@@ -161,9 +161,9 @@ task form.
 | Intent | Label |
 | --- | --- |
 | Start a running harness | **New Harness** |
-| Create a workspace group | **New Tab** |
+| Create a group of harnesses | **New Tab** |
 | Open a shell | **New terminal** |
-| Manage a workspace group | **Rename Tab**, **Close Tab**, **Next Tab**, **Previous Tab** |
+| Manage a group of harnesses | **Rename Tab**, **Close Tab**, **Next Tab**, **Previous Tab** |
 | Manage a running harness | **Rename Harness**, **Pause Harness**, **Resume Harness**, **Restart Harness**, **Stop Harness** |
 | Author a reusable Store package | **Create Harness** |
 | Start the bundled agent from the installed OS home | **Start OpenCode** |
@@ -182,7 +182,7 @@ configuration where it affects a decision.
 | Disk unlock prompt | **Enter your password** |
 | USB install action | **Install Harness** |
 | USB startup | Open **Install Harness** directly; no trial choice or network step. |
-| First installed boot | **Connect to Wi-Fi** when disconnected, then the agent workspace. |
+| First installed boot | **Connect to Wi-Fi** when disconnected, then the agent window. |
 | USB session label | Omit from the single installation footer. |
 | Connect another execution machine | **Connect a computer** |
 | Installer title | Omit the redundant heading; label the action. |
@@ -235,7 +235,7 @@ technical meanings. Use those terms where they help explain or diagnose behavior
 | programmer or programmer-live as a default identity | **me**, **harness**, or **me@harness**, according to the field |
 | hn or hn TUI as a product name | **Harness**; retain `hn` in command examples |
 | New Swarm or Untitled Tab as an automatic group name | **New Tab** |
-| Swarm as a workspace group | **Tab** |
+| Swarm as a group of harnesses | **Tab** |
 | TUI as the square device's mode label | **Harness** |
 | DSH as a user-facing package name | The harness's actual name |
 
