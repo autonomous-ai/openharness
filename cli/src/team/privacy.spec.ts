@@ -69,11 +69,21 @@ describe('privacy check', () => {
       expect(tried).toEqual([
         `open ${LINUX_HOME}/.harness-team-privacy`, `list ${LINUX_HOME}`, `open ${LINUX_HOME}/.gitconfig`, `list ${LINUX_HOME}/.ssh`,
         ...['code', 'Code', 'Developer', 'Projects', 'projects', 'src', 'Documents'].map((name) => `list ${LINUX_HOME}/${name}`),
-        `list ${LINUX_HOME}/.local/share/keyrings`, `list ${LINUX_HOME}/.config/google-chrome`, `list ${LINUX_HOME}/.mozilla`,
+        // GNOME Keyring's folder, then KWallet's.
+        `list ${LINUX_HOME}/.local/share/keyrings`, `list ${LINUX_HOME}/.local/share/kwalletd`,
+        `list ${LINUX_HOME}/.config/google-chrome`, `list ${LINUX_HOME}/.mozilla`,
       ])
       expect(privacyProbes(linuxConfig, 'linux').map((p) => p.item))
         .toEqual(['sentinel', 'home-listing', 'gitconfig', 'ssh', 'projects', 'keychain', 'chrome', 'firefox'])
       expect(JSON.stringify(privacyProbes(linuxConfig, 'linux').map((p) => p.what))).not.toMatch(/Keychain|Safari|Library/)
+    })
+
+    it('fails on a KWallet folder it can list, or one it is not refused (ENOENT under a home it can search)', () => {
+      const kwallet = `${LINUX_HOME}/.local/share/kwalletd`
+      expect(runPrivacyCheck(linuxConfig, onLinux({ list: (p) => { if (p === kwallet) return; throw errno('EACCES') } })))
+        .toMatchObject({ passed: false, item: 'keychain', detail: 'The team account could read your login keyring folder.' })
+      expect(runPrivacyCheck(linuxConfig, onLinux({ list: (p) => { throw errno(p === kwallet ? 'ENOENT' : 'EACCES') } })))
+        .toMatchObject({ passed: false, item: 'keychain' })
     })
 
     it('fails a home folder others can list, and passes one that is 700', () => {
