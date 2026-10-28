@@ -15,6 +15,7 @@ import '../widgets/new_harness_paste.dart';
 import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
+import 'chat_scroll.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'identity.dart' show superTabPersonName;
@@ -86,7 +87,7 @@ class _SuperTabViewState extends State<SuperTabView>
   final _composer = TextEditingController();
   final _focus = FocusNode(debugLabel: 'Swarm message');
   final _pullRequestsFocus = FocusNode(debugLabel: 'Project pull requests');
-  final _scroll = <String, ScrollController>{};
+  final _scroll = <String, SuperTabChatScroll>{};
   final _latest = <String, int>{};
   final _following = <String, bool>{};
   final _newAfter = <String, int>{};
@@ -121,6 +122,9 @@ class _SuperTabViewState extends State<SuperTabView>
   final _built = <String, BuildContext>{};
   // Rows to keep in place once their conversation is on screen again.
   final _anchors = <String, ({String messageId, double top})>{};
+  // Each list's dividing row: see [_splitAt].
+  final _split = <String, SuperTabMessage>{};
+  final _newerRows = UniqueKey();
   int _mentionIndex = 0;
   String? _dismissedMention;
   String? _completionPrefix;
@@ -202,6 +206,7 @@ class _SuperTabViewState extends State<SuperTabView>
         scroll.dispose();
       }
       _scroll.clear();
+      _split.clear();
       _latest.clear();
       _following.clear();
       _newAfter.clear();
@@ -231,7 +236,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _replies.removeWhere((id, _) => !visible.contains(id));
     final id = c.selectedId;
     final firstView = !_scroll.containsKey(id);
-    final scroll = _scroll.putIfAbsent(id, ScrollController.new);
+    final scroll = _scroll.putIfAbsent(
+      id,
+      () => SuperTabChatScroll(rows: () => _built.entries),
+    );
     final atEnd = scroll.hasClients
         ? scroll.position.extentAfter < 40
         : (_following[id] ?? true);
@@ -811,6 +819,14 @@ class _SuperTabViewState extends State<SuperTabView>
     return first;
   }
 
+  /// Near row [index] of [count]: the list measures only rows it built,
+  /// from the top of what is read to its end.
+  static double _estimate(ScrollPosition position, int index, int count) =>
+      position.minScrollExtent +
+      (position.maxScrollExtent - position.minScrollExtent) *
+          (index + 1) /
+          (count + 1);
+
   /// Brings [anchor]'s row back to where it was in [id]'s list after rows
   /// arrived above it: near it by its place in the list until it is built,
   /// then exactly. A conversation no longer on screen does so on return;
@@ -839,16 +855,17 @@ class _SuperTabViewState extends State<SuperTabView>
           (e) => e.message.id == anchor.messageId,
         );
         if (index < 0) return;
-        scroll.jumpTo(
-          position.maxScrollExtent * (index + 1) / (entries.length + 1),
-        );
+        scroll.jumpTo(_estimate(position, index, entries.length));
         continue;
       }
       if ((top - anchor.top).abs() < .5) return;
       // The list's extent is an estimate until laid out there: only the
       // start bounds the jump, and the next frame measures the row again.
       scroll.jumpTo(
-        (position.pixels + top - anchor.top).clamp(0.0, double.infinity),
+        (position.pixels + top - anchor.top).clamp(
+          position.minScrollExtent,
+          double.infinity,
+        ),
       );
     }
   }
@@ -1173,9 +1190,7 @@ class _SuperTabViewState extends State<SuperTabView>
       if (scroll == null || !scroll.hasClients || index < 0 || attempt > 20) {
         return;
       }
-      scroll.jumpTo(
-        scroll.position.maxScrollExtent * (index + 1) / (entries.length + 1),
-      );
+      scroll.jumpTo(_estimate(scroll.position, index, entries.length));
       _revealTarget(id, attempt + 1, arrived: arrived);
     });
     WidgetsBinding.instance.scheduleFrame();
@@ -1294,7 +1309,7 @@ class _SuperTabViewState extends State<SuperTabView>
         if (scroll == null || !scroll.hasClients || top == null) return;
         scroll.jumpTo(
           (scroll.offset + top - back.top).clamp(
-            0.0,
+            scroll.position.minScrollExtent,
             scroll.position.maxScrollExtent,
           ),
         );
@@ -1873,6 +1888,89 @@ class _SuperTabViewState extends State<SuperTabView>
     ),
   );
 
+  static String _rowKey(String messageId) => 'super-row-$messageId';
+
+  /// Where [id]'s list divides: the first row drawn when it opened. Older
+  /// pages go above it and newer messages below, so neither moves the rows
+  /// already there.
+  int _splitAt(
+    String id,
+    List<({SuperTabMessage message, int interruptions})> entries,
+  ) {
+    if (entries.isEmpty) return 0;
+    final split = _split[id];
+    final at = split == null
+        ? -1
+        : entries.indexWhere(
+            (e) => superTabMessageOrder(e.message, split) >= 0,
+          );
+    if (at >= 0) return at;
+    _split[id] = entries.first.message;
+    return 0;
+  }
+
+  /// The rows that join the one above them, without their name: runs of
+  /// one author's short updates, three to a group. Groups are counted from
+  /// the list's dividing row both ways, so a page read in above regroups
+  /// none of the rows already shown.
+  static Set<String> _joined(
+    List<SuperTabMessage> messages,
+    SuperTabMessage? split,
+  ) {
+    final at = split == null
+        ? -1
+        : messages.indexWhere((m) => superTabMessageOrder(m, split) >= 0);
+    if (at <= 0) return SuperTabMessageRow.consecutiveUpdates(messages);
+    final joined = SuperTabMessageRow.consecutiveUpdates(messages.sublist(at));
+    // Above it, upward: each group, newest first, keeps the name on its
+    // oldest row.
+    var group = [at - 1];
+    for (var i = at - 2; i >= -1; i--) {
+      final newest = group.first;
+      if (i >= 0 &&
+          newest - i < 3 &&
+          SuperTabMessageRow.groupsWith(messages[i + 1], messages[i]) &&
+          SuperTabMessageRow.groupsWith(messages[newest], messages[i])) {
+        group.add(i);
+        continue;
+      }
+      for (final j in group.take(group.length - 1)) {
+        joined.add(messages[j].id);
+      }
+      group = [i];
+    }
+    return joined;
+  }
+
+  /// Above the oldest row read: room for, or the button to read, earlier
+  /// messages. Its spinner only when [near] the view, where it is seen.
+  Widget _earlierRow({required bool near}) {
+    final id = c.selectedId;
+    if (!c.hasOlder(id)) return const SizedBox.shrink();
+    // The button only after a read failed: near
+    // the top, earlier pages read by themselves.
+    if (_olderFailed.contains(id)) {
+      return Align(
+        child: TextButton(
+          onPressed: () => unawaited(_earlier()),
+          child: const Text('Earlier messages'),
+        ),
+      );
+    }
+    return SizedBox(
+      height: 40,
+      child: near && _loadingOlder.contains(id)
+          ? const Center(
+              child: SizedBox.square(
+                key: ValueKey('super-earlier-loading'),
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          : null,
+    );
+  }
+
   Widget _date(DateTime time) => Padding(
     padding: const EdgeInsets.fromLTRB(24, 20, 24, 4),
     child: Row(
@@ -1938,7 +2036,63 @@ class _SuperTabViewState extends State<SuperTabView>
     final messages = _shownMessages(c.selectedId);
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
-    final grouped = SuperTabMessageRow.consecutiveUpdates(messages);
+    final rowIndex = {
+      for (final (index, entry) in entries.indexed)
+        _rowKey(entry.message.id): index,
+    };
+    // A row stays the same row as pages arrive above it, state and all.
+    int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
+    final split = _splitAt(c.selectedId, entries);
+    final grouped = _joined(messages, _split[c.selectedId]);
+    Widget row(int index) {
+      final entry = entries[index];
+      final message = entry.message;
+      final agent = message.fromAgent
+          ? c.snapshot?.agent(message.authorId)
+          : null;
+      final previous = index > 0 ? entries[index - 1].message : null;
+      final time = message.createdAt;
+      return Column(
+        key: ValueKey(_rowKey(message.id)),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (time != null &&
+              !DateUtils.isSameDay(
+                time.toLocal(),
+                previous?.createdAt?.toLocal(),
+              ))
+            _date(time),
+          // The message itself is kept in place: its
+          // date moves above earlier ones as they come.
+          _BuiltRow(
+            id: message.id,
+            rows: _built,
+            child: KeyedSubtree(
+              key: message.id == _target ? _targetKey : null,
+              child: SuperTabMessageHighlight(
+                on: message.id == _lit,
+                child: entry.interruptions > 0
+                    ? SuperTabRecordingNotice(
+                        key: ValueKey('super-message-${message.id}'),
+                        author: _shownAuthor(c, message),
+                        count: entry.interruptions,
+                        onOpenTerminal: agent == null
+                            ? null
+                            : () => _openAgent(agent),
+                      )
+                    : _message(
+                        message,
+                        grouped.contains(message.id),
+                        byId,
+                        showReceipt: message.id == latestOwn?.id,
+                      ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     final newAfter = _newAfter[c.selectedId];
     final newCount = newAfter == null
         ? 0
@@ -2025,99 +2179,57 @@ class _SuperTabViewState extends State<SuperTabView>
                         return false;
                       },
                       child: SelectionArea(
-                        child: ListView.builder(
+                        child: CustomScrollView(
                           controller: _scroll[c.selectedId],
                           key: PageStorageKey(
                             'super-messages-${c.tabId}-${c.selectedId}',
                           ),
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          itemCount: entries.length + 1,
-                          itemBuilder: (context, index) {
-                            if (index == 0) {
-                              final id = c.selectedId;
-                              if (!c.hasOlder(id)) {
-                                return const SizedBox.shrink();
-                              }
-                              // The button only after a read failed: near
-                              // the top, earlier pages read by themselves.
-                              if (_olderFailed.contains(id)) {
-                                return Align(
-                                  child: TextButton(
-                                    onPressed: () => unawaited(_earlier()),
-                                    child: const Text('Earlier messages'),
-                                  ),
-                                );
-                              }
-                              return SizedBox(
-                                height: 40,
-                                child: _loadingOlder.contains(id)
-                                    ? const Center(
-                                        child: SizedBox.square(
-                                          key: ValueKey(
-                                            'super-earlier-loading',
-                                          ),
-                                          dimension: 16,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        ),
-                                      )
-                                    : null,
-                              );
-                            }
-                            final entry = entries[index - 1];
-                            final message = entry.message;
-                            final agent = message.fromAgent
-                                ? c.snapshot?.agent(message.authorId)
-                                : null;
-                            final previous = index > 1
-                                ? entries[index - 2].message
-                                : null;
-                            final time = message.createdAt;
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (time != null &&
-                                    !DateUtils.isSameDay(
-                                      time.toLocal(),
-                                      previous?.createdAt?.toLocal(),
-                                    ))
-                                  _date(time),
-                                // The message itself is kept in place: its
-                                // date moves above earlier ones as they come.
-                                _BuiltRow(
-                                  id: message.id,
-                                  rows: _built,
-                                  child: KeyedSubtree(
-                                    key: message.id == _target
-                                        ? _targetKey
-                                        : null,
-                                    child: SuperTabMessageHighlight(
-                                      on: message.id == _lit,
-                                      child: entry.interruptions > 0
-                                          ? SuperTabRecordingNotice(
-                                              key: ValueKey(
-                                                'super-message-${message.id}',
-                                              ),
-                                              author: _shownAuthor(c, message),
-                                              count: entry.interruptions,
-                                              onOpenTerminal: agent == null
-                                                  ? null
-                                                  : () => _openAgent(agent),
-                                            )
-                                          : _message(
-                                              message,
-                                              grouped.contains(message.id),
-                                              byId,
-                                              showReceipt:
-                                                  message.id == latestOwn?.id,
-                                            ),
+                          // Pages read in grow upward from the rows first
+                          // shown, new messages downward: no row on screen
+                          // moves for either.
+                          center: _newerRows,
+                          slivers: [
+                            // Its spinner runs only near the view.
+                            SliverLayoutBuilder(
+                              builder: (context, constraints) =>
+                                  SliverToBoxAdapter(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(top: 8),
+                                      child: _earlierRow(
+                                        near:
+                                            constraints.remainingCacheExtent >
+                                            0,
+                                      ),
                                     ),
                                   ),
+                            ),
+                            SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) => row(split - 1 - index),
+                                childCount: split,
+                                findChildIndexCallback: (key) =>
+                                    switch (rowOf(key)) {
+                                      final i? when i < split => split - 1 - i,
+                                      _ => null,
+                                    },
+                              ),
+                            ),
+                            SliverPadding(
+                              key: _newerRows,
+                              padding: const EdgeInsets.only(bottom: 8),
+                              sliver: SliverList(
+                                delegate: SliverChildBuilderDelegate(
+                                  (context, index) => row(split + index),
+                                  childCount: entries.length - split,
+                                  findChildIndexCallback: (key) =>
+                                      switch (rowOf(key)) {
+                                        final i? when i >= split => i - split,
+                                        _ => null,
+                                      },
                                 ),
-                              ],
-                            );
-                          },
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -2785,6 +2897,19 @@ class _BuiltRowState extends State<_BuiltRow> {
     if (oldWidget.id != widget.id && oldWidget.rows[oldWidget.id] == context) {
       oldWidget.rows.remove(oldWidget.id);
     }
+  }
+
+  // A row taken out of the tree is not measured, even before it is disposed.
+  @override
+  void deactivate() {
+    if (widget.rows[widget.id] == context) widget.rows.remove(widget.id);
+    super.deactivate();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    widget.rows[widget.id] = context;
   }
 
   @override
