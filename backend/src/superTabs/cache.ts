@@ -152,7 +152,7 @@ export class SwarmCache {
 
 /** One read's stamps. Without them (Redis unreachable or late) every get reads Mongo, and nothing is kept. */
 export class CacheView {
-  constructor(private readonly cache: SwarmCache, private readonly stamps: Map<string, Stamp> | null) {}
+  constructor(private readonly cache: SwarmCache | null, private readonly stamps: Map<string, Stamp> | null) {}
 
   get available(): boolean { return this.stamps !== null }
 
@@ -160,7 +160,7 @@ export class CacheView {
    *  depends on: 'main' for what a machine's reading never changes, 'all' for anything holding machine parts. */
   async get<T>(tabId: string, name: string, scope: StampScope | 'all', load: () => Promise<T>): Promise<T> {
     const stamp = this.stamps?.get(tabId)
-    if (!stamp) return load()
+    if (!stamp || !this.cache) return load()
     const held = this.cache.held(tabId, name, stamp)
     if (held !== undefined) return held as T
     return this.cache.load(tabId, name, scope, stamp, load)
@@ -250,8 +250,9 @@ export function noteChange(tx: object, tabId: string, scope: StampScope): void {
 
 /**
  * One database transaction that writes Swarm parts: once it commits, every Swarm it changed is bumped, before the caller
- * answers, so any read after the answer, on any process, sees the change. A bump that fails is logged and this process
- * forgets the Swarm; others hold it at most CACHE_MAX_AGE_MS. A transaction that fails bumps nothing.
+ * answers, so any read after the answer, on any process, sees the change. A bump Redis cannot take is owed: this process
+ * forgets the Swarm and tries again every second until Redis takes it (other processes hold the Swarm until then, at most
+ * CACHE_MAX_AGE_MS). A transaction that fails bumps nothing.
  */
 export async function swarmTransaction<T>(db: Pick<PrismaClient, '$transaction'>, body: (tx: Prisma.TransactionClient) => Promise<T>,
   options?: { maxWait?: number; timeout?: number }): Promise<T> {
@@ -261,12 +262,30 @@ export async function swarmTransaction<T>(db: Pick<PrismaClient, '$transaction'>
   return result
 }
 
+const owed: Changes = new Map()
+let paying: NodeJS.Timeout | null = null
+export const OWED_RETRY_MS = 1_000
+
 async function announce(changes: Changes): Promise<void> {
   if (!stamps || !changes.size) return
+  const current = stamps
   await Promise.all([...changes].map(async ([tabId, scopes]) => {
-    try { await stamps!.bump(tabId, [...scopes]) } catch (error) {
+    try { await current.bump(tabId, [...scopes]) } catch (error) {
       readCache?.drop(tabId)
-      logger.error('[swarm-cache] stamp bump failed after commit; other processes may read this Swarm stale for up to a minute', error, { tabId })
+      if (!owed.size) logger.error('[swarm-cache] stamp bump failed after commit; retrying every second', error, { tabId })
+      const due = owed.get(tabId) ?? new Set<StampScope>()
+      for (const scope of scopes) due.add(scope)
+      owed.set(tabId, due)
+      paying ??= setTimeout(payOwed, OWED_RETRY_MS)
+      paying.unref?.()
     }
   }))
+}
+
+async function payOwed(): Promise<void> {
+  paying = null
+  const due = [...owed]
+  owed.clear()
+  await announce(new Map(due))
+  if (!owed.size && due.length) logger.info('[swarm-cache] owed stamp bumps paid', { swarms: due.length })
 }

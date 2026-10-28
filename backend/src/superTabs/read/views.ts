@@ -65,8 +65,8 @@ export function agentView(agent: Agent): AgentView {
   return withAvatarView(rest) as AgentView
 }
 
-export function readerView(parts: SwarmParts, actor: Actor, now: number, extras: ReadExtras): ReaderView {
-  const state = store.reassemble(parts)
+/** `state` is the parts already reassembled, when the caller has it (a read reassembles once). */
+export function readerView(parts: SwarmParts, actor: Actor, now: number, extras: ReadExtras, state = store.reassemble(parts, { share: true })): ReaderView {
   const visible = visibleState(state, actor, now)
   const groups = visible.conversations.filter(group => canReadGroup(state, actor, group))
   const readable = new Set(groups.map(g => g.id))

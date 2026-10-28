@@ -21,6 +21,8 @@ export interface BenchReport {
   isolatedPolls: IsolatedPoll[]
   /** The Stability Roadmap's numbers (kpi.ts); absent from reports made before they were measured. */
   kpis?: { load: LoadKpis; isolated: Kpis['isolated'] | null }
+  /** The read cache it ran with (stamps.ts); absent from reports made before there was one. */
+  cache?: string
 }
 
 const ms = (value: number | null) => value === null ? '–' : value.toFixed(1)
@@ -44,7 +46,7 @@ export function renderMarkdown(report: BenchReport): string {
     ['Machine', `${report.machine.cpu}, ${report.machine.cpus} cores, ${report.machine.memoryGb} GB, ${report.machine.platform} ${report.machine.release} ${report.machine.arch}`],
     ['Runtime', `Node ${report.machine.node}, MongoDB ${report.machine.mongo} (local single-node replica set)`],
     ['Lane', config.lane === 'cross-group' ? 'cross-group (one writer per group: no Lead messages, no delivery passes)' : 'mixed'],
-    ['Seed', String(config.seed)], ['Plan', `sha256 ${report.planDigest.slice(0, 16)}`],
+    ['Read cache', report.cache ?? 'none (before the cache)'], ['Seed', String(config.seed)], ['Plan', `sha256 ${report.planDigest.slice(0, 16)}`],
     ['Swarm', `${config.groups} groups (${setup.doneGroups} done, ${setup.activeGroups} active), ${setup.workers} workers and a Lead, ${config.machines} machines`],
     ['Readers', `${config.desktopReaders} Desktop every ${config.every.desktopPollMs} ms, ${config.hostReaders} hosts every ${config.every.hostTickMs} ms`],
     ['Cadence', Object.entries(config.every).map(([k, v]) => `${k} ${v}`).join(', ')],
