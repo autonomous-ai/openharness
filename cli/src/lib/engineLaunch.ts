@@ -1540,11 +1540,37 @@ export async function unsupportedLaunchModelFlag(engine: AgentEngine, launchMode
   return null
 }
 
-/** The line that updates [engine]: its install line, which fetches the latest. Those are POSIX shell lines, so on
- *  Windows only an npm one, which PowerShell runs as written, is named. */
-export function engineUpdateCommand(engine: AgentEngine, platform: NodeJS.Platform = process.platform): string | null {
-  const command = engineInstallRecipe(engine)?.command
-  return command && (platform !== 'win32' || command.startsWith('npm ')) ? command : null
+/** The line that updates the copy of [engine] at [binary], the one Harness runs: an npm copy in its own prefix, a
+ *  Homebrew one with brew. Null when its source cannot be told. Not the install line: on the Mac Studio (2026-10-28)
+ *  codex was a Homebrew cask, and `npm install -g @openai/codex` would have added a second copy PATH never reaches. */
+export function engineUpdateCommand(engine: AgentEngine, binary: string | null, platform: NodeJS.Platform = process.platform): string | null {
+  if (!binary) return null
+  let real: string
+  try { real = realpathSync(binary) } catch { return null }
+  const quote = (path: string) => /^[\w./@:+-]+$/.test(path) ? path : shellSingleQuote(path)
+  const npm = /^(.*)\/lib\/node_modules\/((?:@[^/]+\/)?[^/@]+)\//.exec(real)
+  if (npm) return `npm install -g --prefix ${quote(npm[1]!)} ${npm[2]}`
+  const brew = /\/(Caskroom|Cellar)\/([^/]+)\//.exec(real)
+  if (brew) return `brew upgrade ${brew[1] === 'Caskroom' ? '--cask ' : ''}${brew[2]}`
+  // npm on Windows puts the shim in the prefix itself, beside its node_modules.
+  const pkg = /^npm install -g (\S+)$/.exec(engineInstallRecipe(engine)?.command ?? '')?.[1]
+  if (platform === 'win32' && pkg && existsSync(join(dirname(binary), 'node_modules', pkg))) {
+    return `npm install -g --prefix ${quote(dirname(binary))} ${pkg}`
+  }
+  return null
+}
+
+/** Where [command] is, as the interactive shell that launches it finds it. */
+async function engineCommandPath(command: string, shell: string | undefined): Promise<string | null> {
+  if (isAbsolute(command)) return command
+  const interactive = interactiveEngineShell(shell)
+  if (!interactive) return resolveBinaryOnPath(command)
+  const [file, ...args] = engineShellArgv(interactive, ['command -v "$1"', 'harness-engine-path', command])
+  return await new Promise(resolve => execFile(file, args, { timeout: 5_000 }, (error, stdout) => {
+    // The last line: rc files may print before it.
+    const path = String(stdout).trim().split('\n').pop() ?? ''
+    resolve(!error && isAbsolute(path) ? path : resolveBinaryOnPath(command))
+  }))
 }
 
 /**
@@ -1570,12 +1596,14 @@ export async function refusePermissionFlagIfUnsupported(
   }
   const flag = native ? permissionFlagToVerify(engine, choice) : await unsupportedPermissionFlag(engine, choice, shell)
   if (!flag) return null
-  const update = engineUpdateCommand(engine)
+  const selected = native?.executable?.command
+  const binary = selected && isAbsolute(selected) ? selected : await engineCommandPath(engineBin(engine), shell)
+  const update = engineUpdateCommand(engine, binary)
   return {
     error: 'CODEX_CLI_TOO_OLD',
     detail: `The ${engine} CLI on this machine does not support ${flag}, which Harness uses for this permission mode. `
       // How to update, not only that it is needed (codex_cli_too_old, 2–4 a day).
-      + `Update ${engine}${update ? ` by running ${update}, then try again` : ' and try again'}`
+      + (update ? `Update ${engine} by running ${update}, then try again` : binary ? `Update the ${engine} at ${binary} and try again` : `Update ${engine} and try again`)
       + `${choice.permissionMode === 'ask' ? '.' : ', or choose Ask permissions for this harness.'}`,
   }
 }
