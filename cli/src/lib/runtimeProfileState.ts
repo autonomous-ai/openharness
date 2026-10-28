@@ -5,7 +5,7 @@ import type { RegisteredSession } from './registry.js'
 import type { RuntimeFor, RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
 import type { InlineRuntimeContext, InlineRuntimeReader } from '../engines/facets/inlineRuntime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
-import { encodeRuntimeProfile, record, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
+import { encodeRuntimeProfile, fillConfiguredEffort, record, showEffort, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 import { engineNow, isOtherEngine, loadEngine } from '../engines/inProcess.js'
 import { processIdentityKey } from './terminalRuntime.js'
@@ -182,10 +182,8 @@ export class RuntimeProfileState {
     if (!current() || (!runtime?.configuredEffort && !reader?.config)) return false
     const before = this.selectedModel(session)
     const context = { ...this.context(session, silent), session: { ...session }, state: { ...state }, control: copyControl(control) }
-    if (runtime?.configuredEffort) {
-      context.state.effort = await runtime.configuredEffort(context.session)
-      context.state.observedAt = Date.now()
-    } else if (!await reader!.config!(context)) return false
+    if (runtime?.configuredEffort) fillConfiguredEffort(context.state, await runtime.configuredEffort(context.session))
+    else if (!await reader!.config!(context)) return false
     // An optional reader cannot publish into a forgotten/rebound row or replace newer evidence.
     if (!current()) return false
     Object.assign(state, context.state)
@@ -243,10 +241,8 @@ export class RuntimeProfileState {
         if (!current()) return
         try {
           const runtime = this.runtimeFor(stagedSession.engine)
-          if (runtime?.configuredEffort) {
-            staged.effort = await runtime.configuredEffort(stagedSession)
-            staged.observedAt = Date.now()
-          } else if (!runtime) {
+          if (runtime?.configuredEffort) fillConfiguredEffort(staged, await runtime.configuredEffort(stagedSession))
+          else if (!runtime) {
             const reader = await this.reader(stagedSession.engine)
             if (current()) await reader?.config?.({ session: stagedSession, state: staged, control: stagedControl, refreshConfig: () => {} })
           }
@@ -321,8 +317,7 @@ export class RuntimeProfileState {
   confirmEffort(sessionId: string, effort: string): void {
     if (!EFFORTS.has(effort)) return
     const state = this.state(sessionId)
-    state.effort = effort
-    state.observedAt = Date.now()
+    showEffort(state, effort)
     this.authoritative(state)
     const control = this.controls.get(sessionId)
     if (control) control.effortConfirmed = control.target.effort === effort
@@ -332,8 +327,7 @@ export class RuntimeProfileState {
   confirmControlProfile(target: RuntimeProfile): void {
     const state = this.state(target.sessionId)
     state.model = target.model
-    state.effort = target.effort
-    state.observedAt = Date.now()
+    showEffort(state, target.effort)
     this.authoritative(state)
     const control = this.controls.get(target.sessionId)
     if (control?.target.id === target.id) {
