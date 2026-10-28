@@ -26,14 +26,15 @@ export async function activeMember(tx: Transaction | PrismaClient, workspaceId: 
 const checked = new WeakMap<object, Map<string, boolean>>()
 
 /** Whether the person is still in the Swarm's Workspace; a Swarm from before Workspaces passes until the switch is on. Read once
- *  per person per transaction, which reads one snapshot. */
-export async function hasWorkspaceAccess(tx: Transaction, state: Pick<SuperTabState, 'workspaceId'>, userId: string): Promise<boolean> {
+ *  per person per transaction, which reads one snapshot, or per `request` when its caller names one (a host read's GrantReads). */
+export async function hasWorkspaceAccess(tx: Transaction, state: Pick<SuperTabState, 'workspaceId'>, userId: string, request?: object): Promise<boolean> {
   if (!state.workspaceId) return !workspacesRequired()
-  // Remembered only within a transaction. A read outside one (the read cache's, cache.ts) runs on the process's own client,
-  // which lives as long as the process: an answer kept on it would outlive the person's removal.
-  if (typeof (tx as { $transaction?: unknown }).$transaction === 'function') return !!await activeMember(tx, state.workspaceId, userId)
-  const answers = checked.get(tx) ?? new Map<string, boolean>()
-  checked.set(tx, answers)
+  // Remembered only within a transaction or the request named. A read outside both (the read cache's, cache.ts) runs on the
+  // process's own client, which lives as long as the process: an answer kept on it would outlive the person's removal.
+  const scope = request ?? (typeof (tx as { $transaction?: unknown }).$transaction === 'function' ? null : tx)
+  if (!scope) return !!await activeMember(tx, state.workspaceId, userId)
+  const answers = checked.get(scope) ?? new Map<string, boolean>()
+  checked.set(scope, answers)
   const key = memberId(state.workspaceId, userId)
   const known = answers.get(key)
   if (known !== undefined) return known
@@ -44,8 +45,8 @@ export async function hasWorkspaceAccess(tx: Transaction, state: Pick<SuperTabSt
 
 /** The one Workspace check of every Swarm read and command (design, Audience): the person must still be in the Swarm's Workspace.
  *  Reading the Swarm needs its own membership as well, which the caller checks as before. */
-export async function requireWorkspaceAccess(tx: Transaction, state: Pick<SuperTabState, 'workspaceId'>, userId: string): Promise<void> {
-  if (await hasWorkspaceAccess(tx, state, userId)) return
+export async function requireWorkspaceAccess(tx: Transaction, state: Pick<SuperTabState, 'workspaceId'>, userId: string, request?: object): Promise<void> {
+  if (await hasWorkspaceAccess(tx, state, userId, request)) return
   fail(WORKSPACE_ACCESS_REVOKED, state.workspaceId ? `You are no longer in this Swarm's ${WORKSPACE_LABEL}.` : `This Swarm has no ${WORKSPACE_LABEL} yet.`, 403)
 }
 

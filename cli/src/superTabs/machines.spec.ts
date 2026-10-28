@@ -37,6 +37,78 @@ function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation 
     stamp: (next: string) => { stamp = next } }
 }
 
+// Second review of #1991: a start in a Swarm this host is cleaning up could write into a folder the cleanup then deleted.
+describe('a Swarm this host is cleaning up', () => {
+  const homes: string[] = []
+  afterEach(() => { vi.unstubAllEnvs(); for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
+  it('starts no agent there while its cleanup runs, and starts the waiting one once the cleanup ends', async () => {
+    // The cleanup deletes Swarm folders under the home folder: a throwaway one.
+    const home = mkdtempSync(join(tmpdir(), 'swarm-cleaning-')); homes.push(home)
+    vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
+    const f = fixture()
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const answer = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? held.then(() => swarmReply(path, {})) : answer(core, method, path, body))
+    const cleaning = f.machine.clean('tab', 'removal').catch(() => null)
+    await f.machine.tick()
+    expect(f.start).not.toHaveBeenCalled()
+    expect(f.log.mock.calls.flat().join('\n')).toContain('finish cleaning up this Swarm')
+    release()
+    await cleaning
+    f.advance()
+    await f.machine.tick()
+    expect(f.start).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Review of #2004: a start passed the cleaning check, waited in its folder preparation, and launched after a cleanup began.
+// A start holds its Swarm from that check through its launch, and a cleanup waits for the starts in flight, for a while.
+describe('a start and a cleanup of one Swarm', () => {
+  const homes: string[] = []
+  afterEach(() => { vi.unstubAllEnvs(); for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }) })
+  function held(cleanupWaitMs?: number) {
+    const home = mkdtempSync(join(tmpdir(), 'swarm-cleaning-')); homes.push(home)
+    vi.stubEnv('HOME', home); vi.stubEnv('USERPROFILE', home)
+    const f = fixture()
+    let release!: () => void
+    f.prepare.mockImplementationOnce(() => new Promise<void>(resolve => { release = resolve }))
+    const answer = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, {}) : answer(core, method, path, body))
+    const machine = cleanupWaitMs === undefined ? f.machine : new ContributedMachines(f.core, 'host', { ...f.deps, cleanupWaitMs } as never)
+    const swarmRead = () => f.backend.mock.invocationCallOrder.find((_order, i) => f.backend.mock.calls[i]![1] === 'GET'
+      && String(f.backend.mock.calls[i]![2]).startsWith('/api/super-tabs/tab/'))
+    return { f, machine, release: () => release(), swarmRead }
+  }
+
+  it('lets a start that passed the check launch before the cleanup touches anything', async () => {
+    const { f, machine, release, swarmRead } = held()
+    const pass = machine.tick()
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalled())
+    const cleaning = machine.clean('tab', 'removal').catch(() => null)
+    // Room for a cleanup that does not wait to read the Swarm and delete: what is checked is that nothing happens.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    release()
+    await pass
+    await cleaning
+    expect(f.start).toHaveBeenCalledTimes(1)
+    expect(swarmRead()).toBeGreaterThan(f.start.mock.invocationCallOrder[0]!)
+  })
+
+  it('gives up waiting for a start that never finishes, with a clear error, and touches nothing', async () => {
+    const { f, machine, release, swarmRead } = held(20)
+    const pass = machine.tick()
+    await vi.waitFor(() => expect(f.prepare).toHaveBeenCalled())
+    await expect(machine.clean('tab', 'removal')).rejects.toThrow('an agent start there is still running')
+    expect(swarmRead()).toBeUndefined()
+    release()
+    await pass
+    expect(f.start).toHaveBeenCalledTimes(1)
+  })
+})
+
 // #1726: the pass read GET /hosts/:m/pools, up to 100 whole Swarms, every 5 s. Its pools now come with the host form.
 describe('the pools of a contributed machine', () => {
   it('come from the host form, never the old pools roster', async () => {
@@ -1508,12 +1580,35 @@ describe('removed machine cleanup', () => {
 
   it('keeps the worktree records and confirms nothing when this machine is added again while its folders are deleted', async () => {
     const m = machine()
-    addedOnRead(m, 3)
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/')
+      ? swarmReply(path, { starts: m.starts, ...(existsSync(m.newRoot) ? {} : { machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot }] }) }) : { parts: [] })
     await m.open().clean('tab', 'removal')
     expect(existsSync(m.newRoot)).toBe(false)
     expect(records(m)).toEqual(['tab', 'other-tab'])
     expect(m.acks()).toEqual([])
     expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
+  })
+
+  // Second review of #1991 (the Reviewer's regression, with real folders): the cleanup passed its Swarm read, then waited
+  // on closing an old session; the owner added the machine again meanwhile and a new task wrote into its clone, which was
+  // then deleted. The Swarm is read again after the sessions close and before each deletion.
+  it('keeps the clone a new task wrote into when this machine is added again while an old session closes', async () => {
+    const m = machine()
+    let added = false
+    m.backend.mockImplementation(async (_core, method, path) => {
+      if (method !== 'GET' || !path.startsWith('/api/super-tabs/tab/')) return { parts: [] }
+      return swarmReply(path, { starts: m.starts, ...(added ? { machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot }] } : {}) })
+    })
+    vi.mocked(m.core.agents.closeStarted!).mockImplementation(async () => {
+      // The close was slow; the owner re-added the machine while it was awaited and its new start reused this clone.
+      added = true
+      m.setLive([])
+      writeFileSync(join(m.newRoot, 'new-task.txt'), 'created after re-add')
+      return { closed: true } as never
+    })
+    await m.open().clean('tab', 'removal')
+    expect(existsSync(join(m.newRoot, 'new-task.txt'))).toBe(true)
+    expect(m.acks()).toEqual([])
   })
 
   it('cleans up while the Swarm still lists this machine under this very removal', async () => {

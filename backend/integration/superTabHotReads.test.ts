@@ -8,9 +8,12 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
+import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import { cursorFor } from '../src/superTabs/read/cursor.js'
+import { lastChangedAt } from '../src/superTabs/parts/index.js'
 import type { SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, owner as ownerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -38,6 +41,7 @@ beforeAll(async () => {
   db = new PrismaClient({ datasources: { db: { url: uri } } })
   await db.user.create({ data: { id: owner.sub, externalId: `fixture-${owner.sub}`, email: owner.email, autonomousEnv: 'prod' } })
   store = new SuperTabStore(db, () => clock)
+  await listGroupIndexes(db)
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -90,7 +94,8 @@ async function profiled(run: () => Promise<unknown>): Promise<ProfileEntry[]> {
   } finally {
     await db.$runCommandRaw({ profile: 0 })
   }
-  const reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: PROFILE_STAGES, cursor: { batchSize: 100000 } }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }
+  const reply = await db.$runCommandRaw({ aggregate: 'system.profile', pipeline: [
+    { $project: { ...PROFILE_STAGES[0]!.$project, 'command.hint': 1 } }], cursor: { batchSize: 100000 } }) as unknown as { cursor: { firstBatch: ProfileEntry[] } }
   return reply.cursor.firstBatch.map(profileEntry)
 }
 
@@ -105,6 +110,60 @@ function reads(entries: ProfileEntry[], collection: string, fields: string[], no
   })
 }
 const plan = (rows: ProfileEntry[]) => rows.map(r => ({ plan: r.planSummary, docsExamined: r.docsExamined, keysExamined: r.keysExamined, returned: r.nreturned }))
+
+it('reuses the host timestamp at the same stamp, including a repeated wake with a held etag', async () => {
+  const s = await scene()
+  const hosts = new HostReads(store, { now: () => Date.now() })
+  const first = await hosts.changes(owner, s.machineId, { full: true })
+  const held = Object.fromEntries(first.tabs.map(tab => [tab.tabId, tab.etag]))
+  // An older cursor wakes this Swarm again without another write or stamp bump.
+  const entries = await profiled(async () => {
+    const second = await hosts.changes(owner, s.machineId, { cursor: cursorFor(MIGRATED - 1, 0), held })
+    expect(second.tabs).toEqual(first.tabs.map(tab => ({ tabId: tab.tabId, etag: tab.etag,
+      lastChangedAt: tab.lastChangedAt, unchanged: true })))
+  })
+  const scans = entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
+    .filter(e => {
+      const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: unknown } } }>)?.[0]?.$match
+      // Timestamp scans match only tabId; the host's indexed wake query also bounds changedAt and hostMachineIds.
+      return match?.tabId?.$in && Object.keys(match).length === 1
+    })
+  expect(scans.map(e => e.command?.aggregate)).toEqual([])
+
+  // A committed change invalidates the timestamp along with the host inputs; a cold/direct read agrees.
+  clock = Date.now()
+  await store.execute(owner, s.tabId, { operationId: randomUUID(), command: {
+    type: 'message.send', conversationId: s.web, text: 'A newer change', replyTo: null, recipientIds: [] } })
+  const changed = await hosts.changes(owner, s.machineId, { full: true })
+  const newest = (await lastChangedAt(db, [s.tabId])).get(s.tabId)
+  expect(newest).toBeGreaterThan(first.tabs[0]!.lastChangedAt!)
+  expect(changed.tabs[0]!.lastChangedAt).toBe(newest)
+  const direct = new HostReads(new SuperTabStore(db, () => clock, null, { readCache: null }))
+  expect((await direct.changes(owner, s.machineId, { full: true })).tabs).toEqual(changed.tabs)
+})
+
+describe('delivery authority reads', () => {
+  it.each(['person', 'agent'] as const)('claim, hold and ack from a %s leave unrelated conversations and machine parts unread', async sender => {
+    const s = await scene()
+    // Keep unrelated conversations active: dormant rows already escape loadActive.
+    await db.swarmGroup.updateMany({ where: { tabId: s.tabId }, data: { dormant: false } })
+    await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send',
+      conversationId: s.web, text: 'Please continue.', recipientIds: [s.worker], replyTo: null } }, sender === 'agent' ? s.lead : undefined)
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: s.tabId, agentId: s.worker, status: 'queued' } })
+    for (const action of [{ type: 'claim', claimId: 'bounded' },
+      { type: 'hold', claimId: 'bounded', reason: 'team_waiting_idle' },
+      { type: 'ack', claimId: 'bounded', receipt: 'typed', uncertain: false }] as const) {
+      const entries = await profiled(() => store.delivery(owner, s.tabId, s.worker, delivery.id, action))
+      const groups = entries.filter(e => e.ns.endsWith('.SwarmGroup') && e.op !== 'update')
+      const returned = groups.reduce((sum, e) => sum + (e.nreturned ?? 0), 0)
+      console.log(`delivery ${action.type}: groups=${returned}, docs=${entries.reduce((sum, e) => sum + (e.docsExamined ?? 0), 0)}`)
+      // The project and Swarm Lead conversations plus the receiver's group; no quiet groups or finished work.
+      expect(returned, `${action.type}: ${JSON.stringify(plan(groups))}`).toBe(3)
+      expect(groups.every(e => !!e.command?.hint), 'delivery reads use the installed group indexes').toBe(true)
+      expect(entries.filter(e => e.ns.endsWith('.SwarmMachine'))).toEqual([])
+    }
+  })
+})
 
 describe('hot reads read only what they return (roadmap 2.7)', () => {
   let entries: ProfileEntry[]

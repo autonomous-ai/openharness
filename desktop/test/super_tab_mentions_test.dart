@@ -498,6 +498,74 @@ void main() {
       expect(c.selectedId, isNot('group'));
     });
 
+    testWidgets('a tag newer than what was read earlier opens at its message', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      // Read earlier up to 100, then 100 more arrived while away.
+      await c.loadMessages('group');
+      expect(c.messages('group').last.id, 'message-100');
+      for (var i = 101; i <= 200; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-150', conversationId: 'group', text: 'Note 150');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-150')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a tag among more than a page that arrived since opens too', (
+      tester,
+    ) async {
+      final server = ConversationServer();
+      server.state['conversations'] = [
+        ...server.state['conversations'] as List,
+        conversationFixture('group', 'Release'),
+      ];
+      for (var i = 1; i <= 100; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      final c = await showView(tester, server);
+      await c.loadMessages('group');
+      // More than a page since: the latest page (151..250) replaces what is
+      // held, and the tag is on the page before it.
+      for (var i = 101; i <= 250; i++) {
+        server.append('Note $i', conversationId: 'group');
+      }
+      server.tag('message-120', conversationId: 'group', text: 'Note 120');
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This message is no longer in the conversation.'),
+        findsNothing,
+      );
+      expect(c.selectedId, 'group');
+      expect(
+        find.byKey(const ValueKey('super-message-message-120')).hitTestable(),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('opening a tag shows its message with the reply box on it', (
       tester,
     ) async {
