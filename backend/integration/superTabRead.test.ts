@@ -837,6 +837,35 @@ describe('decisions asked of one person (v2)', () => {
     expect((await ask(['Question 21?'])).status).toBe(200)
   })
 
+  it('at the cap, a worker\'s needs-human update still records its status, tells the Lead and renews its lease, asking nothing new', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const assignment = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment
+    const assignmentId = (await assignment()).id as string
+    await db.superTabDecision.createMany({ data: Array.from({ length: 20 }, (_, i) => ({ id: `full-${s.tabId}-${i}`, tabId: s.tabId, batchId: 'full',
+      projectId: 'lead', conversationId: s.web, assignmentId, personId: peer.sub, askerAgentId: s.worker, question: `Question ${i + 1}?`,
+      options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release', createdAt: new Date() })) })
+    const before = (await assignment()).leaseUntil as number
+    const needs = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
+    expect(needs.status, JSON.stringify(needs.body)).toBe(200)
+    const notAsked = `Not asked ${peer.email}: 20 decisions you asked them are still open, and at most 20 can be. Wait for answers before asking more.`
+    expect(needs.body.data.result.notAsked).toBe(notAsked)
+    const after = await assignment()
+    expect(after).toMatchObject({ status: 'needs_human', result: 'Ship how?' })
+    expect(after.leaseUntil).toBeGreaterThan(before)
+    const notice = await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } })
+    expect(notice).toMatchObject({ text: `Needs a human\n\nShip how?\n\n${notAsked}`, recipientIds: [s.lead] })
+    expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
+    // A repeat of one still open is that decision again, so it is asked as before.
+    const repeat = await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Question 1?',
+      ask: { personId: peer.sub, options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
+    expect(repeat.body.data.result.notAsked).toBeUndefined()
+    expect((await db.superTabMessage.findFirst({ where: { tabId: s.tabId, conversationId: s.web }, orderBy: { sequence: 'desc' } }))!.text)
+      .toBe(`Needs a human\n\nQuestion 1?\n\nAsked ${peer.email}.`)
+    expect(await db.superTabDecision.count({ where: { tabId: s.tabId, askerAgentId: s.worker } })).toBe(20)
+  })
+
   it('removes answered decisions older than the leaderboard\'s 5 weeks when it writes new ones, keeping newer and open ones', async () => {
     const s = await scene()
     clock = Date.now()

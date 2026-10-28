@@ -115,6 +115,17 @@ export async function writeDecisions(tx: Tx, tabId: string, drafts: DecisionDraf
   return drafts.map(d => held.get(repeatKey(d)) ?? d.id)
 }
 
+/** How many decisions this asker has open for this person when one more question would pass MAX_OPEN_DECISIONS, or null when
+ *  it fits: an exact repeat of an open one is that decision again and always fits. Read before a worker's needs_human, which
+ *  at the cap still records its status and only skips the question (review of #1859). */
+export async function fullFor(tx: Tx, tabId: string, ask: Parameters<typeof repeatKey>[0]): Promise<number | null> {
+  const { personId, askerAgentId } = ask
+  const asked = await tx.superTabDecision.count({ where: { tabId, personId, askerAgentId, ...waiting } })
+  if (asked < MAX_OPEN_DECISIONS) return null
+  const same = await tx.superTabDecision.findMany({ where: { tabId, personId, askerAgentId, conversationId: ask.conversationId, question: ask.question, ...waiting } })
+  return same.some(o => repeatKey(o) === repeatKey(ask)) ? null : asked
+}
+
 export async function readAskedDecision(tx: Tx, tabId: string, id: string): Promise<DecisionTarget | undefined> {
   const row = await tx.superTabDecision.findFirst({ where: { id, tabId },
     select: { id: true, personId: true, conversationId: true, askerAgentId: true, question: true, options: true, answeredAt: true } })
