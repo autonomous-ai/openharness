@@ -1,6 +1,7 @@
 import { agentDisplayName } from './agentNames.js'
-import { activeWork, agentRole, stableId, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
-import { agentProjectId, groupProject, projectsOf } from './projects.js'
+import { githubRepository } from '../github/repository.js'
+import { activeWork, agentRole, appendPullRequestUrls, stableId, type Actor, type Agent, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { agentProjectId, canReadGroup, groupProject, projectsOf } from './projects.js'
 
 // Nobody has to tidy a Swarm by hand (roadmap, December). A Builder left with nothing to do for 15 minutes is stopped, as
 // its Lead's agent.release stop would: its host closes the session and frees the machine slot (host.ts). Whatever the
@@ -106,13 +107,47 @@ export function archivable(state: SuperTabState, group: Conversation, now: numbe
   return last !== undefined && now - last >= ARCHIVE_QUIET_MS
 }
 
-/** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead. */
+/** Work that ended without finishing: only a cancel with a reason closes it, never an archive alone (#558). */
+export const unfinishedWork = (group: Conversation): boolean => ['lost', 'stopped'].includes(group.assignment?.status ?? '')
+
+/** Who hears that a group archives without shipping: the person who asked for its cancelled task, unless they archive it
+ *  themselves or can no longer read it (#558). */
+export function cancelledTags(state: SuperTabState, group: Conversation, actor?: Actor): string[] {
+  if (group.assignment?.status !== 'cancelled' || !group.requesterId) return []
+  if (actor?.kind === 'person' && actor.userId === group.requesterId) return []
+  const requester = state.people.find(p => p.id === group.requesterId)
+  return requester && canReadGroup(state, { kind: 'person', userId: requester.id, email: requester.email }, group) ? [requester.id] : []
+}
+
+/** Why a cancelled task ended, as its cancel recorded it, without the final full stop. */
+export const cancelReason = (group: Conversation): string => (group.assignment?.result ?? '').replace(/[.\s]+$/, '')
+
+/** "PR #1875", as a Lead's cancel or a builder's result names a pull request without its link. */
+const PR_NUMBER = /\bPR #([1-9][0-9]{0,8})\b/gi
+
+/** The pull requests a group's archive waits on: those it links, and those its result and check evidence name, a "PR #N"
+ *  read in its project's repository. A cancel saying "Handed off as PR #1875" linked nothing, so the group archived while
+ *  that PR was open (#558). Null when it names a number with no GitHub repository to read it in: it stays open. */
+export function archiveWaitsFor(group: Conversation, repositoryUrl: string | null | undefined): string[] | null {
+  const texts = [group.assignment?.result, ...group.checks.map(check => check.evidence)]
+  const named = { pullRequestUrls: [...group.pullRequestUrls ?? []] } as Conversation
+  appendPullRequestUrls(named, texts)
+  const numbers = texts.flatMap(text => [...(text ?? '').matchAll(PR_NUMBER)].map(match => match[1]!))
+  if (!numbers.length) return named.pullRequestUrls!
+  const repository = githubRepository(repositoryUrl)
+  if (!repository) return null
+  return [...new Set([...named.pullRequestUrls!, ...numbers.map(n => `https://github.com/${repository.fullName}/pull/${n}`)])]
+}
+
+/** The one quiet line an archived group gets, to nobody, written as its project's Lead; none when the project has no Lead.
+ *  A cancelled task's requester is tagged in it (cancelledTags). */
 export function archiveLine(state: SuperTabState, group: Conversation, now: number): MessageDraft | null {
   const leadId = state.conversations.find(c => c.id === groupProject(state, group).leadConversationId)?.leadId
   const lead = leadId ? state.agents.find(a => a.id === leadId) : undefined
   if (!lead) return null
   const prs = group.pullRequestUrls?.length ? ' and its pull requests are merged or closed' : ''
+  const mentions = cancelledTags(state, group), reason = mentions.length && cancelReason(group) ? ` (${cancelReason(group)})` : ''
   return { id: stableId('auto-archive', group.id, String(now)), conversationId: group.id, replyTo: null, recipients: [],
     author: { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration },
-    text: `Archived: the work is ${group.assignment!.status}${prs}.`, source: { kind: 'auto-archive' } }
+    text: `Archived: the work is ${group.assignment!.status}${reason}${prs}.`, source: { kind: 'auto-archive' }, ...(mentions.length ? { mentions } : {}) }
 }

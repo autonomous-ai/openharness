@@ -1074,8 +1074,9 @@ describe('cancelling work', () => {
     expect(() => f.run(cancel, peer)).toThrow('Lead')
   })
   it('refuses work that already finished', () => {
-    const { f, group, leadActor, assignmentId, cancel } = active()
-    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    const { f, group, leadActor, cancel } = active()
+    // A stopped task did not finish, so it still cancels ('archiving unfinished work'); a done one has ended.
+    f.state.conversations.find(c => c.id === group)!.assignment!.status = 'done'
     expect(() => f.run(cancel, leadActor)).toThrow('already ended')
   })
 })
@@ -2859,5 +2860,85 @@ describe('agent.stopRefused', () => {
     t.f.run({ type: 'agent.release', agentId: t.worker, decision: 'stop' }, { kind: 'agent', agentId: t.lead, machineOwnerId: 'host-owner' })
     expect(() => t.f.run({ type: 'agent.stopRefused', agentId: t.worker, releaseId: 'idle-release' }, t.asWorker)).toThrow('Only the execution host')
     expect(t.member().workDecision).toBe('stop')
+  })
+})
+
+describe('archiving unfinished work', () => {
+  /** A task Peer asked for, its worker's attempt left at [status]. */
+  function task(status: 'lost' | 'stopped' | 'cancelled' | 'done') {
+    const f = fixture()
+    f.invite()
+    const group = f.run({ type: 'conversation.create', title: 'Round tabs', brief: 'Drop closed tabs.', requesterId: 'peer',
+      checks: [{ description: 'Closed tabs leave the dial.', independent: false }] }).result.conversationId as string
+    const worker = f.add('worker', 'owner', group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: worker }).result.assignmentId as string
+    if (status === 'cancelled') f.run({ type: 'work.cancel', conversationId: group, assignmentId, reason: 'Superseded by the dial rewrite.' })
+    else f.state.conversations.find(c => c.id === group)!.assignment!.status = status
+    return { f, group, assignmentId }
+  }
+  const archive = (t: ReturnType<typeof task>) => t.f.run({ type: 'conversation.archive', conversationId: t.group, archived: true })
+
+  it.each(['lost', 'stopped'] as const)('refuses to archive a %s task by hand, so nothing unfinished closes silently', status => {
+    const t = task(status)
+    expect(() => archive(t)).toThrow('cancel it with a reason')
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(false)
+  })
+
+  it('cancels a stopped task, which then archives', () => {
+    const t = task('stopped')
+    t.f.run({ type: 'work.cancel', conversationId: t.group, assignmentId: t.assignmentId, reason: 'Nobody can finish it here.' })
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.assignment!.status).toBe('cancelled')
+    archive(t)
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(true)
+  })
+
+  it('tags the requester with the reason when a cancelled task is archived', () => {
+    const t = task('cancelled')
+    expect(archive(t).messages).toEqual([expect.objectContaining({ conversationId: t.group, mentions: ['peer'],
+      text: 'Archived without shipping: the task was cancelled (Superseded by the dial rewrite).' })])
+  })
+
+  it('archives a done task without tagging anyone', () => {
+    const t = task('done')
+    expect(archive(t).messages).toEqual([])
+    expect(t.f.state.conversations.find(c => c.id === t.group)!.archived).toBe(true)
+  })
+})
+
+describe('linking an open pull request', () => {
+  const PR = 'https://github.com/acme/app/pull/1875'
+  const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+  /** A group with a Lead and its own builder at work, and a builder from another group. */
+  function setup() {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), builder = f.add('builder', 'owner', group)
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const other = f.group(), stranger = f.add('stranger', 'owner', other)
+    const link = (actor: Actor, pullRequestUrl = PR) => f.run({ type: 'conversation.link', conversationId: group, pullRequestUrl }, actor)
+    const links = () => f.state.conversations.find(c => c.id === group)!.pullRequestUrls
+    return { f, lead, group, builder, stranger, link, links }
+  }
+
+  it('lets the Lead link a PR to the group and says so there once', () => {
+    const s = setup()
+    expect(s.link(as(s.lead)).messages.map(m => [m.conversationId, m.text])).toEqual([[s.group, `Linked ${PR}`]])
+    expect(s.links()).toEqual([PR])
+    expect(s.link(as(s.lead)).messages).toEqual([])
+    expect(s.links()).toEqual([PR])
+  })
+
+  it('lets the group\'s own builder link a PR', () => {
+    const s = setup()
+    s.link(as(s.builder))
+    expect(s.links()).toEqual([PR])
+  })
+
+  it('refuses anyone else, and anything but a pull request link', () => {
+    const s = setup()
+    expect(() => s.link(as(s.stranger))).toThrow('Only the Lead or the group\'s own builder')
+    expect(() => s.link(owner)).toThrow('Only the Lead or the group\'s own builder')
+    expect(commandSchema.safeParse({ type: 'conversation.link', conversationId: s.group, pullRequestUrl: 'https://github.com/acme/app/issues/3' }).success).toBe(false)
+    expect(s.links() ?? []).toEqual([])
   })
 })

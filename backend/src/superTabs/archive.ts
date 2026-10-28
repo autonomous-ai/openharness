@@ -1,10 +1,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { PULL_READ_PERMISSIONS, type GitHubApp } from '../github/app.js'
 import { githubRepository, type GitHubRepository } from '../github/repository.js'
-import type { Conversation } from './model.js'
+import type { Conversation, SuperTabState } from './model.js'
 import type { HeadData } from './parts/index.js'
 import type { SuperTabStore } from './store.js'
-import { ARCHIVE_QUIET_MS } from './tidy.js'
+import { projectsOf } from './projects.js'
+import { ARCHIVE_QUIET_MS, archiveWaitsFor } from './tidy.js'
 import { logger } from '../utils/logger.js'
 
 // A finished group archives by itself (roadmap, December: nobody tidies a Swarm by hand): its task done or cancelled, quiet
@@ -63,10 +64,11 @@ export async function markFinishedGroups(db: PrismaClient): Promise<number> {
  *  tidying on, is archived once GitHub says each of its pull requests is merged or closed. Read oldest first by a cursor,
  *  so groups that stay open never hold later ones back. */
 export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperTabStore, 'archiveFinished'>, prs: PullRequests, now: number): Promise<number> {
-  const tidy = new Map<string, boolean>()
-  const tidyOn = async (tabId: string) => {
-    if (!tidy.has(tabId)) tidy.set(tabId, ((await db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }))?.data as unknown as HeadData | undefined)?.tidy !== false)
-    return tidy.get(tabId)!
+  // One head read per Swarm a pass: whether it keeps tidying on, and its projects' repositories.
+  const heads = new Map<string, Promise<HeadData | undefined>>()
+  const headOf = (tabId: string) => {
+    if (!heads.has(tabId)) heads.set(tabId, db.swarmHead.findUnique({ where: { id: `${tabId}:head` } }).then(row => row?.data as unknown as HeadData | undefined))
+    return heads.get(tabId)!
   }
   // One read per pull request a pass, however many groups link it.
   const states = new Map<string, Promise<PullRequestState>>()
@@ -79,8 +81,12 @@ export async function archiveFinishedGroups(db: PrismaClient, store: Pick<SuperT
         orderBy: [{ lastActivityAt: 'asc' }, { id: 'asc' }], take: BATCH, select: { id: true, tabId: true, key: true, lastActivityAt: true, data: true } })
       for (const row of rows) {
         const group = row.data as unknown as Conversation
-        if (group.audience || !['done', 'cancelled'].includes(group.assignment?.status ?? '') || !await tidyOn(row.tabId)) continue
-        const urls = group.pullRequestUrls ?? []
+        if (group.audience || !['done', 'cancelled'].includes(group.assignment?.status ?? '')) continue
+        const head = await headOf(row.tabId)
+        if (head?.tidy === false) continue
+        const project = head && projectsOf(head as unknown as SuperTabState).find(p => p.id === (group.projectId ?? 'lead'))
+        const urls = archiveWaitsFor(group, project?.repository?.repositoryUrl)
+        if (!urls) continue
         let settled = true
         for (const url of urls) if (!['merged', 'closed'].includes(await stateOf(url) ?? '')) { settled = false; break }
         if (settled && await store.archiveFinished(row.tabId, row.key, urls)) archived++

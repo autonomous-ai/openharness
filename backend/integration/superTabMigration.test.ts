@@ -45,7 +45,7 @@ async function legacySwarm(edit: (state: SuperTabState, s: ReturnType<typeof ric
   const state = structuredClone(s.state)
   state.id = tabId
   const web = state.conversations.find(c => c.id === s.web)!
-  web.assignment = { ...web.assignment!, status: 'done' }
+  web.assignment = { ...web.assignment!, status: 'done', result: `Opened ${PR}` }
   delete web.pullRequestUrls
   web.lastMessageSequence = 30
   state.conversations.find(c => c.id === 'lead')!.lastMessageSequence = 40
@@ -142,13 +142,13 @@ describe('link lists rebuilt from history (moved from the store, design R8)', ()
   /** The done group from before link lists. */
   const legacyDone = (state: SuperTabState, s: ReturnType<typeof richSwarm>) => { delete state.conversations.find(c => c.id === s.done)!.pullRequestUrls }
 
-  it('finds a link in a message older than the latest page of 100', async () => {
+  it('does not link a pull request a message only mentions (#558)', async () => {
     const { s, tabId } = await legacySwarm(legacyDone)
     const author: Author = { kind: 'person', id: 'owner', name: 'owner@example.com', membershipGeneration: 'tab' }
-    await db.superTabMessage.createMany({ data: Array.from({ length: 150 }, (_, i) => ({ id: `${tabId}-page-${i}`, tabId, conversationId: s.done,
-      sequence: 100 + i, author: author as never, text: i === 0 ? `First PR ${link(11)}` : `Update ${i}`, recipientIds: [], mentions: [] })) })
+    await db.superTabMessage.create({ data: { id: `${tabId}-mention`, tabId, conversationId: s.done,
+      sequence: 100, author: author as never, text: `The token fix is ${link(11)}`, recipientIds: [], mentions: [] } })
     await migrateSwarm(db, tabId, { now: () => NOW })
-    expect(await links(tabId, s.done)).toEqual([link(11)])
+    expect(await links(tabId, s.done)).toEqual([])
   })
 
   it('finds links in check evidence and in a work result', async () => {

@@ -22,7 +22,7 @@ import { confidentialSessions, otherRegistrations, recordConfidential } from './
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
 import { digestDue, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
-import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
+import { archivable, archiveLine, archiveWaitsFor, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { touchesFor } from './parts/touches.js'
@@ -967,14 +967,12 @@ export class SuperTabStore {
       const dispatched = command.type === 'agent.startDispatch' ? original.starts?.find(s => s.id === command.startId)?.routeDecisionId : undefined
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       const effects = applyCommand(original, actor, command, context)
-      // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
+      // An agent-only notice changes nothing people see: no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source))
-      for (const group of effects.state.conversations) {
-        appendPullRequestUrls(group, [
-          ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
-          ...group.checks.map(check => check.evidence), group.assignment?.result,
-        ])
-      }
+      // A group links the pull requests its work names in check evidence and its result, and those its Lead records merged
+      // (conversation.merged). A message only mentioning one never links it: a Lead naming an unrelated PR in chat linked
+      // it to a group that shipped nothing (#558).
+      for (const group of effects.state.conversations) appendPullRequestUrls(group, [...group.checks.map(check => check.evidence), group.assignment?.result])
       if (command.type === 'agent.rebind') {
         const target = agent(effects.state, command.agentId)
         // A terminal can already belong to a different project or Swarm on this host. The pure
@@ -2045,7 +2043,9 @@ export class SuperTabStore {
       const loaded = await loadRow(tx, requireParts(row), { groupIds: [groupId] }), state = structuredClone(loaded.state)
       const group = state.conversations.find(c => c.id === groupId)
       const now = this.now()
-      if (!group || !archivable(state, group, now) || (group.pullRequestUrls ?? []).some(url => !checked.includes(url))) return false
+      if (!group || !archivable(state, group, now)) return false
+      const waits = archiveWaitsFor(group, groupProject(state, group).repository?.repositoryUrl)
+      if (!waits || waits.some(url => !checked.includes(url))) return false
       if (await waitingIn(tx, tabId, groupId)) return false
       group.archived = true
       const line = archiveLine(state, group, now), rows = line ? [line] : []
@@ -2055,6 +2055,7 @@ export class SuperTabStore {
       await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: groupId, status: { in: [...OPEN_DELIVERY] } }, data: { updatedAt: new Date(now) } })
       await this.save(tx, loaded, state, clock.next())
       await this.writeMessages(tx, tabId, state, rows, sequences)
+      await writeMentions(tx, tabId, state, rows, now)
       return true
     })
   }
