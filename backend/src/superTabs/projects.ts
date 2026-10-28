@@ -227,7 +227,8 @@ export function watchersLost(before: SuperTabState, after: SuperTabState): Array
 
 /** Everything that decides who reads a conversation and who watches a terminal (canReadGroup, canWatchAgent and the
  *  terminals native.ts revokes): when two states give the same text, no access changed between them. Messages, statuses and
- *  checks, most commands, change none of it. */
+ *  checks, most commands, change none of it. The Swarm's owner counts only once PRIVATE_VISIBLE_TO_OWNERS is true; it is
+ *  kept so that turning it on cannot skip a revocation. */
 export const accessInputs = (state: SuperTabState): string => JSON.stringify([state.ownerId,
   state.people.map(p => [p.id, p.generation, p.role]),
   projectsOf(state).map(p => [p.id, p.visibility, p.ownerId, p.members, p.leadConversationId]),

@@ -99,6 +99,17 @@ describe('which terminals a commit revokes (item 7: only what changed access is 
     expect(got.conditions).toEqual(expected)
   })
 
+  // A conversation's kind alone decides who reads it: every person reads the Leads conversation, but as a project group only
+  // that project's readers do. A Buddy chat's kind narrows only what agents read, and no agent reader is checked here.
+  it('revokes exactly what every check revokes when only a conversation\'s kind changes', () => {
+    const ids = swarm()
+    const leads = ids.before.conversations.find(isLeads)!
+    leads.projectId = ids.s.secret
+    const { got, expected } = ids.revokes(after => { delete group(after, leads.id).kind })
+    expect(expected).toEqual([{ conversationId: leads.id, userId: outsider.userId }])
+    expect(got.conditions).toEqual(expected)
+  })
+
   it('names those who lost an agent, once, for the observers too', () => {
     const ids = swarm()
     const { got } = ids.revokes(after => { target(after, ids.s.worker).confidential = true })
