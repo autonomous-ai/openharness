@@ -62,6 +62,9 @@ class SuperTabFixtureConnection extends WsConn {
 
   /// The account's Workspaces; null is a backend from before them.
   List<Map<String, dynamic>>? workspaces;
+
+  /// What each Workspace's people route answers.
+  Map<String, dynamic> workspacePeople = {'members': [], 'invitations': []};
   late AppNotifier app;
   final sentFiles = <Uint8List>[];
   final terminalCalls = <(String, Map<String, dynamic>)>[];
@@ -212,6 +215,11 @@ class SuperTabFixtureConnection extends WsConn {
           'ok': true,
           'value': {'workspaces': workspaces},
         };
+      }
+      if (payload['path'] case final String path
+          when path.startsWith('/api/super-tabs/workspaces/') &&
+              path.endsWith('/members')) {
+        return {'ok': true, 'value': workspacePeople};
       }
       if (payload['path'] == '/api/super-tabs/workspace-invitations') {
         return {

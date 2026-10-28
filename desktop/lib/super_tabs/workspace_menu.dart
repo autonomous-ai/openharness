@@ -124,7 +124,8 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
 
   Widget _quietRow(String label, {String? note, String? tooltip}) {
     final row = Padding(
-      padding: const EdgeInsets.fromLTRB(36, 6, 12, 6),
+      // Lines up with an [AppMenuItem]'s label and trailing edge.
+      padding: const EdgeInsets.fromLTRB(40, 8, 15, 8),
       child: Row(
         children: [
           Expanded(
@@ -188,7 +189,6 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
             icon: AppIcons.layers,
             label: workspace.name,
             note: workspace.role.label,
-            selected: workspace.id == current.id,
             expandLabel: true,
             onPressed: () => _switch(workspace),
           ),
@@ -322,7 +322,16 @@ class _SwarmWorkspaceMenuState extends State<SwarmWorkspaceMenu> {
             childFocusNode: _focus,
             consumeOutsideTap: true,
             alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-            style: grid.AppMenu.style(minWidth: width, maxWidth: width),
+            // As tall as the window allows, so a few Workspaces need no
+            // scrolling to reach the actions at the end.
+            style: grid.AppMenu.style(
+              minWidth: width,
+              maxWidth: width,
+              maxHeight: (MediaQuery.sizeOf(context).height - 96).clamp(
+                240.0,
+                720.0,
+              ),
+            ),
             onOpen: () => unawaited(widget.workspaces.refresh()),
             menuChildren: _menuChildren(current, width),
             builder: (context, menu, _) => _row(current, menu),
