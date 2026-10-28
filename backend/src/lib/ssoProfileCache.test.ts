@@ -230,3 +230,66 @@ describe('SSO profile cache', () => {
     expect(state.calls).toBe(2)
   })
 })
+
+describe('while the profile service is unavailable', () => {
+  const unavailable = Object.assign(new Error('SSO profile service unavailable'), { unavailable: true })
+  const rejected = new Error('Invalid or expired SSO access token')
+  const servesStale = (err: unknown) => (err as { unavailable?: boolean }).unavailable === true
+
+  /** A cache that validated `token` once at `start`, then the clock moved on by `elapsed`. */
+  async function validatedThen(elapsed: number, token = 'opaque-token') {
+    let now = 1_000_000
+    const cache = createSsoProfileCache({ ttlMs: 60_000, staleGraceMs: 600_000, servesStale, now: () => now })
+    await cache.resolve(token, 'prod', loader().load)
+    now += elapsed
+    return cache
+  }
+
+  it('keeps a token it validated recently working, rather than signing everyone out', async () => {
+    const cache = await validatedThen(60_000 + 599_000)
+    const down = loader(unavailable)
+
+    await expect(cache.resolve('opaque-token', 'prod', down.load)).resolves.toEqual(profile)
+
+    expect(down.state.calls).toBe(1)
+  })
+
+  it('still asks the profile service first, and uses its answer when it has one', async () => {
+    const cache = await validatedThen(60_001)
+    const fresh = loader({ id: 'external-1', email: 'renamed@example.com' })
+
+    await expect(cache.resolve('opaque-token', 'prod', fresh.load)).resolves.toEqual({ id: 'external-1', email: 'renamed@example.com' })
+  })
+
+  it('stops after the grace period', async () => {
+    const cache = await validatedThen(60_000 + 600_001)
+
+    await expect(cache.resolve('opaque-token', 'prod', loader(unavailable).load)).rejects.toBe(unavailable)
+  })
+
+  it('never keeps a token the profile service rejected, even within the grace period', async () => {
+    const cache = await validatedThen(60_001)
+
+    await expect(cache.resolve('opaque-token', 'prod', loader(rejected).load)).rejects.toBe(rejected)
+    await expect(cache.resolve('opaque-token', 'prod', loader(unavailable).load)).rejects.toBe(unavailable)
+  })
+
+  it('never keeps a token past its own expiry', async () => {
+    let now = 1_000_000
+    const cache = createSsoProfileCache({ ttlMs: 60_000, staleGraceMs: 600_000, servesStale, now: () => now })
+    const token = tokenExpiringAt(now + 120_000)
+    await cache.resolve(token, 'prod', loader().load)
+    now += 120_001
+
+    await expect(cache.resolve(token, 'prod', loader(unavailable).load)).rejects.toBe(unavailable)
+  })
+
+  it('serves nothing stale when no grace period is set', async () => {
+    let now = 1_000_000
+    const cache = createSsoProfileCache({ ttlMs: 60_000, servesStale, now: () => now })
+    await cache.resolve('opaque-token', 'prod', loader().load)
+    now += 60_001
+
+    await expect(cache.resolve('opaque-token', 'prod', loader(unavailable).load)).rejects.toBe(unavailable)
+  })
+})

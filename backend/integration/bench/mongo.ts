@@ -9,6 +9,8 @@ import { POOL_DEFAULTS, withPoolDefaults } from '../../src/lib/databaseUrl.js'
 
 export interface LocalDatabase {
   db: PrismaClient
+  /** Its loopback address, for a backend process the bench starts itself (resilience.ts). */
+  uri: string
   /** The MongoDB server version the run measured. */
   version: string
   stop(): Promise<void>
@@ -27,5 +29,5 @@ export async function localDatabase(): Promise<LocalDatabase> {
   })
   // The backend's own pool options (src/lib/prisma.ts), so the run measures the pool production has.
   const db = new PrismaClient({ datasources: { db: { url: withPoolDefaults(uri, POOL_DEFAULTS) } } })
-  return { db, version, async stop() { await db.$disconnect(); await replica.stop() } }
+  return { db, uri, version, async stop() { await db.$disconnect(); await replica.stop() } }
 }

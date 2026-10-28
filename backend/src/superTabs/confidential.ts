@@ -8,14 +8,16 @@ type Transaction = Prisma.TransactionClient
 
 /**
  * The native sessions (an agent id is one machine's harness, the same in every Swarm) among `agentIds` that are confidential
- * in any Swarm (Lead ruling, final review Critical 1): marked once a Lead or a private conversation's member (projects.ts
- * markConfidential), or, in a part written before that mark, a Lead or private member now. A confidential session is
- * watched by nobody but its machine's person, whichever Swarm or share asks.
+ * in any Swarm (Lead ruling, final review Critical 1), or in any but `exceptTabId`: marked once a Lead or a private
+ * conversation's member (projects.ts markConfidential), or, in a part written before that mark, a Lead or private member now.
+ * A confidential session is watched by nobody but its machine's person, whichever Swarm or share asks, except by its own
+ * Swarm's readers while it is that Swarm's current Lead (projects.ts watchClosed), which is why a Swarm asks about the others.
  */
-export async function confidentialSessions(tx: Transaction, agentIds: string[]): Promise<Set<string>> {
+export async function confidentialSessions(tx: Transaction, agentIds: string[], exceptTabId?: string): Promise<Set<string>> {
   const found = new Set<string>()
   if (!agentIds.length) return found
-  const rows = await tx.swarmAgent.findMany({ where: { key: { in: [...new Set(agentIds)] }, deleted: false }, select: { tabId: true, key: true, data: true } })
+  const rows = await tx.swarmAgent.findMany({ where: { key: { in: [...new Set(agentIds)] }, deleted: false, ...(exceptTabId ? { tabId: { not: exceptTabId } } : {}) },
+    select: { tabId: true, key: true, data: true } })
   const unmarked = new Map<string, string[]>()
   for (const row of rows) {
     if ((row.data as unknown as Agent).confidential) found.add(row.key)
