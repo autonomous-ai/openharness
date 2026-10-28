@@ -17,6 +17,12 @@ class FakeHub {
   final HttpServer server;
   final bool rejectOldToken;
   final int? closeCodeOnSelect;
+
+  /// The reason [closeCodeOnSelect] closes with: what the daemon's relay says, as it says it.
+  String closeReasonOnSelect = 'rejected';
+
+  /// Answers every select with this `machine_select_error` code instead, as the backend does.
+  String? selectErrorOnSelect;
   final List<Map<String, dynamic>> frames = [];
   final List<String> protocols = [];
   final List<String?> environments = [];
@@ -56,7 +62,19 @@ class FakeHub {
         if (frame['type'] == 'machine_select') {
           final machineId = (frame['payload'] as Map)['machineId'] as String;
           if (hub.closeCodeOnSelect != null) {
-            ws.close(hub.closeCodeOnSelect!, 'rejected');
+            ws.close(hub.closeCodeOnSelect!, hub.closeReasonOnSelect);
+            return;
+          }
+          if (hub.selectErrorOnSelect != null) {
+            ws.add(
+              jsonEncode({
+                'type': 'machine_select_error',
+                'payload': {
+                  'machineId': machineId,
+                  'error': hub.selectErrorOnSelect,
+                },
+              }),
+            );
             return;
           }
           if (hub.rejectOldToken && protocol == 'tok-old') {
@@ -508,6 +526,46 @@ void main() {
     );
     expect(conn!.isClosed, isTrue);
   });
+
+  // Prod, 2026-10-28: a laptop removed from the account in September was still selected every few
+  // seconds. Through this computer's daemon the refusal arrives as the relay's close, with the
+  // backend's code for its reason; straight from the backend (the web viewer), as the frame.
+  for (final (path, local) in [('daemon relay', true), ('backend', false)]) {
+    test(
+      'a machine refused as not on the account ($path) is not dialled again',
+      () async {
+        hub = await FakeHub.start(closeCodeOnSelect: local ? 1011 : null);
+        hub.closeReasonOnSelect = 'NOT_YOUR_MACHINE';
+        if (!local) hub.selectErrorOnSelect = 'NOT_YOUR_MACHINE';
+        final failures = <String>[];
+        final statuses = <ConnectionStatus>[];
+        conn = WsConn(
+          wsBaseUrl: 'ws://127.0.0.1:${hub.port}',
+          autonomousEnv: 'prod',
+          machineId: 'm1',
+          accessTokenProvider: (_, _) async => 'sso-token',
+          onAuthFailure: (_) {},
+          onLocalFailure: (code, reason) => failures.add(reason),
+          onEvent: (_) {},
+          onStatus: statuses.add,
+          transportKind: local
+              ? WsTransportKind.localPlaintext
+              : WsTransportKind.cloudE2ee,
+          allowLocalTcpFixture: true,
+          localWsUri: local
+              ? Uri.parse('ws://127.0.0.1:${hub.port}/api/local-ws')
+              : null,
+        );
+        await conn!.connect();
+        // Past the first two steps of the backoff (0.5–1 s, then 1–2 s).
+        await Future<void>.delayed(const Duration(milliseconds: 3200));
+        expect(hub.protocols, hasLength(1));
+        expect(conn!.isClosed, isTrue);
+        expect(statuses.last, ConnectionStatus.disconnected);
+        if (local) expect(failures, ['NOT_YOUR_MACHINE']);
+      },
+    );
+  }
 
   test(
     'a fixed reconnect delay retries at that pace instead of backing off',

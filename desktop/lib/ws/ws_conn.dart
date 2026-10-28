@@ -48,6 +48,18 @@ Duration reconnectDelay(int attempt, Random random) {
 /// every second, for good: about 54 dials a minute from one browser tab (prod, 2026-10-28).
 const connectionStableAfter = Duration(minutes: 1);
 
+/// The backend's refusals of a `machine_select` that no redial can change: the machine left the
+/// account or was never shared with it, it belongs to another environment, or its subscription stops
+/// it (`backend/src/lib/webWs.ts`). Through this computer's daemon they arrive as the relay's close,
+/// with the code for its reason (`cli/src/localWsServer.ts`). Prod, 2026-10-28: a laptop removed in
+/// September was still selected every few seconds.
+const finalSelectRefusals = {
+  'NOT_YOUR_MACHINE',
+  'MACHINE_ENV_MISMATCH',
+  'MACHINE_PAYMENT_PENDING',
+  'MACHINE_SUBSCRIPTION_REQUIRED',
+};
+
 /// A `request()` call got no reply within its timeout — distinct from other request-level errors
 /// (an explicit `{error: ...}` response) so callers can tell "the peer is unresponsive" apart from
 /// "the peer answered with a failure."
@@ -491,6 +503,7 @@ class WsConn {
     } catch (_) {
       return;
     }
+    if (message['type'] == 'machine_select_error') _selectRefused(message);
     if (codec != null) {
       _inboundTail = _inboundTail
           .then((_) => _onRelayFrame(codec, message))
@@ -998,6 +1011,13 @@ class WsConn {
     }
     final code = channel.closeCode;
     if (isLocal) {
+      if (finalSelectRefusals.contains(channel.closeReason)) {
+        // The relay could not select the machine, for good: told as a 4404 is, never redialled.
+        _closing = true;
+        onLocalFailure?.call(code ?? 1011, channel.closeReason!);
+        onStatus(ConnectionStatus.disconnected);
+        return;
+      }
       if (code == 4404 || (observerShareId != null && code == 4403)) {
         _closing = true;
         // needsLink first: AppNotifier's onStatus handler reads machine.needsLink
@@ -1043,6 +1063,24 @@ class WsConn {
       return;
     }
     _scheduleReconnect();
+  }
+
+  /// The backend refused this socket's select. The app still hears it ([onEvent]); a refusal no
+  /// redial can change also ends the connection, which would otherwise sit open and unselected.
+  void _selectRefused(Map<String, dynamic> message) {
+    final payload = message['payload'];
+    if (payload is! Map || payload['machineId'] != machineId) return;
+    if (_closing || _ready || !finalSelectRefusals.contains(payload['error'])) {
+      return;
+    }
+    _closing = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _disposePlugin();
+    onStatus(ConnectionStatus.disconnected);
+    final channel = _channel;
+    _channel = null;
+    unawaited(channel?.sink.close().catchError((Object _) {}));
   }
 
   Future<void> _refreshAndReconnect() async {

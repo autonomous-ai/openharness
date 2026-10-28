@@ -188,6 +188,52 @@ void main() {
     expect(app.lastErrorRetryable, isTrue);
   });
 
+  // Prod, 2026-10-28: a laptop removed from the account in September was still selected every few
+  // seconds. Refused as not on the account, an own machine is read again from the account's list.
+  for (final (how, refuse) in <(String, Future<void> Function(AppNotifier))>[
+    (
+      'the backend’s refusal',
+      (app) => app.handleEventForTest('gone', {
+        'type': 'machine_select_error',
+        'payload': {'machineId': 'gone', 'error': 'NOT_YOUR_MACHINE'},
+      }),
+    ),
+    (
+      'the daemon relay’s close',
+      (app) async => app.localFailureForTest('gone', 1011, 'NOT_YOUR_MACHINE'),
+    ),
+  ]) {
+    test('an own machine refused by $how leaves the list', () async {
+      const gone = Machine(
+        machineId: 'gone',
+        authMode: MachineAuthMode.remote,
+        name: 'M1 Laptop',
+      );
+      const kept = Machine(
+        machineId: 'kept',
+        authMode: MachineAuthMode.remote,
+        name: 'Studio',
+      );
+      final api = _Api()..listed = const [kept];
+      app = _App(api)..status = AppStatus.authenticated;
+      app.machines = [gone, kept];
+      for (final machine in app.machines) {
+        app.machineStates[machine.machineId] = MachineState(machine)
+          ..nodeOnline = true
+          ..connectionStatus = ConnectionStatus.connected;
+      }
+      await refuse(app);
+      for (var i = 0; i < 20; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      final listed = app.machines.map((m) => m.machineId);
+      expect(listed, contains('kept'));
+      expect(listed, isNot(contains('gone')));
+      expect(app.stateOf('gone'), isNull);
+      expect(app.lastErrorRetryable, isFalse);
+    });
+  }
+
   test('every refusal code reads as a sentence', () {
     for (final code in [
       'NOT_YOUR_MACHINE',

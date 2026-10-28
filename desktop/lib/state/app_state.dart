@@ -8721,9 +8721,45 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The backend refused to select [machine] ([code]), straight or through this computer's daemon.
+  void _selectRefused(MachineState machine, String code) {
+    final name = machine.machine.displayName;
+    if (code == 'NOT_YOUR_MACHINE' && machine.machine.machineShare != null) {
+      // Its owner stopped sharing it: no retry brings it back, and the list drops it.
+      _noteSharingEnded(machine.machine);
+      _lastError =
+          '${machine.machine.machineShare!.owner} stopped sharing $name with you.';
+      _lastErrorRetryable = false;
+      _sharingEndedError = (
+        machineId: machine.machine.machineId,
+        text: _lastError!,
+      );
+      unawaited(refreshMachines());
+    } else {
+      _lastError = machineSelectErrorText(code, name);
+      _lastErrorRetryable =
+          code != 'NOT_YOUR_MACHINE' && code != 'MACHINE_ENV_MISMATCH';
+      // Removed from the account: its socket has stopped (WsConn), and the account's list, read
+      // again, takes it out of the list and its tabs. Prod, 2026-10-28: a laptop removed in
+      // September was still selected every few seconds.
+      if (code == 'NOT_YOUR_MACHINE') unawaited(refreshMachines());
+    }
+    machine.connectionStatus = ConnectionStatus.disconnected;
+  }
+
   void _onLocalFailure(String machineId, int code, String reason) {
     final machine = machineStates[machineId];
     if (machine == null) return;
+    // The daemon's relay closing for a refusal no redial changes (WsConn), with the backend's code.
+    if (finalSelectRefusals.contains(reason)) {
+      productConnections.refused(
+        machineId,
+        ProductHealthMeasure.connectErrorOther,
+      );
+      _selectRefused(machine, reason);
+      notifyListeners();
+      return;
+    }
     productConnections.refused(
       machineId,
       code == 4404
@@ -21341,26 +21377,7 @@ class AppNotifier extends ChangeNotifier {
         await _applyNodeStatus(machine, online, why: 'node_status');
         break;
       case 'machine_select_error':
-        final code = '${payload['error'] ?? ''}';
-        final name = machine.machine.displayName;
-        if (code == 'NOT_YOUR_MACHINE' &&
-            machine.machine.machineShare != null) {
-          // Its owner stopped sharing it: no retry brings it back, and the list drops it.
-          _noteSharingEnded(machine.machine);
-          _lastError =
-              '${machine.machine.machineShare!.owner} stopped sharing $name with you.';
-          _lastErrorRetryable = false;
-          _sharingEndedError = (
-            machineId: machine.machine.machineId,
-            text: _lastError!,
-          );
-          unawaited(refreshMachines());
-        } else {
-          _lastError = machineSelectErrorText(code, name);
-          _lastErrorRetryable =
-              code != 'NOT_YOUR_MACHINE' && code != 'MACHINE_ENV_MISMATCH';
-        }
-        machine.connectionStatus = ConnectionStatus.disconnected;
+        _selectRefused(machine, '${payload['error'] ?? ''}');
         break;
       case 'agent_synced':
         final raw = payload['agent'];
