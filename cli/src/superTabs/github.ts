@@ -6,7 +6,7 @@
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
  */
-import { readdirSync, readFileSync, rmSync, type Dirent } from 'node:fs'
+import { readdirSync, readFileSync, rmSync, statSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { swarmGitHubRoot, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
@@ -76,6 +76,9 @@ export async function githubToken(core: CoreApi, harnessId: string, sources: Swa
 /** How often the daemon looks at its sessions' tasks. A token is renewed once it has this much left or less. */
 export const REFRESH_INTERVAL_MS = 60_000
 export const RENEW_BELOW_MS = 10 * 60_000
+/** How long a session's folder with no session registered for it stays: longer than any start waits to launch, since a
+ *  start writes the folder before its session is registered (core/agents/create.ts; review of #1998). */
+export const UNREGISTERED_FOLDER_MS = 15 * 60_000
 
 /**
  * Keeps each local session started to use the app holding a token for its task while the task lasts: renewed before it
@@ -124,7 +127,9 @@ export class GitHubTokenRefresher {
    * minute, while the refresher runs. Anything that is not a session's folder is skipped, and one that cannot be read or
    * written is logged and passed over, so no folder stops the renewals below. A folder whose session is gone from this
    * machine is removed, so passes do not grow with every session ever run (security review of #1978); one whose session
-   * stopped but may run again ([known]) keeps its commit identity and trailers for then.
+   * stopped but may run again ([known]) keeps its commit identity and trailers for then. Removed only once untouched for
+   * UNREGISTERED_FOLDER_MS: a session still starting has its folder before its record, and a record may not be read just
+   * now (review of #1998).
    */
   private emptyStopped(running: ReadonlySet<string>, known: ReadonlySet<string>): void {
     const sessions = join(swarmGitHubRoot(this.core.dataDir), 'sessions')
@@ -135,7 +140,7 @@ export class GitHubTokenRefresher {
       const dir = swarmGitHubSessionDir(this.core.dataDir, entry.name)
       if (!dir || running.has(dir)) continue
       try {
-        if (!known.has(dir)) { rmSync(dir, { recursive: true, force: true }); continue }
+        if (!known.has(dir) && this.now() - this.touched(dir) >= UNREGISTERED_FOLDER_MS) { rmSync(dir, { recursive: true, force: true }); continue }
         let hosts: string
         try { hosts = readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8') } catch { continue }
         if (hosts !== '{}\n') writeSessionGitHub(dir, null)
@@ -143,6 +148,15 @@ export class GitHubTokenRefresher {
         console.warn(`[super-tab] could not empty a stopped session's gh login · ${error instanceof Error ? error.message : String(error)}`)
       }
     }
+  }
+
+  /** When anything in a session's folder last changed. */
+  private touched(dir: string): number {
+    let newest = 0
+    for (const path of [dir, join(dir, 'gh'), join(dir, 'gh', 'hosts.yml'), join(dir, 'gh', 'config.yml'), join(dir, 'gitconfig'), join(dir, 'trailers')]) {
+      try { newest = Math.max(newest, statSync(path).mtimeMs) } catch { /* not there */ }
+    }
+    return newest
   }
 
   private async look(): Promise<void> {

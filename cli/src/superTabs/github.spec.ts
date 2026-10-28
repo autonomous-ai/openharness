@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
+import { swarmGitHubLaunch, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
 import { GitHubTokenRefresher, githubToken, RENEW_BELOW_MS } from './github.js'
 import { hostForm } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
@@ -25,6 +25,13 @@ const row = (tabId: string, agentId: string, harnessId = 'harness-1', extra: Rec
 /** The machine's host form and Swarm reads, as the service hands them over. */
 const sourcesOf = (core: CoreApi, now?: () => number) => { const held = { feed: new HostFeed(core, 'machine-1', { now }), reads: new SwarmReads(core) }; return () => held }
 const HOST = '/api/super-tabs/hosts/machine-1/changes'
+/** Makes [dir] and everything in it look untouched for [ms]. */
+const age = (dir: string, ms: number) => {
+  const then = new Date(Date.now() - ms)
+  for (const path of [dir, join(dir, 'gh'), join(dir, 'gh', 'hosts.yml'), join(dir, 'gh', 'config.yml'), join(dir, 'gitconfig'), join(dir, 'trailers')]) {
+    if (existsSync(path)) utimesSync(path, then, then)
+  }
+}
 
 /** A core whose backend answers by path; one session per harness id, started to use the app unless `plain`. */
 function setup(routes: (method: string, path: string, body: unknown) => Reply, sessions: Array<{ id: string; plain?: boolean }> = [{ id: 'harness-1' }]) {
@@ -147,6 +154,7 @@ describe('keeping gh\'s token fresh', () => {
     // A session that stopped while no daemon ran, and is gone from this machine since: its folder is removed.
     const old = swarmGitHubSessionDir(dataDir, 'harness-codex-old')!
     writeSessionGitHub(old, 'ghs_fixtureToken0000008')
+    age(old, 16 * 60_000)
     await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
     expect(existsSync(old)).toBe(false)
   })
@@ -157,12 +165,35 @@ describe('keeping gh\'s token fresh', () => {
     const kept = swarmGitHubSessionDir(dataDir, 'harness-codex-harness-1')!, gone = swarmGitHubSessionDir(dataDir, 'harness-codex-old')!
     writeSessionGitHub(kept, 'ghs_fixtureToken0000003', ['Harness-Agent: Atlas'])
     writeSessionGitHub(gone, 'ghs_fixtureToken0000002')
+    age(gone, 16 * 60_000)
     live.length = 0
     stopped.push(session({ id: 'harness-1' }))
     await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
     expect(readFileSync(join(kept, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
     expect(readFileSync(join(kept, 'trailers'), 'utf8')).toBe('Harness-Agent: Atlas\n')
     expect(existsSync(gone)).toBe(false)
+  })
+
+  // Review of #1998: a start writes its session's folder before the session is registered (core/agents/create.ts), and a
+  // pass in that gap removed it. Only a folder untouched for 15 minutes, longer than any start waits, goes.
+  it('keeps the folder of a session still starting, and of one not read just now, until it is 15 minutes untouched', async () => {
+    const dataDir = mkdtempSync(join(root, 'starting-'))
+    const core = fakeCore({ dataDir, agents: { live: vi.fn(() => []), all: vi.fn(() => []), byAgent: vi.fn(() => undefined) } })
+    swarmGitHubLaunch('harness-codex-starting', { dataDir, command: '/bin/true', port: 1, machineId: 'machine-1' }, 'darwin')
+    const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-starting')!
+    expect(existsSync(dir)).toBe(true)
+    await new GitHubTokenRefresher(core, () => ({}) as never).tick()
+    expect(existsSync(dir), 'folder of a session still starting').toBe(true)
+    // A token in a young folder of no known session is still taken out.
+    writeSessionGitHub(dir, 'ghs_fixtureToken0000001')
+    await new GitHubTokenRefresher(core, () => ({}) as never).tick()
+    expect(readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
+    age(dir, 14 * 60_000)
+    await new GitHubTokenRefresher(core, () => ({}) as never).tick()
+    expect(existsSync(dir)).toBe(true)
+    age(dir, 16 * 60_000)
+    await new GitHubTokenRefresher(core, () => ({}) as never).tick()
+    expect(existsSync(dir)).toBe(false)
   })
 
   // Security review of #1978: a token fetch still in flight as its session stopped wrote the token after the folder was
