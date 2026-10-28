@@ -56,6 +56,19 @@ describe('reading and typing in an agent terminal', () => {
     }
   })
 
+  // Ken (2026-10-28): members may watch the Lead, but driving another person's Lead needs its machine's owner, whether or not
+  // its session counts as private.
+  it('lets only its machine\'s owner read or type in a Lead\'s terminal, for being the Lead', () => {
+    const s = swarm()
+    for (const command of [{ type: 'agent.screen', agentId: s.lead }, { type: 'agent.input', agentId: s.lead, keys: ['Enter'] }] as Command[]) {
+      expect(() => s.run(command, peer)).toThrow('in a Product Manager’s terminal')
+    }
+    const hostOwner: Actor = { kind: 'person', userId: 'host-owner', email: 'host-owner@example.com' }
+    const invited = s.run({ type: 'invite.create', email: 'host-owner@example.com', role: 'collaborator', conversationId: 'lead' })
+    s.run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, hostOwner)
+    expect(s.run({ type: 'agent.input', agentId: s.lead, keys: ['Enter'] }, hostOwner).terminal).toMatchObject({ requesterKey: 'person:host-owner' })
+  })
+
   it('logs typed input as a terminal-input row in the agent\'s current group, delivered to nobody', () => {
     const s = swarm()
     s.run({ type: 'work.assign', conversationId: s.group, agentId: s.worker })

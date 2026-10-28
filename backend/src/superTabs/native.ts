@@ -5,7 +5,8 @@ import type { AuthUser } from '../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import { activeWork, agent, appendPullRequestUrls, author, conversation, fail, isLeads, stableId, SuperTabError,
   type Actor, type Agent, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, readConversation } from './projects.js'
+import { canReadGroup, groupProject, readConversation, watchersLost } from './projects.js'
+import { mayDrive } from './terminal.js'
 import { noteProjectReports } from './projectUpdates.js'
 import { numberMessages, type Touch } from './parts/commit.js'
 import { redactCredentials } from './credentials.js'
@@ -70,6 +71,11 @@ export class SuperTabNativeStore {
     const operator = author(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, true)
     const target = agent(state, record.agentId)
     const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
+    // A terminal drives its session and its answers land in the conversation: only those who may drive it may use it.
+    try { mayDrive(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, target) } catch (error) {
+      if (error instanceof SuperTabError) fail('NATIVE_CONTEXT_REVOKED', 'Only this agent\'s machine\'s owner can use its terminal now.', 403)
+      throw error
+    }
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
       || target.harnessId !== binding.harnessId || target.machineId !== binding.machineId || target.machineOwnerId !== binding.machineOwnerId
       || target.contributorId !== binding.contributorId || target.membershipGeneration !== binding.contributionGeneration
@@ -110,6 +116,7 @@ export class SuperTabNativeStore {
         await this.validate(tx, state, prior)
         return { contextId }
       }
+      mayDrive(state, { kind: 'person', userId: user.sub, email: user.email }, target)
       const binding: Binding = { tabId, conversationId: group.id, agentId: target.id, harnessId: target.harnessId,
         machineId: target.machineId, machineOwnerId: target.machineOwnerId, operator,
         contributorId: target.contributorId, contributionGeneration: target.membershipGeneration,
@@ -264,6 +271,8 @@ export async function revokeNativeContexts(tx: Transaction, before: SuperTabStat
     const current = after.agents.find(a => a.id === target.id)
     if (!current || current.harnessId !== target.harnessId) conditions.push({ agentId: target.id })
   }
+  // Those who may no longer watch an agent, such as everyone but its machine's owner once it reads private chats.
+  for (const { agentId, personIds } of watchersLost(before, after)) conditions.push({ agentId, userId: { in: personIds } })
   for (const group of before.conversations) {
     const current = after.conversations.find(c => c.id === group.id)
     if (!current || (current.archived && !group.archived)) conditions.push({ conversationId: group.id })

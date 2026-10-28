@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import 'format.dart';
 import 'model.dart';
 
-/// The shared reward at the top of Humans: a small "🚀 N shipped" chip for
-/// the week shown (Dee, 2026-10-28: no open count). The week before and the
-/// median time to ship are on hover.
+/// The team's total at the top of Humans, as quiet text: "N shipped this
+/// week" for the week shown (Dee, 2026-10-28: no open count). The week before
+/// and the median time to ship are on hover.
 class LeaderboardGoalLine extends StatelessWidget {
   const LeaderboardGoalLine({
     super.key,
@@ -25,24 +24,22 @@ class LeaderboardGoalLine extends StatelessWidget {
     final earlier = weekName == 'this week' ? 'last week' : 'the week before';
     final median = _median(now.medianAskToShipMs, before.medianAskToShipMs);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      key: const ValueKey('leaderboard-goal'),
+      padding: const EdgeInsets.fromLTRB(
+        DesktopChrome.groupGap,
+        0,
+        DesktopChrome.groupGap,
+        DesktopChrome.controlGap / 2,
+      ),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Tooltip(
           message: ['${before.shipped} shipped $earlier', ?median].join('\n'),
-          child: Container(
-            key: const ValueKey('leaderboard-goal'),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: grid.AppSurface.hoverFill,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Text(
-              '🚀 ${now.shipped} shipped $weekName',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: DesktopChrome.metadata(color: DesktopChrome.foreground),
-            ),
+          child: Text(
+            '${now.shipped} shipped $weekName',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
           ),
         ),
       ),
