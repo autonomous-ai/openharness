@@ -1,6 +1,6 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
-import type { Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
+import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
 import { machineAlive } from '../lib/prisma.js'
 import { isTeamSession, teamMachine, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
@@ -19,13 +19,15 @@ import { logger } from '../utils/logger.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, watchingNarrowed, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
-import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest } from './projectUpdates.js'
+import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, stopIdleWorkers, stoppedMachines } from './tidy.js'
 import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
+import { loadDeliveryParts } from './parts/light.js'
+import { guardedWrite } from './parts/write.js'
 import { touchesFor } from './parts/touches.js'
 import { freeze, swarmReadCache, swarmTransaction, type CacheView, type SwarmCache } from './cache.js'
 import { DIRECT, readLastChangedAt, readParts, type ReadNamed } from './cachedReads.js'
@@ -46,6 +48,7 @@ import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, t
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
+import { invitedSwarms } from './invitedSwarms.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
 
@@ -275,6 +278,30 @@ export function localPollMemory(now: () => number): PollMemory {
 /** The routing decision a command names. `decision.answer` names a person's decision instead (decisions.ts). */
 const routeDecisionOf = (command: Command): string | undefined => command.type === 'decision.answer' ? undefined
   : 'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
+
+const machineKey = (environment: string, machineId: string, ownerId: string) => `machine:${environment}:${machineId}:${ownerId}`
+
+/**
+ * What agent grant checks read, kept for one request only. A host read checks every agent on its machine, mostly for the
+ * same few contributors: without this each agent cost its machine, share, contributor and Workspace membership again
+ * (4 point queries per agent on a shared machine, Diego's review 2026-10-28). Never kept past the request, so a revoked
+ * share or a Workspace removal drops the rows on the next read, as before.
+ */
+export class GrantReads {
+  private readonly answers = new Map<string, Promise<unknown>>()
+  /** `machine`: a live machine the request already read with the grant's own filter (machineAlive), its host's. */
+  constructor(machine?: Machine) {
+    if (machine) this.answers.set(machineKey(machine.autonomousEnv, machine.machineId, machine.userId), Promise.resolve(machine))
+  }
+
+  once<T>(key: string, read: () => Promise<T>): Promise<T> {
+    const known = this.answers.get(key) as Promise<T> | undefined
+    if (known) return known
+    const answer = read()
+    this.answers.set(key, answer)
+    return answer
+  }
+}
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
@@ -542,15 +569,17 @@ export class SuperTabStore {
   /** Shared with the read API (superTabs/read, design section 7.2). */
   /** Every path that serves an agent's host checks this, so it also holds the Workspace check: the agent acts for its
    *  contributor, who must still be in the Swarm's Workspace. Its host need not be, as it need not be in the Swarm. */
-  async agentGrant(tx: Transaction, state: SuperTabState, target: Agent): Promise<void> {
-    await requireWorkspaceAccess(tx, state, target.contributorId)
-    const machine = await tx.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId,
-      autonomousEnv: state.environment, ...machineAlive } })
+  /** `reads`: one request's reads, shared by every agent it checks (GrantReads). */
+  async agentGrant(tx: Transaction, state: SuperTabState, target: Agent, reads?: GrantReads): Promise<void> {
+    const once = <T>(key: string, read: () => Promise<T>) => reads ? reads.once(key, read) : read()
+    await requireWorkspaceAccess(tx, state, target.contributorId, reads)
+    const machine = await once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
+      where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } }))
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     if (target.contributorId !== machine.userId) {
       person(state, target.contributorId)
-      const contributor = await tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } })
-      const share = await tx.machineShare.findUnique({ where: { machineId: machine.machineId } })
+      const contributor = await once(`user:${target.contributorId}`, () => tx.user.findUnique({ where: { id: target.contributorId }, select: { email: true, autonomousEnv: true } }))
+      const share = await once(`share:${machine.machineId}`, () => tx.machineShare.findUnique({ where: { machineId: machine.machineId } }))
       if (!contributor || contributor.autonomousEnv !== state.environment || !share || share.ownerId !== machine.userId ||
           share.autonomousEnv !== state.environment || !sharedVia(share, contributor.email) ||
           machineShareGrant(share, contributor.email) !== target.hostGrant) {
@@ -659,7 +688,7 @@ export class SuperTabStore {
   async invitations(user: AuthUser) {
     this.personOnly(user)
     const email = user.email.trim().toLowerCase()
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, invitedEmails: { has: email } }, take: 100, select: SWARM_ROW })
+    const rows = await invitedSwarms(this.db, user.autonomousEnv, email, 100)
     const heads = await this.heads(rows)
     return rows.flatMap(row => {
       const state = heads.get(row.id)
@@ -670,7 +699,7 @@ export class SuperTabStore {
   }
 
   /** The heads of Swarms already split into parts, by id. */
-  private async heads(rows: SwarmRow[]): Promise<Map<string, HeadData>> {
+  private async heads(rows: Array<Pick<SwarmRow, 'id' | 'format'>>): Promise<Map<string, HeadData>> {
     const heads = await this.db.swarmHead.findMany({ where: { id: { in: rows.filter(r => r.format === 2).map(r => `${r.id}:head`) } } })
     return new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData]))
   }
@@ -2011,9 +2040,10 @@ export class SuperTabStore {
       let woken = false
       if (update) {
         const progress = groupProject(state, conversation(state, update.conversationId)).progress!
+        const received = this.now() - (progress.requestedAt ?? 0) < UNANSWERED_REQUEST_MS ? ['delivered'] : []
         const pending = progress.requestMessageId
           ? await tx.superTabDelivery.findFirst({ where: { tabId, agentId, messageId: progress.requestMessageId,
-            status: { in: ['queued', 'claimed', 'uncertain', 'delivered'] } } })
+            status: { in: ['queued', 'claimed', 'uncertain', ...received] } } })
           : null
         if (!pending) {
           progress.requested = { ...progress.requested, ...update.source!.through as Record<string, number> }
@@ -2075,10 +2105,17 @@ export class SuperTabStore {
     action: { type: 'claim'; claimId: string } | { type: 'ack'; claimId: string; receipt: string; uncertain: boolean }
       | { type: 'hold'; claimId: string; reason: HoldReason }) {
     return transaction(this.db, async tx => {
-      const named = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId }, select: { conversationId: true } })
-      const loaded = await this.load(tx, user, tabId, { groupIds: named ? [named.conversationId] : [] }), state = loaded.state
-      author(state, await this.actor(tx, user, state, agentId), true)
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
+      await this.row(tx, user, tabId)
+      // A native message may be delivered to its Lead in a different conversation from the terminal it came from.
+      const context = delivery?.nativeContextId ? await tx.superTabNativeContext.findFirst({
+        where: { id: delivery.nativeContextId, tabId }, select: { agentId: true } }) : null
+      const parts = await loadDeliveryParts(tx, tabId, delivery ? [delivery.conversationId] : [],
+        [agentId, ...delivery?.authorKind === 'agent' ? [delivery.authorId] : [], ...context ? [context.agentId] : []], context?.agentId)
+      const state = reassemble(parts, { share: true })
+      parkLaterConversations(state)
+      syncLeads(state)
+      author(state, await this.actor(tx, user, state, agentId), true)
       // The delivery pass ended a hold (it keeps the hold's reason) as its host, its terminal free again, typed it: the
       // host's own confirmation counts, or the agent has it while its sender sees Not sent and sends it again (review of
       // #1941). Nothing else brings an ended delivery back.
@@ -2098,7 +2135,11 @@ export class SuperTabStore {
       }
       // No Swarm-wide write: revocation and group changes write this delivery row, and the claim relies on its receiver and
       // its sender, whose parts it touches (spec ruling 9, design section 3.5).
-      await this.save(tx, loaded, state, clock.next(), deliveryTouches(delivery))
+      const stamp = clock.next()
+      for (const touch of deliveryTouches(delivery)) {
+        const part = parts.members.find(p => p.key === touch.key)
+        if (part) await guardedWrite(tx, tabId, { op: 'touch', ...touch, seen: part.version }, stamp)
+      }
       const updated = await tx.superTabDelivery.update({ where: { id: delivery.id }, data: { status, claimId: action.claimId,
         ...(action.type === 'ack' ? { receipt: action.receipt, holdReason: null, holdSince: null,
           ...(!action.uncertain ? { deliveredAt: delivery.deliveredAt ?? new Date(this.now()) } : {}) } : {}) } })

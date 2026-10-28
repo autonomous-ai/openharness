@@ -4040,6 +4040,22 @@ describe('swarm cards', () => {
     } finally { await session.stop() }
   })
 
+  it('logs a focus sent again after the dial came back on new firmware, though the line is the same', async () => {
+    const lines: string[] = []
+    const state = { cards: [card('st1')], open: { superTabId: 'st1', projectId: 'proj2', fromDevice: false } as { superTabId: string; projectId: string; fromDevice: boolean } | null }
+    const { session, port } = await connect(cardHost(state, { log: (l) => lines.push(l) }))
+    const sent = () => lines.filter((l) => l === 'cable: swarm focus st1/proj2 → lead2')
+    try {
+      port.say({ ...PRO, fw: '0.0.93' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(1))
+      expect(sent()).toHaveLength(1)
+      // Diego's dial, 2026-10-28: the update rebooted it and it greeted again on 0.0.94. The focus went again, unlogged.
+      port.say({ ...PRO, fw: '0.0.94' })
+      await vi.waitFor(() => expect(ofType(port, 'supertab.focus')).toHaveLength(2))
+      expect(sent()).toHaveLength(2)
+    } finally { await session.stop() }
+  })
+
   it('a project the list does not hold yet is followed when the list arrives', async () => {
     const state = { cards: [] as SwarmCard[], open: { superTabId: 'st1', projectId: 'proj1', fromDevice: false } }
     const { session, port } = await connect(cardHost(state))
