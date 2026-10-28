@@ -66,10 +66,6 @@ HOME = Path('/home') / USER
 SESSION = HOME / '.harness/auth/session.json'
 COMPUTER_ID = HOME / '.harness/computer-id'
 HOTSPOT = 'harness-setup'
-HOSTNAME = Path('/etc/hostname')
-HOSTS = Path('/etc/hosts')
-# What the installer calls every computer (installer.py), until name_computer gives it its hotspot's name.
-INSTALLED_NAME = 'harness'
 ADDRESS = '10.42.0.1'
 PORT = 80
 PROTOCOL = 1
@@ -161,32 +157,6 @@ def hotspot_name(device=None):
         source = computer_id()
     tail = ''.join(character for character in source if character.isalnum())[-4:].upper()
     return 'Harness-' + (tail or 'Setup')
-
-
-def name_computer(device=None):
-    """Call the computer what its hotspot is called (`Harness-BD19`) instead of the installer's
-    `harness`: every Harness OS was `harness`, so two in one account, on one router or in one Swarm
-    could not be told apart. Once, and only over that name: one somebody chose stays."""
-    try:
-        if HOSTNAME.read_text().strip() != INSTALLED_NAME:
-            return
-    except OSError:
-        return
-    name = hotspot_name(device)
-    try:
-        renamed = subprocess.run(['hostnamectl', 'set-hostname', name], capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        log(f'could not name the computer {name}: {error}')
-        return
-    if renamed.returncode:
-        log(f'could not name the computer {name}: {renamed.stderr.strip()}')
-        return
-    try:
-        hosts = HOSTS.read_text()
-        HOSTS.write_text(re.sub(rf'^(127\.0\.1\.1\s+){INSTALLED_NAME}$', rf'\g<1>{name}', hosts, flags=re.M))
-    except OSError:
-        pass
-    log(f'named the computer {name}')
 
 
 def signed_in():
@@ -751,15 +721,9 @@ def set_up_as_unlocked():
 
 
 def watch():
-    started, waiting_since, named = time.monotonic(), None, False
+    started, waiting_since = time.monotonic(), None
     while True:
         now = time.monotonic()
-        if not named:
-            # By the Wi-Fi card, as the hotspot is: once it is there, or once it would have been.
-            device = wifi_device()
-            if device or now - started >= DEVICE_WAIT:
-                name_computer(device)
-                named = True
         forced = asked_now()
         wait = 0 if forced else hotspot_wait(now, started)
         if wait is None:
