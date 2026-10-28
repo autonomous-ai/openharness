@@ -126,7 +126,7 @@ describe('socket meter', () => {
       expect(await r.json()).toEqual({ path, method: 'GET' })
     }
     const posted = await fetch(`${meter.url}/api/machines/resolve-computer`, { method: 'POST', body: '{}' })
-    expect((await posted.json()).method).toBe('POST')
+    expect(((await posted.json()) as { method: string }).method).toBe('POST')
 
     expect(meter.sockets).toEqual([])
     expect(meter.refused).toMatchObject([{ endpoint: '/api/web-ws', status: 401 }])
@@ -148,6 +148,9 @@ describe('socket meter', () => {
         // A web tab, selected, open to the end.
         { endpoint: '/api/web-ws', client: 'web', version: null, openedAt: at, closedAt: null, closeCode: null, closeReason: '',
           selects: [{ machineId: KNOWN, at, outcome: 'accepted' }] },
+        // A second tab, selected, dropped after 30 s.
+        { endpoint: '/api/web-ws', client: 'web', version: '2.0.0', openedAt: at + 20_000, closedAt: at + 50_000, closeCode: 1006, closeReason: '',
+          selects: [{ machineId: KNOWN, at: at + 20_000, outcome: 'accepted' }] },
         // A daemon relay that never selected, 90 s.
         { endpoint: '/api/web-ws', client: null, version: null, openedAt: at, closedAt: at + 90_000, closeCode: 1000, closeReason: '', selects: [] },
         { endpoint: '/api/adapter-ws', client: null, version: '1.0.0', openedAt: at, closedAt: null, closeCode: null, closeReason: '', selects: [] },
@@ -158,18 +161,21 @@ describe('socket meter', () => {
     const report = meter.report({ now: at + 120_000, deletedMachineIds: [DELETED] })
     expect(report.durationMs).toBe(120_000)
     const web = report.endpoints['/api/web-ws']
-    expect(web.connects).toBe(4)
-    expect(web.connectsPerMinute).toBe(2)
+    expect(web.connects).toBe(5)
+    expect(web.connectsPerMinute).toBe(2.5)
     expect(web.refused).toBe(1)
-    // Lifetimes 1 s, 1 s, 90 s, 120 s (still open at the report): the median is between the middle two.
-    expect(web.medianLifetimeMs).toBe(45_500)
+    // Lifetimes 1 s, 1 s, 30 s, 90 s, 120 s (still open at the report).
+    expect(web.medianLifetimeMs).toBe(30_000)
     expect(web.livedUnder2s).toBe(2)
     expect(web.closedWithoutSelect).toBe(1)
-    // Attributed: a client kind and a version. Only the two relays.
-    expect(web.attributed).toBe(0.5)
-    expect(web.closeCodes).toEqual({ 1011: 2, 1000: 1 })
-    expect(web.selectOutcomes).toEqual({ NOT_YOUR_MACHINE: 2, accepted: 1 })
+    // Attributed: a client kind and a version. The two relays and the second tab.
+    expect(web.attributed).toBe(0.6)
+    expect(web.closeCodes).toEqual({ 1011: 2, 1000: 1, 1006: 1 })
+    expect(web.selectOutcomes).toEqual({ NOT_YOUR_MACHINE: 2, accepted: 2 })
     expect(web.deletedMachineSelects).toBe(2)
+    expect(web.selectsByMachine).toEqual({ [DELETED]: 2, [KNOWN]: 2 })
+    // Selected fine and closed within a minute: the second tab, not the first (still open at 120 s).
+    expect(web.acceptedThenDiedUnder1m).toBe(1)
     expect(report.endpoints['/api/adapter-ws'].connects).toBe(1)
   })
 })

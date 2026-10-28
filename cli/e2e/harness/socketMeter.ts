@@ -52,6 +52,9 @@ export interface EndpointReport {
   closeCodes: Record<string, number>
   selectOutcomes: Record<string, number>
   deletedMachineSelects: number
+  selectsByMachine: Record<string, number>
+  /** Sockets whose select was accepted and that closed within a minute: a healthy socket dropped. */
+  acceptedThenDiedUnder1m: number
 }
 
 export interface MeterReport {
@@ -213,7 +216,7 @@ export class SocketMeter {
   private readAnswer(data: RawData, pending: Map<string, SelectRecord>): void {
     const frame = parse(data)
     const machineId = frame?.payload?.machineId
-    if (typeof machineId !== 'string') return
+    if (!frame?.payload || typeof machineId !== 'string') return
     const select = pending.get(machineId)
     if (!select) return
     if (frame.type === 'connected') select.outcome = 'accepted'
@@ -233,9 +236,13 @@ export class SocketMeter {
       const lifetimes = sockets.map((s) => (s.closedAt ?? now) - s.openedAt)
       const closeCodes: Record<string, number> = {}
       const selectOutcomes: Record<string, number> = {}
+      const selectsByMachine: Record<string, number> = {}
       for (const s of sockets) {
         if (s.closeCode !== null) count(closeCodes, String(s.closeCode))
-        for (const select of s.selects) count(selectOutcomes, select.outcome ?? 'unanswered')
+        for (const select of s.selects) {
+          count(selectOutcomes, select.outcome ?? 'unanswered')
+          count(selectsByMachine, select.machineId)
+        }
       }
       endpoints[name] = {
         connects: sockets.length,
@@ -248,6 +255,9 @@ export class SocketMeter {
         closeCodes,
         selectOutcomes,
         deletedMachineSelects: sockets.reduce((n, s) => n + s.selects.filter((select) => deleted.has(select.machineId)).length, 0),
+        selectsByMachine,
+        acceptedThenDiedUnder1m: sockets.filter((s) => s.closedAt !== null && s.closedAt - s.openedAt < 60_000
+          && s.selects.some((select) => select.outcome === 'accepted')).length,
       }
     }
     return { durationMs, endpoints, http: { ...this.http } }
