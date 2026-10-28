@@ -218,6 +218,41 @@ describe('work that loses its owner', () => {
     expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
   })
 
+  // 2026-10-28: a resumed task keeps its id. When its session then stopped, the second loss wrote the first loss's notice
+  // ids again: the machine's report and the Lead's poll each failed on the duplicate from then on, so the machine looked
+  // offline and nothing reached the Lead.
+  it('is lost again after it resumed, and its machine\'s report and its Lead\'s poll still go through', async () => {
+    const f = await swarm()
+    const lostAt = f.clock.now
+    await f.execute({ type: 'agent.alert', agentId: f.worker, alert: 'limit', active: true, resetAt: new Date(f.clock.now + 30 * MINUTE).toISOString() }, host, f.worker)
+    f.clock.now += 30 * MINUTE
+    await f.execute({ type: 'work.resume', conversationId: f.group, assignmentId: f.assignmentId, lostAt }, host, f.worker)
+    await f.leadInbox()
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped', at: f.clock.now } })
+    expect((await f.lostRows()).filter(m => m.recipientIds.includes(f.lead))).toHaveLength(2)
+    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost').at(-1)!.text)
+      .toContain('lost its task "Ship the parser": its session on Worker Mac stopped.')
+  })
+
+  // The stuck Swarm of that day: its first loss's notices were written under the old ids, named by the task alone. Its next
+  // check writes the loss under new ids, and the Lead and the worker each receive their notice.
+  it('heals a resumed task whose first loss was written under the old notice ids', async () => {
+    const f = await swarm()
+    for (const id of [stableId('work-lost', f.assignmentId), stableId('work-lost', f.assignmentId, 'agent')]) {
+      await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: f.group, sequence: 1, author: { kind: 'agent', id: f.lead },
+        text: 'The first loss', replyTo: null, recipientIds: [], mentions: [] } })
+    }
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ id: f.assignmentId, status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} lost its task "Ship the parser": its session on Worker Mac stopped. `
+      + 'Last progress 1 minute ago. Last result: none. Assign it to another agent now, or cancel it.')
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: f.worker,
+      messageId: stableId('work-lost', f.assignmentId, String(f.clock.now), 'agent') } })).toBe(1)
+  })
+
   // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
   // rows do (cli superTabs/limitResume.ts reads them before typing).
   it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {

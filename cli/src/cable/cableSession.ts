@@ -2772,6 +2772,8 @@ export class CableSession {
     const lead = open.projectId ? card.leads.find((l) => l.projectId === open.projectId) : undefined
     if (open.projectId && !lead) { this.logFocus(`cable: swarm focus ${named} · held: no Lead for that project`); return }
     this.focusedKey = key
+    // A send is always logged: one again after the dial rebooted on an update read as "never sent" (Diego's dial, 2026-10-28).
+    this.focusLogged = ''
     this.logFocus(`cable: swarm focus ${named} → ${lead ? lead.id : 'its Leads'}`)
     await this.send({ t: 'supertab.focus', tab: open.superTabId, lead: lead?.id ?? '' })
   }

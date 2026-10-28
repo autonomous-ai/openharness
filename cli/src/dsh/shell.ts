@@ -70,6 +70,15 @@ export function dshShellArgv(script: string): { path: string; args: string[] } {
 }
 
 /**
+ * Whether this computer has a shell for a DSH's commands. Windows has none yet: interactiveEngineShell gives it no
+ * shell, and the `/bin/sh` fallback is not there, so every Store install on Windows failed in its setup or doctor
+ * (2026-10-28: 0 of 25 since 10-26). Running them under Git Bash there is its own change, which turns this on.
+ */
+export function dshShellAvailable(): boolean {
+  return process.platform !== 'win32'
+}
+
+/**
  * The line run before a DSH's command: when the login shell's PATH has no `node`, the Node this
  * daemon runs on joins the END of it. Since the product moved to a private runtime, a machine with no
  * node on PATH is the normal case (see nodeRuntime.ts), and a package whose setup says `npm ci` or
