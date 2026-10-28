@@ -225,6 +225,9 @@ export interface SuperTabStoreHooks {
   /** Who may watch an agent's terminal in this Swarm may have narrowed, after the commit: its observer sockets check again
    *  at once (lib/observerWs.ts). It must not throw. */
   accessChanged?: (tabId: string) => void
+  /** These native sessions just turned confidential, after the commit: their shares and links, which follow no Swarm of
+   *  theirs, check again at once (routes/harnessLinks.ts tellSessionViewers). It must not throw. */
+  sessionsConfidential?: (sessions: Array<{ machineId: string; harnessId: string; machineOwnerId: string }>) => void
   /** The read cache this store reads through (cache.ts): the process's by default, none when null. */
   readCache?: SwarmCache | null
   /** When each caller's full delivery poll last succeeded, shared by every server (Redis in production, pollMemory.ts). Left
@@ -991,8 +994,12 @@ export class SuperTabStore {
         await bindSession(tx, effects.state, target, context.now)
       }
       // A session that just became confidential writes the record its registrations write (confidential.ts).
-      for (const target of effects.state.agents) {
-        if (target.confidential && !original.agents.find(a => a.id === target.id)?.confidential) await recordConfidential(tx, effects.state, target, context.now)
+      const turned = effects.state.agents.filter(target => target.confidential && !original.agents.find(a => a.id === target.id)?.confidential)
+      for (const target of turned) await recordConfidential(tx, effects.state, target, context.now)
+      const tell = this.hooks.sessionsConfidential
+      if (tell && turned.length) {
+        const sessions = turned.map(({ machineId, harnessId, machineOwnerId }) => ({ machineId, harnessId, machineOwnerId }))
+        afterCommit(tx, () => tell(sessions))
       }
       if (command.type === 'project.sharing' && command.visibility === 'private') {
         await makeProjectPrivate(tx, effects.state, command.projectId)
