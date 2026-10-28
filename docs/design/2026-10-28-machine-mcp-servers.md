@@ -59,7 +59,10 @@ harness mcp-servers remove lamp
 
 ## Who may change it
 
-Only the person. An agent (`model.ts` `outsideCaller`: Claude Code, Codex, `AI_AGENT`) is refused with exit 5, with no
+Only the person. An entry's command runs at every matching launch with no prompt (`--mcp-config` servers start without
+Claude Code's project-server question), so `mcp-servers.json` is as trusted as the person's shell startup files. An agent (`model.ts` `outsideCaller`: Claude Code, Codex, `AI_AGENT`), or anyone in a pane a Harness daemon made
+(`paneOwner(TMUX_PANE)`, as `harness mcp` asks; a person's own terminal pane there is refused alike and told to run it
+outside Harness), is refused with exit 5, with no
 `--person-said-yes` way round, because an entry runs a command inside every later agent on the machine. Listing is open
 to anyone on the machine. The lamp holds its own limits: a Harness-started agent gets exactly the grants the lamp's
 owner gave that computer, a body lease the person always wins back, and the lamp's rates and quiet hours.
