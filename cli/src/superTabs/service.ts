@@ -360,7 +360,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat).
           const chat = payload.chat === true
@@ -374,6 +374,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
             return { ok: true, said: await cards().say(payload.harnessId, payload.text.trim(), chat) }
+          }
+          // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
+          if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
+            return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId, chat)
