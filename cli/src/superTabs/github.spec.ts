@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -29,12 +29,17 @@ const HOST = '/api/super-tabs/hosts/machine-1/changes'
 /** A core whose backend answers by path; one session per harness id, started to use the app unless `plain`. */
 function setup(routes: (method: string, path: string, body: unknown) => Reply, sessions: Array<{ id: string; plain?: boolean }> = [{ id: 'harness-1' }]) {
   const dataDir = join(root, `data-${made++}`)
-  const live = sessions.map(s => ({ agentId: s.id, swarmSkill: { role: 'dev', key: `harness-codex-${s.id}`, ...(s.plain ? {} : { github: true }) } }) as unknown as RegisteredSession)
+  const session = (s: { id: string; plain?: boolean }) =>
+    ({ agentId: s.id, swarmSkill: { role: 'dev', key: `harness-codex-${s.id}`, ...(s.plain ? {} : { github: true }) } }) as unknown as RegisteredSession
+  const live = sessions.map(session)
+  /** Sessions stopped but still on this machine, which may run again. */
+  const stopped: RegisteredSession[] = []
   const backend = vi.fn(async (method: string, path: string, body?: unknown) => routes(method, path, body))
-  const core = fakeCore({ dataDir, account: { backend }, agents: { live: vi.fn(() => live), byAgent: vi.fn((id: string) => live.find(s => s.agentId === id)) } })
+  const core = fakeCore({ dataDir, account: { backend }, agents: { live: vi.fn(() => live), all: vi.fn(() => [...live, ...stopped]),
+    byAgent: vi.fn((id: string) => live.find(s => s.agentId === id)) } })
   const hosts = (id = 'harness-1') => readFileSync(join(swarmGitHubSessionDir(dataDir, `harness-codex-${id}`)!, 'gh', 'hosts.yml'), 'utf8')
   const trailers = (id = 'harness-1') => readFileSync(join(swarmGitHubSessionDir(dataDir, `harness-codex-${id}`)!, 'trailers'), 'utf8')
-  return { core, backend, hosts, trailers, live, dataDir }
+  return { core, backend, hosts, trailers, live, stopped, session, dataDir }
 }
 
 describe('a local agent\'s GitHub token', () => {
@@ -130,26 +135,41 @@ describe('keeping gh\'s token fresh', () => {
   // Local Team account run, 2026-10-28: a task cancelled as its agent stopped left the last token in that session's gh login,
   // since the refresher looks only at running sessions.
   it('empties the gh login of a session that stopped, also one left from before the daemon started', async () => {
-    const { core, hosts, live, dataDir } = setup(method => method === 'GET'
+    const { core, hosts, live, stopped, dataDir } = setup(method => method === 'GET'
       ? ok(hostForm([row('tab-1', 'agent-1')], { assignments: [{ tabId: 'tab-1', assignmentId: 'attempt-1', harnessId: 'harness-1' }] }))
       : issued('ghs_fixtureToken0000007'))
     const refresher = new GitHubTokenRefresher(core, sourcesOf(core))
     await refresher.tick()
     expect(hosts()).toContain('ghs_fixtureToken0000007')
-    live.length = 0
+    stopped.push(...live.splice(0))
     await refresher.tick()
     expect(hosts()).toBe('{}\n')
-    // A session that stopped while no daemon ran: its folder is found on the next look.
-    writeSessionGitHub(swarmGitHubSessionDir(dataDir, 'harness-codex-old')!, 'ghs_fixtureToken0000008')
+    // A session that stopped while no daemon ran, and is gone from this machine since: its folder is removed.
+    const old = swarmGitHubSessionDir(dataDir, 'harness-codex-old')!
+    writeSessionGitHub(old, 'ghs_fixtureToken0000008')
     await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
-    expect(hosts('old')).toBe('{}\n')
+    expect(existsSync(old)).toBe(false)
+  })
+
+  // Security review of #1978, Minor: a pass read every stopped session's folder, so passes grew with every session ever run.
+  it('keeps the folder of a stopped session that may run again, emptied, and removes one whose session is gone', async () => {
+    const { core, live, stopped, session, dataDir } = setup(() => ok(hostForm([])))
+    const kept = swarmGitHubSessionDir(dataDir, 'harness-codex-harness-1')!, gone = swarmGitHubSessionDir(dataDir, 'harness-codex-old')!
+    writeSessionGitHub(kept, 'ghs_fixtureToken0000003', ['Harness-Agent: Atlas'])
+    writeSessionGitHub(gone, 'ghs_fixtureToken0000002')
+    live.length = 0
+    stopped.push(session({ id: 'harness-1' }))
+    await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
+    expect(readFileSync(join(kept, 'gh', 'hosts.yml'), 'utf8')).toBe('{}\n')
+    expect(readFileSync(join(kept, 'trailers'), 'utf8')).toBe('Harness-Agent: Atlas\n')
+    expect(existsSync(gone)).toBe(false)
   })
 
   // Security review of #1978: a token fetch still in flight as its session stopped wrote the token after the folder was
   // emptied, and the folder was not looked at again until the daemon restarted.
   it('empties a stopped session\'s gh login again when a late write puts a token back', async () => {
-    const { core, hosts, live, dataDir } = setup(() => ok(hostForm([])))
-    live.length = 0
+    const { core, hosts, live, stopped, dataDir } = setup(() => ok(hostForm([])))
+    stopped.push(...live.splice(0))
     const dir = swarmGitHubSessionDir(dataDir, 'harness-codex-harness-1')!
     writeSessionGitHub(dir, 'ghs_fixtureToken0000005')
     const refresher = new GitHubTokenRefresher(core, sourcesOf(core))

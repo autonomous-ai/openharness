@@ -6,7 +6,7 @@
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
  */
-import { readdirSync, readFileSync, type Dirent } from 'node:fs'
+import { readdirSync, readFileSync, rmSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
 import { swarmGitHubRoot, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
@@ -122,9 +122,11 @@ export class GitHubTokenRefresher {
    * that stopped while no daemon ran. Looked at on every pass, not once: a token fetch still in flight as its session stopped
    * writes the token after the folder was emptied (security review of #1978). One small read per stopped session's folder a
    * minute, while the refresher runs. Anything that is not a session's folder is skipped, and one that cannot be read or
-   * written is logged and passed over, so no folder stops the renewals below.
+   * written is logged and passed over, so no folder stops the renewals below. A folder whose session is gone from this
+   * machine is removed, so passes do not grow with every session ever run (security review of #1978); one whose session
+   * stopped but may run again ([known]) keeps its commit identity and trailers for then.
    */
-  private emptyStopped(running: ReadonlySet<string>): void {
+  private emptyStopped(running: ReadonlySet<string>, known: ReadonlySet<string>): void {
     const sessions = join(swarmGitHubRoot(this.core.dataDir), 'sessions')
     let entries: Dirent[]
     try { entries = readdirSync(sessions, { withFileTypes: true }) } catch { return }
@@ -133,6 +135,7 @@ export class GitHubTokenRefresher {
       const dir = swarmGitHubSessionDir(this.core.dataDir, entry.name)
       if (!dir || running.has(dir)) continue
       try {
+        if (!known.has(dir)) { rmSync(dir, { recursive: true, force: true }); continue }
         let hosts: string
         try { hosts = readFileSync(join(dir, 'gh', 'hosts.yml'), 'utf8') } catch { continue }
         if (hosts !== '{}\n') writeSessionGitHub(dir, null)
@@ -148,7 +151,8 @@ export class GitHubTokenRefresher {
       return dir ? [{ session, dir }] : []
     })
     for (const id of this.primed.keys()) if (!sessions.some(s => s.session.agentId === id)) this.primed.delete(id)
-    this.emptyStopped(new Set(sessions.map(s => s.dir)))
+    this.emptyStopped(new Set(sessions.map(s => s.dir)),
+      new Set(this.core.agents.all().flatMap(session => githubDir(this.core, session) ?? [])))
     if (!sessions.length) return
     const machineId = this.core.daemon.machineId()
     if (!identifier(machineId)) return
