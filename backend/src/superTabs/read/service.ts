@@ -40,7 +40,7 @@ export class SwarmReads {
   constructor(private readonly store: SuperTabStore, private readonly options: { now?: () => number; githubApp?: boolean } = {}) {
     this.db = store.db
     this.now = options.now ?? store.now
-    this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars) : null
+    this.avatarLinks = store.avatars ? new AvatarLinks(store.avatars, store.avatarPrefix) : null
   }
   private readonly avatarLinks: AvatarLinks | null
 

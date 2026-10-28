@@ -25,6 +25,8 @@ import { ensureTeamTmux, TMUX_MANIFEST_URL, tmuxRunsAt, untarGz, type TeamTmuxDe
 import { downloadVerified } from '../lib/selfUpdate.js'
 import { managedTmuxPath, tmuxInstallDirectories } from '../lib/tmuxOnPath.js'
 import { ensureTeamGh, ghRunsAt, unzipArchive, type TeamGhDeps, type TeamGhOutcome } from '../team/gh.js'
+import { managedNodePath } from '../lib/nodeRuntime.js'
+import { linkTeamNodeTools, type TeamNodeToolsDeps } from '../team/nodeTools.js'
 import { env as appEnv } from '../config/env.js'
 import { homedir, userInfo } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
@@ -209,6 +211,8 @@ export interface SuperTabServiceOptions {
   teamTmux?: () => Promise<TeamTmuxOutcome>
   /** What installs the Harness Team account's own gh (team/gh.ts), for a spec. */
   teamGh?: () => Promise<TeamGhOutcome>
+  /** What links the Harness Team account's npm and npx (team/nodeTools.ts), for a spec. */
+  teamNodeTools?: () => unknown
   /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
   teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
 }
@@ -275,6 +279,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     if (Date.now() - ghCheckedAt >= 30 * 60_000) {
       ghCheckedAt = Date.now()
       void ensureGh().then(outcome => { if (settled(outcome)) ghCheckedAt = Infinity })
+      ;(options.teamNodeTools ?? (() => linkTeamNodeTools(realTeamNodeToolsDeps())))()
     }
   }
   const disconnect = () => { preparations.clear(); host?.stop(); host = null; held = null; book?.stop(); book = null; bookMachine = null; swarmCards?.want(false); swarmCards = null; cardsMachine = null; tokens.stop(); engines.stop() }
@@ -551,6 +556,16 @@ function realTeamTmuxDeps(): TeamTmuxDeps {
     download: (build) => downloadVerified({ url: build.url, sha256: build.sha256, ...(build.size ? { size: build.size } : {}) }),
     untar: untarGz,
     runtimeDir: appEnv.ADAPTER_RUNTIME_DIR,
+    binDir: join(homedir(), '.local', 'bin'),
+    log: (line) => console.log(`[team] ${line}`),
+  }
+}
+
+/** The team daemon's own Node and bin folder (team/nodeTools.ts). */
+function realTeamNodeToolsDeps(): TeamNodeToolsDeps {
+  return {
+    team: () => { try { return readTeamConfig()?.user === userInfo().username } catch { return false } },
+    node: managedNodePath,
     binDir: join(homedir(), '.local', 'bin'),
     log: (line) => console.log(`[team] ${line}`),
   }

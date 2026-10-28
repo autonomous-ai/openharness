@@ -1,4 +1,4 @@
-import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import type { AuthUser } from '../lib/ssoAuth.js'
@@ -11,7 +11,7 @@ import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
 import { pageDeliveries, pageReactions } from './pageReads.js'
-import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl,
+import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
@@ -42,7 +42,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
-import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
+import { answerable, fullFor, listDecisions, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { authenticatedEmail, authorizeSwarmJoin, configureSharing, joinSwarmSchema, requireSharingOwner,
   saveSharingSchema, sharingDetails, type JoinSwarm, type SaveSharing } from './sharing.js'
@@ -265,8 +265,10 @@ const routeDecisionOf = (command: Command): string | undefined => command.type =
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
   readonly workspaces: SwarmWorkspaces
-  /** The private avatar bucket, whose links member reads sign (read/service.ts); null when avatar uploads are off. */
+  /** Where avatars are kept, whose links member reads carry (read/service.ts); null when avatar uploads are off. */
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
+  /** The folder avatar keys start with (attachments.ts `avatarPrefix`). */
+  get avatarPrefix(): string { return trimPrefix(this.attachments?.avatarPrefix ?? this.attachments?.prefix ?? '') }
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
     this.polls = hooks.polls ?? localPollMemory(now)
@@ -746,7 +748,7 @@ export class SuperTabStore {
       const stored = state.machines!.find(m => m.machineId === pool.machineId)!
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
-      const refusal = teamWorkRefusal(stored, now, teamMachines.includes(pool.machineId), teamAccountRequired(state), otherWorkspace.includes(pool.machineId))
+      const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
       return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
     }) } }
@@ -927,8 +929,10 @@ export class SuperTabStore {
       if (command.type === 'mention.done') context.mention = await readMention(tx, tabId, command.mentionId)
       if (command.type === 'decision.answer') context.decision = await readAskedDecision(tx, tabId, command.decisionId)
       if (command.type === 'work.status' && command.ask && command.result && actor.kind === 'agent') {
-        context.openDecisions = await fullFor(tx, tabId, { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId,
-          conversationId: command.conversationId, question: command.result })
+        const ask = { ...command.ask, askerAgentId: actor.agentId, assignmentId: command.assignmentId, conversationId: command.conversationId,
+          question: command.result }
+        context.repeatedDecision = await repeatOf(tx, tabId, ask) ?? null
+        context.openDecisions = context.repeatedDecision ? null : await fullFor(tx, tabId, ask)
       }
       if (command.type === 'message.send' && command.attachmentIds?.length) context.attachments = await this.sendable(tx, tabId, actor, command)
       if (command.type === 'message.react') context.reaction = await this.reactionTarget(tx, tabId, actor, command)
@@ -1264,7 +1268,7 @@ export class SuperTabStore {
   /** A picture for a person's or an agent's avatar (profile.ts): png, jpg or webp by its real bytes, at most 1 MB. Any
    *  member who may write uploads one; the command that sets it decides whose it becomes. */
   async uploadAvatar(user: AuthUser, tabId: string, file: { body: Readable }, asAgentId?: string) {
-    // Member-only: never the public attachments bucket. Until a private one is configured, uploads stay off (presets work).
+    // Off until a bucket for avatars is configured (attachmentsFromEnv); presets still work.
     const avatars = this.attachments?.avatars ?? fail('AVATARS_UNAVAILABLE', 'Uploading pictures is not set up on this server yet. Pick one of the pictures instead.', 503)
     const key = await this.uploader(tabId, async tx => {
       const { state } = await this.load(tx, user, tabId, {})
@@ -1272,12 +1276,12 @@ export class SuperTabStore {
       author(state, actor, true)
       return actor
     })
-    const row = await this.keep(avatars, this.attachments!.prefix, tabId, key, { name: 'avatar', conversationId: '', purpose: AVATAR_PURPOSE }, async () => {
+    const row = await this.keep(avatars, this.avatarPrefix, tabId, key, { name: 'avatar', conversationId: '', purpose: AVATAR_PURPOSE }, async () => {
       const peeked = await peekType(file.body)
       if (!peeked.type || !AVATAR_TYPES.has(peeked.type)) fail('AVATAR_TYPE', 'Use a PNG, JPEG or WebP picture.', 415)
       return { mime: peeked.type, body: peeked.body }
     }, file.body, MAX_AVATAR_BYTES)
-    // No link: a picture is only reached through the signed links member reads carry (avatarLinks.ts).
+    // No link: a picture is only reached through the links member reads carry (avatarLinks.ts).
     return { avatar: { id: row.id } }
   }
 

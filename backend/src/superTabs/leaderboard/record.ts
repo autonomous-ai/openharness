@@ -25,9 +25,10 @@ export interface GroupLedger {
   shippedAt?: number
   /** The earliest merge the Lead recorded (recordMerged); once there is one, it is the ship time. */
   mergedAt?: number
-  /** The item waiting on a person: the attempt, since when, the "Needs a human" row it posted, and once a person answered it,
-   *  when. An answered item no longer waits, though its worker has not moved on yet. */
-  waiting?: { assignmentId: string; since: number; messageId: string; answeredAt?: number }
+  /** The item waiting on a person: the attempt, since when, the "Needs a human" row it posted, the decision it asked with it
+   *  (the same one again when the worker repeats an open question), and once a person answered it, when. An answered item no
+   *  longer waits, though its worker has not moved on yet. A wait recorded before decisions were named has none. */
+  waiting?: { assignmentId: string; since: number; messageId: string; decisionId?: string; answeredAt?: number }
   /** Answers within the last LEDGER_WEEKS, oldest first. */
   unblocks?: Unblock[]
   /** The last MAX_RUNS attempts, oldest first. */
@@ -48,13 +49,14 @@ export function recordAsked(group: Conversation, requesterId: string | undefined
   group.ledger = { askedAt: now }
 }
 
-/** A status change opens, closes or ships: needs_human starts a wait (again, when the agent asks anew after an answer), any
- *  other status ends it, done ships once. */
-export function recordStatus(group: Conversation, assignment: Assignment, previous: WorkStatus, now: number, messageId: string | null): void {
+/** A status change opens, closes or ships: needs_human starts a wait (again, when the agent asks anew after an answer), naming
+ *  the decision it asked, any other status ends it, done ships once. */
+export function recordStatus(group: Conversation, assignment: Assignment, previous: WorkStatus, now: number, messageId: string | null,
+  decisionId?: string): void {
   const ledger = group.ledger ??= {}
   const open = ledger.waiting?.assignmentId === assignment.id && ledger.waiting.answeredAt == null
   if (assignment.status === 'needs_human' && messageId && (previous !== 'needs_human' || !open)) {
-    ledger.waiting = { assignmentId: assignment.id, since: now, messageId }
+    ledger.waiting = { assignmentId: assignment.id, since: now, messageId, ...decisionId ? { decisionId } : {} }
   } else if (assignment.status !== 'needs_human') delete ledger.waiting
   if (assignment.status === 'done') ledger.shippedAt ??= now
 }
@@ -102,12 +104,14 @@ export function approves(text: string): boolean {
 }
 
 /** The person asked answered a decision: credited from when it was asked. A decision a worker asked through needs_human is
- *  that wait's question, asked in the same command (same time): answering it answers the wait, and once the wait is answered,
- *  by a post or this decision, the other earns nothing more. */
+ *  that wait's question, named by the wait, also when the worker asked it again after moving on: answering it answers the
+ *  wait, and once the wait is answered, by a post or this decision, the other earns nothing more. A wait from before
+ *  decisions were named is matched by its time, as it was asked in the same command. */
 export function recordDecision(group: Conversation, decision: { id: string; personId: string; createdAt: number; assignmentId: string | null }, now: number): void {
   if (group.audience || isLeads(group)) return
   const waiting = group.ledger?.waiting
-  if (decision.assignmentId && waiting?.assignmentId === decision.assignmentId && waiting.since === decision.createdAt) {
+  if (waiting && (waiting.decisionId ? waiting.decisionId === decision.id
+    : !!decision.assignmentId && waiting.assignmentId === decision.assignmentId && waiting.since === decision.createdAt)) {
     if (waiting.answeredAt != null) return
     waiting.answeredAt = now
   }

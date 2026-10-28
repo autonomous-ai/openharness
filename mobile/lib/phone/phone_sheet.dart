@@ -88,6 +88,12 @@ class PhoneSheetSection {
   void expand() => _expanded = true;
 }
 
+/// A sheet's rows: its first card, then the cards after it ([showPhoneSheet]).
+typedef PhoneSheetRows = ({
+  List<PhoneSheetAction> actions,
+  List<PhoneSheetSection> sections,
+});
+
 /// The `⋯` menu on a phone page: a title line, then its actions in inset cards.
 ///
 /// The desktop reaches the same actions through a right-click menu, which a phone has no gesture
@@ -106,6 +112,11 @@ class PhoneSheetSection {
 /// [onShown] is handed the sheet's route as it is pushed, for a page that may have to take the
 /// sheet down itself: its rows are read once, as it opens, and something that ends under it — a
 /// Change agent — would otherwise leave it saying what is no longer true.
+///
+/// [rows], with [rebuildOn]: the rows read again each time [rebuildOn] changes, in place of
+/// [actions] and [sections] — for a sheet whose rows wait on an answer asked as it opens (a
+/// computer's Harness OS status, `machine_actions.dart`), which would otherwise only show the
+/// next time it is opened.
 Future<void> showPhoneSheet(
   BuildContext context, {
   required String title,
@@ -113,20 +124,32 @@ Future<void> showPhoneSheet(
   List<PhoneSheetSection> sections = const [],
   String? titleBranch,
   void Function(Route<void> route)? onShown,
+  Listenable? rebuildOn,
+  PhoneSheetRows Function()? rows,
 }) {
+  Widget menu(BuildContext sheetContext) {
+    final now = rows?.call() ?? (actions: actions, sections: sections);
+    return _TmuxMenu(
+      title: title,
+      branch: titleBranch,
+      actions: now.actions,
+      sections: now.sections,
+      onAction: (action) {
+        Navigator.of(sheetContext).pop();
+        action.onTap();
+      },
+    );
+  }
+
   final route = phoneSheetRoute<void>(
     context,
     builder: (sheetContext) => SafeArea(
-      child: _TmuxMenu(
-        title: title,
-        branch: titleBranch,
-        actions: actions,
-        sections: sections,
-        onAction: (action) {
-          Navigator.of(sheetContext).pop();
-          action.onTap();
-        },
-      ),
+      child: rebuildOn == null
+          ? menu(sheetContext)
+          : ListenableBuilder(
+              listenable: rebuildOn,
+              builder: (_, _) => menu(sheetContext),
+            ),
     ),
   );
   onShown?.call(route);
