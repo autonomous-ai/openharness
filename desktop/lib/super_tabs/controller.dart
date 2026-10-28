@@ -1795,7 +1795,13 @@ class SuperTabController extends ChangeNotifier {
       // Recorded only once the rows are refreshed: a read that fails leaves
       // the change for the next poll.
       final reactionSeq = older ? null : answer['reactionSeq'];
-      if (!_disposed &&
+      // More than a page arrived after the newest held (back from another
+      // conversation, or from sleep): the page after it would show messages
+      // from hours ago as the newest. The latest page replaces what is held.
+      final skipped = query.startsWith('?after=') && answer['next'] != null;
+      if (!_disposed && skipped) {
+        answer = await request('GET', _messagesPath(id));
+      } else if (!_disposed &&
           !older &&
           (!light || reacted) &&
           tail != null &&
@@ -1837,7 +1843,7 @@ class SuperTabController extends ChangeNotifier {
       }
       // The first read over a saved page replaces it: merged, the saved
       // page would leave a gap when more than a page arrived since.
-      final replacing = _showingSaved && !older;
+      final replacing = (_showingSaved || skipped) && !older;
       if (replacing) _rows.remove(id);
       _keepRows(id, answer['messages'] as List);
       final combined = {

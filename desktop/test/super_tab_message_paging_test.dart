@@ -80,7 +80,8 @@ void main() {
       ];
       final c = server.controller();
       await c.refresh();
-      for (final text in ['r1', 'r2', 'r3']) {
+      // One page of replies: more would make the poll read the latest page.
+      for (final text in ['r1', 'r2']) {
         server.append(text);
         server.messages.last['author'] = {
           'kind': 'agent',
@@ -113,6 +114,39 @@ void main() {
         'r1',
         'r2',
       ]);
+    },
+  );
+
+  test(
+    'returning after more than a page arrived shows the latest page at once',
+    () async {
+      final server = ConversationServer();
+      for (var i = 1; i <= 100; i++) {
+        server.append('lead $i');
+      }
+      server.append('result', conversationId: 'offline');
+      final c = server.controller();
+      await c.refresh();
+      expect(c.messages('lead').last.sequence, 100);
+      await c.select('offline');
+      await c.loadMessages('offline');
+      // Away from the conversation, 600 messages arrive.
+      for (var i = 102; i <= 701; i++) {
+        server.append('lead $i');
+      }
+      await c.refresh();
+
+      // The one read that opening the conversation starts.
+      await c.select('lead');
+      await pumpEventQueue();
+
+      final shown = c.messages('lead');
+      expect(shown.last.sequence, 701);
+      expect(shown, hasLength(100));
+      expect(c.hasOlder('lead'), isTrue);
+      // The view marks what it shows read: the newest message, nothing more.
+      c.markRead('lead', through: 701);
+      expect(c.unread(c.selected!), isFalse);
     },
   );
 
