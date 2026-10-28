@@ -128,7 +128,9 @@ class _ProjectGitHubAccessState extends State<ProjectGitHubAccess>
               const SizedBox(height: 4),
               Text(
                 'Checking…',
-                key: ValueKey('super-project-github-text-${widget.projectId}'),
+                key: ValueKey(
+                  'super-project-github-text-${widget.projectId}',
+                ),
                 style: DesktopChrome.text().copyWith(
                   color: DesktopChrome.muted,
                 ),
