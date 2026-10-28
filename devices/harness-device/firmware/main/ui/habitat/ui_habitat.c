@@ -590,6 +590,7 @@ static int workspace_index(const char *id)
  */
 enum { SUPERTAB_RECAP_GET, SUPERTAB_OPEN, SUPERTAB_SELECT };
 #define SWARM_WAITS 16
+#define SWARM_SAID 24   // one per inbox entry the Lead messages can fill (NOTICES)
 static EXT_RAM_BSS_ATTR ht_supertabs_t swarm;
 static EXT_RAM_BSS_ATTR struct {
     char tab[ID_MAX], lead[ID_MAX];   // the Swarm the dial is in ("" in a desk tab) and the Lead on its face
@@ -601,7 +602,7 @@ static EXT_RAM_BSS_ATTR struct {
     // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
     struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
     // The chat each Lead's message entry (`swarm` 3) came from, so `supertab.notice.read` removes only that one.
-    struct { char lead[ID_MAX], chat[ID_MAX]; } said[NOTICES];
+    struct { char lead[ID_MAX], chat[ID_MAX]; } said[SWARM_SAID];
 } sw;
 static bool swarm_mode(void)
 {
@@ -5038,9 +5039,10 @@ void ui_supertab_focus(const char *tab, const char *lead)
  * and the Swarm's name (with " · PM" for Chat with PM) as its grey line. Each notice counts as unread again; it is read at
  * once only when that Lead's face shows that very chat. True when the caller should beep (the coalescing is the audio's).
  */
+_Static_assert(SWARM_SAID == NOTICES, "a chat for every inbox entry a Lead's message can take");
 static int swarm_said_of(const char *lead)
 {
-    for (int i = 0; lead && i < NOTICES; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
+    for (int i = 0; lead && i < SWARM_SAID; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
     return -1;
 }
 bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at)
@@ -5058,7 +5060,7 @@ bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, 
     notice_add(l->id, l->project[0] ? l->project : "Untitled", grey, text, false, false);
     swarm_notice_mark(l->id, 3);
     int slot = swarm_said_of(l->id);
-    for (int k = 0; k < NOTICES && slot < 0; k++) if (!sw.said[k].lead[0] || swarm_notice(sw.said[k].lead) < 0) slot = k;
+    for (int k = 0; k < SWARM_SAID && slot < 0; k++) if (!sw.said[k].lead[0] || swarm_notice(sw.said[k].lead) < 0) slot = k;
     if (slot < 0) slot = 0;
     COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
     s.notice_sequence++;
