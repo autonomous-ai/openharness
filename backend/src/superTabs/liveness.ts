@@ -31,7 +31,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 const machineName = (state: SuperTabState, machineId: string) => state.machines?.find(m => m.machineId === machineId)?.name ?? 'its machine'
 /** A sweep runs inside a machine's report and the Lead's poll, so it never fails on an agent whose membership changed:
  *  it writes as that agent without checking it, and a delivery to an agent no longer shared is not created. */
-const writtenBy = (state: SuperTabState, writer: Agent): Author => ({ kind: 'agent', id: writer.id, name: writer.name,
+export const writtenBy = (state: SuperTabState, writer: Agent): Author => ({ kind: 'agent', id: writer.id, name: writer.name,
   displayName: agentDisplayName(state.agents, writer.id), membershipGeneration: writer.membershipGeneration })
 const reachable = (state: SuperTabState, row: MessageDraft): MessageDraft => ({ ...row, recipients: row.recipients.filter(id => {
   const target = state.agents.find(a => a.id === id)

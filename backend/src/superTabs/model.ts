@@ -210,6 +210,10 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
+  /** The person the work needs for judgement, taste, knowledge or hands, named by its Lead (collaboration protocol). */
+  partnerId?: string
+  /** The people with an open decision or hands-on request here, oldest first (decisions.ts noteAsked): whom to alert. */
+  askedPersonIds?: string[]
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -328,6 +332,7 @@ export interface CommandEffects {
   /** Decisions asked, and a decision answered, written outside the tab state by the store (decisions.ts). */
   decisions?: import('./decisions.js').DecisionDraft[]
   decisionAnswer?: import('./decisions.js').DecisionAnswer
+  handsOnAnswer?: import('./decisions.js').HandsOnAnswer
 }
 export class SuperTabError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) {

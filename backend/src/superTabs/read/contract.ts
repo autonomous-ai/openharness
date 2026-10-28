@@ -68,6 +68,10 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: hands-on requests asked of them, still open (collaboration protocol). */
+  handsOnWaiting?: number
+  /** A person only: when the latest of their open requests was reminded, in ms; absent when none was. */
+  requestRemindedAt?: number
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null

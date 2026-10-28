@@ -850,8 +850,8 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
   })
 })
 
-// Lead mentions (spec 2026-10-24-lead-mentions): a post names people by id or email; the backend gets their person ids,
-// and only a Lead's help offers it.
+// Mentions (spec 2026-10-24-lead-mentions, widened by the collaboration protocol): a post names people by id or email;
+// the backend gets their person ids, and every agent's help offers it.
 describe('mentions on a post', () => {
   const people = [{ id: 'person-ken', email: 'Ken@Example.com', role: 'owner' }, { id: 'person-dee', email: 'dee@example.com', role: 'collaborator' }]
   const swarm = (t: ReturnType<typeof setup>, leadId: string | null) => {
@@ -891,16 +891,30 @@ describe('mentions on a post', () => {
 
   const help = async (t: ReturnType<typeof setup>, payload: Record<string, unknown>) => object(object(await t.ask({ action: 'help', ...payload }, owner)).help)
   const mention = '[--mention PERSON]...'
-  it('offers --mention in help to a project\'s Lead only', async () => {
+  it('offers --mention in help to every agent: anyone who posts may mention a reader (collaboration protocol)', async () => {
     const t = setup()
     swarm(t, t.agentId)
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
     expect(lead.post).toContain(`post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... ${mention}:`)
-    expect(lead.post).toContain('--mention tags a person, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
-    expect(await help(t, { tabId: 'tab', harnessId: 'native' })).toEqual(lead)
-    // A former Lead still named on an older work group is not one, as in status.
+    expect(lead.post).toContain('--mention tags a person who can read the conversation, by the id or email shown in status (up to 5), when you need them to act or decide; it shows in their notifications.')
     swarm(t, 'new-lead')
-    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
+    expect((await help(t, { tabId: 'tab', agentId: t.agentId })).post).toBe(lead.post)
+    expect((await help(t, {})).post).toBe(lead.post)
+  })
+
+  it('tells every agent how to ask a person for hands-on help and read the answer, and only a Lead how to name a partner', async () => {
+    const t = setup()
+    swarm(t, t.agentId)
+    const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
+    const plain = await help(t, {})
+    for (const each of [lead, plain]) {
+      expect(each.decisions).toContain('decisions [--answered] [--hands-on]')
+      expect(each.decisions).toContain('--hands-on: the hands-on requests you asked')
+      expect(each.commands).toContainEqual({ type: 'handsOn.ask', conversationId: 'GROUP', personId: 'PERSON', request: 'What you need the person to do, in one line',
+        steps: ['One physical step', 'The next step'], next: 'What you do once it is done' })
+    }
+    expect(lead.commands).toContainEqual({ type: 'conversation.partner', conversationId: 'GROUP', personId: 'PERSON' })
+    expect(plain.commands).not.toContainEqual(expect.objectContaining({ type: 'conversation.partner' }))
   })
   it('offers plan in help to a project\'s Lead only', async () => {
     const t = setup()
@@ -916,25 +930,12 @@ describe('mentions on a post', () => {
     const lead = await help(t, { tabId: 'tab', agentId: t.agentId })
     const plain = await help(t, {})
     for (const each of [lead, plain]) {
-      expect(each.decisions).toContain('decisions [--answered]: the decisions you asked of people')
+      expect(each.decisions).toContain('decisions [--answered] [--hands-on]: the decisions you asked of people')
       expect(each.decisions).toContain('A decision is not a private channel')
       expect(each.commands).toContainEqual(expect.objectContaining({ type: 'work.status', status: 'needs_human',
         ask: { personId: 'PERSON', options: ['Option A', 'Option B'], recommended: 0, unblocks: 'What the answer unblocks' } }))
     }
     expect(lead.commands).toContainEqual(expect.objectContaining({ type: 'decision.ask', conversationId: 'GROUP', personId: 'PERSON' }))
     expect(plain.commands).not.toContainEqual(expect.objectContaining({ type: 'decision.ask' }))
-  })
-
-  it('answers help without --mention outside a tab, or when the caller cannot be read', async () => {
-    const t = setup()
-    swarm(t, t.agentId)
-    const plain = await help(t, {})
-    expect(String(plain.post)).not.toContain('--mention')
-    expect(plain.leadOptions).toBe('Leads: run help with --tab ID for options only a Lead has.')
-    expect(String((await help(t, { tabId: 'tab' })).post)).not.toContain('--mention')
-    t.call.mockRejectedValue(new Error('Offline'))
-    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
-    t.call.mockResolvedValue({ status: 200, body: { success: true, data: hostForm([], { tabs: ['tab'] }) } })
-    expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
   })
 })

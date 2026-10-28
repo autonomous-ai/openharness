@@ -34,6 +34,8 @@ export interface SwarmProject {
   skillSet?: SkillSet
   /** The project's custom set, kept when the project switches away from it. */
   roles?: ProjectRole[]
+  /** What each person covers here (devices, mobile, product...), by person id; set by that person or the project owner. */
+  areas?: Record<string, string[]>
 }
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'

@@ -15,7 +15,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
-import { decisionsWaiting } from '../src/superTabs/decisions.js'
+import { requestsWaiting } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -773,12 +773,16 @@ describe('decisions asked of one person (v2)', () => {
     const waiting = await counted.$transaction(async tx => {
       const state = parts.reassemble(await parts.loadActive(tx, s.tabId))
       whole.length = 0
-      return decisionsWaiting(tx, s.tabId, state, { kind: 'person', userId: peer.sub, email: peer.email })
+      return requestsWaiting(tx, s.tabId, state, { kind: 'person', userId: peer.sub, email: peer.email })
     })
-    expect(waiting.count).toBe(150)
+    expect(waiting.decisionsWaiting).toBe(150)
     // Neither what they ask nor a cap; and each quiet conversation's access fields, not its whole record.
-    expect(reads).toEqual([expect.objectContaining({ select: { id: true, conversationId: true } })])
-    expect(reads[0]).not.toHaveProperty('take')
+    // The badge counts each kind apart (#1769), so it lists ids more than once; each list is ids alone, uncapped.
+    expect(reads.length).toBeGreaterThan(0)
+    for (const read of reads) {
+      expect(Object.keys((read as { select: object }).select).every(field => field === 'id' || field === 'conversationId')).toBe(true)
+      expect(read).not.toHaveProperty('take')
+    }
     expect(whole).toEqual([])
     expect(quiet.map(row => row.key).sort()).toEqual([s.web, s.privateId].sort())
     for (const row of quiet) expect(['id', 'kind', 'projectId', 'audience']).toEqual(expect.arrayContaining(Object.keys(row.data)))
@@ -846,6 +850,279 @@ describe('decisions asked of one person (v2)', () => {
     const first = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data
     clock = Date.now()
     expect((await get(`/api/super-tabs/${s.tabId}/changes?cursor=${first.cursor}`, peer)).body.data.derived.decisionsWaiting).toBe(1)
+  })
+})
+
+describe('hands-on requests (collaboration protocol)', () => {
+  const post = async (tabId: string, command: Record<string, unknown>, as: AuthUser = owner, asAgentId?: string, operationId = randomUUID()) => {
+    const response = await app.inject({ method: 'POST', url: `/api/super-tabs/${tabId}/commands`, headers: { authorization: `Bearer ${as.sub}` },
+      payload: { operationId, command, ...(asAgentId ? { asAgentId } : {}) } })
+    return { status: response.statusCode, body: response.json() as { data: { result: Record<string, unknown> }; error?: { code: string } } }
+  }
+  const list = async (tabId: string, as: AuthUser, state = 'open', agent?: string, kind = 'handsOn') =>
+    (await get(`/api/super-tabs/${tabId}/decisions?state=${state}&kind=${kind}${agent ? `&asAgentId=${agent}` : ''}`, as)).body.data
+  const plugIn = { request: 'Plug in the voice device', steps: ['Plug it into the Mac Studio', 'Press its button'], next: 'I run the voice test' }
+
+  it('runs from the worker’s ask to the person’s answer: listed apart from decisions, counted on the badge, answered once', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = await post(s.tabId, { type: 'handsOn.ask', conversationId: s.web, personId: peer.sub, ...plugIn }, owner, s.worker)
+    expect(asked.status, JSON.stringify(asked.body)).toBe(200)
+    const id = asked.body.data.result.requestId as string
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    expect((await list(s.tabId, peer)).handsOn).toEqual([expect.objectContaining({ id, kind: 'handsOn', request: plugIn.request, steps: plugIn.steps,
+      next: plugIn.next, askerAgentId: s.worker, assignmentId, conversationTitle: 'Web', answer: null, remindedAt: null })])
+    // Not a decision: an older Desktop's list and count stay decisions only.
+    expect((await get(`/api/super-tabs/${s.tabId}/decisions?state=open`, peer)).body.data.decisions).toEqual([])
+    const derived = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived
+    expect([derived.decisionsWaiting, derived.handsOnWaiting]).toEqual([0, 1])
+    expect(derived).not.toHaveProperty('requestRemindedAt')
+    // Nobody else sees it but the asker and the Lead.
+    expect((await list(s.tabId, owner)).handsOn).toEqual([])
+    expect((await list(s.tabId, outsider)).handsOn).toEqual([])
+    expect((await list(s.tabId, owner, 'open', s.lead)).handsOn).toHaveLength(1)
+    // A decision answer cannot take it.
+    expect((await post(s.tabId, { type: 'decision.answer', decisionId: id, choice: 0 }, peer)).status).toBe(404)
+    const answered = await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'cant', until: '2026-10-27T14:00:00.000Z', note: 'In a meeting' }, peer)
+    expect(answered.status, JSON.stringify(answered.body)).toBe(200)
+    expect((await list(s.tabId, owner, 'answered', s.worker)).handsOn).toEqual([expect.objectContaining({ id, answer: 'cant', note: 'In a meeting',
+      until: '2026-10-27T14:00:00.000Z' })])
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived.handsOnWaiting).toBe(0)
+    const notice = await db.superTabMessage.findUnique({ where: { id: answered.body.data.result.messageId as string } })
+    expect(notice).toMatchObject({ conversationId: s.web, recipientIds: [s.worker, s.lead], source: { kind: 'agent-only', handsOnId: id } })
+    expect(notice!.text).not.toContain('meeting')
+    expect((await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'done' }, peer)).body.error?.code).toBe('DECISION_ANSWERED')
+    expect((await post(s.tabId, { type: 'handsOn.answer', requestId: id, answer: 'done' }, owner)).status).toBe(404)
+  })
+
+  it('records on the group who it waits on while their request is open, for a phone or Desktop to alert only them', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const asked = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.askedPersonIds
+    expect(await asked()).toBeUndefined()
+    const assignmentId = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.assignment.id
+    await post(s.tabId, { type: 'work.status', conversationId: s.web, assignmentId, status: 'needs_human', result: 'Ship how?',
+      ask: { personId: peer.sub, options: ['A', 'B'], recommended: 0, unblocks: 'The release' } }, owner, s.worker)
+    const hands = (await post(s.tabId, { type: 'handsOn.ask', conversationId: s.web, personId: owner.sub, ...plugIn }, owner, s.lead)).body.data.result.requestId as string
+    expect(await asked()).toEqual([peer.sub, owner.sub])
+    await post(s.tabId, { type: 'handsOn.answer', requestId: hands, answer: 'done' }, owner)
+    expect(await asked()).toEqual([peer.sub])
+    const [decision] = (await list(s.tabId, peer, 'open', undefined, 'decision')).decisions
+    await post(s.tabId, { type: 'decision.answer', decisionId: decision.id, choice: 0 }, peer)
+    expect(await asked()).toBeUndefined()
+  })
+
+  /** Open requests written straight to the store, oldest first, as a busy Swarm would have them. */
+  const openRows = (s: Awaited<ReturnType<typeof scene>>, personId: string, count: number, from: number, kind?: 'handsOn') =>
+    db.superTabDecision.createMany({ data: Array.from({ length: count }, (_, i) => ({ id: `${kind ?? 'decision'}-${personId}-${from + i}-${randomUUID()}`,
+      tabId: s.tabId, batchId: 'batch', projectId: 'lead', conversationId: s.web, assignmentId: null, personId, askerAgentId: s.lead,
+      question: `Request ${i}`, options: kind ? [] : ['A', 'B'], recommended: 0, unblocks: 'Next', createdAt: new Date(from + i),
+      ...kind ? { kind, steps: ['Plug it in'] } : {} })) })
+
+  it('counts each kind on the badge however many of the other kind are newer (review of #1769)', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const base = Date.now() - 60 * 60_000
+    await openRows(s, peer.sub, 1, base)
+    await db.superTabDecision.updateMany({ where: { tabId: s.tabId, kind: { isSet: false } }, data: { remindedAt: new Date(base + 5) } })
+    await openRows(s, peer.sub, 201, base + 10, 'handsOn')
+    const derived = (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived
+    expect([derived.decisionsWaiting, derived.handsOnWaiting, derived.requestRemindedAt]).toEqual([1, 201, base + 5])
+  })
+
+  it('keeps everyone the group waits on, past 500 older requests from one person (review of #1769)', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const base = Date.now() - 60 * 60_000
+    await openRows(s, owner.sub, 501, base, 'handsOn')
+    await openRows(s, peer.sub, 1, base + 1000, 'handsOn')
+    const [first] = (await list(s.tabId, owner)).handsOn.slice(-1)
+    expect((await post(s.tabId, { type: 'handsOn.answer', requestId: first.id, answer: 'done' }, owner)).status).toBe(200)
+    const asked = (await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.groups.find((g: { key: string }) => g.key === s.web).data.askedPersonIds
+    expect(asked).toEqual([owner.sub, peer.sub])
+  })
+
+  it('asks once however often the same request is repeated, and refuses a person who cannot read the conversation', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const ask = async (conversationId = s.web) => post(s.tabId, { type: 'handsOn.ask', conversationId, personId: peer.sub, ...plugIn }, owner, s.lead)
+    const first = (await ask()).body.data.result.requestId
+    expect((await ask()).body.data.result.requestId).toBe(first)
+    expect((await list(s.tabId, peer)).handsOn).toHaveLength(1)
+    const refused = await post(s.tabId, { type: 'handsOn.ask', conversationId: s.secretGroup, personId: peer.sub, ...plugIn }, owner, s.lead)
+    expect([400, 403, 404]).toContain(refused.status)
+  })
+
+  // The decisions digest (#1820) names decisions only: a hands-on request moves its own count, never the decisions list.
+  it('leaves the decisions digest alone when a hands-on request is asked', async () => {
+    const s = await scene()
+    clock = Date.now()
+    const derived = async () => (await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived
+    const before = await derived()
+    expect((await post(s.tabId, { type: 'handsOn.ask', conversationId: s.web, personId: peer.sub, ...plugIn }, owner, s.lead)).status).toBe(200)
+    const after = await derived()
+    expect([after.decisionsWaiting, after.handsOnWaiting]).toEqual([0, 1])
+    expect(after.decisionsDigest).toBe(before.decisionsDigest)
+  })
+})
+
+describe('escalation and the device hook (collaboration protocol)', () => {
+  const MINUTE = 60_000
+  /** A store on its own clock, with a device hook that records what it hears. */
+  const timed = () => {
+    let now = Date.now()
+    const heard: unknown[] = []
+    const hooks = { personNeeded: (signal: unknown) => { heard.push(signal) } }
+    const store = new SuperTabStore(db, () => now, null, hooks)
+    // Another server on the same database and clock: it sweeps on its own schedule.
+    const other = new SuperTabStore(db, () => now, null, hooks)
+    return { store, other, heard, later: (ms: number) => { now += ms }, get now() { return now } }
+  }
+  const plugIn = { request: 'Plug in the voice device', steps: ['Plug it into the Mac Studio'], next: 'I run the voice test' }
+  const ask = (t: ReturnType<typeof timed>, s: Awaited<ReturnType<typeof scene>>, as = s.worker) =>
+    t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'handsOn.ask', conversationId: s.web, personId: peer.sub, ...plugIn } }, as)
+  /** The scene's worker keeps its task for these hours: the fixture's assignment ids repeat across Swarms, so its lost-task
+   *  notice, whose id the assignment names, would collide with another test's. */
+  const keepWorker = (s: Awaited<ReturnType<typeof scene>>) =>
+    writeGroup(s.tabId, s.web, Date.now(), group => { group.assignment = { ...group.assignment!, leaseUntil: Date.now() + 10 * 60 * MINUTE } })
+  const escalations = async (tabId: string) => (await db.superTabMessage.findMany({ where: { tabId }, orderBy: { sequence: 'asc' } }))
+    .filter(m => (m.source as { escalated?: string } | null)?.escalated)
+
+  it('tells the device when a hands-on request is asked, with only the request, the person and the kind, and not again for a repeat', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const id = (await ask(t, s)).result.requestId as string
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: id, kind: 'handsOn', reason: 'asked' }])
+    await ask(t, s)
+    expect(t.heard).toHaveLength(1)
+  })
+
+  it('reminds the person once after 30 minutes and tells the Lead once after 2 hours, however many sweeps run', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const id = (await ask(t, s)).result.requestId as string
+    t.heard.length = 0
+    t.later(29 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([])
+    t.later(2 * MINUTE)
+    await Promise.all([t.store.deliveries(owner, s.tabId, s.lead), t.other.deliveries(owner, s.tabId, s.lead)])
+    await new SuperTabStore(db, () => t.now, null, { personNeeded: signal => { t.heard.push(signal) } }).deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: id, kind: 'handsOn', reason: 'reminder' }])
+    const row = await db.superTabDecision.findUnique({ where: { id } })
+    expect(row!.remindedAt!.getTime()).toBe(t.now)
+    // The person's own read moves with it, though no count changed; nobody else's does.
+    clock = Date.now()
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, peer)).body.data.derived).toMatchObject({ handsOnWaiting: 1, requestRemindedAt: t.now })
+    expect((await get(`/api/super-tabs/${s.tabId}/parts`, owner)).body.data.derived).not.toHaveProperty('requestRemindedAt')
+    expect(await escalations(s.tabId)).toEqual([])
+    t.later(90 * MINUTE)
+    await Promise.all([t.store.deliveries(owner, s.tabId, s.lead), t.other.deliveries(owner, s.tabId, s.lead)])
+    t.later(MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    const told = await escalations(s.tabId)
+    expect(told).toEqual([expect.objectContaining({ conversationId: s.web, recipientIds: [s.lead],
+      source: { kind: 'agent-only', escalated: id } })])
+    expect(told[0]!.text).toBe('A hands-on request asked here 2 hours ago is still unanswered. Ask someone else, or go on with your recommendation. '
+      + 'Read it with: harness super-tab decisions --hands-on')
+    expect(told[0]!.text).not.toContain('voice')
+    expect(t.heard).toHaveLength(1)
+  })
+
+  it('leaves an answered request alone, and escalates decisions the same way', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const id = (await ask(t, s)).result.requestId as string
+    await t.store.execute(peer, s.tabId, { operationId: randomUUID(), command: { type: 'handsOn.answer', requestId: id, answer: 'done' } })
+    const decision = ((await t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'decision.ask', conversationId: s.web,
+      personId: peer.sub, questions: [{ question: 'Ship how?', options: ['A', 'B'], recommended: 0, unblocks: 'The release' }] } }, s.lead))
+      .result.decisionIds as string[])[0]!
+    t.heard.length = 0
+    t.later(121 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: decision, kind: 'decision', reason: 'reminder' }])
+    expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([decision])
+    expect((await db.superTabDecision.findUnique({ where: { id } }))!.remindedAt).toBeNull()
+  })
+
+  it('tells the device about a person mention, and the Lead in its own conversation when it is not in the request’s', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const sent = await t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'message.send', conversationId: s.web,
+      text: 'Can you check the copy?', replyTo: null, recipientIds: [], mentions: [peer.sub] } })
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: expect.any(String), kind: 'mention', reason: 'asked' }])
+    expect(JSON.stringify(t.heard)).not.toContain('copy')
+    expect(sent.result.messageId).toEqual(expect.any(String))
+    await writeGroup(s.tabId, s.done, Date.now(), group => { group.agentIds = group.agentIds.filter(id => id !== s.lead) })
+    const asked = await t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'handsOn.ask', conversationId: s.done,
+      personId: peer.sub, ...plugIn } }, s.lead)
+    t.later(121 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    const told = (await escalations(s.tabId)).filter(m => (m.source as { escalated: string }).escalated === asked.result.requestId)
+    expect(told).toEqual([expect.objectContaining({ conversationId: 'lead', recipientIds: [s.lead] })])
+    expect(told[0]!.text).toContain('asked in “Done work” 2 hours ago')
+  })
+
+  it('does not remind a person who can no longer read the conversation, and still tells the Lead', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const asked = await t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'handsOn.ask', conversationId: s.privateId,
+      personId: peer.sub, ...plugIn } }, s.lead)
+    await writeGroup(s.tabId, s.privateId, Date.now(), group => { group.audience = { people: [] } })
+    t.heard.length = 0
+    t.later(121 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([])
+    expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([asked.result.requestId])
+  })
+
+  it('sweeps on the Lead’s poll even when a worker polls just before it each time (review of #1769)', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const id = (await ask(t, s)).result.requestId as string
+    t.heard.length = 0
+    t.later(31 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.worker)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: id, kind: 'handsOn', reason: 'reminder' }])
+    t.later(90 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.worker)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([id])
+  })
+
+  it('reminds nobody and tells the Lead nothing while the Swarm is paused, and does both once it resumes', async () => {
+    const s = await scene(), t = timed()
+    await keepWorker(s)
+    const id = (await ask(t, s)).result.requestId as string
+    const pause = (paused: boolean) => t.store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'tab.pause', paused } })
+    await pause(true)
+    t.heard.length = 0
+    t.later(121 * MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([])
+    expect(await escalations(s.tabId)).toEqual([])
+    expect(await db.superTabDecision.findUnique({ where: { id }, select: { remindedAt: true, escalatedAt: true } }))
+      .toEqual({ remindedAt: null, escalatedAt: null })
+    await pause(false)
+    t.later(MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    t.later(MINUTE)
+    await t.store.deliveries(owner, s.tabId, s.lead)
+    expect(t.heard).toEqual([{ tabId: s.tabId, personId: peer.sub, requestId: id, kind: 'handsOn', reason: 'reminder' }])
+    expect((await escalations(s.tabId)).map(m => (m.source as { escalated: string }).escalated)).toEqual([id])
+  })
+
+  it('never fails a write or a sweep on a failing device hook', async () => {
+    const s = await scene()
+    await keepWorker(s)
+    let now = Date.now()
+    const store = new SuperTabStore(db, () => now, null, { personNeeded: () => { throw new Error('Device offline') } })
+    const asked = await store.execute(owner, s.tabId, { operationId: randomUUID(), command: { type: 'handsOn.ask', conversationId: s.web, personId: peer.sub, ...plugIn } }, s.worker)
+    expect(asked.result.requestId).toEqual(expect.any(String))
+    now += 31 * MINUTE
+    await store.deliveries(owner, s.tabId, s.lead)
+    expect((await db.superTabDecision.findUnique({ where: { id: asked.result.requestId as string } }))!.remindedAt).not.toBeNull()
   })
 })
 

@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { ANSWERED_NOTICE, answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { ANSWERED_NOTICE, answerDecision, answerHandsOn, askDecisions, askHandsOn, checkAsker, checkHandsOnAsker, decisionChoices, decisionQuestion, HANDS_ON_NOTICE, handsOnRequest, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
@@ -23,7 +23,7 @@ import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadGroup, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -92,6 +92,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.rename'), projectId: id, name: title }).strict(),
   z.object({ type: z.literal('project.delete'), projectId: id }).strict(),
   z.object({ type: z.literal('project.sharing'), projectId: id, visibility: z.enum(['public', 'private']), memberIds: z.array(id).max(200) }).strict(),
+  // What a person covers in a project (devices, mobile, product...), so a Lead picks a group's partner from it.
+  z.object({ type: z.literal('project.areas'), projectId: id, personId: id, areas: z.array(z.string().trim().min(1).max(40)).max(10) }).strict(),
   z.object({ type: z.literal('project.cadence'), projectId: id, minutes: z.union([z.literal(1), z.literal(5), z.literal(15), z.literal(30)]) }).strict(),
   // A local time of day ("08:00") in an IANA zone; null turns the digest off.
   z.object({ type: z.literal('project.digest'), projectId: id, time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).nullable(), timeZone: z.string().min(1).max(64) }).strict(),
@@ -118,6 +120,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
     mergedAt: z.iso.datetime().optional() }).strict(),
+  // The person the work needs for judgement, taste, knowledge or hands (collaboration protocol); null clears it.
+  z.object({ type: z.literal('conversation.partner'), conversationId: id, personId: id.nullable() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -148,6 +152,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
+  z.object({ type: z.literal('handsOn.ask'), conversationId: id, personId: id }).merge(handsOnRequest).strict(),
+  z.object({ type: z.literal('handsOn.answer'), requestId: id, answer: z.enum(['done', 'cant', 'note']), note: z.string().trim().min(1).max(2000).optional(),
+    until: z.string().datetime().optional() }).strict(),
   z.object({ type: z.literal('decision.answer'), decisionId: id, choice: z.number().int().min(0), note: z.string().trim().min(1).max(2000).optional() }).strict(),
   z.object({ type: z.literal('delivery.resolve'), deliveryId: id, resolution: z.enum(['received', 'resend', 'cancel']) }).strict(),
   z.object({ type: z.literal('work.define'), conversationId: id, brief: text.optional(), task: task.optional(), checks: z.array(check).min(1).max(40) }).strict()
@@ -382,7 +389,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if (command.type === 'invite.accept' || command.type === 'agent.sessionClosed' || command.type === 'machine.cleaned') return
   // Marking one's own tag done changes only one's own list, so a viewer may do it too.
   // Answering a decision asked of oneself changes only that decision, so a viewer may do it too.
-  if (command.type === 'mention.done' || command.type === 'decision.answer') return void author(state, actor)
+  if (command.type === 'mention.done' || command.type === 'decision.answer' || command.type === 'handsOn.answer') return void author(state, actor)
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
@@ -421,6 +428,14 @@ function owner(state: SuperTabState, actor: Actor): void {
 function requester(state: SuperTabState, project: SwarmProject, personId: string): string {
   const member = person(state, personId)
   if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) fail('REQUESTER_UNAVAILABLE', 'Name a person who can read this project.', 400)
+  return member.id
+}
+/** A partner is a person in the Swarm who can read the group. */
+function partnerOf(state: SuperTabState, group: Conversation, personId: string): string {
+  const member = state.people.find(p => p.id === personId) ?? fail('INVALID_PERSON', 'Name a person in this Swarm.', 400)
+  if (!canReadGroup(state, { kind: 'person', userId: member.id, email: member.email }, group)) {
+    fail('INVALID_PERSON', 'Name a partner who can read this conversation.', 400)
+  }
   return member.id
 }
 function open(state: SuperTabState, conversationId: string) {
@@ -490,7 +505,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
 
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
-  const sender = author(state, actor, !leaving && command.type !== 'decision.answer')
+  const sender = author(state, actor, !leaving && command.type !== 'decision.answer' && command.type !== 'handsOn.answer')
   authorizeCommandAccess(state, actor, command, context)
   const rememberAttempt = (group: ReturnType<typeof conversation>) => {
     if (group.assignment) effects.previousAttempts.push(structuredClone({ conversationId: group.id,
@@ -860,6 +875,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       project.visibility = command.visibility
       break
     }
+    case 'project.areas': {
+      const project = readProject(state, actor, command.projectId)
+      if (actor.kind !== 'person' || (actor.userId !== command.personId && actor.userId !== project.ownerId)) {
+        fail('AREAS_FORBIDDEN', 'Only that person or the project owner sets their areas.', 403)
+      }
+      const member = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Name a person in this Swarm.', 400)
+      if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) {
+        fail('INVALID_PERSON', 'Name a person who can read this project.', 400)
+      }
+      mutableProjects(state)
+      const changed = projectOf(state, project.id), list = [...new Set(command.areas)]
+      const { [member.id]: _previous, ...others } = changed.areas ?? {}
+      const next = list.length ? { ...others, [member.id]: list } : others
+      if (Object.keys(next).length) changed.areas = next
+      else delete changed.areas
+      break
+    }
     case 'project.cadence': {
       const project = readProject(state, actor, command.projectId)
       if (actor.kind !== 'person') fail('HUMAN_REQUIRED', 'A person chooses the update cadence.', 403)
@@ -1080,6 +1112,21 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
+    case 'handsOn.ask': {
+      const group = open(state, command.conversationId)
+      const draft = askHandsOn(state, group, command.personId, { request: command.request, steps: command.steps, next: command.next },
+        { operationId, ...checkHandsOnAsker(state, actor, group) })
+      effects.decisions = [draft]
+      result.requestId = draft.id
+      break
+    }
+    case 'handsOn.answer': {
+      const { answer, recipients, source } = answerHandsOn(state, actor, context.decision, command.answer, command.note ?? null, command.until ?? null)
+      effects.handsOnAnswer = answer
+      if (recipients.length) message(context.decision!.conversationId, HANDS_ON_NOTICE, recipients, null, source)
+      result.requestId = answer.id
+      break
+    }
     case 'decision.answer': {
       const { answer, recipients, source } = answerDecision(state, actor, context.decision, command.choice, command.note ?? null)
       effects.decisionAnswer = answer
@@ -1118,6 +1165,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
       if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
+      break
+    }
+    case 'conversation.partner': {
+      chatOnly(command.conversationId)
+      controls(state, actor, command.conversationId)
+      const group = open(state, command.conversationId)
+      if (command.personId) group.partnerId = partnerOf(state, group, command.personId)
+      else delete group.partnerId
       break
     }
     case 'conversation.audience': {

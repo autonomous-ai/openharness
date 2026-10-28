@@ -35,6 +35,9 @@ export interface ReadExtras {
   decisionsWaiting?: number
   /** Which ones they are, as a digest (decisions.ts). */
   decisionsDigest?: string
+  /** A person's open hands-on requests, and when the latest open request was reminded (decisions.ts requestsWaiting). */
+  handsOnWaiting?: number
+  remindedAt?: number
 }
 
 const HEAD_FIELDS = ['version', 'id', 'name', 'project', 'projects', 'leadsConversationId', 'ownerId', 'environment',
@@ -110,5 +113,7 @@ function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now:
     ...(actor.kind === 'person' && extras.mentionsWaiting !== undefined ? { mentionsWaiting: extras.mentionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsWaiting !== undefined ? { decisionsWaiting: extras.decisionsWaiting } : {}),
     ...(actor.kind === 'person' && extras.decisionsDigest !== undefined ? { decisionsDigest: extras.decisionsDigest } : {}),
+    ...(actor.kind === 'person' && extras.handsOnWaiting !== undefined ? { handsOnWaiting: extras.handsOnWaiting } : {}),
+    ...(actor.kind === 'person' && extras.remindedAt !== undefined ? { requestRemindedAt: extras.remindedAt } : {}),
   }
 }
