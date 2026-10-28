@@ -21,6 +21,7 @@ import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
 import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { useSharedRateCounter } from './lib/rateLimit.js'
+import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
 import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
@@ -151,8 +152,18 @@ async function start(): Promise<void> {
   // Rate limits count across every process and pod (lib/rateLimit.ts), not once per process.
   useSharedRateCounter(redisWindowCounter(pub))
 
-  // SSO access-token gate for the control API (data-plane auth happens before Fastify).
+  // SSO access-token gate for the control API (data-plane auth happens before Fastify), inside the per-route limit
+  // (Stability 3.2): a request counts for the person it signed in as, and a token already refused this window is
+  // answered before it costs a sign-in.
+  const routeLimitShare = env.ROUTE_RATE_LIMIT_WINDOW_MS / 60_000
+  const routeLimit = createRouteRateLimit({
+    perPerson: Math.ceil(env.ROUTE_RATE_LIMIT_PER_PERSON * routeLimitShare),
+    perMachine: Math.ceil(env.ROUTE_RATE_LIMIT_PER_MACHINE * routeLimitShare),
+    windowMs: env.ROUTE_RATE_LIMIT_WINDOW_MS,
+  })
+  app.addHook('onRequest', routeLimit.beforeSignIn)
   registerAuthMiddleware(app)
+  app.addHook('onRequest', routeLimit.afterSignIn)
 
   await registerControlRoutes(app, { daemons: DAEMONS, count: redisCount })
   logger.info(describeDaemonsSwitch(DAEMONS))
