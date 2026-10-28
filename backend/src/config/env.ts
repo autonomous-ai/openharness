@@ -22,6 +22,9 @@ const envSchema = z.object({
   // manager socket may land on different backend instances; Redis pub/sub bridges them
   // (channels up:{machineId} / down:{machineId}) plus an agent→manager presence key. See lib/bus.ts.
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // The longest one Redis command may take on the shared command connection (lib/bus.ts). Redis answers in well under a
+  // millisecond; past this it is stuck, and a request should not wait on it (Stability 3.5).
+  REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(1_000),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
