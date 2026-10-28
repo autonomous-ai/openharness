@@ -138,6 +138,7 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
+      workStarted: (tabId, started) => { void github?.resume(tabId, started).catch(error => logger.warn('[github] resume failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
       teamAccountsIdle: !github,
       // Every server answers the quiet delivery poll from any server's full one, and tells the agent's machine of new work

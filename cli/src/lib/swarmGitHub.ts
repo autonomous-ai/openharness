@@ -170,6 +170,18 @@ const TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{19,4095}$/
 const COMMIT_NAME = /^[a-z0-9][a-z0-9-]{0,99}\[bot\]$/
 const COMMIT_EMAIL = /^[0-9]{1,20}\+[a-z0-9][a-z0-9-]{0,99}\[bot\]@users\.noreply\.github\.com$/
 
+/**
+ * Revoke a Harness GitHub App installation token with the token itself (GitHub's `DELETE /installation/token`): the
+ * read-only one a machine cloned a teammate's project with, done with once the clone and the fetch are (local Team account
+ * run, 2026-10-28: it stayed good for its hour). Best effort: a token GitHub does not revoke still expires within the hour.
+ */
+export async function revokeGitHubToken(token: string, send: typeof fetch = fetch): Promise<void> {
+  if (!TOKEN.test(token)) return
+  const answer = await send('https://api.github.com/installation/token', { method: 'DELETE', signal: AbortSignal.timeout(10_000),
+    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'harness' } })
+  if (answer.status !== 204 && answer.status !== 401) throw new Error(`GitHub answered ${answer.status} to revoking the token`)
+}
+
 /** The session's gh login: [token] for github.com, or none. And, when given, the trailers its commits get and who they are
  *  by ([commitAs]: the app's bot account, which the server gives a Harness Team account, as it has no git identity of its
  *  own: its commits read "Harness Team <harnessteam@<host>.local>" before, PR #1934). Without one, git's own stands. */
