@@ -243,6 +243,16 @@ export function publishMachineShareChanged(machineId: string): Promise<number> {
   return safePublish(`machine-share:${machineId}`, '{}')
 }
 
+/** A Swarm delivery waits for an agent of this machine (superTabs/store.ts `deliveryWaiting`): the machine's daemon socket
+ *  tells its host to read that agent's deliveries now (lib/adapterDeliveryPushes.ts). Names only, never content. */
+export interface SuperTabDeliveriesMsg { tabId: string; agentId: string }
+export function subscribeSuperTabDeliveries(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(`st-deliveries:${machineId}`, cb as Cb)
+}
+export function publishSuperTabDeliveries(machineId: string, msg: SuperTabDeliveriesMsg): Promise<number> {
+  return safePublish(`st-deliveries:${machineId}`, JSON.stringify(msg))
+}
+
 export function publishUp(machineId: string, msg: UpBusMsg): Promise<number> {
   const type = (msg.frame as { type?: unknown } | undefined)?.type
   if (typeof type === 'string' && STATUS_TYPES.has(type)) void safePublish(statusChannel(machineId), JSON.stringify(msg.frame))

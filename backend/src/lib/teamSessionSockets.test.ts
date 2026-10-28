@@ -10,6 +10,8 @@ const m = vi.hoisted(() => ({
   machineUpdate: vi.fn(), machineFindUnique: vi.fn(), userFindUnique: vi.fn(),
   claim: vi.fn(), release: vi.fn(), publishUp: vi.fn(), publishPair: vi.fn(), terminalDown: vi.fn(),
   pushes: vi.fn(), appendKey: vi.fn(), nodeRole: vi.fn(),
+  /** The bus's per-machine Swarm delivery channels (lib/bus.ts): a publish reaches only that machine's subscribers. */
+  deliveryChannels: new Map<string, Set<(msg: unknown) => void>>(),
 }))
 vi.mock('./ssoAuth.js', async original => ({ ...await original<typeof import('./ssoAuth.js')>(), authenticateAccessToken: m.auth }))
 vi.mock('./wsServer.js', async original => ({ ...await original<typeof import('./wsServer.js')>(), createWss: () => ({ handleUpgrade: m.upgrade }) }))
@@ -21,7 +23,13 @@ vi.mock('./prisma.js', () => ({
 vi.mock('./bus.js', () => ({
   publishUp: m.publishUp, claimMachineOwner: m.claim, releaseMachineOwner: m.release, publishDeviceE2eePair: m.publishPair,
   publishTerminalUp: vi.fn(), subscribeTerminalDown: m.terminalDown, setMachineAppState: vi.fn(), clearMachineAppState: vi.fn(),
+  subscribeSuperTabDeliveries: async (machineId: string, cb: (msg: unknown) => void) => {
+    const set = m.deliveryChannels.get(machineId) ?? new Set()
+    m.deliveryChannels.set(machineId, set.add(cb))
+    return () => { set.delete(cb) }
+  },
 }))
+const publishDeliveries = (machineId: string, msg: unknown) => { for (const cb of m.deliveryChannels.get(machineId) ?? []) cb(msg) }
 vi.mock('./adapterAccountPushes.js', () => ({ relayAccountPushes: m.pushes }))
 vi.mock('./deviceKeyLog.js', () => ({ appendDeviceKey: m.appendKey, touchDeviceKey: vi.fn() }))
 vi.mock('./nodeRole.js', () => ({ attachNodeRole: m.nodeRole, PRESENCE_TTL_SEC: 30 }))
@@ -172,6 +180,31 @@ describe('the machine socket and a team session', () => {
       teamDeliver({ connId: '', frame: { type: '__team_converted' } })
       expect(ws.close).not.toHaveBeenCalled()
       expect(ws.sent().some(f => f.frame?.type === '__team_converted')).toBe(false)
+    })
+
+    // Stability 2.4, the Lead's rule: a socket hears the Swarm deliveries of the machine it signed in as, whatever its daemon
+    // names, and never another machine's.
+    it('hears the Swarm delivery pushes of the machine it signed in as, never those of the machine its daemon names', async () => {
+      ws = new Socket()
+      m.auth.mockResolvedValue(owner)
+      m.upgrade.mockImplementation((_r, _s, _h, done) => done(ws))
+      handleAdapterUpgrade({ ...adapter(OWNER_COMPUTER), url: `${adapter(OWNER_COMPUTER).url}&machine=other-mac` } as never, raw() as never, Buffer.alloc(0))
+      await flush()
+      const deliveries = () => ws.sent().filter(f => f.frame?.type === 'super_tab_deliveries').map(f => f.frame.payload)
+      expect(deliveries()).toEqual([{}])
+      publishDeliveries('other-mac', { tabId: 'tab', agentId: 'theirs' })
+      publishDeliveries('owner-mac', { tabId: 'tab', agentId: 'mine' })
+      expect(deliveries()).toEqual([{}, { tabId: 'tab', agentId: 'mine' }])
+      ws.close()
+      publishDeliveries('owner-mac', { tabId: 'tab', agentId: 'later' })
+      expect(deliveries()).toHaveLength(2)
+      expect(m.deliveryChannels.get('owner-mac')?.size).toBe(0)
+    })
+
+    it('a team machine hears its own Swarm delivery pushes too: it runs teammates\' agents', async () => {
+      await attach(team, TEAM_COMPUTER)
+      publishDeliveries('team-mac', { tabId: 'tab', agentId: 'teammate-work' })
+      expect(ws.sent().filter(f => f.frame?.type === 'super_tab_deliveries').map(f => f.frame.payload)).toEqual([{}, { tabId: 'tab', agentId: 'teammate-work' }])
     })
 
     it('a computer keeps every account push, its grid name and its pairing notices', async () => {

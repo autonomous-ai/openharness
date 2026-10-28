@@ -13,9 +13,10 @@ describe('frames a web client may never forge', () => {
     // machine_meta names the account's private grid — the inference endpoint every agent on that
     // computer is then pointed at. machine_revoked makes the adapter clear its session and exit.
     // desk_changed / zoo_changed / machines_changed / connectors_changed make every window re-read from the backend:
+    // super_tab_deliveries makes a Swarm host read an agent's deliveries early (lib/adapterDeliveryPushes.ts):
     // forged in a loop, that is request amplification against our own API. device_keys_changed makes the
     // daemon re-read its device key log; devlog_append_result is the backend's answer to its own append.
-    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['connectors_changed', 'desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'zoo_changed'])
+    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['connectors_changed', 'desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'super_tab_deliveries', 'zoo_changed'])
   })
 
   it('covers only frames that are NOT already caught by the `__` rule', () => {

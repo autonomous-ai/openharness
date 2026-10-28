@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
+import { memoryPollMarks, SuperTabStore, type SuperTabStoreHooks } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import type { MachineObservation } from '../src/superTabs/machines.js'
 import * as parts from '../src/superTabs/parts/index.js'
@@ -554,6 +554,22 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     f.clock.now += 1_000
     const rows = await f.timed.deliveries(host, f.tab, f.lead)
     expect(rows.map(d => d.messageId)).toEqual([sent.result.messageId])
+  })
+
+  // On 2026-10-27 each of 5 pods kept its own memory of the last full poll, so every pod ran the full poll for each host.
+  it('answers from another server\'s full poll when they share the memory of it, as pods do through Redis', async () => {
+    let now = () => 0
+    const marks = memoryPollMarks(() => now())
+    const f = await swarm({ hooks: { pollMarks: marks } })
+    now = () => f.clock.now
+    const counted = counting()
+    const other = new SuperTabStore(counted.client, () => f.clock.now, null, { pollMarks: marks })
+    expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
+    f.clock.now += 1_000
+    expect(await other.deliveries(host, f.tab, f.lead)).toEqual([])
+    expect(counted.ops).toEqual(['SuperTabDelivery.findFirst'])
+    // Another caller is never answered from it.
+    await expect(other.deliveries(owner, f.tab, f.lead)).rejects.toMatchObject({ code: 'FORBIDDEN' })
   })
 
   it('never answers a caller who is not the agent\'s host from another caller\'s quiet poll, before or after it fails', async () => {

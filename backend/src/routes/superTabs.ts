@@ -9,6 +9,7 @@ import { sendError, sendSuccess } from '../utils/response.js'
 import { operationSchema } from '../superTabs/commands.js'
 import { fail, SuperTabError } from '../superTabs/model.js'
 import { SuperTabStore } from '../superTabs/store.js'
+import { deliveryStoreHooks } from '../lib/adapterDeliveryPushes.js'
 import { routingPolicySchema } from '../superTabs/routingPolicy.js'
 import { nativeEventSchema, openNativeSchema } from '../superTabs/native.js'
 import { machineObservationSchema } from '../superTabs/machines.js'
@@ -87,7 +88,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   const store = options.store ?? new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
       // A team account has no git login of its own: without the app it takes no teammates' work.
-      teamAccountsIdle: !github })
+      teamAccountsIdle: !github,
+      // Stability 2.4: hosts hear of new deliveries over their daemon socket, and the quiet poll's memory is every pod's.
+      ...deliveryStoreHooks() })
   const reads = options.reads ?? new SwarmReads(store, { githubApp: !!github })
   const hosts = options.hosts ?? new HostReads(store, { githubApp: !!github, teamAccountsIdle: !github })
   app.get('/api/super-tabs/grids', (req, reply) => respond(reply, () => store.hostGrids(req.user!)))

@@ -167,6 +167,26 @@ export function afterCommit(tx: Transaction, callback: () => void): void {
 const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
 const POLLED_CAP = 5_000
+
+/** When each caller's full delivery poll last succeeded, by tab, agent and caller: for SWEEP_EVERY_MS after one, the quiet
+ *  poll answers that caller with one indexed read (store.deliveries). */
+export interface PollMarks {
+  recent(key: string): Promise<boolean>
+  mark(key: string): Promise<void>
+}
+
+/** This server's own memory of the full polls: what every pod kept until Stability 2.4, which made each of 5 pods run the full
+ *  poll for every host (2026-10-27). Servers share Redis's instead (lib/pollMarks.ts); this stays for tests and one server. */
+export function memoryPollMarks(now: () => number): PollMarks {
+  const polled = new Map<string, number>()
+  return {
+    recent: async key => { const last = polled.get(key); return last !== undefined && now() - last < SWEEP_EVERY_MS },
+    mark: async key => {
+      polled.set(key, now())
+      if (polled.size > POLLED_CAP) for (const [k, at] of polled) if (now() - at >= SWEEP_EVERY_MS) polled.delete(k)
+    },
+  }
+}
 const TRANSACTION_ATTEMPTS = 8
 const TRANSACTION_BACKOFF_MS = 50
 const TRANSACTION_BACKOFF_CAP_MS = 1_500
@@ -204,6 +224,9 @@ export interface SuperTabStoreHooks {
    *  the agent's deliveries at once instead of each second (routes/superTabs.ts). Called after the write commits; it must
    *  not throw. */
   deliveryWaiting?: (machineId: string, tabId: string, agentId: string) => void
+  /** Where the quiet delivery poll remembers full polls: shared by every server through Redis (routes/superTabs.ts), or this
+   *  server's own. */
+  pollMarks?: PollMarks
 }
 
 /** Persistent coordination. Host adapters own execution and must confirm their local session grants. */
@@ -217,6 +240,7 @@ export class SuperTabStore {
   get avatars(): AvatarStore | null { return this.attachments?.avatars ?? null }
   constructor(readonly db: PrismaClient, readonly now: () => number = Date.now,
     private readonly attachments: Attachments | null = null, private readonly hooks: SuperTabStoreHooks = {}) {
+    this.polled = hooks.pollMarks ?? memoryPollMarks(now)
     this.native = new SuperTabNativeStore({
       transaction: body => transaction(db, body),
       load: (tx, user, tabId, groupIds) => this.load(tx, user, tabId, { groupIds }),
@@ -1674,8 +1698,8 @@ export class SuperTabStore {
     catch (error) { if (error instanceof SuperTabError) return false; throw error }
   }
 
-  /** When each caller's full delivery poll last succeeded for an agent, on this server: key is tab, agent and caller. */
-  private readonly polled = new Map<string, number>()
+  /** When each caller's full delivery poll last succeeded for an agent: key is tab, agent and caller. */
+  private readonly polled: PollMarks
 
   /**
    * Every running agent's host polls this each second. With nothing waiting and the full poll (which loads the Swarm and
@@ -1684,12 +1708,11 @@ export class SuperTabStore {
    * succeeded is ever answered this way, so a stranger or a revoked host meets the authority checks every time.
    */
   async deliveries(user: AuthUser, tabId: string, agentId: string) {
-    const key = `${tabId}:${agentId}:${user.sub}`, last = this.polled.get(key)
-    if (last !== undefined && this.now() - last < SWEEP_EVERY_MS
+    const key = `${tabId}:${agentId}:${user.sub}`
+    if (await this.polled.recent(key)
       && !await this.db.superTabDelivery.findFirst({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } }, select: { id: true } })) return []
     const rows = await this.fullDeliveries(user, tabId, agentId)
-    this.polled.set(key, this.now())
-    if (this.polled.size > POLLED_CAP) for (const [k, at] of this.polled) if (this.now() - at >= SWEEP_EVERY_MS) this.polled.delete(k)
+    await this.polled.mark(key)
     return rows
   }
 
