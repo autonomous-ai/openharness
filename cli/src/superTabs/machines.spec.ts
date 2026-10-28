@@ -12,6 +12,7 @@ import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { object } from './wire.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
@@ -555,6 +556,66 @@ describe('contributed machine executor', () => {
         f.advance(); await f.machine.tick()
         expect(machinePosts(f).at(-1)).not.toHaveProperty('preparingStartIds')
       }
+    })
+
+    // Diego's Mac, 2026-10-28: a Harness Team account's creation was held on its engine for the whole 15 minutes; the
+    // backend then failed it "still preparing", and nobody could read what it waited for.
+    describe('held on a dependency', () => {
+      const held = { service: 'native', detail: 'Waiting to confirm access to the selected engine executable.' }
+      const heldCreation = { ...pendingCreation, held, detail: `${held.detail} ${pendingCreation.detail}` }
+      const commands = (f: ReturnType<typeof fixture>) => f.backend.mock.calls
+        .filter(c => String(c[2]).includes('/starts/tab/start')).map(c => object(c[3]).command).filter(Boolean)
+      const launched = (result: Record<string, unknown>, cancel: Record<string, unknown> = { creationId: 'creation', state: 'cancelled' }) => {
+        const f = fixture()
+        f.pool.starts[0]!.dispatched = true
+        f.start.mockResolvedValue(result as never)
+        const usage = f.request.getMockImplementation()!
+        f.request.mockImplementation(async (type, ...rest) => type === 'agent_create_cancel' ? cancel : usage(type, ...rest as []))
+        return f
+      }
+
+      it('is stopped on this machine and failed with what it waited for, once held 5 minutes', async () => {
+        const f = launched(heldCreation)
+        await f.machine.tick()
+        f.step(295_000); await f.machine.tick()
+        expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toHaveLength(0)
+        f.step(5_000); await f.machine.tick()
+        expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toEqual([['agent_create_cancel', { creationId: 'creation' }, 10_000]])
+        expect(commands(f)).toEqual([{ type: 'agent.startFailed', startId: 'start',
+          error: 'This machine held the agent\'s launch for 5 minutes and stopped it: Waiting to confirm access to the selected engine executable.' }])
+        expect(f.log).toHaveBeenCalledWith(`Swarm start start is waiting: ${heldCreation.detail}`)
+      })
+
+      it('is never failed while its creation is under way, or Harness installs its engine', async () => {
+        for (const result of [pendingCreation, { ...heldCreation, held: { service: 'install', detail: 'Installing Claude Code.' } }]) {
+          const f = launched(result)
+          await f.machine.tick()
+          f.step(600_000); await f.machine.tick()
+          expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toHaveLength(0)
+          expect(commands(f)).toEqual([])
+        }
+      })
+
+      it('counts its 5 minutes again after a pass that found it no longer held', async () => {
+        const f = launched(heldCreation)
+        await f.machine.tick()
+        f.step(200_000); f.start.mockResolvedValue(pendingCreation as never); await f.machine.tick()
+        f.step(20_000); f.start.mockResolvedValue(heldCreation as never); await f.machine.tick()
+        f.step(200_000); await f.machine.tick()
+        expect(commands(f)).toEqual([])
+        f.step(100_000); await f.machine.tick()
+        expect(commands(f)).toHaveLength(1)
+      })
+
+      it('is not failed when the machine does not confirm the cancellation: its launch may have won', async () => {
+        for (const cancel of [{ creationId: 'creation', state: 'pending' }, { error: 'INTERNAL' }, { creationId: 'other', state: 'cancelled' }]) {
+          const f = launched(heldCreation, cancel)
+          await f.machine.tick()
+          f.step(300_000); await f.machine.tick()
+          expect(f.request.mock.calls.filter(c => c[0] === 'agent_create_cancel')).toHaveLength(1)
+          expect(commands(f)).toEqual([])
+        }
+      })
     })
 
     it('is left out for a backend that refuses it, which then fails it at 3 minutes as before, and offered again ten minutes later', async () => {
