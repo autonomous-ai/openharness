@@ -1484,10 +1484,13 @@ model SwarmGroup {
   @@index([tabId, changedAt])
   @@index([tabId, dormant, changedAt])
   @@index([tabId, agentIds])
-  @@index([tabId, projectId, dormant, lastActivityAt])
+  /// A project's quiet conversations by activity (leaderboard, digest), and their pages newest first, then by key (parts/load.ts loadDormant).
+  @@index([tabId, projectId, dormant, lastActivityAt, key])
   @@index([tabId, projectId, dormant, reportSeq])
   @@index([dormant, lastActivityAt])
   @@index([workFinished, archived, lastActivityAt])
+  /// A host's wake check (read/host.ts woken): the conversations its last writes concerned, by Swarm, since its cursor.
+  @@index([hostMachineIds, tabId, changedAt])
   /// A Swarm's running work (parts/light.ts, the host's light load).
   @@index([tabId, executionMachineId])
   /// The host signature (read/host.ts inputs) reads every conversation's digest and dormancy from this index alone.
@@ -1665,6 +1668,20 @@ model HarnessSession {
   /// Slides forward on every refresh: a phone in use stays signed in, one left in a drawer does not.
   expiresAt   DateTime
   revokedAt   DateTime?
+  /// A session an SSO sign-in backs (lib/ssoSession.ts): the CLI or Desktop signed in through SSO and traded it for this
+  /// session. The person's SSO refresh token, and the last access token it gave, encrypted (lib/machineCredential.ts);
+  /// cleared when the session ends. Absent on a session a QR or a handoff made.
+  ssoRefresh         String?
+  ssoAccess          String?
+  ssoAccessExpiresAt DateTime?
+  /// The account plane and auth-service client the SSO tokens were issued on: a renewal must name the same.
+  ssoEnv             String?
+  ssoClientId        String?
+  /// The last time SSO accepted the sign-in: re-checked hourly, and the outage grace runs from it.
+  ssoCheckedAt       DateTime?
+  /// Set before a renewal asks SSO, cleared once its answer is saved. Left set, a renewal was lost on the way — its
+  /// rotated refresh token may never have been saved — so a refusal of the stored one is no proof of a sign-out.
+  ssoRenewingAt      DateTime?
 
   @@index([userId])
   @@map("harness_sessions")

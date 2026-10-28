@@ -80,7 +80,8 @@ void main() {
       ];
       final c = server.controller();
       await c.refresh();
-      for (final text in ['r1', 'r2', 'r3']) {
+      // One page of replies: more would make the poll read the latest page.
+      for (final text in ['r1', 'r2']) {
         server.append(text);
         server.messages.last['author'] = {
           'kind': 'agent',
@@ -115,6 +116,65 @@ void main() {
       ]);
     },
   );
+
+  test(
+    'returning after more than a page arrived shows the latest page at once',
+    () async {
+      final server = ConversationServer();
+      for (var i = 1; i <= 100; i++) {
+        server.append('lead $i');
+      }
+      server.append('result', conversationId: 'offline');
+      final c = server.controller();
+      await c.refresh();
+      expect(c.messages('lead').last.sequence, 100);
+      await c.select('offline');
+      await c.loadMessages('offline');
+      // Away from the conversation, 600 messages arrive.
+      for (var i = 102; i <= 701; i++) {
+        server.append('lead $i');
+      }
+      await c.refresh();
+
+      // The one read that opening the conversation starts.
+      await c.select('lead');
+      await pumpEventQueue();
+
+      final shown = c.messages('lead');
+      expect(shown.last.sequence, 701);
+      expect(shown, hasLength(100));
+      expect(c.hasOlder('lead'), isTrue);
+      // The view marks what it shows read: the newest message, nothing more.
+      c.markRead('lead', through: 701);
+      expect(c.unread(c.selected!), isFalse);
+    },
+  );
+
+  test('an older page read while the latest page replaces the held ones leaves '
+      'no gap', () async {
+    final server = ConversationServer()..messagePage = 2;
+    for (final text in ['one', 'two', 'three', 'four']) {
+      server.append(text);
+    }
+    final c = server.controller();
+    await c.refresh();
+    for (final text in ['five', 'six', 'seven']) {
+      server.append(text);
+    }
+    final pages = server.holdReads = Completer<void>();
+
+    // The reader scrolls up while the poll finds more than a page new.
+    final newest = c.loadMessages('lead');
+    final older = c.loadMessages('lead', older: true);
+    server.holdReads = null;
+    pages.complete();
+    await Future.wait([newest, older]);
+
+    final shown = c.messages('lead').map((m) => m.sequence).toList();
+    expect(shown.last, 7);
+    expect(shown, List.generate(shown.length, (i) => shown.first + i));
+    expect(c.hasOlder('lead'), isTrue);
+  });
 
   test('a new message is read after the newest one', () async {
     final server = ConversationServer()..append('one');
