@@ -1466,7 +1466,7 @@ export class SuperTabStore {
       // when a task there is lost.
       const saved = async (lost: MessageDraft[] = []) => {
         const sequences = numberMessages(state, lost, now)
-        const touches = judgedMachines(state, lost).filter(t => t.key !== machineId)
+        const touches = judgedMachines(loaded.state, state, lost).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, lost, sequences)
@@ -1637,8 +1637,8 @@ export class SuperTabStore {
       }
       // One write for all: the time checks' changes, the digest and the wake-ups'.
       const sequences = numberMessages(state, written, this.now())
-      // A stop was judged from its machine's report that the session is clean: a newer report makes this write retry.
-      await this.save(tx, loaded, state, clock.next(), [...judgedMachines(state, written), ...stoppedMachines(state, idle),
+      // A loss, a start's failure or a stop was judged from a machine's report: a newer report makes this write retry.
+      await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written), ...stoppedMachines(state, idle),
         ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
       await this.writeMessages(tx, tabId, state, written, sequences)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },

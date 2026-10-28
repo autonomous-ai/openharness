@@ -151,11 +151,13 @@ export function loseTasks(state: SuperTabState, now: number, which: (worker: Age
   })
 }
 
-/** The machine parts a loss was judged from (offline, stopped, its reports' renewals). The write that records the loss
- *  touches them, so a fresh report committed since the read makes it retry on current data instead of fencing a live worker. */
-export function judgedMachines(state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
+/** The machine parts a loss was judged from (offline, stopped, its reports' renewals), and those a start failed since
+ *  `before` was judged from (its own machine's preparing report). The write touches them, so a fresh report committed since
+ *  the read makes it retry on current data instead of fencing a live worker or failing a start still being prepared. */
+export function judgedMachines(before: SuperTabState, state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
   const lost = new Set(rows.flatMap(r => r.source?.kind === 'work-lost' ? [r.source.agentId as string] : []))
-  const machines = new Set(state.agents.filter(a => lost.has(a.id)).map(a => a.machineId))
+  const failed = (state.starts ?? []).filter(s => s.error && !before.starts?.find(b => b.id === s.id)?.error).map(s => s.request.machineId)
+  const machines = new Set([...state.agents.filter(a => lost.has(a.id)).map(a => a.machineId), ...failed])
   return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
 }
 
