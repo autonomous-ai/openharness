@@ -1999,7 +1999,11 @@ export class SuperTabStore {
       const loaded = await this.load(tx, user, tabId, { groupIds: named ? [named.conversationId] : [] }), state = loaded.state
       author(state, await this.actor(tx, user, state, agentId), true)
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: deliveryId, tabId, agentId } })
-      if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled' ||
+      // The delivery pass ended a hold (it keeps the hold's reason) as its host, its terminal free again, typed it: the
+      // host's own confirmation counts, or the agent has it while its sender sees Not sent and sends it again (review of
+      // #1941). Nothing else brings an ended delivery back.
+      const typedAsEnded = delivery?.status === 'cancelled' && !!delivery.holdReason && action.type === 'ack' && delivery.claimId === action.claimId
+      if (!delivery || !this.deliveryAllowed(state, delivery) || delivery.status === 'cancelled' && !typedAsEnded ||
           !await this.senderAllowed(tx, state, delivery)) fail('DELIVERY_REVOKED', 'This instruction is no longer authorized.', 403)
       if (delivery.status === 'answered') fail('DELIVERY_RESOLVED', 'This message was already answered.')
       if (delivery.status === 'confirmed' || delivery.status === 'superseded') {
@@ -2059,8 +2063,9 @@ export class SuperTabStore {
   }
 
   /** Ends, as cancelled, those of this Swarm's open deliveries `rows` (as the delivery pass read them) that can no longer move
-   *  (deliverySettle.ts). Each only as it was read: a host that claimed, held or acknowledged one since keeps it. A hold
-   *  keeps its reason, so its sender learns why it was not sent. The number ended. */
+   *  (deliverySettle.ts). Each only as it was read: one its host acknowledged since, or a claim with no hold its host claimed
+   *  again since, is kept. A held claim its host claims again still ends once its hold is over; it keeps its hold's reason,
+   *  so its sender learns why, and its host's confirmation that it typed it still counts (delivery). The number ended. */
   async settleDeliveries(tabId: string, rows: SuperTabDelivery[], now: number): Promise<number> {
     return transaction(this.db, async tx => {
       const row = await tx.superTab.findUnique({ where: { id: tabId }, select: SWARM_ROW })

@@ -338,6 +338,33 @@ describe('a delivery that cannot move', () => {
     expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id: asking } })).toMatchObject({ status: 'cancelled', holdReason: 'team_waiting_user' })
   })
 
+  it('counts a hold the pass ended as delivered once its host confirms it typed it', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Held, then typed as the pass ends it.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
+    // An hour on, the terminal frees: the host claims it again and types it, and the pass ends it before the host confirms.
+    f.clock.now += HOUR + MINUTE
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await settleStuckDeliveries(db, f.timed, f.clock.now)
+    expect(await status(id)).toBe('cancelled')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed.', uncertain: false })
+    expect(await db.superTabDelivery.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: 'delivered', receipt: 'Typed.',
+      deliveredAt: new Date(f.clock.now), holdReason: null })
+  })
+
+  it('never types a hold the pass ended: claiming it again is refused', async () => {
+    const f = await swarm()
+    const id = await toLead(f, 'Held and ended, never typed.')
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })
+    await f.timed.delivery(host, f.tab, f.lead, id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })
+    await settleStuckDeliveries(db, f.timed, f.clock.now + HOUR + MINUTE)
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'claim', claimId: 'claim' })).rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'another', receipt: 'Typed.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    expect(await status(id)).toBe('cancelled')
+  })
+
   it('ends an uncertain delivery nobody resolved within an hour', async () => {
     const f = await swarm()
     const id = await toLead(f, 'Maybe typed.')
@@ -346,6 +373,10 @@ describe('a delivery that cannot move', () => {
     await settleAfter(f, id, 59 * MINUTE)
     expect(await status(id)).toBe('uncertain')
     await settleAfter(f, id, HOUR + MINUTE)
+    expect(await status(id)).toBe('cancelled')
+    // Ended for good: only a hold the pass ended comes back on its host's confirmation.
+    await expect(f.timed.delivery(host, f.tab, f.lead, id, { type: 'ack', claimId: 'claim', receipt: 'Typed after all.', uncertain: false }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
     expect(await status(id)).toBe('cancelled')
   })
 
