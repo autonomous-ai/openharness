@@ -7,7 +7,11 @@ import type { ChildProcess } from 'node:child_process'
 
 // Two switches, both off by default: `sh` makes commands run under plain `/bin/sh -c` (as when no user
 // shell is known) so output is exactly the command's; `fakeChild` hands runDshCommand a scripted child.
-const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess) }))
+const seams = vi.hoisted(() => ({ sh: false, noFiles: false, files: null as Set<string> | null, fakeChild: null as null | (() => ChildProcess) }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, existsSync: (path: Parameters<typeof actual.existsSync>[0]) => seams.noFiles ? false : seams.files ? seams.files.has(String(path)) : actual.existsSync(path) }
+})
 vi.mock('../lib/engineLaunch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/engineLaunch.js')>()
   return { ...actual, interactiveEngineShell: (shell?: string) => (seams.sh ? null : actual.interactiveEngineShell(shell)) }
@@ -20,8 +24,11 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 const { managedNodePath } = await import('../lib/nodeRuntime.js')
 const { dshNodeFallback, dshShellArgv, isKilledJobReport, isShellNoise, killProcessGroup, runDshCommand, spawnDshCommand } = await import('./shell.js')
+const nativeWindows = process.platform === 'win32'
 
 describe('dshShellArgv', () => {
+  beforeEach(() => { vi.spyOn(process, 'platform', 'get').mockReturnValue('linux') })
+  afterEach(() => { vi.restoreAllMocks() })
   const original = process.env.SHELL
   afterEach(() => { if (original === undefined) delete process.env.SHELL; else process.env.SHELL = original })
 
@@ -45,7 +52,7 @@ describe('dshShellArgv', () => {
   })
 })
 
-describe('dshNodeFallback', () => {
+describe.skipIf(nativeWindows)('dshNodeFallback (POSIX paths)', () => {
   let dir: string
   beforeEach(() => { seams.sh = true; dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-node-'))) })
   afterEach(() => { seams.sh = false; rmSync(dir, { recursive: true, force: true }) })
@@ -88,7 +95,7 @@ describe('isShellNoise', () => {
   })
 })
 
-describe('runDshCommand', () => {
+describe.skipIf(nativeWindows)('runDshCommand (POSIX signals)', () => {
   let dir: string
   beforeEach(() => {
     seams.sh = true
@@ -179,7 +186,7 @@ describe('runDshCommand', () => {
   })
 })
 
-describe('spawnDshCommand and killProcessGroup', () => {
+describe.skipIf(nativeWindows)('spawnDshCommand and killProcessGroup (POSIX process groups)', () => {
   let dir: string
   beforeEach(() => {
     seams.sh = true
@@ -216,5 +223,94 @@ describe('spawnDshCommand and killProcessGroup', () => {
     expect(() => killProcessGroup(gone, 20)).not.toThrow()
     // the SIGKILL that follows the grace finds nothing either
     await new Promise((resolve) => setTimeout(resolve, 60))
+  })
+})
+
+describe('Windows DSH shell resolution', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-win-')))
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    vi.stubEnv('SHELL', '/bin/bash')
+    vi.stubEnv('ProgramFiles', dir)
+    vi.stubEnv('ProgramFiles(x86)', dir)
+    vi.stubEnv('LOCALAPPDATA', dir)
+    vi.stubEnv('PATH', '')
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+    seams.files = null
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it.skipIf(!nativeWindows)('preserves setup, doctor and init scripts as one login-shell argument', () => {
+    // Native Windows fixture; the integration below covers execution with real Git Bash.
+    const bash = join(dir, 'Git', 'bin', 'bash.exe')
+    mkdirSync(join(dir, 'Git', 'bin'), { recursive: true })
+    writeFileSync(bash, '')
+    for (const script of ['./setup.sh "two words"', './doctor.sh', './init.sh "$PWD"']) {
+      expect(dshShellArgv(script)).toEqual({
+  path: bash,
+  args: [
+    '-lic',
+    `unalias node 2>/dev/null || true\n${dshNodeFallback()}\n${script}`,
+  ],
+})
+    }
+    vi.stubEnv('SHELL', bash)
+    expect(dshShellArgv('true').path).toBe(bash)
+  })
+
+  it.skipIf(!nativeWindows)('finds a custom Git installation from PATH and ignores a missing SHELL', () => {
+    const bin = join(dir, 'custom Git', 'bin')
+    const cmd = join(dir, 'custom Git', 'cmd')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(cmd, { recursive: true })
+    writeFileSync(join(bin, 'bash.exe'), '')
+    writeFileSync(join(cmd, 'git.exe'), '')
+    vi.stubEnv('SHELL', join(dir, 'missing', 'bash.exe'))
+    vi.stubEnv('PATH', cmd)
+    // Explicitly prevent the machine's default install from winning this fixture.
+    seams.files = new Set([join(cmd, 'git.exe'), join(bin, 'bash.exe')])
+    expect(dshShellArgv('true').path).toBe(join(bin, 'bash.exe'))
+  })
+
+  it('converts the managed Node directory for Bash without replacing an existing node', () => {
+    const prelude = dshNodeFallback()
+    expect(prelude).toContain('if ! command -v node >/dev/null 2>&1; then')
+    expect(prelude).toContain('PATH="${PATH:+$PATH:}$(cygpath -u -- ')
+    expect(prelude).toContain('export PATH; fi')
+  })
+})
+
+describe.skipIf(!nativeWindows)('Windows Git Bash execution', () => {
+  let dir: string
+  beforeEach(() => { dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-bash-'))) })
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+
+  it.each(['setup', 'doctor', 'workspace init'])('executes an isolated %s hook with arguments, cwd, env and Node', async (name) => {
+    const script = `test "$HOOK_VALUE" = 'two words' || exit 8; test -d "$PWD" || exit 9; node -e 'console.log(process.argv[1])' '${name}'; printf 'tail' >&2`
+    const seen: string[] = []
+    const result = await runDshCommand(script, { cwd: dir, env: { HOOK_VALUE: 'two words' }, onLine: (line) => seen.push(line), timeoutMs: 10000 })
+    expect(result).toMatchObject({ code: 0, timedOut: false })
+    expect(result.lines).toEqual(expect.arrayContaining([name, 'tail']))
+    expect(seen).toEqual(result.lines)
+  }, 15000)
+
+  it('returns resolution failures through the existing exit-127 contract', async () => {
+    // Standard Git installation may still be present: explicitly make candidate checks fail.
+    seams.noFiles = true
+    try {
+      expect(() => dshShellArgv('true')).toThrow('Git Bash')
+      const seen: string[] = []
+      const result = await runDshCommand('true', { cwd: dir, onLine: (line) => seen.push(line) })
+      expect(result).toMatchObject({ code: 127, signal: null, timedOut: false })
+      expect(result.lines).toEqual([expect.stringContaining('Git Bash')])
+      expect(seen).toEqual(result.lines)
+    } finally {
+      seams.noFiles = false
+      vi.restoreAllMocks()
+    }
   })
 })
