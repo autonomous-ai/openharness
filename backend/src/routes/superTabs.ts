@@ -70,8 +70,9 @@ const githubStartToken = z.object({ always: z.boolean().optional() }).strict()
 async function respond(reply: FastifyReply, action: () => Promise<unknown>) {
   try { sendSuccess(reply, await action()) } catch (error) {
     if (error instanceof GitHubAppError) return sendError(reply, error.message, error.code, error.status, error.details)
-    if (!(error instanceof SuperTabError)) throw error
-    sendError(reply, error.message, error.code, error.status)
+    // A Swarm refusal, a busy Swarm (503 with Retry-After), an expired transaction or a duplicate key: the shared
+    // error handler answers each deliberately, and every other failure stays a 500 with its stack logged.
+    throw error
   }
 }
 
