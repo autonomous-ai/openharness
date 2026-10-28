@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
 import 'swarm_conversation.dart';
 import 'swarm_file_picker.dart';
-import 'swarm_message_row.dart';
+import 'swarm_message_row.dart'
+    show swarmChatCard, swarmChatHair, swarmFileSize;
 import 'swarm_outgoing_files.dart';
 import 'swarm_style.dart';
 
@@ -16,10 +20,7 @@ Future<SwarmPickSource?> showSwarmAttachSheet(BuildContext context) =>
     showModalBottomSheet<SwarmPickSource>(
       context: context,
       backgroundColor: AppGlass.rowFill,
-      barrierColor: Colors.black.withValues(alpha: .55),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      shape: AppControl.sheetShape,
       builder: (context) => const _AttachSheet(),
     );
 
@@ -41,28 +42,35 @@ class _AttachSheet extends StatelessWidget {
       excludeSemantics: true,
       child: InkWell(
         key: ValueKey(key),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppControl.radius),
         onTap: () => Navigator.of(context).pop(source),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 56),
+          constraints: const BoxConstraints(minHeight: minTouchTarget),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpace.m,
+              vertical: AppSpace.s,
+            ),
             child: Row(
               children: [
-                Icon(icon, size: 24, color: AppPalette.textPrimary),
-                const SizedBox(width: 16),
+                Icon(
+                  icon,
+                  size: AppIconSize.standalone,
+                  color: AppPalette.textPrimary,
+                ),
+                const SizedBox(width: AppSpace.l),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(title, style: swarmChatText(17)),
+                      Text(
+                        title,
+                        style: AppType.body(color: AppPalette.textPrimary),
+                      ),
                       Text(
                         detail,
-                        style: swarmChatText(
-                          13,
-                          color: AppPalette.textSecondary,
-                        ),
+                        style: AppType.caption(color: AppPalette.textSecondary),
                       ),
                     ],
                   ),
@@ -77,19 +85,25 @@ class _AttachSheet extends StatelessWidget {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.l,
+          AppSpace.s,
+          AppSpace.l,
+          AppSpace.l,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // The grabber: a capsule as wide as the two largest steps.
             Center(
               child: Container(
-                width: 36,
-                height: 5,
-                margin: const EdgeInsets.only(bottom: 8),
-                decoration: BoxDecoration(
+                width: AppSpace.xl + AppSpace.m,
+                height: AppSpace.xs,
+                margin: const EdgeInsets.only(bottom: AppSpace.s),
+                decoration: ShapeDecoration(
                   color: AppGlass.hair,
-                  borderRadius: BorderRadius.circular(3),
+                  shape: const StadiumBorder(),
                 ),
               ),
             ),
@@ -130,18 +144,17 @@ Future<bool> showSwarmAccessOff(
   final camera = source == SwarmPickSource.camera;
   final open = await showDialog<bool>(
     context: context,
+    // The theme's dialog: its fill and Desktop's dialog radius.
     builder: (context) => AlertDialog(
-      backgroundColor: AppGlass.rowFill,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       title: Text(
         camera ? 'Camera access is off' : 'Photos access is off',
-        style: swarmChatText(17, weight: FontWeight.w600),
+        style: AppType.heading(color: AppPalette.textPrimary),
       ),
       content: Text(
         camera
             ? 'Allow Harness to use the camera in Settings to take a photo.'
             : 'Allow Harness to use your photos in Settings to attach them.',
-        style: swarmChatText(15, color: AppPalette.textSecondary),
+        style: AppType.body(color: AppPalette.textSecondary),
       ),
       actions: [
         SwarmButton(
@@ -173,13 +186,13 @@ class SwarmOutgoingChips extends StatelessWidget {
     final files = conversation.files.files;
     if (files.isEmpty) return const SizedBox.shrink();
     return SizedBox(
-      height: 60,
+      height: _chipHeight + AppSpace.s,
       child: ListView.separated(
         key: const ValueKey('swarm-outgoing'),
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.only(bottom: AppSpace.s),
         itemCount: files.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: AppSpace.s),
         itemBuilder: (context, i) => _Chip(
           file: files[i],
           progress: conversation.isUploading(files[i])
@@ -191,6 +204,11 @@ class SwarmOutgoingChips extends StatelessWidget {
     );
   }
 }
+
+/// A chip's thumbnail: the 44-point target less a step, so the chip with its inset is a target and
+/// a step tall.
+const _thumbnail = minTouchTarget - AppSpace.s;
+const _chipHeight = _thumbnail + 2 * AppSpace.s;
 
 class _Chip extends StatelessWidget {
   const _Chip({
@@ -211,39 +229,44 @@ class _Chip extends StatelessWidget {
     final picture = swarmMimeForName(file.name).startsWith('image/');
     final mark = Icon(
       picture ? LucideIcons.image : LucideIcons.file,
-      size: 20,
+      size: AppIconSize.besideText,
       color: AppPalette.textSecondary,
     );
     final going = progress;
     return Container(
       key: ValueKey('swarm-outgoing-${file.name}'),
-      constraints: const BoxConstraints(maxWidth: 220),
-      padding: const EdgeInsets.only(left: 8),
+      // A long name gives way first: a chip takes at most most of the row.
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.sizeOf(context).width * .6,
+        minHeight: _chipHeight,
+      ),
+      padding: const EdgeInsets.only(left: AppSpace.s),
       decoration: BoxDecoration(
         color: swarmChatCard(tty),
         border: Border.all(color: swarmChatHair(tty)),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppControl.radius),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(AppCard.insetRadius),
             child: SizedBox.square(
-              dimension: 36,
+              dimension: _thumbnail,
               child: picture
                   ? Image.memory(
                       file.bytes,
                       fit: BoxFit.cover,
-                      // Decoded small: a thumbnail, not the photo.
-                      cacheWidth: 108,
+                      // Decoded small: a thumbnail, not the photo — three
+                      // pixels a point, a phone's sharpest.
+                      cacheWidth: (_thumbnail * 3).round(),
                       gaplessPlayback: true,
                       errorBuilder: (_, _, _) => Center(child: mark),
                     )
                   : Center(child: mark),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpace.s),
           Flexible(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -253,33 +276,41 @@ class _Chip extends StatelessWidget {
                   file.name,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: swarmChatText(14),
+                  style: AppType.caption(color: AppPalette.textPrimary),
                 ),
                 if (going == null)
                   Text(
                     swarmFileSize(file.bytes.length),
-                    style: swarmChatText(13, color: AppPalette.textFaint),
+                    style: AppType.caption(
+                      color: AppPalette.textFaint,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
                   )
                 else
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       SizedBox(
-                        width: 56,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
+                        width: minTouchTarget,
+                        child: ClipPath(
+                          clipper: const ShapeBorderClipper(
+                            shape: StadiumBorder(),
+                          ),
                           child: LinearProgressIndicator(
                             value: going,
-                            minHeight: 4,
+                            minHeight: AppSpace.xs,
                             color: AppPalette.accent,
                             backgroundColor: swarmChatHair(tty),
                           ),
                         ),
                       ),
-                      const SizedBox(width: 6),
+                      const SizedBox(width: AppSpace.s),
                       Text(
                         '${(going * 100).round()}%',
-                        style: swarmChatText(13, color: AppPalette.textFaint),
+                        style: AppType.caption(
+                          color: AppPalette.textFaint,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
                       ),
                     ],
                   ),
@@ -295,10 +326,10 @@ class _Chip extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap: onRemove,
               child: SizedBox.square(
-                dimension: 44,
+                dimension: minTouchTarget,
                 child: Icon(
                   LucideIcons.x,
-                  size: 16,
+                  size: AppIconSize.besideText,
                   color: AppPalette.textSecondary,
                 ),
               ),

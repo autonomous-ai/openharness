@@ -50,6 +50,9 @@ dependencies:
   # The running build's version, shown in Settings and sent with analytics.
   package_info_plus: ^10.2.1
   path: ^1.9.1
+  # The app's temporary folder on Android, where a Swarm chat's pickers leave the copies it deletes
+  # once read (`swarm/swarm_file_picker.dart`). Already in the app through flutter_cache_manager.
+  path_provider: ^2.1.6
 
   # The phone's second wire to a machine: the `terminal-v1` data channel the
   # harness CLI opens with werift on the desktop's behalf (lib/p2p/). Data

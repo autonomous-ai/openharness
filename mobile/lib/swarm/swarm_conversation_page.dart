@@ -9,7 +9,9 @@ import 'package:harness_mobile/phone/composing_keyboard.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
@@ -1043,11 +1045,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
             builder: (context, note, _) => note == null
                 ? const SizedBox.shrink()
                 : Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.xs,
+                      0,
+                      AppSpace.xs,
+                      AppSpace.s,
+                    ),
                     child: Text(
                       note,
                       key: const ValueKey('swarm-attach-note'),
-                      style: swarmChatText(13.5, color: tty.yellow),
+                      style: AppType.caption(color: tty.yellow),
                     ),
                   ),
           ),
@@ -1064,7 +1071,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                       : () => unawaited(_pickFiles(c)),
                   child: Icon(
                     LucideIcons.plus,
-                    size: 22,
+                    size: AppIconSize.standalone,
                     color: c.uploading || c.files.room <= 0
                         ? AppPalette.textFaint
                         : AppPalette.textSecondary,
@@ -1077,7 +1084,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   onTap: () => _mention(c),
                   child: Icon(
                     LucideIcons.atSign,
-                    size: 22,
+                    size: AppIconSize.standalone,
                     color: AppPalette.textSecondary,
                   ),
                 ),

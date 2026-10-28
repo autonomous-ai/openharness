@@ -83,8 +83,11 @@ void main() {
     photos: pickSwarmPhotos,
     camera: takeSwarmPhoto,
     documents: pickSwarmFiles,
+    copies: swarmPickerCopyFolders,
   );
+  setUp(() => swarmPickerCopyFolders = () async => const []);
   tearDown(() {
+    swarmPickerCopyFolders = original.copies;
     pickSwarmPhotos = original.photos;
     takeSwarmPhoto = original.camera;
     pickSwarmFiles = original.documents;

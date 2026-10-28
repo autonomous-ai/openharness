@@ -12,22 +12,30 @@ import 'package:harness_mobile/swarm/swarm_outgoing_files.dart';
 void main() {
   late Directory folder;
   late SwarmOutgoingFiles files;
+  late Directory elsewhere;
   final original = (
     photos: pickSwarmPhotos,
     camera: takeSwarmPhoto,
     documents: pickSwarmFiles,
+    copies: swarmPickerCopyFolders,
   );
 
   setUp(() {
     folder = Directory.systemTemp.createTempSync('swarm-picker-test');
+    elsewhere = Directory.systemTemp.createTempSync('swarm-picker-original');
     files = SwarmOutgoingFiles();
+    // The app's own temporary folder, where the pickers leave their copies.
+    swarmPickerCopyFolders = () async => [folder.path];
   });
   tearDown(() {
     files.dispose();
-    if (folder.existsSync()) folder.deleteSync(recursive: true);
+    for (final dir in [folder, elsewhere]) {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    }
     pickSwarmPhotos = original.photos;
     takeSwarmPhoto = original.camera;
     pickSwarmFiles = original.documents;
+    swarmPickerCopyFolders = original.copies;
   });
 
   /// A picker's copy of a file, on disk as the pickers leave it.
@@ -271,5 +279,43 @@ void main() {
     expect((outcome as SwarmPicked).note, isNull);
     expect(files.files, isEmpty);
     expect(File(picked.single.path).existsSync(), isFalse);
+  });
+
+  group('only the pickers\' own copies are deleted', () {
+    test(
+      'a file outside the app\'s temporary folder is read and kept',
+      () async {
+        final file = File('${elsewhere.path}/original.pdf')
+          ..writeAsBytesSync([1, 2, 3]);
+        pickSwarmFiles = () async => [XFile(file.path)];
+
+        await addSwarmPicked(files, SwarmPickSource.files);
+
+        expect(names(), ['original.pdf']);
+        expect(file.existsSync(), isTrue);
+      },
+    );
+
+    test('a path that only starts like the temporary folder is kept', () async {
+      final sibling = Directory('${folder.path}-sibling')..createSync();
+      addTearDown(() => sibling.deleteSync(recursive: true));
+      final file = File('${sibling.path}/a.jpg')..writeAsBytesSync([1]);
+      pickSwarmPhotos = (limit) async => [XFile(file.path)];
+
+      await addSwarmPicked(files, SwarmPickSource.library);
+
+      expect(file.existsSync(), isTrue);
+    });
+
+    test('with no temporary folder known, nothing is deleted', () async {
+      swarmPickerCopyFolders = () async => throw MissingPluginException();
+      final picked = copy('a.jpg', 3);
+      pickSwarmPhotos = (limit) async => [picked];
+
+      await addSwarmPicked(files, SwarmPickSource.library);
+
+      expect(names(), ['photo.jpg']);
+      expect(File(picked.path).existsSync(), isTrue);
+    });
   });
 }

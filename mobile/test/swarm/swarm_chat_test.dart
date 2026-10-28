@@ -15,6 +15,7 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
@@ -1564,8 +1565,12 @@ void main() {
       camera: takeSwarmPhoto,
       documents: pickSwarmFiles,
       settings: openSwarmSettings,
+      copies: swarmPickerCopyFolders,
     );
+    // No plugin answers in a widget test: the pickers' copies here are in memory.
+    setUp(() => swarmPickerCopyFolders = () async => const []);
     tearDown(() {
+      swarmPickerCopyFolders = picker.copies;
       pickSwarmPhotos = picker.photos;
       takeSwarmPhoto = picker.camera;
       pickSwarmFiles = picker.documents;
@@ -1637,6 +1642,17 @@ void main() {
           greaterThanOrEqualTo(44),
         );
       }
+    });
+
+    testWidgets('the sheet rounds at the theme\'s sheet radius', (
+      tester,
+    ) async {
+      await pump(tester, backend([message('m1', 1)]));
+
+      await tester.tap(key('swarm-attach'));
+      await tester.pumpAndSettle();
+
+      expect(sheetTopRadius(tester), grid.AppControl.sheetRadius);
     });
 
     testWidgets('photos picked show as chips with their size; ✕ takes one '

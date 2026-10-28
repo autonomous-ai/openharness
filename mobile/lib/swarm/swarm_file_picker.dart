@@ -4,6 +4,8 @@ import 'package:file_selector/file_selector.dart' show openFiles;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import 'swarm_outgoing_files.dart';
 
@@ -68,12 +70,22 @@ Future<XFile?> Function() takeSwarmPhoto = () => ImagePicker().pickImage(
 @visibleForTesting
 Future<List<XFile>> Function() pickSwarmFiles = () => openFiles();
 
+/// The app's own temporary folders, where the pickers leave their copies: Dart's temporary folder
+/// (the app's `tmp/` on iOS, where image_picker and the document picker copy to) and the one
+/// path_provider names (the cache folder on Android, where both copy to). Replaced in tests.
+@visibleForTesting
+Future<List<String>> Function() swarmPickerCopyFolders = () async => [
+  Directory.systemTemp.path,
+  (await getTemporaryDirectory()).path,
+];
+
 /// Opens [source] and adds what the person picks to [files], by Desktop's limits: ten files a
 /// message, 10 MB each. Photos are named `photo.jpg`, `photo-2.jpg`… since a picker names them by
 /// no name a person would know; other files keep their own.
 ///
 /// Each picker hands over its own copy of the file in the app's private temporary folder; it is
-/// read into memory and deleted at once, kept or not, so no photo stays on the phone. Nothing is
+/// read into memory and deleted at once, kept or not, so no photo stays on the phone. A file
+/// outside those folders is read and left where it is. Nothing is
 /// added once [stillWanted] fails: the chat closed while its picker was up.
 Future<SwarmPickOutcome> addSwarmPicked(
   SwarmOutgoingFiles files,
@@ -108,10 +120,12 @@ Future<SwarmPickOutcome> addSwarmPicked(
           : 'Could not open the picker.',
     );
   }
+  final copies = await _copyFolders();
+  void delete(XFile file) => _delete(file, copies);
   // The chat can have closed while the picker was up — signed out, say: nothing goes into it.
   if (!stillWanted()) {
     for (final file in picked) {
-      _delete(file);
+      delete(file);
     }
     return const SwarmPicked(null);
   }
@@ -133,7 +147,7 @@ Future<SwarmPickOutcome> addSwarmPicked(
     } catch (_) {
       unreadable ??= name;
     } finally {
-      _delete(file);
+      delete(file);
     }
   }
   final note = files.add(read, oversized: oversized);
@@ -158,13 +172,36 @@ Future<Uint8List?> _read(XFile file) async {
   return bytes.length > swarmAttachmentMaxBytes ? null : bytes;
 }
 
-/// Deletes the picker's copy of [file]. Every picker here makes one in the app's own temporary
-/// folder (image_picker and file_selector alike), never handing over the person's original. At
-/// once rather than awaited: one small file, gone before anything else runs.
-void _delete(XFile file) {
-  if (kIsWeb || file.path.isEmpty) return;
+/// [swarmPickerCopyFolders], each as its real path; none when they cannot be read, and then
+/// nothing is deleted.
+Future<List<String>> _copyFolders() async {
   try {
-    File(file.path).deleteSync();
+    return [for (final folder in await swarmPickerCopyFolders()) _real(folder)];
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// [path] with its links resolved (iOS reaches the app's folders through `/private`), or as given
+/// when it is not there to resolve.
+String _real(String path) {
+  try {
+    return File(path).resolveSymbolicLinksSync();
+  } catch (_) {
+    return p.normalize(p.absolute(path));
+  }
+}
+
+/// Deletes the picker's copy of [file] — only when it lies in one of the app's own temporary
+/// [folders], where image_picker and file_selector put the copies they hand over. A file anywhere
+/// else could be the person's original, and is never touched. At once rather than awaited: one
+/// small file, gone before anything else runs.
+void _delete(XFile file, List<String> folders) {
+  if (kIsWeb || file.path.isEmpty) return;
+  final path = _real(file.path);
+  if (!folders.any((folder) => p.isWithin(folder, path))) return;
+  try {
+    File(path).deleteSync();
   } catch (_) {
     // Already gone, or never written: nothing of it is left to keep.
   }
