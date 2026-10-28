@@ -580,12 +580,43 @@ describe('turning Buddies off while one starts (privacy review of #1992)', () =>
   })
 })
 
-describe('a Codex Buddy (Lead\'s ruling on the privacy review of #1992)', () => {
-  it('runs only on its owner\'s own machine; a Claude Buddy may run on any machine they may use', () => {
+describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
+  const contribution = (f: ReturnType<typeof setup>, machineId: string, owner: string) =>
+    ({ contribution: { machineOwnerId: owner, contributorId: f.state.machines!.find(m => m.machineId === machineId)!.contributorId } })
+  const add = (f: ReturnType<typeof setup>, machineId: string, owner: string, engine: 'claude' | 'codex' = 'claude', projectId = f.app.projectId) =>
+    f.run({ type: 'buddy.create', projectId, machineId, engine }, peer, contribution(f, machineId, owner))
+
+  it('is only its owner\'s own machine, for Claude and Codex alike: never one shared with them', () => {
     const f = fresh()
     machine(f, 'owner-mac', 'owner')
-    expect(() => addBuddy(f, peer, f.app.projectId, 'owner-mac', 'codex')).toThrow('A Codex Buddy runs only on your own machine')
-    expect(addBuddy(f, peer, f.app.projectId, 'owner-mac', 'claude').result.startId).toBeTruthy()
-    expect(addBuddy(f, peer, f.web.projectId, 'peer-mac', 'codex').result.startId).toBeTruthy()
+    for (const engine of ['claude', 'codex'] as const) {
+      expect(() => add(f, 'owner-mac', 'owner', engine)).toThrow('A Buddy runs only on your own machine')
+    }
+    expect(add(f, 'peer-mac', 'peer', 'codex').result.startId).toBeTruthy()
+  })
+
+  it('is never a Harness Team account, not even the one on its owner\'s own Mac', () => {
+    const f = fresh()
+    machine(f, 'peer-team', 'peer')
+    Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
+    f.state.machines!.find(m => m.machineId === 'peer-team')!.observation!.sessionKind = 'team'
+    expect(() => add(f, 'peer-team', 'peer')).toThrow('A Buddy runs only on your own machine')
+  })
+
+  it('stays in its owner\'s own account for a teammate\'s project, even where teammates\' work needs a Team account', () => {
+    const f = fresh()
+    const saved = { required: process.env.SWARM_TEAM_ACCOUNT_REQUIRED, owners: process.env.SWARM_TEAM_ACCOUNT_OWNERS }
+    process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
+    delete process.env.SWARM_TEAM_ACCOUNT_OWNERS
+    try {
+      machine(f, 'peer-team', 'peer')
+      Object.assign(f.state.machines!.find(m => m.machineId === 'peer-team')!, { hostMachineId: 'peer-mac' })
+      // A Builder for the owner's project would be refused here, or moved to the Mac's Team account.
+      const start = add(f, 'peer-mac', 'peer').result.startId
+      expect(f.state.starts!.find(s => s.id === start)!.request.machineId).toBe('peer-mac')
+    } finally {
+      if (saved.required === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED; else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = saved.required
+      if (saved.owners !== undefined) process.env.SWARM_TEAM_ACCOUNT_OWNERS = saved.owners
+    }
   })
 })

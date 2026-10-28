@@ -4,7 +4,7 @@ import { z } from 'zod'
 import {
   activeWork, actorKey, agent, agentRole, appendPullRequestUrls, author, conversation, crossProjectActive, fail, isLeads, person, stableId, syncLeads, numberConversations, nextConversationNumber, renderWorkTask,
   finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY,
-  type Actor, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
+  type Actor, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { routingOverrideSchema } from './routingPolicy.js'
@@ -1391,12 +1391,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (existing) removeAgent(existing)
       // A Buddy runs where the Swarm's agents run, under that machine's own rules: its Machines list.
       const pool = machineContribution(state, command.machineId) ?? fail('BUDDY_MACHINE', 'Add this machine to the Swarm first: a Buddy runs on one of its machines.', 403)
-      // A Codex Buddy keeps its engine's full permissions, read-only files being all that hold it back: only on its owner's
-      // own machine, until Codex has the Claude Buddy's pre-approved commands (Lead's ruling, privacy review of #1992).
-      if (command.engine === 'codex' && pool.contributorId !== me.id) {
-        fail('BUDDY_CODEX_OWN_MACHINE', 'A Codex Buddy runs only on your own machine. Pick one of yours, or choose Claude for this machine.', 403)
-      }
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
+      // Like a Lead, a Buddy runs only on its owner's own machine, in their own account, for Claude and Codex alike: never a
+      // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28).
+      if (pool.contributorId !== me.id || grant.machineOwnerId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') {
+        fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
+      }
       const contributor = person(state, grant.contributorId)
       let chat = state.conversations.find(c => c.id === chatId)
       if (!chat) {
@@ -1407,9 +1407,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         state.conversations.push(chat)
       }
       chat.archived = false
-      const request = teamStartRequest(state, { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
+      // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
+      const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
-        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }, project, context.teamAccountsIdle, context.teamMachines)
+        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')

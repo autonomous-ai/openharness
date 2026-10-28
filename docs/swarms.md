@@ -195,16 +195,16 @@ the work as usual; a Buddy never assigns work, starts agents, changes code or op
 The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy, fails
 any still starting, and stops their posts. Their chats stay for their owners to read.
 
-- Each person may add one Buddy per project. They choose the project, a machine in the Swarm's Machines list, and
-  Claude Code or Codex. The Buddy runs under that machine's own rules, like any Swarm agent. The person whose machine
-  runs it can see its terminal, so the add screen and the chat name that person.
+- Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
+  list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  account: never on a machine shared with them, and never in a Harness Team account.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.
 - A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
-  file editing is turned off, and the files in its own copy of the project are read-only. It may run on any machine its
-  owner may use. A Codex Buddy keeps Codex's full permissions with read-only files, so it runs only on its owner's own
-  machines (follow-up: give Codex the same pre-approved commands). No Buddy gets the Harness GitHub App's token.
+  file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
+  full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the
+  Harness GitHub App's token.
   Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
   broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
