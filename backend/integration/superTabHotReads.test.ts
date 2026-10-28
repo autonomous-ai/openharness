@@ -120,7 +120,11 @@ it('reuses the host timestamp at the same stamp, including a repeated wake with 
       lastChangedAt: tab.lastChangedAt, unchanged: true })))
   })
   const scans = entries.filter(e => /^Swarm(Head|Member|Agent|Group|Machine|Start|Progress)$/.test(e.command?.aggregate as string))
-    .filter(e => (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: unknown } } }>)?.[0]?.$match?.tabId?.$in)
+    .filter(e => {
+      const match = (e.command?.pipeline as Array<{ $match?: { tabId?: { $in?: unknown } } }>)?.[0]?.$match
+      // Timestamp scans match only tabId; the host's indexed wake query also bounds changedAt and hostMachineIds.
+      return match?.tabId?.$in && Object.keys(match).length === 1
+    })
   expect(scans.map(e => e.command?.aggregate)).toEqual([])
 
   // A committed change invalidates the timestamp along with the host inputs; a cold/direct read agrees.
