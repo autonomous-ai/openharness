@@ -9,7 +9,7 @@ import { hostname } from 'os'
 import { env } from '../config/env.js'
 
 // pm2 sets NODE_APP_INSTANCE to the 0-based worker index; a bare `node dist/server.js` has none → 0.
-const WORKER_INDEX = Number(process.env.NODE_APP_INSTANCE ?? '0') || 0
+export const WORKER_INDEX = Number(process.env.NODE_APP_INSTANCE ?? '0') || 0
 
 /** Unique + stable id for this instance/worker (used as the value of agent:{machineId}:appinst). */
 export const INSTANCE_ID = `${env.BACKEND_INSTANCE_ID || hostname()}-${WORKER_INDEX}`
