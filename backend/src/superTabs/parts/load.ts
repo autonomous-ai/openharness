@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client'
 import { delegate, extracted, partId, type PartRow } from './write.js'
 import type { GroupData, HeadData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
+import { ms } from './light.js'
 
 type Transaction = Prisma.TransactionClient
 type Where = Record<string, unknown>
@@ -84,14 +85,18 @@ export async function loadDormant(tx: Transaction, tabId: string,
 }
 
 /** The newest data change of each Swarm, over all its parts (design section 3.7). A touch does not count.
- *  One newest-row read per Swarm and kind on the (tabId, changedAt) index: a groupBy here can panic the Prisma engine on
- *  Mongo, which then fails every later query of the process (as groupBy on SuperTabDecision did, 2026-10-27). */
+ *  One `$group` with `$max` per part kind, run by Mongo itself: Prisma's groupBy here can panic its engine on Mongo, which
+ *  then fails every later query of the process (as groupBy on SuperTabDecision did, 2026-10-27). */
 export async function lastChangedAt(tx: Transaction, tabIds: string[]): Promise<Map<string, number>> {
   const newest = new Map<string, number>()
-  const rows = await Promise.all(tabIds.flatMap(tabId => PART_KINDS.map(kind => delegate(tx, kind)
-    .findFirst({ where: { tabId }, orderBy: { changedAt: 'desc' }, select: { tabId: true, changedAt: true } }))))
-  for (const row of rows) {
-    if (row && row.changedAt.getTime() > (newest.get(row.tabId) ?? 0)) newest.set(row.tabId, row.changedAt.getTime())
+  if (!tabIds.length) return newest
+  for (const kind of PART_KINDS) {
+    const rows = await delegate(tx, kind).aggregateRaw({ pipeline: [{ $match: { tabId: { $in: tabIds } } },
+      { $group: { _id: '$tabId', at: { $max: '$changedAt' } } }] }) as Array<{ _id: string; at: unknown }>
+    for (const row of rows) {
+      const at = row.at ? ms(row.at) : 0
+      if (at > (newest.get(row._id) ?? 0)) newest.set(row._id, at)
+    }
   }
   return newest
 }
