@@ -96,11 +96,13 @@ export async function loadChanged(tx: Transaction, tabIds: string[], since: Date
   return changed
 }
 
-/** Dormant groups the caller pages through, newest activity first, 50 at a time. */
+/** Dormant groups the caller pages through, newest activity first, 50 at a time. A later page starts at its cursor's time,
+ *  a bound on the index ([tabId, projectId, dormant, lastActivityAt, key]); the cursor's `or` alone is no bound, and each page
+ *  read every newer group again. */
 export async function loadDormant(tx: Transaction, tabId: string,
   page: { projectId?: string; before?: { lastActivityAt: number; key: string } }): Promise<Part<GroupData>[]> {
-  const before = page.before && { OR: [{ lastActivityAt: { lt: new Date(page.before.lastActivityAt) } },
-    { lastActivityAt: new Date(page.before.lastActivityAt), key: { lt: page.before.key } }] }
+  const at = page.before && new Date(page.before.lastActivityAt)
+  const before = page.before && { lastActivityAt: { lte: at }, OR: [{ lastActivityAt: { lt: at } }, { key: { lt: page.before.key } }] }
   const rows = await tx.swarmGroup.findMany({ where: { tabId, deleted: false, dormant: true, ...(page.projectId ? { projectId: page.projectId } : {}),
     ...before }, orderBy: [{ lastActivityAt: 'desc' }, { key: 'desc' }], take: 50 })
   return rows.map(row => toPart<GroupData>('group', row as unknown as PartRow))
