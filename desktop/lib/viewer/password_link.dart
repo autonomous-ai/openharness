@@ -70,8 +70,9 @@ Future<PasswordLinkResult> linkWithPassword({
   Duration timeout = const Duration(seconds: 30),
 }) async {
   onProgress?.call(PasswordLinkStage.connecting);
+  // It says what it is (`?client=`; backend lib/wsAttribution.ts, WebSocket roadmap Phase 0).
   final uri = Uri.parse('$wsBaseUrl/api/web-ws').replace(
-    queryParameters: {'autonomousEnv': autonomousEnv},
+    queryParameters: {'autonomousEnv': autonomousEnv, 'client': 'link'},
   );
   final channel = socket(uri, [accessToken]);
   final run = _PasswordLinkRun(machineId, password, identity, channel, onProgress);
