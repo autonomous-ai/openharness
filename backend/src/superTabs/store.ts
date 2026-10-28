@@ -572,7 +572,7 @@ export class SuperTabStore {
   /** `reads`: one request's reads, shared by every agent it checks (GrantReads). */
   async agentGrant(tx: Transaction, state: SuperTabState, target: Agent, reads?: GrantReads): Promise<void> {
     const once = <T>(key: string, read: () => Promise<T>) => reads ? reads.once(key, read) : read()
-    await requireWorkspaceAccess(tx, state, target.contributorId, reads)
+    await once(`workspace:${state.workspaceId}:${target.contributorId}`, () => requireWorkspaceAccess(tx, state, target.contributorId))
     const machine = await once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
       where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } }))
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
