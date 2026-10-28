@@ -70,3 +70,14 @@ ConversationServer humansSwarm() {
   };
   return server;
 }
+
+/// Adds workgroups #1 to #[count] to the Pilot project, created in that order.
+void addNumberedWorkgroups(ConversationServer server, int count) {
+  final conversations = server.state['conversations'] as List;
+  for (var number = 1; number <= count; number++) {
+    conversations.add({
+      ...conversationFixture('g$number', 'Workgroup $number'),
+      'number': number,
+    });
+  }
+}
