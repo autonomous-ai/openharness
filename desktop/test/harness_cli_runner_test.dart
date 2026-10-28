@@ -16,6 +16,36 @@ void main() {
     if (await scratch.exists()) await scratch.delete(recursive: true);
   });
 
+  // 10-27: a test reached this computer's real CLI and signed it out. `harness stop` and `start`
+  // from a test would take its daemon down the same way.
+  test('under flutter test, a runner with the real process functions runs '
+      'nothing', () async {
+    final home = Directory('${scratch.path}/home')..createSync();
+    final harnessHome = Directory('${home.path}/.harness')..createSync();
+    final calls = File('${scratch.path}/calls.txt');
+    // A stand-in for the managed Node: it only writes down what it was asked.
+    final node = File('${harnessHome.path}/runtime/node-v22/bin/node')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('#!/bin/sh\necho "\$@" >> ${calls.path}\n');
+    await Process.run('chmod', ['+x', node.path]);
+    File('${harnessHome.path}/runtime/current-node')
+      ..createSync(recursive: true)
+      ..writeAsStringSync('${node.path}\n');
+    File('${harnessHome.path}/cli/cli.js').createSync(recursive: true);
+    final runner = HarnessCliRunner(
+      harnessHome: harnessHome,
+      environment: {'HOME': home.path, 'PATH': '/usr/bin'},
+      isWindows: false,
+    );
+
+    await expectLater(runner.run(['stop']), throwsA(isA<ProcessException>()));
+    await expectLater(
+      runner.start(['logout']),
+      throwsA(isA<ProcessException>()),
+    );
+    expect(calls.existsSync(), isFalse, reason: 'nothing was run');
+  }, skip: Platform.isWindows);
+
   test(
     'uses the managed Node runtime and CLI bundle without a shell',
     () async {
