@@ -57,23 +57,49 @@ it('does not reflect a database error or report contents', async () => {
   expect(response.statusCode).toBe(503)
   expect(response.body).not.toContain('PRIVATE_CANARY')
 })
+/** A busy answer says when to come back: whole seconds, spread over 30 to 120 so a refused fleet does not return at once. */
+function expectRetryAfter(response: { headers: Record<string, unknown> }) {
+  const seconds = Number(response.headers['retry-after'])
+  expect(Number.isInteger(seconds)).toBe(true)
+  expect(seconds).toBeGreaterThanOrEqual(30)
+  expect(seconds).toBeLessThanOrEqual(120)
+}
 it('returns retryable backpressure without admitting another database write', async () => {
   methods.ingestProductUsage.mockRejectedValue({ code: 'USAGE_BUSY', message: 'PRIVATE_CANARY' })
   const response = await submit(good)
   expect(response.statusCode).toBe(429)
   expect(response.json().error.code).toBe('USAGE_BUSY')
+  expectRetryAfter(response)
   expect(response.body).not.toContain('PRIVATE_CANARY')
 })
+// Contention that outlasted its retries is load, not an outage: try later, with the cause kept apart.
 it.each([['P2034', 'USAGE_WRITE_CONFLICT'], ['P2002', 'USAGE_WRITE_CONFLICT'],
-  ['P2028', 'USAGE_TRANSACTION_FAILED'], ['PRIVATE_CANARY', 'USAGE_UNAVAILABLE']])(
-  'returns only the fixed delivery category for storage error %s', async (code, expected) => {
+  ['P2028', 'USAGE_TRANSACTION_FAILED'], ['P2024', 'USAGE_BUSY']])(
+  'answers busy storage error %s with 429, its fixed category and a Retry-After', async (code, expected) => {
     methods.ingestProductUsage.mockRejectedValue(Object.assign(new Error('PRIVATE_CANARY'), { code, meta: 'PRIVATE_CANARY' }))
     const response = await submit(good)
-    expect(response.statusCode).toBe(503)
+    expect(response.statusCode).toBe(429)
     expect(response.json().error.code).toBe(expected)
+    expectRetryAfter(response)
     expect(response.body).not.toContain('PRIVATE_CANARY')
   },
 )
+it('answers a Mongo lock wait that outlasted its retries as busy', async () => {
+  methods.ingestProductUsage.mockRejectedValue(new Error('PRIVATE_CANARY Error code 24 (LockTimeout): Unable to acquire IX lock, labels: {"TransientTransactionError"}'))
+  const response = await submit(good)
+  expect(response.statusCode).toBe(429)
+  expect(response.json().error.code).toBe('USAGE_BUSY')
+  expectRetryAfter(response)
+  expect(response.body).not.toContain('PRIVATE_CANARY')
+})
+// An outage stays 503, so the counters still show storage down.
+it.each(['P1001', 'PRIVATE_CANARY'])('answers storage error %s as unavailable, not busy', async code => {
+  methods.ingestProductUsage.mockRejectedValue(Object.assign(new Error('PRIVATE_CANARY'), { code }))
+  const response = await submit(good)
+  expect(response.statusCode).toBe(503)
+  expect(response.json().error.code).toBe('USAGE_UNAVAILABLE')
+  expect(response.body).not.toContain('PRIVATE_CANARY')
+})
 it('accepts the same native Desktop report exercised through the real daemon proxy', async () => {
   const report = JSON.parse(readFileSync(new URL('../../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))
   expect((await submit(report)).statusCode).toBe(200)
@@ -253,7 +279,9 @@ it('bounds untrusted setup writes independently of signed-in reports', async () 
   methods.ingestSetupUsage.mockReturnValue(done)
   const pending = Array.from({ length: 4 }, () => sendSetup().then((r: { statusCode: number }) => r.statusCode))
   await vi.waitFor(() => expect(methods.ingestSetupUsage).toHaveBeenCalledTimes(4))
-  expect((await sendSetup()).statusCode).toBe(429)
+  const busy = await sendSetup()
+  expect(busy.statusCode).toBe(429)
+  expectRetryAfter(busy)
   expect((await submit(good)).statusCode).toBe(200)
   finish({ accepted: true })
   expect(await Promise.all(pending)).toEqual([200, 200, 200, 200])
@@ -291,6 +319,20 @@ it('refuses Hub reports with credentials, foreign or malformed counters, or extr
   expect((await submit({ ...good, counters: { hub_fork: 1 } })).statusCode).toBe(400)
   expect((await sendSetup({ ...setup, counters: { hub_fork: 1 } })).statusCode).toBe(400)
 })
+it('answers busy storage behind setup and Hub reports as 429 with a Retry-After, and an outage as 503', async () => {
+  for (const send of [() => sendSetup(), () => sendHub()]) {
+    methods.ingestSetupUsage.mockRejectedValueOnce(Object.assign(new Error('PRIVATE_CANARY'), { code: 'P2034' }))
+    const busy = await send()
+    expect(busy.statusCode).toBe(429)
+    expect(busy.json().error.code).toBe('USAGE_UNAVAILABLE')
+    expectRetryAfter(busy)
+    expect(busy.body).not.toContain('PRIVATE_CANARY')
+    methods.ingestSetupUsage.mockRejectedValueOnce(Object.assign(new Error('PRIVATE_CANARY'), { code: 'P1001' }))
+    const down = await send()
+    expect(down.statusCode).toBe(503)
+    expect(down.headers['retry-after']).toBeUndefined()
+  }
+})
 it('does not reflect a Hub storage error', async () => {
   methods.ingestSetupUsage.mockRejectedValue(new Error('PRIVATE_CANARY'))
   const response = await sendHub()
@@ -306,6 +348,7 @@ it('bounds Hub writes with a budget of their own, so they never starve setup mea
   const busy = await sendHub()
   expect(busy.statusCode).toBe(429)
   expect(busy.json().error.code).toBe('USAGE_UNAVAILABLE')
+  expectRetryAfter(busy)
   const setupWhileHubBusy = sendSetup()
   await vi.waitFor(() => expect(methods.ingestSetupUsage).toHaveBeenCalledTimes(5))
   finish({ accepted: true })
