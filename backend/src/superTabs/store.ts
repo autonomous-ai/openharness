@@ -1624,8 +1624,18 @@ export class SuperTabStore {
     return rows.map(r => r.assignmentId).filter(id => !id.startsWith('release-') && !active.has(id))
   }
 
-  /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. */
-  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>) {
+  /** Records committed messages, each at the sequence its conversation gave it, and one delivery per recipient. The time
+   *  checks of a machine's report and of a Lead's poll pass `skipWritten`: their notices are written once, and one already
+   *  there is skipped rather than failing every later report and poll (2026-10-28: one duplicate stopped both for hours). */
+  private async writeMessages(tx: Transaction, tabId: string, state: SuperTabState, messages: MessageDraft[], sequences: ReadonlyMap<string, number>,
+    skipWritten = false) {
+    if (skipWritten && messages.length) {
+      const written = new Set((await tx.superTabMessage.findMany({ where: { id: { in: messages.map(m => m.id) } }, select: { id: true } })).map(m => m.id))
+      if (written.size) {
+        logger.warn('Skipped Swarm notices already written', { tabId, ids: [...written] })
+        messages = messages.filter(m => !written.has(m.id))
+      }
+    }
     const rows: Prisma.SuperTabMessageCreateManyInput[] = []
     const deliveries: Prisma.SuperTabDeliveryCreateManyInput[] = []
     for (const message of messages) {
@@ -1862,7 +1872,7 @@ export class SuperTabStore {
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
-        await this.writeMessages(tx, tabId, state, rows, sequences)
+        await this.writeMessages(tx, tabId, state, rows, sequences, true)
         return { version }
       }
       if (!state.machines?.includes(pool)) return saved()
@@ -2043,7 +2053,7 @@ export class SuperTabStore {
       // A loss, a start's failure or a stop was judged from a machine's report: a newer report makes this write retry.
       await this.save(tx, loaded, state, clock.next(), [...judgedMachines(loaded.state, state, written), ...stoppedMachines(state, idle),
         ...woken ? [{ kind: 'agent' as const, key: agentId }] : []])
-      await this.writeMessages(tx, tabId, state, written, sequences)
+      await this.writeMessages(tx, tabId, state, written, sequences, true)
       const rows = await tx.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: [...OPEN_DELIVERY] } },
         orderBy: { createdAt: 'asc' }, take: 100 })
       const allowed: SuperTabDelivery[] = []

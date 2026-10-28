@@ -236,6 +236,30 @@ describe('work that loses its owner', () => {
       .toContain('lost its task "Ship the parser": its session on Worker Mac stopped.')
   })
 
+  // The same day: one notice already written must not stop every later report and poll. The time checks write it once; an
+  // id already there is skipped, and the rest of the write goes through.
+  it('skips a lost notice already written, so its machine\'s report and its Lead\'s poll still go through', async () => {
+    const f = await swarm()
+    f.clock.now += MINUTE
+    await db.superTabMessage.create({ data: { id: stableId('work-lost', f.assignmentId, String(f.clock.now)), tabId: f.tab, conversationId: f.group,
+      sequence: 1, author: { kind: 'agent', id: f.lead }, text: 'Written earlier', replyTo: null, recipientIds: [], mentions: [] } })
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'its session on Worker Mac stopped' } })
+    expect((await f.lostRows()).map(m => m.text)).toContain('Your task "Ship the parser" moved: its session on Worker Mac stopped. '
+      + 'Stop working on it; your status and results for it are no longer accepted.')
+    await expect(f.leadInbox()).resolves.toBeDefined()
+  })
+
+  it('skips a scheduled notice already written on its Lead\'s poll too', async () => {
+    const f = await swarm()
+    await f.observe('test-host', [f.harness.worker])
+    f.clock.now += 3 * MINUTE
+    await db.superTabMessage.create({ data: { id: stableId('work-lost', f.assignmentId, String(f.clock.now)), tabId: f.tab, conversationId: f.group,
+      sequence: 1, author: { kind: 'agent', id: f.lead }, text: 'Written earlier', replyTo: null, recipientIds: [], mentions: [] } })
+    await f.leadInbox()
+    expect(await f.assignment()).toMatchObject({ status: 'lost' })
+  })
+
   // #1757 review, 2: a receipt replays the first answer, so it never says who holds the task now; the host's assignment
   // rows do (cli superTabs/limitResume.ts reads them before typing).
   it('replays a resume whose answer was lost even after a takeover, while its host\'s assignment rows no longer list it', async () => {
