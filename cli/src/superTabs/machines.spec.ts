@@ -148,6 +148,11 @@ describe('contributed machine executor', () => {
     expect(where).toMatchObject({ machineId: 'host', dataDir: '/isolated-pool-fixture' })
     await (scoped as (p: unknown) => Promise<unknown>)({ action: 'startStatus' })
     expect(f.backend).toHaveBeenLastCalledWith(f.core, 'GET', '/api/super-tabs/hosts/host/starts/tab/start', undefined)
+    // Any other read went out as an empty start report, which the backend refused with a 400 at every start (prod logs
+    // 2026-10-28): the start endpoint takes only this start's commands.
+    const sent = f.backend.mock.calls.length
+    expect(await (scoped as (p: unknown) => Promise<unknown>)({ action: 'status' })).toMatchObject({ error: 'HOST_UNSUPPORTED' })
+    expect(f.backend.mock.calls.length).toBe(sent)
     expect(f.close).toHaveBeenCalledOnce()
     await f.machine.tick()
     expect(f.open).toHaveBeenCalledOnce()
