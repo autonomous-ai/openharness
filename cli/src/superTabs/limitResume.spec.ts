@@ -84,6 +84,26 @@ describe('a host resuming a task its agent lost to a usage limit', () => {
     expect(t.steps).toEqual(['ask work.resume', 'check tab w1 h1', `type ${CONTINUE}`])
   })
 
+  // Diego's issue, 2026-10-27: settled losses and their retry times were kept for the life of the daemon, one per lost task.
+  it('forgets a settled loss after it ages out', async () => {
+    const replies = [{ status: 503, body: { success: false, error: { code: 'BACKEND_UNAVAILABLE', message: 'Down.' } } },
+      { status: 409, body: { success: false, error: { code: 'TASK_MOVED', message: 'This task was handed on or closed, so it does not resume.' } } }]
+    const t = setup({ reply: () => replies.shift()! })
+    const state = t.resumer as unknown as Record<'settled' | 'retryAt', Map<string, unknown>>
+    t.wait(30 * 60_000)
+    await t.resumer.tick([row()])
+    t.wait(15_000)
+    await t.resumer.tick([row()])
+    expect([state.settled.size, state.retryAt.size]).toEqual([1, 1])
+    // A roster read from seconds before still lists the loss: it is not asked about again.
+    t.wait(5_000)
+    await t.resumer.tick([row()])
+    expect(t.steps).toEqual(['ask work.resume', 'ask work.resume'])
+    t.wait(11 * 60_000)
+    await t.resumer.tick([])
+    expect([state.settled.size, state.retryAt.size]).toEqual([0, 0])
+  })
+
   it('resumes the same task again when it is lost to a limit a second time (#1757 review, 1)', async () => {
     const t = setup()
     t.wait(30 * 60_000)
