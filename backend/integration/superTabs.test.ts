@@ -124,19 +124,41 @@ describe('durable group pull request links', () => {
     return (group as unknown as { pullRequestUrls?: string[] }).pullRequestUrls
   }
 
+  /** A work group with a Lead and its assigned builder. */
+  const workGroup = async () => {
+    const { tab, lead } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Fix the dial', brief: 'Closed tabs leave the dial',
+      checks: [{ description: 'Dial matches the app', independent: false }] })).result.conversationId as string
+    const builder = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Dial Engineer', configuration: config, lead: false })).result.agentId as string
+    await run(tab, { type: 'work.assign', conversationId: group, agentId: builder })
+    const say = (text: string, user = owner, agentId?: string) => run(tab, { ...message(text), conversationId: group } as Command, user, agentId)
+    return { tab, lead, group, builder, say }
+  }
+
+  it('links a pull request the group builder posts, not one its Lead or a person only mentions (group #369)', async () => {
+    const { tab, lead, group, builder, say } = await workGroup()
+    await run(tab, { type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    await say(`The token fix is ${pr(1817)}`, host, lead)
+    await say(`Is this like ${pr(1903)}?`)
+    expect(await links(tab, group)).toEqual([])
+    await say(`Opened ${pr(61)}`, host, builder)
+    expect(await links(tab, group)).toEqual([pr(61)])
+  })
+
   it('keeps one link beyond the latest 100 messages', async () => {
-    const { tab } = await fixture()
-    await run(tab, message(`Review ${pr(41)}`))
-    await run(tab, message(`Same PR again: ${pr(41)}`))
-    expect(await links(tab)).toEqual([pr(41)])
+    const { tab, group, builder, say } = await workGroup()
+    await say(`Review ${pr(41)}`, host, builder)
+    await say(`Same PR again: ${pr(41)}`, host, builder)
+    expect(await links(tab, group)).toEqual([pr(41)])
     await db.superTabMessage.createMany({ data: Array.from({ length: 101 }, (_, i) => ({
-      id: randomUUID(), tabId: tab, conversationId: 'lead', sequence: 1000 + i,
+      id: randomUUID(), tabId: tab, conversationId: group, sequence: 1000 + i,
       author: { kind: 'person', id: owner.sub, name: owner.email }, text: `Later note ${i}`,
       replyTo: null, recipientIds: [],
     })) })
-    expect((await store.messages(owner, tab, 'lead', {})).messages).toHaveLength(100)
-    expect((await store.messages(owner, tab, 'lead', {})).messages.some(row => row.text.includes(pr(41)))).toBe(false)
-    expect(await links(tab)).toEqual([pr(41)])
+    expect((await store.messages(owner, tab, group, {})).messages).toHaveLength(100)
+    expect((await store.messages(owner, tab, group, {})).messages.some(row => row.text.includes(pr(41)))).toBe(false)
+    expect(await links(tab, group)).toEqual([pr(41)])
   })
 
   it('lists links from check evidence and a work result even when no message has those links', async () => {
@@ -201,6 +223,13 @@ describe('native recording restart recovery', () => {
     })) })
     expect((await store.messages(owner, f.tab, f.group, {})).messages.some(row => row.text.includes(url))).toBe(false)
     expect((await group()).pullRequestUrls).toEqual([url])
+  })
+
+  it('does not link a pull request a person only types into the builder terminal', async () => {
+    const f = await recoveryFixture()
+    await f.append({ turnId: 'next_turn', kind: 'prompt', previousEventId: f.checkpoint.eventId,
+      text: 'Compare with https://github.com/example/project/pull/1817', truncated: false, interrupted: false })
+    expect((await store.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.pullRequestUrls).toEqual([])
   })
 
   it.each(['recording_restarted', 'history_lost', 'agent_stopped'] as const)('wakes only the Lead and blocks working work for %s with a checkpoint time and no visible ids', async reason => {

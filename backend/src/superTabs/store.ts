@@ -933,9 +933,13 @@ export class SuperTabStore {
       const effects = applyCommand(original, actor, command, context)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
       const shown = effects.messages.filter(message => !agentOnly(message.source))
+      // A group links the pull requests its own builder posts; one its Lead or a person only mentions is not its result
+      // (group #369 got an unrelated PR this way). The Lead links one explicitly by recording its merge.
       for (const group of effects.state.conversations) {
+        const builder = group.assignment?.agentId
         appendPullRequestUrls(group, [
-          ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
+          ...shown.filter(message => message.conversationId === group.id && message.author.kind === 'agent' && message.author.id === builder)
+            .map(message => message.text),
           ...group.checks.map(check => check.evidence), group.assignment?.result,
         ])
       }
