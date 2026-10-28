@@ -6,8 +6,10 @@
  * The token goes to git through `harness git-credential` (superTabs/gitCredential.ts), which asks here over the local
  * socket, and to gh through the session's own `hosts.yml`. Nothing here logs a token.
  */
+import { readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import type { CoreApi } from '../core/api.js'
-import { swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
+import { swarmGitHubRoot, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
 
@@ -85,6 +87,8 @@ export class GitHubTokenRefresher {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly primed = new Map<string, { assignmentId: string; expiresAt: number }>()
+  /** Session folders whose gh login was emptied after their session stopped: each is looked at once per daemon run. */
+  private readonly emptied = new Set<string>()
   private readonly now: () => number
   private readonly intervalMs: number
 
@@ -114,12 +118,31 @@ export class GitHubTokenRefresher {
     return this.running
   }
 
+  /**
+   * A session that stopped takes its token with it: its folder's gh login is emptied. A task ended as its agent stopped left
+   * the last token there, since only running sessions are looked at (local Team account run, 2026-10-28); so did a session
+   * that stopped while no daemon ran. The backend revokes the token when the task ends; this keeps none on disk.
+   */
+  private emptyStopped(running: ReadonlySet<string>): void {
+    const sessions = join(swarmGitHubRoot(this.core.dataDir), 'sessions')
+    let names: string[]
+    try { names = readdirSync(sessions) } catch { return }
+    for (const name of names) {
+      const dir = swarmGitHubSessionDir(this.core.dataDir, name)
+      if (!dir || running.has(dir) || this.emptied.has(dir)) continue
+      writeSessionGitHub(dir, null)
+      this.emptied.add(dir)
+    }
+    for (const dir of running) this.emptied.delete(dir)
+  }
+
   private async look(): Promise<void> {
     const sessions = this.core.agents.live().flatMap(session => {
       const dir = githubDir(this.core, session)
       return dir ? [{ session, dir }] : []
     })
     for (const id of this.primed.keys()) if (!sessions.some(s => s.session.agentId === id)) this.primed.delete(id)
+    this.emptyStopped(new Set(sessions.map(s => s.dir)))
     if (!sessions.length) return
     const machineId = this.core.daemon.machineId()
     if (!identifier(machineId)) return

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { fakeCore } from '../testing/fakeCore.js'
 import type { RegisteredSession } from '../lib/registry.js'
-import { swarmGitHubSessionDir } from '../lib/swarmGitHub.js'
+import { swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
 import { GitHubTokenRefresher, githubToken, RENEW_BELOW_MS } from './github.js'
 import { hostForm } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
@@ -34,7 +34,7 @@ function setup(routes: (method: string, path: string, body: unknown) => Reply, s
   const core = fakeCore({ dataDir, account: { backend }, agents: { live: vi.fn(() => live), byAgent: vi.fn((id: string) => live.find(s => s.agentId === id)) } })
   const hosts = (id = 'harness-1') => readFileSync(join(swarmGitHubSessionDir(dataDir, `harness-codex-${id}`)!, 'gh', 'hosts.yml'), 'utf8')
   const trailers = (id = 'harness-1') => readFileSync(join(swarmGitHubSessionDir(dataDir, `harness-codex-${id}`)!, 'trailers'), 'utf8')
-  return { core, backend, hosts, trailers }
+  return { core, backend, hosts, trailers, live, dataDir }
 }
 
 describe('a local agent\'s GitHub token', () => {
@@ -125,6 +125,24 @@ describe('keeping gh\'s token fresh', () => {
     await refresher.tick()
     expect(hosts()).toBe('{}\n')
     expect(asked()).toBe(3)
+  })
+
+  // Local Team account run, 2026-10-28: a task cancelled as its agent stopped left the last token in that session's gh login,
+  // since the refresher looks only at running sessions.
+  it('empties the gh login of a session that stopped, also one left from before the daemon started', async () => {
+    const { core, hosts, live, dataDir } = setup(method => method === 'GET'
+      ? ok(hostForm([row('tab-1', 'agent-1')], { assignments: [{ tabId: 'tab-1', assignmentId: 'attempt-1', harnessId: 'harness-1' }] }))
+      : issued('ghs_fixtureToken0000007'))
+    const refresher = new GitHubTokenRefresher(core, sourcesOf(core))
+    await refresher.tick()
+    expect(hosts()).toContain('ghs_fixtureToken0000007')
+    live.length = 0
+    await refresher.tick()
+    expect(hosts()).toBe('{}\n')
+    // A session that stopped while no daemon ran: its folder is found on the next look.
+    writeSessionGitHub(swarmGitHubSessionDir(dataDir, 'harness-codex-old')!, 'ghs_fixtureToken0000008')
+    await new GitHubTokenRefresher(core, sourcesOf(core)).tick()
+    expect(hosts('old')).toBe('{}\n')
   })
 
   it('reads nothing from the backend while no session uses the app, and leaves tokens be while it is away', async () => {
