@@ -39,6 +39,11 @@ const envSchema = z.object({
   // Base internal port; each worker binds MESH_PORT_BASE + NODE_APP_INSTANCE (distinct per worker).
   MESH_PORT_BASE: z.string().default('8095').transform(Number),
 
+  // On SIGTERM the API answers /api/ready with 503 at once, then keeps serving this long before it closes its
+  // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
+  // Kubernetes sets it below terminationGracePeriodSeconds (backend/README.md).
+  DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
+
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.
   TERMINAL_P2P_ROLLOUT_PERCENT: z.coerce.number().int().min(0).max(100).default(100),
