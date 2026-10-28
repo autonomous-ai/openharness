@@ -73,7 +73,8 @@ export class SuperTabNativeStore {
     const group = readConversation(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, record.conversationId)
     // A terminal drives its session and its answers land in the conversation: only those who may drive it may use it.
     try { mayDrive(state, { kind: 'person', userId: binding.operator.id, email: binding.operator.name }, target) } catch (error) {
-      if (error instanceof SuperTabError) fail('NATIVE_CONTEXT_REVOKED', 'Only this agent\'s machine\'s owner can use its terminal now.', 403)
+      // The driving rule's own reason (read-only, the agent's project gone, a Lead or a private session), under the code clients reopen on.
+      if (error instanceof SuperTabError) fail('NATIVE_CONTEXT_REVOKED', error.message, 403)
       throw error
     }
     if (operator.membershipGeneration !== binding.operator.membershipGeneration || group.archived || !group.agentIds.includes(target.id)
