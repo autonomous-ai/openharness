@@ -355,6 +355,49 @@ void main() {
     },
   );
 
+  testWidgets('opens only web links, and shows any other link as plain text', (
+    tester,
+  ) async {
+    const channel = MethodChannel('plugins.flutter.io/url_launcher');
+    final launches = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      if (call.method == 'launch') {
+        launches.add((call.arguments as Map)['url'] as String);
+      }
+      return true;
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    final server = humansSwarm();
+    final dee = (server.leaderboard!['people'] as List).first as Map;
+    (dee['details'] as Map)['shipped'] = [
+      {'title': 'A file', 'prUrl': 'file:///etc/hosts'},
+      {'title': 'A script', 'prUrl': 'javascript:alert(1)'},
+      {'title': 'An app', 'prUrl': 'x-harness://open'},
+      {'title': 'Plain web', 'prUrl': 'http://example.com/pull/1'},
+    ];
+    final controller = await show(tester, server);
+    await tester.tap(person('peer'));
+    await tester.pumpAndSettle();
+    for (final title in ['A file', 'A script', 'An app', 'Plain web']) {
+      await tester.tap(find.text(title));
+      await tester.pumpAndSettle();
+    }
+    expect(launches, ['http://example.com/pull/1']);
+    // Only the web link reads as a link.
+    expect(
+      find.ancestor(of: find.text('A file'), matching: find.byType(InkWell)),
+      findsNothing,
+    );
+    await close(tester, controller);
+  });
+
   testWidgets('keeps a long list of details inside the window', (tester) async {
     final server = humansSwarm();
     final dee = (server.leaderboard!['people'] as List).first as Map;

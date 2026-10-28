@@ -435,19 +435,23 @@ class _LeaderboardPersonDetails extends StatelessWidget {
               section('🚀 Shipped', 'No pull requests merged yet', [
                 for (final shipped in details.shipped)
                   item(switch (Uri.tryParse(shipped.prUrl ?? '')) {
-                    final link? when link.hasScheme => Semantics(
-                      link: true,
-                      child: InkWell(
-                        onTap: () => launchUrl(
-                          link,
-                          mode: LaunchMode.externalApplication,
-                        ),
-                        child: Text(
-                          shipped.title,
-                          style: text.copyWith(color: DesktopChrome.accent),
+                    // Only a web page opens: a link from the server is data,
+                    // and any other scheme could open a file or an app.
+                    final link?
+                        when const {'http', 'https'}.contains(link.scheme) =>
+                      Semantics(
+                        link: true,
+                        child: InkWell(
+                          onTap: () => launchUrl(
+                            link,
+                            mode: LaunchMode.externalApplication,
+                          ),
+                          child: Text(
+                            shipped.title,
+                            style: text.copyWith(color: DesktopChrome.accent),
+                          ),
                         ),
                       ),
-                    ),
                     _ => Text(shipped.title, style: text),
                   }, ''),
               ]),
