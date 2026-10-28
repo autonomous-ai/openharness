@@ -21,6 +21,8 @@ export function shouldSkipAuth(url: string): boolean {
   const path = url.split('?')[0]
   return (
     path === '/api/health' ||
+    // Readiness probe: the orchestrator carries no token, and the answer names only dependencies and their state.
+    path === '/api/ready' ||
     // Explicitly enabled, credential-free setup totals; its own schema and workload budget apply.
     path === '/api/product-usage/setup' ||
     // Hub totals the website's server forwards with cookies and auth stripped; same rules as setup.

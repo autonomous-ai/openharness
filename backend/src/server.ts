@@ -18,7 +18,9 @@ import { handleManagerUpgrade } from './lib/managerWs.js'
 import { handleAdapterUpgrade } from './lib/adapterWs.js'
 import { logger } from './utils/logger.js'
 import { startTurnCredentialRefresh } from './lib/turnCredentials.js'
-import { closeBus, redisCount, redisSsoProfileStore } from './lib/bus.js'
+import { closeBus, pub, redisCount, redisSsoProfileStore } from './lib/bus.js'
+import { prisma } from './lib/prisma.js'
+import { backendReadinessChecks, createReadiness, drainBeforeClosing, processDrain } from './lib/readiness.js'
 import { useSharedSsoProfileStore } from './lib/ssoAuth.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
@@ -150,7 +152,12 @@ async function start(): Promise<void> {
   // SSO access-token gate for the control API (data-plane auth happens before Fastify).
   registerAuthMiddleware(app)
 
-  await registerControlRoutes(app, { daemons: DAEMONS, count: redisCount })
+  // Mongo always; Redis where one is configured. Each answers within 1 s or counts as down (lib/readiness.ts).
+  const readiness = createReadiness(backendReadinessChecks(process.env, {
+    mongo: () => prisma.$runCommandRaw({ ping: 1 }),
+    redis: () => pub.ping(),
+  }))
+  await registerControlRoutes(app, { daemons: DAEMONS, count: redisCount, readiness })
   logger.info(describeDaemonsSwitch(DAEMONS))
 
   // Dedicated public subdomain app-proxy on its own port (Host-header routed → tunnelled to the node app).
@@ -164,6 +171,9 @@ async function start(): Promise<void> {
     shuttingDown = true
     logger.info(`Received ${signal}, shutting down...`, { openSockets: openSocketCount() })
     try {
+      // Readiness answers 503 from here on. On a signal, keep serving for DRAIN_DELAY_MS first so the load balancer
+      // takes this process out of rotation before its listeners close; a crash closes at once.
+      await drainBeforeClosing(processDrain, exitCode === 0 ? env.DRAIN_DELAY_MS : 0)
       appProxyServer.close()
       meshServer?.close()
       // Start Fastify's close (it tells the http server to stop accepting new connections) but DON'T await
@@ -177,9 +187,10 @@ async function start(): Promise<void> {
       // handlers clear presence/owner keys as fire-and-forget Redis writes. Let them land before closeBus
       // quits the connection, else a half-open socket's key survives on TTL alone.
       await new Promise((resolve) => setTimeout(resolve, 250))
-      // Bounded wait for Fastify to finish (onClose hooks, Prisma disconnect); never block shutdown on it.
+      // Bounded wait for Fastify to finish its onClose hooks; never block shutdown on it.
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
-      await closeBus()
+      // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
+      await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)
     } catch (err) {
       logger.error('Error during shutdown', err)
