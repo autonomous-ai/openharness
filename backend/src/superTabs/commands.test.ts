@@ -2136,6 +2136,28 @@ describe('machine.remove', () => {
     expect(f.state.machineCleanups).toBeUndefined()
   })
 
+  // Review of #1986 (Minor 2, intended): the adds a host makes by itself, the owner's machine running its Lead and a Mac's
+  // Harness Team account joining where the Mac is, take an overdue cleanup's place like the owner's own add; a fresh one
+  // still holds them off without an error.
+  it('lets the automatic adds take an overdue cleanup\'s place, and leaves a fresh one waiting', () => {
+    const f = fixture()
+    const fresh = new Date(1000 + 30 * 60_000 - 1).toISOString()
+    f.state.machineCleanups = [{ machineId: 'host', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh },
+      { machineId: 'team', removalId: 'old', machineOwnerId: 'owner', requestedAt: fresh }]
+    const add = (machineId: string) => ({ type: 'machine.contribute', machineId, name: 'Studio', cwd: '/repo', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      ifMissing: true }) as Command
+    const owners = (now: number, hostMachineId?: string) => ({ contribution: { machineOwnerId: 'owner', contributorId: 'owner', ...(hostMachineId ? { hostMachineId } : {}) }, now })
+    // Fresh: the owner's host skips its automatic add and nothing changes.
+    f.run(add('host'), owner, owners(1000 + 30 * 60_000 - 1))
+    expect([f.state.machines ?? [], f.state.machineCleanups!.map(c => c.machineId)]).toEqual([[], ['host', 'team']])
+    // Overdue: the owner's host adds its machine, then its Team account joins where that Mac is.
+    const later = 1000 + 60 * 60_000
+    f.run(add('host'), owner, owners(later))
+    f.run(add('team'), owner, owners(later, 'host'))
+    expect(f.state.machines!.map(m => [m.machineId, m.hostMachineId, m.removal])).toEqual([['host', undefined, undefined], ['team', 'host', undefined]])
+    expect(f.state.machineCleanups).toBeUndefined()
+  })
+
   it('tells each project\'s chat that the machine left once its host confirmed the cleanup', () => {
     const { f, removalId } = cleaning()
     const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { conversationId: string }
