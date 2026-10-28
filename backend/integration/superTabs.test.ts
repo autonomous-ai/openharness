@@ -127,6 +127,74 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+describe('delivery authority dependencies', () => {
+  it('refuses a native delivery to another receiver when the terminal agent has a private PM chat', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Terminal source', brief: '', checks: [] })).result.conversationId)
+    const worker = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Terminal agent', configuration: config, lead: false })).result.agentId)
+    const { contextId } = await store.native.open(peer, tab, { operationId: randomUUID(), conversationId: group, agentId: worker })
+    const turn = await store.native.append(host, tab, contextId, { turnId: 'private-terminal', kind: 'prompt', previousEventId: null,
+      text: 'Typed before the session became private.', truncated: false, interrupted: false }) as { eventId: string }
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: turn.eventId, agentId: lead } })
+    expect(delivery.nativeContextId).toBe(contextId)
+    expect(delivery.agentId).not.toBe(worker)
+    // An older stored registration can carry privacy through group membership without a confidential mark or a revoked
+    // context. Only the terminal agent's groups reveal it; the receiver is the Lead in the public source conversation.
+    const state = await storedState(tab)
+    expect(state.agents.find(a => a.id === worker)!.confidential).toBeUndefined()
+    state.conversations.push({ ...structuredClone(state.conversations.find(c => c.id === group)!), id: randomUUID(), title: 'Private PM chat',
+      agentIds: [worker], leadId: null, assignment: null, audience: { people: [{ id: owner.sub, generation: state.people.find(p => p.id === owner.sub)!.generation }] } })
+    await saveState(tab, state)
+    expect((await db.superTabNativeContext.findUniqueOrThrow({ where: { id: contextId } })).revoked).toBe(false)
+    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+  })
+
+  it('refuses an older agent without a project when its private project cannot deliver to an outsider', async () => {
+    const { tab, lead } = await fixture()
+    const projectId = String((await run(tab, { type: 'project.create', name: 'Private legacy project', visibility: 'private', brief: '' })).result.projectId)
+    const group = String((await run(tab, { type: 'conversation.create', projectId, title: 'Legacy source', brief: '', checks: [] })).result.conversationId)
+    const sender = String((await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(),
+      name: 'Legacy sender', configuration: config, lead: false })).result.agentId)
+    const state = await storedState(tab)
+    const legacy = state.agents.find(a => a.id === sender)!
+    delete legacy.projectId
+    await saveState(tab, state)
+    // A stale cross-project delivery from before migration must not acquire the public receiver's project identity.
+    const sent = await run(tab, message('Stale legacy delivery.'))
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
+    await db.superTabDelivery.update({ where: { id: delivery.id }, data: { authorKind: 'agent', authorId: sender,
+      authorGeneration: legacy.membershipGeneration } })
+    await expect(store.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+  })
+
+  it('refuses a claim when its person sender is removed after the authority read', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const sent = await run(tab, message('Sent before removal.'), peer)
+    const delivery = await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, agentId: lead, messageId: sent.result.messageId as string } })
+    let removed = false
+    const raced = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (removed) return
+      removed = true
+      // Remove the authority part independently of delivery cancellation, so only the sender touch can reject a stale
+      // authorization decision. The other fixture paths already cover commands cancelling the delivery row itself.
+      await swarmTransaction(db, async tx => {
+        const member = await tx.swarmMember.findFirstOrThrow({ where: { tabId: tab, key: peer.sub } })
+        await guardedWrite(tx, tab, { op: 'remove', kind: 'member', key: peer.sub, seen: member.version,
+          data: member.data as unknown as SuperTabState['people'][number] }, parts.clock.next())
+      })
+    }))
+    await expect(raced.delivery(host, tab, lead, delivery.id, { type: 'claim', claimId: randomUUID() }))
+      .rejects.toMatchObject({ code: 'DELIVERY_REVOKED' })
+    expect(removed).toBe(true)
+    expect((await db.superTabDelivery.findUniqueOrThrow({ where: { id: delivery.id } })).status).toBe('queued')
+  })
+})
+
 describe('durable group pull request links', () => {
   const pr = (number: number) => `https://github.com/example/project/pull/${number}`
   const links = async (tab: string, groupId = 'lead') => {
