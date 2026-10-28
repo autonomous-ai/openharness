@@ -34,6 +34,13 @@ TextStyle _pointsStyle() => grid.AppType.label(
   color: grid.AppPalette.textPrimary,
   fontFeatures: grid.AppFont.tabularFigures,
 );
+
+/// Points of 0 hold the column in quiet ink: nothing to emphasize yet.
+TextStyle _noPointsStyle() => grid.AppType.label(
+  fontWeight: grid.AppFont.regular,
+  color: grid.AppPalette.textSecondary,
+  fontFeatures: grid.AppFont.tabularFigures,
+);
 TextStyle _trendStyle(Color color) =>
     DesktopChrome.metadata(color: color)
         .copyWith(fontFeatures: grid.AppFont.tabularFigures);
@@ -52,16 +59,15 @@ String? leaderboardTrend(SuperTabPersonScore score) {
   return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
 }
 
-/// "16 shipped · 1 unblocked · 43 h lent", leaving out each number that would
-/// read zero; null when all would.
-String? leaderboardNumbers(SuperTabPersonScore score) {
+/// "16 shipped", "1 unblocked", "43 h lent": each number that would not read
+/// zero, in words; empty when all would.
+List<String> leaderboardNumbers(SuperTabPersonScore score) {
   final hours = leaderboardHours(score.lentMs);
-  final parts = [
+  return [
     if (score.shipped > 0) '${score.shipped} shipped',
     if (score.unblocked > 0) '${score.unblocked} unblocked',
     if (hours != '0') '$hours h lent',
   ];
-  return parts.isEmpty ? null : parts.join(' · ');
 }
 
 /// The board's fixed numeric columns, each as wide as its widest value at
@@ -146,7 +152,9 @@ class LeaderboardPersonRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final score = this.score;
     final columns = this.columns;
-    final numbers = score == null ? null : leaderboardNumbers(score);
+    final numbers = score == null
+        ? const <String>[]
+        : leaderboardNumbers(score);
     final trend = score == null ? null : leaderboardTrend(score);
     final radius = BorderRadius.circular(DesktopChrome.rowRadius);
     Widget column(String kind, double width, Widget? child) => Padding(
@@ -208,19 +216,10 @@ class LeaderboardPersonRow extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _name(),
-                        if (numbers != null)
-                          Tooltip(
+                        if (numbers.isNotEmpty)
+                          _Numbers(
                             key: ValueKey('leaderboard-meta-${person.id}'),
-                            message: numbers.replaceFirst(
-                              ' h lent',
-                              ' agent-hours lent',
-                            ),
-                            child: Text(
-                              numbers,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: DesktopChrome.metadata(),
-                            ),
+                            parts: numbers,
                           ),
                       ],
                     ),
@@ -247,7 +246,9 @@ class LeaderboardPersonRow extends StatelessWidget {
                         child: Text(
                           '${score.points}',
                           maxLines: 1,
-                          style: _pointsStyle(),
+                          style: score.points == 0
+                              ? _noPointsStyle()
+                              : _pointsStyle(),
                         ),
                       ),
                     ),
@@ -282,6 +283,55 @@ class LeaderboardPersonRow extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// A person's numbers joined by a spaced middle dot. Where the line does not
+/// fit, whole items fall off its end, never part of a word; the whole line,
+/// lent in agent-hours, is on hover.
+class _Numbers extends StatelessWidget {
+  const _Numbers({super.key, required this.parts});
+  final List<String> parts;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = DesktopChrome.metadata();
+    final scaler = MediaQuery.textScalerOf(context);
+    return Tooltip(
+      message: parts
+          .map((part) => part.replaceFirst(' h lent', ' agent-hours lent'))
+          .join(' · '),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          bool fits(String text) {
+            final painter = TextPainter(
+              text: TextSpan(text: text, style: style),
+              textDirection: TextDirection.ltr,
+              textScaler: scaler,
+              maxLines: 1,
+            )..layout(maxWidth: constraints.maxWidth);
+            final fits = !painter.didExceedMaxLines;
+            painter.dispose();
+            return fits;
+          }
+
+          var shown = parts.length;
+          while (shown > 1 && !fits(parts.take(shown).join(' · '))) {
+            shown--;
+          }
+          final text = parts.take(shown).join(' · ');
+          // A first item too wide even alone (enlarged text in a narrow
+          // pane) wraps between its words rather than losing one.
+          final wraps = !fits(text);
+          return Text(
+            text,
+            maxLines: wraps ? 2 : 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          );
+        },
+      ),
+    );
+  }
 }
 
 /// An arrow and the change against last week, by shape and colour both: up in

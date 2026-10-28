@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/desktop_chrome.dart';
+import 'format.dart';
 import 'model.dart';
 
-/// "Agents waiting on a person now": who and how many, in name order, never a
-/// ranking or blame. Answer goes straight to the viewer's own waiting item, or
+/// Who agents wait on now, in words: "3 agents are waiting on Ken", "1 agent
+/// is waiting on you", in name order, never a ranking or blame. Answer goes straight to the viewer's own waiting item, or
 /// to the first one when none waits on them.
 class LeaderboardWaitingLine extends StatelessWidget {
   const LeaderboardWaitingLine({
@@ -41,31 +42,27 @@ class LeaderboardWaitingLine extends StatelessWidget {
               'No agent is waiting on a person.',
               style: DesktopChrome.metadata(),
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          : Row(
               children: [
-                // The whole width, so the count never wraps beside Answer.
-                Text(
-                  'Agents waiting on a person now: ${waiting.total}',
-                  style: DesktopChrome.metadata(),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final person in waiting.people)
+                        Text(
+                          '${plural(person.count, 'agent')} '
+                          '${person.count == 1 ? 'is' : 'are'} waiting on '
+                          '${person.personId == viewerId ? 'you' : nameOf(person.personId)}',
+                          style: DesktopChrome.metadata(),
+                        ),
+                    ],
+                  ),
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        waiting.people
-                            .map((p) => '${nameOf(p.personId)} ${p.count}')
-                            .join(' · '),
-                        style: DesktopChrome.metadata(),
-                      ),
-                    ),
-                    if (target != null)
-                      TextButton(
-                        onPressed: () => onAnswer(target),
-                        child: const Text('Answer'),
-                      ),
-                  ],
-                ),
+                if (target != null)
+                  TextButton(
+                    onPressed: () => onAnswer(target),
+                    child: const Text('Answer'),
+                  ),
               ],
             ),
     );

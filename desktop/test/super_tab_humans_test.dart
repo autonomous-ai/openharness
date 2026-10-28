@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
@@ -191,28 +192,49 @@ void main() {
     'writes the three numbers as one quiet line under the name, hiding zeros',
     (tester) async {
       final controller = await show(tester, humansSwarm());
+      // Each person's whole line, in full words on hover.
       final lines = {
         'peer': '6 shipped · 3 unblocked',
-        'owner': '1 shipped · 4 unblocked · 20 h lent',
+        'owner': '1 shipped · 4 unblocked · 20 agent-hours lent',
         'tony': '2 shipped',
-        'scholes': '2 unblocked · 10 h lent',
-        'diego': '1 unblocked · 10 h lent',
+        'scholes': '2 unblocked · 10 agent-hours lent',
+        'diego': '1 unblocked · 10 agent-hours lent',
       };
+      String shown(String id) => tester
+          .widget<Text>(
+            find.descendant(of: part('meta', id), matching: find.byType(Text)),
+          )
+          .data!;
       for (final MapEntry(key: id, value: line) in lines.entries) {
+        expect(find.byTooltip(line), findsOneWidget, reason: id);
+        // What fits is whole items from the start, never part of a word.
+        final full = line.replaceAll('agent-hours', 'h');
+        final text = shown(id);
+        expect(full.startsWith(text), isTrue, reason: '$id: $text');
         expect(
-          find.descendant(of: part('meta', id), matching: find.text(line)),
-          findsOneWidget,
-          reason: id,
+          text == full || full.substring(text.length).startsWith(' · '),
+          isTrue,
+          reason: '$id: $text',
         );
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.descendant(
+            of: part('meta', id),
+            matching: find.byType(RichText),
+          ),
+        );
+        expect(paragraph.didExceedMaxLines, isFalse, reason: id);
       }
+      expect(shown('tony'), '2 shipped');
+      // Ken's line is too long for the pane: whole items fall off its end.
+      expect(
+        shown('owner'),
+        isNot(lines['owner']!.replaceAll('agent-hours', 'h')),
+      );
       // Nothing to say, no line at all.
       expect(part('meta', 'huy'), findsNothing);
       final style = styleOf(
         tester,
-        find.descendant(
-          of: part('meta', 'peer'),
-          matching: find.text(lines['peer']!),
-        ),
+        find.descendant(of: part('meta', 'peer'), matching: find.byType(Text)),
       );
       expect(style.fontSize, grid.AppType.captionSize);
       expect(style.color, grid.AppPalette.textSecondary);
@@ -348,19 +370,67 @@ void main() {
       final waiting = find.byKey(const ValueKey('leaderboard-waiting'));
       final heading = find.descendant(
         of: waiting,
-        matching: find.text('Agents waiting on a person now: 1'),
+        matching: find.text('1 agent is waiting on you'),
       );
       expect(heading, findsOneWidget);
       expect(styleOf(tester, heading).fontSize, grid.AppType.captionSize);
-      expect(
-        styleOf(tester, find.text('Dee 1')).fontSize,
-        grid.AppType.captionSize,
-      );
+      expect(styleOf(tester, heading).color, grid.AppPalette.textSecondary);
+      expect(find.textContaining('Dee 1'), findsNothing);
+      expect(styleOf(tester, heading).fontSize, grid.AppType.captionSize);
       final goal = find.text('7 shipped this week');
       expect(tester.getTopLeft(heading).dx, tester.getTopLeft(goal).dx);
       await close(tester, controller);
     },
   );
+
+  testWidgets('says in words how many agents wait on whom, the viewer as you', (
+    tester,
+  ) async {
+    final server = humansSwarm();
+    server.leaderboard!['waiting'] = {
+      'total': 4,
+      'people': [
+        {
+          'personId': 'owner',
+          'count': 3,
+          'conversationIds': ['g1'],
+        },
+        {
+          'personId': 'peer',
+          'count': 1,
+          'conversationIds': ['offline'],
+        },
+      ],
+    };
+    final controller = await show(tester, server);
+    final waiting = find.byKey(const ValueKey('leaderboard-waiting'));
+    Finder line(String text) =>
+        find.descendant(of: waiting, matching: find.text(text));
+    expect(line('3 agents are waiting on Ken'), findsOneWidget);
+    expect(line('1 agent is waiting on you'), findsOneWidget);
+    await close(tester, controller);
+  });
+
+  testWidgets('keeps a row with no points in rank order, its 0 in quiet ink', (
+    tester,
+  ) async {
+    final controller = await show(tester, humansSwarm());
+    final zero = styleOf(
+      tester,
+      find.descendant(of: part('points', 'huy'), matching: find.text('0')),
+    );
+    expect(zero.color, grid.AppPalette.textSecondary);
+    expect(zero.fontWeight, isNot(grid.AppFont.semibold));
+    expect(zero.fontFeatures, grid.AppFont.tabularFigures);
+    // Points that count keep the emphasis.
+    final points = styleOf(tester, within('tony', '6'));
+    expect(points.color, grid.AppPalette.textPrimary);
+    expect(
+      tester.getTopLeft(person('huy')).dy,
+      greaterThan(tester.getTopLeft(person('diego')).dy),
+    );
+    await close(tester, controller);
+  });
 
   testWidgets(
     "names each person by display name, else their email's first part",
@@ -375,8 +445,7 @@ void main() {
       expect(find.text('dee'), findsNothing);
       // The email stays on hover.
       expect(find.byTooltip('dee@example.com'), findsOneWidget);
-      // Who agents wait on reads the same name.
-      expect(find.text('Dee 1'), findsOneWidget);
+
       await close(tester, controller);
     },
   );
