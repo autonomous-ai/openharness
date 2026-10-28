@@ -53,7 +53,7 @@ export async function githubToken(core: CoreApi, harnessId: string, sources: Swa
         if (typeof value.token !== 'string' || typeof value.repository !== 'string') {
           throw new SuperTabHostError('GITHUB_UNAVAILABLE', 'The Harness server answered without a token.', 502)
         }
-        if (dir) writeSessionGitHub(dir, value.token, Array.isArray(value.trailers) ? value.trailers.filter(t => typeof t === 'string') : [])
+        if (dir) writeSessionGitHub(dir, value.token, Array.isArray(value.trailers) ? value.trailers.filter(t => typeof t === 'string') : [], value.commitAs ?? null)
         return { ok: true, value: { ...value, tabId, agentId } }
       } catch (error) {
         if (!(error instanceof SuperTabHostError)) throw error
