@@ -110,3 +110,26 @@ describe('reassembling a Swarm from its parts', () => {
       since: 111, requestedAt: 222, requestMessageId: 'm1' })
   })
 })
+
+describe('reassembling for a read', () => {
+  const deepFreeze = (value: unknown): void => {
+    if (value && typeof value === 'object') { Object.values(value).forEach(deepFreeze); Object.freeze(value) }
+  }
+
+  it('gives the same state as a command\'s reassembly, sharing the parts\' records instead of copying them', () => {
+    const parts = split(legacy(), { tabId: 'tab1', version: 1, now: 123 })
+    deepFreeze(parts)
+    const shared = reassemble(parts, { share: true })
+    expect(shared).toEqual(reassemble(parts))
+    expect(shared.people[0]).toBe(parts.members[0]!.data)
+    expect(shared.conversations[1]).toBe(parts.groups[1]!.data)
+    expect(shared.machines![0]).toBe(parts.machines[0]!.data!.contribution)
+  })
+
+  it('still copies for a command, which changes what it reassembled', () => {
+    const parts = split(legacy(), { tabId: 'tab1', version: 1, now: 123 })
+    const state = reassemble(parts)
+    state.people[0]!.role = 'viewer'
+    expect(parts.members[0]!.data!.role).toBe('owner')
+  })
+})

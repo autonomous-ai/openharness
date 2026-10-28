@@ -67,6 +67,12 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
   /// How long an update gets before the page stops waiting and says so.
   static const _updateFor = Duration(minutes: 6);
 
+  /// A check for updates asked from here (or found under way), followed until the computer is done.
+  bool _checking = false;
+
+  /// How long a check gets: the computer bounds its own at 6 minutes (CLI osDevice.ts CHECK_TIMEOUT_MS).
+  static const _checkFor = Duration(minutes: 7);
+
   AppNotifier get _app => widget.notifier;
   String get _id => widget.machineId;
   String get _name => _app.stateOf(_id)?.machine.displayName ?? 'The computer';
@@ -260,10 +266,69 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
   }
 
   Future<void> _refresh() async {
-    if (_started.isEmpty) _finished = '';
+    if (_started.isEmpty && !_checking) _finished = '';
     setState(() => _asking = true);
     await _app.refreshOsStatus(_id, force: true);
-    if (mounted) setState(() => _asking = false);
+    if (!mounted) return;
+    setState(() => _asking = false);
+    // A check already under way there (asked before this page opened): followed to its end.
+    if (_checkingThere() && !_checking) unawaited(_followCheck());
+  }
+
+  bool _checkingThere() =>
+      (_app.osStatus[_id]?['update'] as Map?)?['checking'] == true;
+
+  /// Check for updates now instead of at the computer's next check (every 15 minutes, a new Harness OS
+  /// once a day): the OS release too. Answered at once; followed until the computer is done.
+  Future<void> _check() async {
+    setState(() {
+      _checking = true;
+      _finished = '';
+    });
+    final reply = await _app.osDevice(_id, {'action': 'check_update'});
+    if (!mounted) return;
+    if (reply['started'] != true) {
+      setState(() {
+        _checking = false;
+        _finishedWell = false;
+        _finished = 'Could not ask $_name to check. Try again.';
+      });
+      return;
+    }
+    await _followCheck();
+  }
+
+  Future<void> _followCheck() async {
+    setState(() => _checking = true);
+    final deadline = DateTime.now().add(_checkFor);
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted) return;
+      final before = _app.osStatus[_id];
+      await _app.refreshOsStatus(_id, force: true);
+      if (!mounted) return;
+      // Its own fresh answer, saying the check is over.
+      if (identical(before, _app.osStatus[_id]) || _checkingThere()) continue;
+      final update = _app.osStatus[_id]?['update'];
+      final error = update is Map ? update['checkError'] as String? : null;
+      setState(() {
+        _checking = false;
+        _finishedWell = error == null;
+        _finished =
+            error ??
+            (_app.updateAvailable(_id) || _app.updateRestarts(_id)
+                ? 'A new version is ready.'
+                : '$_name is up to date.');
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _finishedWell = false;
+      _finished =
+          '$_name has not said the check is done. Pull down to ask it again.';
+    });
   }
 
   Future<void> _update() async {
@@ -451,7 +516,20 @@ class _ComputerVersionPageState extends State<ComputerVersionPage> {
                     const SizedBox(height: 20),
                     // Restarted and locked, or offline: nothing to update until it is back. An
                     // encrypted one is unlocked from here.
-                    if (online && _started.isEmpty)
+                    // Nothing waiting: where Up to date was, ask it to check now (a daemon that can).
+                    if (online &&
+                        _started.isEmpty &&
+                        !available &&
+                        !restartRequired &&
+                        _app.osFeature(_id, 'check_update'))
+                      TtyPrimaryButton(
+                        key: const Key('version-check'),
+                        label: 'Check for updates',
+                        busy: _checking,
+                        busyLabel: 'Checking…',
+                        onPressed: () => unawaited(_check()),
+                      )
+                    else if (online && _started.isEmpty)
                       TtyPrimaryButton(
                         key: const Key('version-update'),
                         label: restartRequired && !available

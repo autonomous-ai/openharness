@@ -1,7 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import { delegate, extracted, partId, type PartRow } from './write.js'
-import type { GroupData, HeadData, Part, PartKind, SwarmParts } from './types.js'
+import type { GroupData, HeadData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
+import { noteChange } from '../cache.js'
 import { ms } from './light.js'
 
 type Transaction = Prisma.TransactionClient
@@ -10,11 +11,12 @@ type Where = Record<string, unknown>
 const toPart = <T>(kind: PartKind, row: PartRow): Part<T> => ({ kind, key: row.key, version: row.version, changedAt: row.changedAt.getTime(),
   ordinal: row.ordinal, data: row.data as T, ...(row.deleted ? { deleted: true as const } : {}), ...(row.dormant ? { dormant: true as const } : {}) })
 
-async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<PartKind, 'head'>, Where>): Promise<SwarmParts> {
+/** `null` for a kind leaves it out: none are loaded. */
+async function assemble(tx: Transaction, tabId: string, where: Record<Exclude<PartKind, 'head'>, Where | null>): Promise<SwarmParts> {
   const head = await tx.swarmHead.findUnique({ where: { id: partId(tabId, 'head') } })
   if (!head) throw Object.assign(new Error(`Swarm ${tabId} has no parts`), { code: 'PARTS_MISSING' })
   const [members, agents, groups, machines, starts, progress] = await Promise.all((['member', 'agent', 'group', 'machine', 'start', 'progress'] as const)
-    .map(kind => delegate(tx, kind).findMany({ where: { tabId, ...where[kind] } }).then(rows => rows.map(row => toPart(kind, row)))))
+    .map(kind => where[kind] === null ? Promise.resolve([]) : delegate(tx, kind).findMany({ where: { tabId, ...where[kind] } }).then(rows => rows.map(row => toPart(kind, row)))))
   return { tabId, head: toPart<HeadData>('head', head as unknown as PartRow), members, agents, groups, machines, starts, progress,
     sequenceBase: head.sequenceBase, visibilityEpoch: head.visibilityEpoch, groupCounter: head.groupCounter } as SwarmParts
 }
@@ -43,6 +45,23 @@ export function loadActive(tx: Transaction, tabId: string,
   })
 }
 
+/** What the read cache keeps of a Swarm at its main stamp (cache.ts): `loadActive`'s parts with every live start, and no
+ *  machines, which it keeps at their own stamp (`loadMachines`). Dormant groups and their like come by name (`loadGroups`). */
+export function loadReadBase(tx: Transaction, tabId: string): Promise<SwarmParts> {
+  const live = { deleted: false }
+  return assemble(tx, tabId, { member: live, agent: live, group: { ...live, dormant: false }, machine: null, start: live, progress: live })
+}
+
+/** A Swarm's live machine parts. */
+export async function loadMachines(tx: Transaction, tabId: string): Promise<Part<MachineData>[]> {
+  return (await delegate(tx, 'machine').findMany({ where: { tabId, deleted: false } })).map(row => toPart<MachineData>('machine', row))
+}
+
+/** A Swarm's live groups that match `where` (by key, or the dormant ones). */
+export async function loadGroups(tx: Transaction, tabId: string, where: Where): Promise<Part<GroupData>[]> {
+  return (await delegate(tx, 'group').findMany({ where: { tabId, deleted: false, ...where } })).map(row => toPart<GroupData>('group', row))
+}
+
 /** Every part of one Swarm, tombstones included with their last data (migration verification and rollback). */
 export function loadAll(tx: Transaction, tabId: string): Promise<SwarmParts> {
   return assemble(tx, tabId, { member: {}, agent: {}, group: {}, machine: {}, start: {}, progress: {} })
@@ -51,6 +70,7 @@ export function loadAll(tx: Transaction, tabId: string): Promise<SwarmParts> {
 /** Inserts a Swarm's parts as they are (the migration, a new Swarm). An existing part fails with P2002. */
 export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<void> {
   const { tabId } = parts
+  noteChange(tx, tabId, 'main')
   const rows = (kind: PartKind, list: Part[]) => list.map(part => ({ id: partId(tabId, part.key), tabId, key: part.key, version: part.version,
     changedAt: new Date(part.changedAt), deleted: !!part.deleted, ordinal: part.ordinal, data: part.data as Prisma.InputJsonValue,
     ...extracted(kind, part.data, part.changedAt),
@@ -61,14 +81,16 @@ export async function insertParts(tx: Transaction, parts: SwarmParts): Promise<v
   }
 }
 
-/** Parts of these Swarms whose data changed after `since`, by tab, each kind in turn. Tombstones and dormant groups come
- *  with their last data and `deleted`/`dormant` set, so the reader can check who may see them before sending anything. */
+/** Parts of these Swarms whose data changed after `since`, by tab, each kind in turn, machines also by their own reading
+ *  (`readAt`). Tombstones and dormant groups come with their last data and `deleted`/`dormant` set, so the reader can
+ *  check who may see them before sending anything. */
 export async function loadChanged(tx: Transaction, tabIds: string[], since: Date, kinds: readonly PartKind[] = PART_KINDS): Promise<Map<string, Part[]>> {
   const changed = new Map<string, Part[]>(tabIds.map(id => [id, []]))
   if (!tabIds.length) return changed
   for (const kind of kinds) {
-    for (const row of await delegate(tx, kind).findMany({ where: { tabId: { in: tabIds }, changedAt: { gt: since } } })) {
-      changed.get(row.tabId)!.push(toPart(kind, row))
+    const after = kind === 'machine' ? { OR: [{ changedAt: { gt: since } }, { readAt: { gt: since } }] } : { changedAt: { gt: since } }
+    for (const row of await delegate(tx, kind).findMany({ where: { tabId: { in: tabIds }, ...after } })) {
+      changed.get(row.tabId)!.push({ ...toPart(kind, row), ...row.readAt ? { readAt: row.readAt.getTime() } : {} })
     }
   }
   return changed
