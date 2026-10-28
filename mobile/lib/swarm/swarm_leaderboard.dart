@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
+import 'identity.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -389,7 +390,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     final people = snapshot?.people ?? const <SuperTabPerson>[];
     String nameOf(String id) =>
         switch (people.where((p) => p.id == id).firstOrNull) {
-          final person? => person.email.split('@').first,
+          final person? => superTabPersonName(person.email),
           null => 'Former member',
         };
     return [

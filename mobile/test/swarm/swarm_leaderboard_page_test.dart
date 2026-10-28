@@ -142,7 +142,7 @@ void main() {
     expect(y(tester, 'swarm-leaderboard-person-ken'), lessThan(y(tester, dee)));
     expect(
       tester.getSemantics(key(diego)),
-      containsSemantics(
+      isSemantics(
         label:
             'diego, place 1, 28 points, 8 shipped, 1 unblocked, '
             '40 hours lent',
