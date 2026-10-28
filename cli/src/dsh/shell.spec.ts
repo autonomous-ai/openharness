@@ -7,14 +7,20 @@ import { spawnSync, type ChildProcess } from 'node:child_process'
 
 // Two switches, both off by default: `sh` makes commands run under plain `/bin/sh -c` (as when no user
 // shell is known) so output is exactly the command's; `fakeChild` hands runDshCommand a scripted child.
-const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess) }))
+// `started` collects the pid of each real process spawned, for a test that needs the shell's own.
+const seams = vi.hoisted(() => ({ sh: false, fakeChild: null as null | (() => ChildProcess), started: [] as Array<number | undefined> }))
 vi.mock('../lib/engineLaunch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/engineLaunch.js')>()
   return { ...actual, interactiveEngineShell: (shell?: string) => (seams.sh ? null : actual.interactiveEngineShell(shell)) }
 })
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
-  const spawn = ((...args: Parameters<typeof actual.spawn>) => (seams.fakeChild ? seams.fakeChild() : actual.spawn(...args))) as typeof actual.spawn
+  const spawn = ((...args: Parameters<typeof actual.spawn>) => {
+    if (seams.fakeChild) return seams.fakeChild()
+    const child = actual.spawn(...args)
+    seams.started.push(child.pid)
+    return child
+  }) as typeof actual.spawn
   return { ...actual, spawn, default: { ...actual, spawn } }
 })
 
@@ -59,6 +65,13 @@ describe('dshShellArgv on Windows', () => {
   it('says to install Git for Windows when there is no Git Bash, instead of trying a shell that is not there', () => {
     expect(() => dshShellArgv('./doctor.sh', { platform: 'win32', gitBash: () => null }))
       .toThrow('This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+  })
+
+  it('names what could not start when it is a viewer or a workspace init, which are not setup or check scripts', () => {
+    expect(() => dshShellArgv('./viewer.sh', { platform: 'win32', gitBash: () => null }, 'viewer'))
+      .toThrow("This harness's viewer needs Git Bash on Windows, and it was not found. Install Git for Windows")
+    expect(() => dshShellArgv('./init.sh', { platform: 'win32', gitBash: () => null }, 'workspace init'))
+      .toThrow("This harness's workspace init needs Git Bash on Windows, and it was not found. Install Git for Windows")
   })
 
   describe('the script it runs, in a real bash', () => {
@@ -145,6 +158,15 @@ describe('isShellNoise', () => {
     expect(isShellNoise('  ok   bash: no job control in this shell')).toBe(false)
     expect(isShellNoise('logout failed')).toBe(false)
   })
+
+  it('keeps a line that names some other bash: only bash itself, or the paths it is installed at, says the notice', () => {
+    // Review of #2025: any `<path>/bash: no job control in this shell` was dropped, a script's own line included.
+    expect(isShellNoise('scripts/bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('./bash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('/home/ana/project/bash: cannot set terminal process group (-1): Inappropriate ioctl for device')).toBe(false)
+    expect(isShellNoise('mybash: no job control in this shell')).toBe(false)
+    expect(isShellNoise('/bin/bash: cannot set terminal process group (4242): Inappropriate ioctl for device')).toBe(true)
+  })
 })
 
 describe('runDshCommand', () => {
@@ -190,6 +212,26 @@ describe('runDshCommand', () => {
     expect(result.timedOut).toBe(true)
     expect(result.lines).toEqual(['started'])
     expect(Date.now() - started).toBeLessThan(10_000)
+  })
+
+  it('on Windows, ends the whole tree of a Git Bash run that outlives its timeout, not the shell alone', async () => {
+    // Windows has no process groups: a signal to the group reached nothing, and the one to the shell ended Git Bash's
+    // launcher alone, leaving what the doctor started running (review of #2025). Here a real bash stands in for Git
+    // Bash, and the stand-in for the tree killer ends its group, as TerminateProcess down the tree does there.
+    const ended: number[] = []
+    const endTree = async (pid: number): Promise<void> => { ended.push(pid); process.kill(-pid, 'SIGKILL') }
+    // The shell's pid is taken from the spawn, not from what the shell prints: a login bash reads the host's profile
+    // first, and on the Linux runner that outlived the timeout, so the script never printed it (#2069 in CI). This
+    // home's profile is as slow, so every host takes the same path.
+    writeFileSync(join(dir, '.bash_profile'), 'sleep 5\n')
+    seams.started = []
+    const result = await runDshCommand('sleep 30 & wait', {
+      cwd: dir, timeoutMs: 300, env: { HOME: dir, PATH: '/usr/bin:/bin' },
+      host: { platform: 'win32', gitBash: () => '/bin/bash', endTree },
+    })
+    expect(result.timedOut).toBe(true)
+    expect(seams.started).toHaveLength(1)
+    expect(ended).toEqual(seams.started)
   })
 
   it('does not take the shell\'s report of the job its stop ended for the command\'s output', async () => {

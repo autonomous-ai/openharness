@@ -35,6 +35,24 @@ describe('findGitBash', () => {
     expect(findGitBash({ env: { PATH: 'C:\\Windows\\System32;D:\\MinGit\\cmd' }, isFile: wsl })).toBeNull()
   })
 
+  it('finds the git Scoop installed through the shim on PATH, whose own folder has no bash', () => {
+    // Scoop puts <root>\shims on PATH; git itself, bash with it, is <root>\apps\git\current.
+    const scoop = disk('C:\\Users\\ana\\scoop\\shims\\git.exe', 'C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { PATH: 'C:\\Windows\\System32;C:\\Users\\ana\\scoop\\shims' }, isFile: scoop }))
+      .toBe('C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
+  })
+
+  it('looks where Scoop installs git when PATH has none yet: its own root, the home folder\'s, the global one', () => {
+    const custom = disk('D:\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { SCOOP: 'D:\\scoop' }, isFile: custom })).toBe('D:\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    const home = disk('C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { USERPROFILE: 'C:\\Users\\ana' }, isFile: home })).toBe('C:\\Users\\ana\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    const global = disk('E:\\apps-global\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { SCOOP_GLOBAL: 'E:\\apps-global' }, isFile: global })).toBe('E:\\apps-global\\apps\\git\\current\\bin\\bash.exe')
+    const programData = disk('C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe')
+    expect(findGitBash({ env: { ProgramData: 'C:\\ProgramData' }, isFile: programData })).toBe('C:\\ProgramData\\scoop\\apps\\git\\current\\bin\\bash.exe')
+  })
+
   it('is null on a computer with no Git for Windows at all', () => {
     expect(findGitBash({ env: { PATH: 'C:\\Windows\\System32', ProgramFiles: 'C:\\Program Files' }, isFile: disk() })).toBeNull()
     expect(findGitBash({ env: {}, isFile: disk() })).toBeNull()
