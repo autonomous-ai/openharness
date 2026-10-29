@@ -1,3 +1,5 @@
+import { BUDDY_SUPER_TAB_ACTIONS } from './buddyCommands.js'
+
 /**
  * A Buddy's guard: the Claude Code PreToolUse hook its folder's settings run before every tool call (lib/swarmSkills.ts).
  *
@@ -62,9 +64,9 @@ const GREP_LONG = new Set(['include', 'exclude', 'exclude-dir', 'include-dir', '
   'extended-regexp', 'basic-regexp', 'perl-regexp', 'context', 'after-context', 'before-context', 'max-count',
   'invert-match', 'only-matching', 'no-filename', 'with-filename', 'color', 'colour', 'regexp', 'text', 'no-messages',
   'quiet', 'silent'])
-// A Buddy's own Super Tab commands: reading its chats and posting in its own, and its owner's proposal. The pane it runs in
-// says who it is (superTabs/command.ts), so it never names an agent, a port or a machine.
-const SUPER_TAB = new Set(['status', 'messages', 'message', 'decisions', 'post', 'propose', 'help'])
+// A Buddy's own Super Tab commands (cli/src/lib/buddyCommands.ts). The pane it runs in says who it is, so it never names an
+// agent, a port or a machine.
+const SUPER_TAB = new Set(${JSON.stringify(BUDDY_SUPER_TAB_ACTIONS)})
 const MAY = 'A Buddy only reads, so this was refused and nobody will be asked. Read the code with Read, Grep and Glob. ' +
   'In the shell, run one plain command at a time (no pipes, redirects, ;, &&, $() or globs): git grep, log, show, diff, ' +
   'blame or status; gh issue view or list; gh pr view, list or diff; ls, cat, rg, head, tail, wc or grep; or harness super-tab.'
