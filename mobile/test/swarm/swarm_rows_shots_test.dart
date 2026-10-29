@@ -83,7 +83,7 @@ void main() {
   testWidgets('the chat rows, in both phone themes', (tester) async {
     const messages = '/api/super-tabs/$tab/conversations/g1/messages';
     const commands = '/api/super-tabs/$tab/commands';
-    await tester.binding.setSurfaceSize(const Size(390, 844));
+    await tester.binding.setSurfaceSize(const Size(375, 812));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final root = Directory.systemTemp.createTempSync('swarm-row-shots-');
     addTearDown(() => root.deleteSync(recursive: true));

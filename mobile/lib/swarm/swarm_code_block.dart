@@ -45,12 +45,16 @@ List<SwarmTextPart> swarmTextParts(String text) {
 /// fence's name over it, Copy beside that, and a long one folded to its first
 /// [foldedLines] lines behind Show more (the desktop's `SuperTabCodeBlock`).
 class SwarmCodeBlock extends StatefulWidget {
-  const SwarmCodeBlock({super.key, required this.code, this.name});
+  const SwarmCodeBlock({super.key, required this.code, this.name, this.onTap});
 
   static const foldedLines = 12;
 
   final String code;
   final String? name;
+
+  /// The message's own tap (it shows Reply), anywhere in the block but Copy
+  /// and Show more, which keep theirs; null where the message has none.
+  final VoidCallback? onTap;
 
   @override
   State<SwarmCodeBlock> createState() => _SwarmCodeBlockState();
@@ -75,7 +79,7 @@ class _SwarmCodeBlockState extends State<SwarmCodeBlock> {
     final shown = long && !_unfolded
         ? lines.take(SwarmCodeBlock.foldedLines).join('\n')
         : widget.code;
-    return Container(
+    final block = Container(
       width: double.infinity,
       margin: const EdgeInsets.only(top: AppSpace.s),
       padding: const EdgeInsets.only(left: AppSpace.m, bottom: AppSpace.m),
@@ -110,6 +114,16 @@ class _SwarmCodeBlockState extends State<SwarmCodeBlock> {
               onTap: () => setState(() => _unfolded = !_unfolded),
             ),
         ],
+      ),
+    );
+    final tap = widget.onTap;
+    if (tap == null) return block;
+    return Semantics(
+      hint: 'Reply to this message',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: tap,
+        child: block,
       ),
     );
   }

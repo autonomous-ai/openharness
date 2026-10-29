@@ -293,7 +293,7 @@ class SwarmMessageRow extends StatelessWidget {
         ?quote,
         for (final part in swarmTextParts(message.text))
           if (part.code)
-            SwarmCodeBlock(code: part.text, name: part.name)
+            SwarmCodeBlock(code: part.text, name: part.name, onTap: onTap)
           else
             Semantics(
               button: true,

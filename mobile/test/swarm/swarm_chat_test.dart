@@ -1588,6 +1588,45 @@ void main() {
       expect(key('swarm-reply-bar'), findsNothing);
     });
 
+    testWidgets('a message that is only a code block still opens its thread: '
+        'a tap on the code shows Reply, Copy only copies', (tester) async {
+      const code = '```\nflutter test\n```';
+      final page = [message('m5', 5, text: code, thread: 'm5')];
+      final fake = backend(page);
+      fake.routes['$messages?thread=m5'] = (_) => {
+        'messages': page,
+        'next': null,
+        'threads': <Object>[],
+      };
+      await pump(tester, fake);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (_) async => null);
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+
+      // Copy does its own thing: no Reply.
+      await tester.tap(find.text('Copy'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-reply-m5'), findsNothing);
+
+      await tester.tap(find.text('flutter test'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: key('swarm-reply-m5'),
+          matching: find.text('Reply in thread'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-reply-m5'));
+      await tester.pumpAndSettle();
+
+      expect(fake.paths, contains('$messages?thread=m5'));
+      expect(inThread('flutter test'), findsOneWidget);
+    });
+
     testWidgets('Replied in thread opens the thread it was written in', (
       tester,
     ) async {
