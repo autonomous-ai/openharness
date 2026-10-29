@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentStart, Assignment, SuperTabState } from './model.js'
-import { LEASE_MS, QUIET_RUNNING_MS, sweepLiveness } from './liveness.js'
+import { LEASE_MS, QUIET_RUNNING_MS, sweepForLead, sweepLiveness } from './liveness.js'
 import { MACHINE_FRESH_MS, startPreparing } from './machines.js'
 import { split } from './parts/index.js'
 
@@ -140,15 +140,25 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
   const task = (state: SuperTabState) => state.conversations.find(c => c.id === 'g1')!
   const wakes = (rows: ReturnType<typeof sweepLiveness>) => rows.filter(r => r.source?.kind === 'work-stalled')
 
-  it('is working while its agent reported progress in the last 30 minutes, and wakes nobody', () => {
+  it('is never recorded by a machine\'s reading, which loads only running work and writes no group', () => {
+    const state = project({ progressAt: NOW - 40 * MINUTE })
+    expect(sweepLiveness(state, NOW).filter(r => r.source?.kind === 'work-stalled')).toEqual([])
+    expect(task(state).liveness).toBeUndefined()
+  })
+
+  it('has no record while its agent reported progress in the last 30 minutes, and wakes nobody', () => {
     const state = project({ progressAt: NOW - 29 * MINUTE })
-    expect(wakes(sweepLiveness(state, NOW))).toEqual([])
-    expect(task(state).liveness).toEqual({ state: 'working', why: 'progress', since: NOW - 29 * MINUTE })
+    const parts = () => split(structuredClone(state), { tabId: 't', version: 1, now: 0 }).groups
+    const before = parts()
+    expect(wakes(sweepForLead(state, NOW))).toEqual([])
+    expect(task(state).liveness).toBeUndefined()
+    // A steady Swarm's time checks write no group.
+    expect(parts()).toEqual(before)
   })
 
   it('turns quiet after 30 minutes without its agent\'s own status, check or post, and wakes the Lead once, in its chat', () => {
     const state = project({ progressAt: NOW - 30 * MINUTE })
-    const rows = wakes(sweepLiveness(state, NOW))
+    const rows = wakes(sweepForLead(state, NOW))
     expect(task(state).liveness).toEqual({ state: 'quiet', why: 'silent', since: NOW - 30 * MINUTE })
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ conversationId: 'lead', recipients: ['L'], author: { kind: 'agent', id: 'L' },
@@ -156,32 +166,37 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     expect(rows[0]!.text).toBe('A task needs you:\n- #7 "Ship it": quiet, Luna has reported nothing for 30 minutes.\n'
       + 'Act on it now: nudge its agent, reassign it, or post in its chat why it waits.')
     // Every later sweep, on any server, sees it already quiet.
-    expect(wakes(sweepLiveness(state, NOW + 30_000))).toEqual([])
-    expect(wakes(sweepLiveness(state, NOW + 60 * MINUTE))).toEqual([])
+    expect(wakes(sweepForLead(state, NOW + 30_000))).toEqual([])
+    expect(wakes(sweepForLead(state, NOW + 60 * MINUTE))).toEqual([])
+  })
+
+  it('names its wake-up apart from another Swarm\'s whose project has the same id, stalling at the same moment', () => {
+    const one = project({ progressAt: NOW - 30 * MINUTE }), other = { ...project({ progressAt: NOW - 30 * MINUTE }), id: 't2' }
+    expect(wakes(sweepForLead(one, NOW))[0]!.id).not.toBe(wakes(sweepForLead(other, NOW))[0]!.id)
   })
 
   it('wakes the Lead again only after the task moved and stalled once more', () => {
     const state = project({ progressAt: NOW - 30 * MINUTE })
-    sweepLiveness(state, NOW)
+    sweepForLead(state, NOW)
     task(state).assignment!.progressAt = NOW + MINUTE
     task(state).assignment!.leaseUntil = NOW + MINUTE + LEASE_MS
-    expect(wakes(sweepLiveness(state, NOW + 2 * MINUTE))).toEqual([])
-    expect(task(state).liveness!.state).toBe('working')
+    expect(wakes(sweepForLead(state, NOW + 2 * MINUTE))).toEqual([])
+    expect(task(state).liveness).toBeUndefined()
     // Its machine still reports the session running, its screen changing.
     state.machines![0]!.observation = { ...state.machines![0]!.observation!, receivedAt: NOW + 31 * MINUTE, harnessProgress: { h: NOW + 31 * MINUTE } }
-    expect(wakes(sweepLiveness(state, NOW + 31 * MINUTE))).toHaveLength(1)
+    expect(wakes(sweepForLead(state, NOW + 31 * MINUTE))).toHaveLength(1)
   })
 
   it('waits on purpose, never quiet, while it needs a person (named), is in review or is blocked', () => {
     const asked = project({ status: 'needs_human', result: 'Mockup OK?', progressAt: NOW - 3 * 60 * MINUTE })
     task(asked).ledger = { waiting: { assignmentId: 'a1', since: NOW - 12 * MINUTE, messageId: 'm1' } }
-    expect(wakes(sweepLiveness(asked, NOW))).toEqual([])
+    expect(wakes(sweepForLead(asked, NOW))).toEqual([])
     expect(task(asked).liveness).toEqual({ state: 'waiting', why: 'person', personId: 'p', since: NOW - 12 * MINUTE })
     const review = project({ status: 'review', progressAt: NOW - 3 * 60 * MINUTE })
-    expect(wakes(sweepLiveness(review, NOW))).toEqual([])
+    expect(wakes(sweepForLead(review, NOW))).toEqual([])
     expect(task(review).liveness).toEqual({ state: 'waiting', why: 'review', since: NOW - 3 * 60 * MINUTE })
     const blocked = project({ status: 'blocked', progressAt: NOW - 3 * 60 * MINUTE })
-    expect(wakes(sweepLiveness(blocked, NOW))).toEqual([])
+    expect(wakes(sweepForLead(blocked, NOW))).toEqual([])
     expect(task(blocked).liveness).toEqual({ state: 'waiting', why: 'blocked', since: NOW - 3 * 60 * MINUTE })
   })
 
@@ -191,28 +206,28 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     task(state).reviewOf = 'g0'
     state.conversations.push({ ...structuredClone(task(state)), id: 'g0', number: 6, title: 'Build', reviewOf: undefined,
       assignment: assignment({ id: 'a0', agentId: 'L', status: 'working', progressAt: NOW }) })
-    expect(wakes(sweepLiveness(state, NOW))).toEqual([])
+    expect(wakes(sweepForLead(state, NOW))).toEqual([])
     expect(task(state).liveness).toEqual({ state: 'waiting', why: 'revision', since: NOW - 3 * 60 * MINUTE })
     state.conversations.find(c => c.id === 'g0')!.assignment!.status = 'review'
-    expect(wakes(sweepLiveness(state, NOW))).toHaveLength(1)
+    expect(wakes(sweepForLead(state, NOW))).toHaveLength(1)
     expect(task(state).liveness).toMatchObject({ state: 'quiet', why: 'silent' })
   })
 
   it('is orphaned at once when its agent was removed or is gone, and wakes the Lead once', () => {
     const removed = project({ status: 'reconciling' })
-    expect(wakes(sweepLiveness(removed, NOW))[0]!.text).toContain('- #7 "Ship it": orphaned, its agent was removed from the Swarm.')
+    expect(wakes(sweepForLead(removed, NOW))[0]!.text).toContain('- #7 "Ship it": orphaned, its agent was removed from the Swarm.')
     expect(task(removed).liveness).toEqual({ state: 'orphaned', why: 'removed', since: NOW })
-    expect(wakes(sweepLiveness(removed, NOW + MINUTE))).toEqual([])
+    expect(wakes(sweepForLead(removed, NOW + MINUTE))).toEqual([])
     const gone = project({})
     gone.agents = gone.agents.filter(a => a.id !== 'w')
-    expect(wakes(sweepLiveness(gone, NOW))).toHaveLength(1)
+    expect(wakes(sweepForLead(gone, NOW))).toHaveLength(1)
     expect(task(gone).liveness).toMatchObject({ state: 'orphaned', why: 'removed' })
   })
 
   it('is orphaned when its agent stopped, told by the lost-work notice alone', () => {
     const state = project({})
     state.machines![0]!.observation!.stoppedHarnessIds = ['h']
-    const rows = sweepLiveness(state, NOW)
+    const rows = sweepForLead(state, NOW)
     expect(rows.filter(r => r.source?.kind === 'work-lost' && r.recipients.includes('L'))).toHaveLength(1)
     expect(wakes(rows)).toEqual([])
     expect(task(state).liveness).toEqual({ state: 'orphaned', why: 'lost', since: NOW })
@@ -224,27 +239,36 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
 
   it('waits queued while its start is not launched, and is orphaned 10 minutes after it was asked for, waking the Lead once', () => {
     const queued = starting({})
-    expect(wakes(sweepLiveness(queued, NOW))).toEqual([])
+    expect(wakes(sweepForLead(queued, NOW))).toEqual([])
     expect(task(queued).liveness).toEqual({ state: 'waiting', why: 'queued', since: NOW - 9 * MINUTE })
     const stale = starting({ requestedAt: NOW - 10 * MINUTE })
-    expect(wakes(sweepLiveness(stale, NOW))[0]!.text).toContain('- #7 "Ship it": orphaned, its agent has not started for 10 minutes.')
+    expect(wakes(sweepForLead(stale, NOW))[0]!.text).toContain('- #7 "Ship it": orphaned, its agent has not started for 10 minutes.')
     expect(task(stale).liveness).toEqual({ state: 'orphaned', why: 'unstarted', since: NOW - 10 * MINUTE })
-    expect(wakes(sweepLiveness(stale, NOW + MINUTE))).toEqual([])
+    expect(wakes(sweepForLead(stale, NOW + MINUTE))).toEqual([])
+  })
+
+  it('waits queued, never orphaned and never written again, while a start from before request times is not launched', () => {
+    const legacy = starting({ requestedAt: undefined })
+    sweepForLead(legacy, NOW)
+    const recorded = task(legacy).liveness
+    expect(recorded).toEqual({ state: 'waiting', why: 'queued', since: NOW })
+    sweepForLead(legacy, NOW + 60 * MINUTE)
+    expect(task(legacy).liveness).toBe(recorded)
   })
 
   it('stays queued while the Lead keeps acting on it: 10 minutes run from its last action', () => {
     const retried = starting({ requestedAt: NOW - 25 * MINUTE })
     task(retried).leadAction = { kind: 'route', at: NOW - 2 * MINUTE }
-    expect(wakes(sweepLiveness(retried, NOW))).toEqual([])
+    expect(wakes(sweepForLead(retried, NOW))).toEqual([])
     expect(task(retried).liveness).toEqual({ state: 'waiting', why: 'queued', since: NOW - 25 * MINUTE })
   })
 
   it('waits while its launched start is being prepared, and is orphaned when the start fails, told by the failure notice alone', () => {
     const launched = starting({ dispatched: true, dispatchedAt: NOW - MINUTE })
-    sweepLiveness(launched, NOW)
+    sweepForLead(launched, NOW)
     expect(task(launched).liveness).toEqual({ state: 'waiting', why: 'starting', since: NOW - MINUTE })
     const failed = starting({ dispatched: true, dispatchedAt: NOW - MINUTE, error: 'Mac could not prepare it' })
-    expect(wakes(sweepLiveness(failed, NOW))).toEqual([])
+    expect(wakes(sweepForLead(failed, NOW))).toEqual([])
     expect(task(failed).liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: NOW })
   })
 
@@ -254,7 +278,7 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
       { ...structuredClone(task(state)), id: 'g3', number: 9, title: 'Finished', assignment: { ...task(state).assignment!, id: 'a3', status: 'done' } })
     state.starts = [{ id: 'b1', request: { conversationId: 'g3', machineId: 'm', name: 'Buddy', buddyOf: { personId: 'p', generation: 'g' } },
       dispatched: false, harnessId: null, error: null, requestedAt: 0 } as unknown as AgentStart]
-    const rows = wakes(sweepLiveness(state, NOW))
+    const rows = wakes(sweepForLead(state, NOW))
     expect(rows).toHaveLength(1)
     expect(rows[0]!.source!.tasks).toEqual([{ conversationId: 'g1', state: 'quiet', why: 'silent' }, { conversationId: 'g2', state: 'orphaned', why: 'removed' }])
     expect(rows[0]!.text.startsWith('2 tasks need you:\n')).toBe(true)
@@ -264,9 +288,9 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
 
   it('clears its state once its work is finished', () => {
     const state = project({ progressAt: NOW - 40 * MINUTE })
-    sweepLiveness(state, NOW)
+    sweepForLead(state, NOW)
     task(state).assignment!.status = 'done'
-    sweepLiveness(state, NOW + MINUTE)
+    sweepForLead(state, NOW + MINUTE)
     expect(task(state).liveness).toBeUndefined()
   })
 })

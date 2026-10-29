@@ -1478,7 +1478,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
         message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
-        recordTaskState(state, group, context.now)
         break
       }
       if (start.error) fail('START_FAILED', 'This start failed. Use a new start request.')
@@ -2049,6 +2048,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
   }
+  // The state of the task this command touched, in its own write (liveness.ts recordTaskState).
+  const touched = 'conversationId' in command ? command.conversationId : command.type === 'agent.start' ? command.request.conversationId
+    : 'startId' in command ? state.starts?.find(s => s.id === command.startId)?.request.conversationId : undefined
+  const task = typeof touched === 'string' ? state.conversations.find(c => c.id === touched) : undefined
+  if (task) recordTaskState(state, task, context.now)
   if (command.type === 'conversation.create' || command.type === 'work.define' || command.type === 'work.assign') {
     alertOverlaps(conversation(state, command.type === 'conversation.create' ? result.conversationId as string : command.conversationId))
   }

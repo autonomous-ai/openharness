@@ -228,13 +228,13 @@ export interface Conversation {
   /** The Lead's last action on its task: an assignment, route, start or post here (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
 }
-/** `working`: its agent reported progress in the last 30 minutes. `waiting`: on a person (`personId`), a review, its stated
+/** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
+ *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
  *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes. `orphaned`: nobody holds it — its
- *  agent was removed or lost it, or its start failed or never launched. `since`: when that began, as first recorded; a
- *  working task's last progress is its assignment's `progressAt`. */
+ *  agent was removed or lost it, or its start failed or never launched. `since`: when that began, as first recorded. */
 export interface TaskLiveness {
-  state: 'working' | 'waiting' | 'quiet' | 'orphaned'
-  why: 'progress' | 'person' | 'review' | 'blocked' | 'revision' | 'queued' | 'starting' | 'silent' | 'removed' | 'lost' | 'start-failed' | 'unstarted'
+  state: 'waiting' | 'quiet' | 'orphaned'
+  why: 'person' | 'review' | 'blocked' | 'revision' | 'queued' | 'starting' | 'silent' | 'removed' | 'lost' | 'start-failed' | 'unstarted'
   since: number
   personId?: string
 }

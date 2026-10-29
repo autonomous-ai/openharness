@@ -641,6 +641,17 @@ describe('the Lead\'s last action on a task', () => {
     expect(task().leadAction).toEqual({ kind: 'post', at: 6000 })
   })
 
+  it('records a task\'s wait in the command that starts it, and clears it in the one that ends it, so no sweep rewrites it', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 2000 }).result.assignmentId as string
+    expect(task().liveness).toBeUndefined()
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready' }, f.workerActor, { now: 3000 })
+    expect(task().liveness).toEqual({ state: 'waiting', why: 'review', since: 3000 })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Fixing' }, f.workerActor, { now: 4000 })
+    expect(task().liveness).toBeUndefined()
+  })
+
   it('leaves a task whose start failed orphaned, so it stays so once the failed start is no longer loaded', () => {
     const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
     f.define(group)
