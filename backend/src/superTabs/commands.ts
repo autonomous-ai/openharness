@@ -1393,9 +1393,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       const contributor = person(state, grant.contributorId)
       const chat = openBuddyChat(state, project.id, me)
+      const named = chosenBuddyName(state, chat, me, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name: chosenBuddyName(state, chat, me, context.buddyNames), cwd: projectFolder(pool, project), worktree: true,
+        ...(command.model ? { model: command.model } : {}), name: named.name, cwd: projectFolder(pool, project), worktree: true,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
@@ -1403,6 +1404,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      // Its chosen name was taken since: its owner reads so in their chat, to nobody else (buddies.ts chosenBuddyName).
+      if (named.notice) message(chatId, named.notice, [], null, SYSTEM_ROW)
       result.startId = operationId
       result.conversationId = chatId
       break

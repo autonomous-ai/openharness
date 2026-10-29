@@ -52,6 +52,8 @@ const BUDDY_NAME_LENGTH = { min: 2, max: 32 }
 const BUDDY_RESERVED: ReadonlySet<string> = new Set(['reviewer', 'admin', 'administrator', 'system', 'swarm', 'harness', 'everyone'])
 /** A name as names are compared: NFKC, lowercased. Look-alike letters of other scripts are out of scope (review of #2094). */
 const nameKey = (name: string): string => name.normalize('NFKC').toLowerCase()
+/** Whether [name] is a reserved one, numbered too ("Reviewer 2", "system-3"), as the role check reads "Lead 2". */
+const reserved = (name: string): boolean => BUDDY_RESERVED.has(nameKey(name).replace(/[\s#-]+\d+$/, ''))
 
 /** A name chosen in a Buddy chat, as the store reads every Buddy chat's, quiet ones included (store.ts buddyNames). */
 export interface ChosenBuddyName { conversationId: string; name: string }
@@ -85,7 +87,7 @@ export function renameBuddy(state: SuperTabState, actor: Actor, chat: Conversati
     if (length < BUDDY_NAME_LENGTH.min || length > BUDDY_NAME_LENGTH.max || INVISIBLE.test(name) || !BUDDY_NAME.test(name)) {
       fail('INVALID_BUDDY_NAME', 'Use 2 to 32 letters, digits, single spaces, dots, dashes, underscores or apostrophes, starting with a letter or digit.', 400)
     }
-    if (isRoleName(name) || BUDDY_RESERVED.has(nameKey(name))) fail('BUDDY_NAME_ROLE', `${name} is a role's name. Choose another.`, 400)
+    if (isRoleName(name) || reserved(name)) fail('BUDDY_NAME_ROLE', `${name} is a role's name. Choose another.`, 400)
     if (nameTaken(state, chat, name, chosen)) fail('BUDDY_NAME_TAKEN', `${name} is taken in this Swarm. Choose another.`, 409)
     chat.buddyName = name
   } else {
@@ -98,12 +100,15 @@ export function renameBuddy(state: SuperTabState, actor: Actor, chat: Conversati
 }
 
 /** The name [owner]'s Buddy added in [chat] starts with: the one chosen there, unless someone took it since (a new agent, a
- *  person who joined, another Buddy chat), when the chat goes back to the default rather than show two Buddies alike. */
-export function chosenBuddyName(state: SuperTabState, chat: Conversation, owner: Person, chosen: readonly ChosenBuddyName[] = []): string {
-  if (chat.buddyName && !nameTaken(state, chat, chat.buddyName, chosen)) return chat.buddyName
+ *  person who joined, another Buddy chat), when the chat goes back to the default rather than show two Buddies alike, and
+ *  `notice` is the line that tells its owner so in their chat: nothing changes without saying (review of #2094). */
+export function chosenBuddyName(state: SuperTabState, chat: Conversation, owner: Person, chosen: readonly ChosenBuddyName[] = []): { name: string; notice?: string } {
+  const was = chat.buddyName
+  if (!was) return { name: defaultBuddyName(owner) }
+  if (!nameTaken(state, chat, was, chosen)) return { name: was }
   delete chat.buddyName
   chat.title = defaultBuddyName(owner)
-  return chat.title
+  return { name: chat.title, notice: `${was} is taken now; your Buddy starts as ${chat.title}. Rename it from the ⋮ menu.` }
 }
 
 /** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. */

@@ -7,7 +7,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient, type Prisma } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
-import { SuperTabStore, transaction } from '../src/superTabs/store.js'
+import { buddyNames, SuperTabStore, transaction } from '../src/superTabs/store.js'
+import { buddyChatId } from '../src/superTabs/buddies.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import { DIRECT, readLight } from '../src/superTabs/cachedReads.js'
@@ -231,6 +232,24 @@ describe('hot SwarmGroup reads name their index and read only what they return (
   })
 
   // Folded from #1964: a later page started at no bound, so each page read every newer quiet conversation again.
+  it('a Buddy rename or add reads the names chosen in the Swarm\'s Buddy chats by key, quiet ones included, and nothing else (review of #2094)', async () => {
+    const state = parts.reassemble(await db.$transaction(tx => parts.loadActive(tx, s.tabId)))
+    const me = state.people.find(p => p.id === owner.sub)!
+    const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId: s.tabId, key: s.done } }))!
+    const key = buddyChatId(s.other, me)
+    await db.swarmGroup.create({ data: { ...row, id: `${s.tabId}:${key}`, key, kind: 'buddy', projectId: s.other, dormant: true,
+      data: { ...row.data as object, id: key, kind: 'buddy', projectId: s.other, title: 'Fern', buddyName: 'Fern' } } })
+    let names: unknown
+    // The other tests count this Swarm's quiet conversations: the chat goes once read.
+    const reads = await profiled(async () => { names = await db.$transaction(tx => buddyNames(tx, s.tabId, state)) })
+      .finally(() => db.swarmGroup.delete({ where: { id: `${s.tabId}:${key}` } }))
+    expect(names).toEqual([{ conversationId: key, name: 'Fern' }])
+    expect(reads).toHaveLength(1)
+    expect(reads[0]!.plans.join(), JSON.stringify(reads)).toContain('tabId: 1, key: 1')
+    expectIndexed(reads)
+    expectOnlyReturned(reads)
+  })
+
   it('each page of a project\'s quiet conversations reads the 50 it returns, newest activity first', async () => {
     const order = [...s.quietLead].sort((a, b) => b.lastActivityAt.getTime() - a.lastActivityAt.getTime() || (a.key < b.key ? 1 : -1))
     const pages: string[][] = []

@@ -773,7 +773,7 @@ describe('naming a Buddy (Diego, 10-29)', () => {
 
   it('reserves Buddy-only names such as Reviewer, without making them roles for other agents', () => {
     const { rename } = named()
-    for (const name of ['Reviewer', 'reviewer', 'Admin', 'System']) expect(() => rename(name)).toThrow(/role|reserved/)
+    for (const name of ['Reviewer', 'reviewer', 'Admin', 'System', 'Reviewer 2', 'reviewer-3', 'System 4']) expect(() => rename(name)).toThrow(/role|reserved/)
     expect(isRoleName('Reviewer')).toBe(false)
   })
 
@@ -787,6 +787,9 @@ describe('naming a Buddy (Diego, 10-29)', () => {
     expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
     expect(group(f, chat)).toMatchObject({ title: 'peer\'s Buddy' })
     expect(group(f, chat).buddyName).toBeUndefined()
+    // Nothing fails silently: its owner reads why in their chat, and how to name it again.
+    expect(again.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual([[chat,
+      'Sparky is taken now; your Buddy starts as peer\'s Buddy. Rename it from the ⋮ menu.', []]])
   })
 
   it('also falls back when another Buddy chat, quiet or loaded, chose the name meanwhile', () => {

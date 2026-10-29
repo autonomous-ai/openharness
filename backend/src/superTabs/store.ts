@@ -2424,14 +2424,15 @@ export class SuperTabStore {
 }
 
 /** The names chosen in [state]'s Buddy chats, quiet ones included (buddies.ts chosenBuddyName). A chat's id is fixed per
- *  project and person (buddyChatId), so they are read by key on the unique index, the name alone: a few short strings per
- *  person and project, and only for a rename or an add. */
-async function buddyNames(tx: Transaction, tabId: string, state: SuperTabState): Promise<ChosenBuddyName[]> {
+ *  project and person (buddyChatId), so they are read by key, naming the unique index (parts/indexed.ts groupsBy), the name
+ *  alone: a few short strings per person and project, and only for a rename or an add. `$gt: ''` keeps the non-empty strings
+ *  (a `$type` match reads as a tagged value to Prisma's raw replies). */
+export async function buddyNames(tx: Transaction, tabId: string, state: SuperTabState): Promise<ChosenBuddyName[]> {
   const keys = projectsOf(state).flatMap(project => state.people.map(person => buddyChatId(project.id, person)))
   if (!keys.length) return []
-  const rows = await tx.swarmGroup.aggregateRaw({ pipeline: [
-    { $match: { tabId, key: { $in: keys }, deleted: false, 'data.buddyName': { $type: 'string' } } },
+  const rows = await groupsBy(tx, 'key', [
+    { $match: { tabId, key: { $in: keys }, deleted: false, 'data.buddyName': { $gt: '' } } },
     { $project: { _id: 0, key: 1, name: '$data.buddyName' } },
-  ] }) as unknown as Array<{ key: string; name: string }>
+  ]) as Array<{ key: string; name: string }>
   return rows.map(row => ({ conversationId: row.key, name: row.name }))
 }

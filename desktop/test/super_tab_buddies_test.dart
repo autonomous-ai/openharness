@@ -1099,11 +1099,9 @@ void main() {
         await tester.binding.setSurfaceSize(const Size(1280, 330));
         await tester.pumpAndSettle();
 
+        // Nothing overflows: the dialog's content scrolls instead.
+        expect(tester.takeException(), isNull);
         final dialog = find.byType(AlertDialog);
-        expect(
-          find.descendant(of: dialog, matching: find.byType(Scrollable)),
-          findsWidgets,
-        );
         await tester.dragUntilVisible(
           find.descendant(
             of: dialog,
