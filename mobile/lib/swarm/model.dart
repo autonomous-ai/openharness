@@ -39,10 +39,16 @@ class SuperTabPerson {
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']);
+      status = SuperTabPersonStatus.fromJson(row['status']),
+      chosenUsername = row['username'] as String?;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
+
+  /// The username the person chose (desktop usernames); null for a default.
+  /// The phone still names people by their email prefix until it takes
+  /// usernames too.
+  final String? chosenUsername;
 
   /// Their status while it lasts.
   SuperTabPersonStatus? statusAt(DateTime now) =>
@@ -324,6 +330,7 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      teamAccounts = row['teamAccounts'] != false,
       readMarks = Map.unmodifiable({
         if (row['readMarks'] case final Map marks)
           for (final MapEntry(:key, :value) in marks.entries)
@@ -400,6 +407,10 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// False only where the server does not try Harness Team accounts yet
+  /// (backend read/contract.ts `teamAccounts`), as on the desktop.
+  final bool teamAccounts;
 
   /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
   /// conversation, on any of their devices. Never another person's.
