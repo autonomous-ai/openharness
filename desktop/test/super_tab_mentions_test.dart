@@ -174,14 +174,23 @@ void main() {
   });
 
   group('notification list', () {
-    /// The reader leaves the private chat their tag is in, and the Lead tags
-    /// them elsewhere: one still waits. Who may read what moved.
+    /// [swarm] with a workgroup the reader is tagged in.
+    ConversationServer taggedInPlans() {
+      final server = swarm();
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('plans', 'Plans'),
+        'projectId': 'lead',
+      });
+      return server..tag('message-1', conversationId: 'plans', text: 'Private');
+    }
+
+    /// The reader loses the workgroup their tag is in, and the Lead tags them
+    /// elsewhere: one still waits. Who may read what moved.
     void leaveChatTaggedElsewhere(ConversationServer server) {
-      final pmChat = (server.state['conversations'] as List)
-          .cast<Map<String, dynamic>>()
-          .firstWhere((g) => g['id'] == 'pm-chat');
-      pmChat['audience'] = {'people': <Object>[]};
-      server.mentions.removeWhere((m) => m['conversationId'] == 'pm-chat');
+      (server.state['conversations'] as List).removeWhere(
+        (g) => (g as Map)['id'] == 'plans',
+      );
+      server.mentions.removeWhere((m) => m['conversationId'] == 'plans');
       server.state['mentionsWaiting'] =
           (server.state['mentionsWaiting'] as int) - 1;
       server.tag('message-2', text: 'Here instead');
@@ -190,8 +199,7 @@ void main() {
 
     test('drops the tags of a conversation the reader leaves at once, '
         'while the new list is slow to come', () async {
-      final server = swarm()
-        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final server = taggedInPlans();
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);
@@ -215,8 +223,7 @@ void main() {
 
     test('a tag the reader can no longer read stays gone when the new list '
         'fails', () async {
-      final server = swarm()
-        ..tag('message-1', conversationId: 'pm-chat', text: 'Private');
+      final server = taggedInPlans();
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final mentions = SuperTabMentions.of(controller);

@@ -12,31 +12,19 @@ import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'identity.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
 import 'model.dart';
-import 'pm_chat_rows.dart';
+import 'buddy_rows.dart';
 import 'section_heading.dart';
+import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
 
 /// The Swarm's Product Managers' conversation, listed as a channel among the projects.
 const kProductManagersChannel = 'product-managers';
-
-/// A project's Product Manager by name, as its Chat with PM is listed;
-/// [lead] is the project's Lead conversation when the caller holds it.
-String pmChatName(
-  SuperTabSnapshot snapshot,
-  SuperTabProject project, {
-  SuperTabConversation? lead,
-}) {
-  final pmId =
-      (lead ?? snapshot.conversation(project.leadConversationId))?.leadId;
-  return pmId == null
-      ? 'Product Manager'
-      : snapshot.agentName(pmId, fallback: 'Product Manager');
-}
 
 class ProjectSidebar extends StatelessWidget {
   const ProjectSidebar({
@@ -52,7 +40,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onNotifications,
     this.notificationsSelected = false,
     this.onOpenAgent,
-    this.onOpenPmChat,
+    this.onOpenBuddyChat,
     this.readLocal,
     this.now = DateTime.now,
   });
@@ -70,9 +58,9 @@ class ProjectSidebar extends StatelessWidget {
   final bool notificationsSelected;
   final ValueChanged<SuperTabAgent>? onOpenAgent;
 
-  /// Opens a project's Chat with PM, by project id; the controller's
-  /// [SuperTabController.openPmChat] when not given.
-  final ValueChanged<String>? onOpenPmChat;
+  /// Opens the reader's Buddy chat in a project, by project id; the
+  /// controller's [SuperTabController.openBuddyChat] when not given.
+  final ValueChanged<String>? onOpenBuddyChat;
 
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
   /// the Machines group's readings taken without a real machine.
@@ -86,7 +74,6 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
-  static const _dotSize = 6.0;
 
   Widget _navigationRow({
     required String key,
@@ -161,9 +148,9 @@ class ProjectSidebar extends StatelessWidget {
     style: DesktopChrome.control(color: DesktopChrome.muted, medium: true),
   );
 
-  void _openPmChat(String projectId) => onOpenPmChat != null
-      ? onOpenPmChat!(projectId)
-      : unawaited(controller.openPmChat(projectId));
+  void _openBuddyChat(String projectId) => onOpenBuddyChat != null
+      ? onOpenBuddyChat!(projectId)
+      : unawaited(controller.openBuddyChat(projectId));
 
   /// A project row's name opens the project's chat; only the chevron at its
   /// right end shows or hides its conversations (Dee, 2026-10-28).
@@ -181,12 +168,9 @@ class ProjectSidebar extends StatelessWidget {
     final waiting = reading == null
         ? needsHuman(group) > 0
         : reading.waiting.isNotEmpty;
-    // A project's PM chat shows its own count rather than the dot.
-    final pmChat = reading?.pmChat;
-    final projectPmUnread = reading?.pmUnread ?? 0;
     final unread = reading == null
         ? controller.unread(group)
-        : reading.unread.any((id) => projectPmUnread == 0 || id != pmChat?.id);
+        : reading.unread.isNotEmpty;
     return _drawRow(
       group,
       project: project,
@@ -195,13 +179,34 @@ class ProjectSidebar extends StatelessWidget {
       selected: selected,
       waiting: waiting,
       unread: unread,
-      pmChat: pmChat,
-      projectPmUnread: projectPmUnread,
+      buddyChat: reading?.buddyChat,
       selectedProjectId: reading?.sidebar.selectedProjectId,
     );
   }
 
   /// A workgroup's row from what its project's reading already asked.
+  /// A task row's status, kept current by its own clock, for its line and
+  /// its tooltip alike; any other row is built without one.
+  Widget _withTaskStatus(
+    SuperTabConversation group,
+    Widget Function(SuperTabTaskStatus? status) build, {
+    required bool task,
+  }) => task
+      ? SuperTabTaskClock(
+          group: group,
+          personName: _personName,
+          builder: (_, status) => build(status),
+        )
+      : build(null);
+
+  /// A member as the Humans list names them, for a task's "Waiting on …".
+  String? _personName(String personId) => switch (controller.snapshot?.people
+      .where((p) => p.id == personId)
+      .firstOrNull) {
+    final person? => superTabPersonName(person.email),
+    null => null,
+  };
+
   Widget _workgroupRow(SuperTabConversation group, _ProjectReading reading) =>
       _drawRow(
         group,
@@ -221,14 +226,13 @@ class ProjectSidebar extends StatelessWidget {
     required bool selected,
     required bool waiting,
     required bool unread,
-    SuperTabConversation? pmChat,
-    int projectPmUnread = 0,
+    SuperTabConversation? buddyChat,
     String? selectedProjectId,
   }) {
     final expanded =
         project != null && controller.expandedProjects.contains(project.id);
     // A collapsed project shows as selected while one of its conversations it
-    // hides is open; its Chat with PM has a row of its own.
+    // hides is open; the reader's Buddy chat has a row of its own.
     final highlighted =
         selected ||
         (project != null &&
@@ -236,13 +240,14 @@ class ProjectSidebar extends StatelessWidget {
             !devicesSelected &&
             !notificationsSelected &&
             selectedProjectId == project.id &&
-            controller.selectedId != pmChat?.id);
+            controller.selectedId != buddyChat?.id);
+    // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
     final style = DesktopChrome.control(
-      medium: unread || highlighted,
+      medium: highlighted,
       color: highlighted || unread || project != null || label != null
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
-    );
+    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -278,102 +283,111 @@ class ProjectSidebar extends StatelessWidget {
                               ? 'Private project'
                               : null,
                           selected: selected,
-                          child: Tooltip(
-                            message:
-                                label ??
-                                project?.name ??
-                                SuperTabWorkgroupName.plain(group),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 36),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
+                          child: _withTaskStatus(
+                            group,
+                            task: label == null && project == null,
+                            (status) => Tooltip(
+                              message:
+                                  label ??
+                                  project?.name ??
+                                  [
+                                    SuperTabWorkgroupName.plain(group),
+                                    if (status != null)
+                                      superTabTaskStatusText(status),
+                                  ].join('\n'),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  minHeight: 36,
                                 ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: label == null && project == null
-                                          ? SuperTabWorkgroupName(
-                                              group,
-                                              style: style,
-                                            )
-                                          : Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text(
-                                                  label ?? project!.name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: style,
-                                                ),
-                                                // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                                if (project != null)
-                                                  ProjectGitHubLine(
-                                                    controller: controller,
-                                                    project: project,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: label == null && project == null
+                                            ? Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  SuperTabWorkgroupName(
+                                                    group,
+                                                    style: style,
                                                   ),
-                                              ],
-                                            ),
-                                    ),
-                                    if (project?.isPrivate == true) ...[
-                                      const SizedBox(width: 8),
-                                      Tooltip(
-                                        message: 'Private project',
-                                        child: Icon(
-                                          AppIcons.lock,
-                                          size: 14,
-                                          color: DesktopChrome.muted,
-                                        ),
+                                                  // Moving, waiting and on what, or stuck (#957).
+                                                  if (status != null)
+                                                    SuperTabTaskLineView(
+                                                      status,
+                                                      key: ValueKey(
+                                                        'super-task-line-${group.id}',
+                                                      ),
+                                                    ),
+                                                ],
+                                              )
+                                            : Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    label ?? project!.name,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: style,
+                                                  ),
+                                                  // Teammates' agents cannot push to its repository yet (project_github.dart).
+                                                  if (project != null)
+                                                    ProjectGitHubLine(
+                                                      controller: controller,
+                                                      project: project,
+                                                    ),
+                                                ],
+                                              ),
                                       ),
+                                      if (project?.isPrivate == true) ...[
+                                        const SizedBox(width: 8),
+                                        Tooltip(
+                                          message: 'Private project',
+                                          child: Icon(
+                                            AppIcons.lock,
+                                            size: 14,
+                                            color: DesktopChrome.muted,
+                                          ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
                       ),
-                      if (projectPmUnread > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 4),
-                          child: SuperTabPmUnread(
-                            projectPmUnread,
-                            key: ValueKey(
-                              'super-project-pm-unread-${project!.id}',
-                            ),
-                            onTap: () => _openPmChat(project.id),
-                          ),
-                        ),
                       SizedBox(
                         width: _iconColumn,
-                        child: Center(
-                          child: waiting
-                              ? Tooltip(
-                                  message: 'Needs a human',
-                                  child: Text(
-                                    '?',
-                                    style: DesktopChrome.control(
-                                      color: grid.AppPalette.warn,
-                                      medium: true,
+                        // Unread is drawn as a bold name; a screen reader
+                        // hears it said, as it heard the dot it replaces.
+                        child: Semantics(
+                          label: unread ? 'Unread messages' : null,
+                          child: Center(
+                            child: waiting
+                                ? Tooltip(
+                                    message: 'Needs a human',
+                                    child: Text(
+                                      '?',
+                                      style: DesktopChrome.control(
+                                        color: grid.AppPalette.warn,
+                                        medium: true,
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : unread
-                              ? Semantics(
-                                  label: 'Unread messages',
-                                  child: Container(
-                                    width: _dotSize,
-                                    height: _dotSize,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: DesktopChrome.accent,
-                                    ),
-                                  ),
-                                )
-                              : null,
+                                  )
+                                : label == null && project == null
+                                ? SuperTabTaskMark(group)
+                                : null,
+                          ),
                         ),
                       ),
                     ],
@@ -381,7 +395,7 @@ class ProjectSidebar extends StatelessWidget {
                 ),
               ),
             ),
-            // At the far right edge, since it is always there and the dot
+            // At the far right edge, since it is always there and the mark
             // beside it comes and goes (Dee, 2026-10-28).
             if (project != null) _toggle(project, expanded: expanded),
           ],
@@ -452,12 +466,10 @@ class ProjectSidebar extends StatelessWidget {
   /// ones that left the active set, as read for the project so far.
   List<Widget> _closed(_ProjectReading reading) {
     final project = reading.project;
-    final pmChat = reading.pmChat?.id;
     final groups = reading.conversations
         .where(
           (g) =>
               g.id != project.leadConversationId &&
-              g.id != pmChat &&
               !g.isBuddyChat &&
               !controller.hiddenByBuddies(g) &&
               g.closed,
@@ -534,88 +546,56 @@ class ProjectSidebar extends StatelessWidget {
     ];
   }
 
-  /// The signed-in person's private chat with each project's Product
-  /// Manager, as direct messages below the projects so a collapsed project
-  /// never hides them; the first click opens one.
-  List<Widget> _pmChats(
+  /// The signed-in person's Buddy chat in each project, there from the start
+  /// (Lead's ruling, 10-29): the PM's private lines to them land there, and it
+  /// offers to start their Buddy. A viewer, who opens nothing, sees only the
+  /// chats they have. The project is in brackets once there are several.
+  List<Widget> _buddies(
     List<SuperTabProject> projects,
     _SidebarReading reading,
-  ) => [
-    for (final project in projects)
-      ?_pmChat(reading.of(project), named: projects.length > 1),
-  ];
-
-  Widget? _pmChat(_ProjectReading reading, {required bool named}) {
-    final snapshot = controller.snapshot!;
-    final project = reading.project;
-    final lead = reading.lead;
-    final chat = reading.pmChat;
-    if (chat == null && !controller.canWrite) return null;
-    return SuperTabPmChatRow(
-      key: ValueKey('super-pm-chat-${project.id}'),
-      agentId: lead?.leadId,
-      name: pmChatName(snapshot, project, lead: lead),
-      project: named ? project.name : null,
-      selected:
-          chat != null &&
-          !devicesSelected &&
-          !notificationsSelected &&
-          controller.selectedId == chat.id,
-      unread: chat != null && controller.unread(chat),
-      unreadCount: reading.pmUnread,
-      onTap: chat != null
-          ? () => onSelect(chat.id)
-          : controller.saving || controller.hasPendingAction
-          ? null
-          : () => _openPmChat(project.id),
-    );
-  }
-
-  /// The signed-in person's Buddies, one row per project where they have one
-  /// or its chat stays, the project in brackets once there are several.
-  List<Widget> _buddies(List<SuperTabProject> projects) {
+  ) {
     final listed = [
       for (final project in projects)
-        if (controller.buddyChat(project.id) case final chat?) (project, chat),
+        if (reading.of(project) case final read
+            when read.buddyChat != null || controller.canWrite)
+          read,
     ];
-    return [
-      for (final (project, chat) in listed)
-        _buddy(project, chat, named: listed.length > 1),
-    ];
+    return [for (final read in listed) _buddy(read, named: listed.length > 1)];
   }
 
-  Widget _buddy(
-    SuperTabProject project,
-    SuperTabConversation chat, {
-    required bool named,
-  }) {
+  Widget _buddy(_ProjectReading reading, {required bool named}) {
     final snapshot = controller.snapshot!;
+    final project = reading.project;
+    final chat = reading.buddyChat;
     final agent = controller.buddy(project.id);
-    // A removed Buddy's chat stays; it reads as plain "Buddy" until one is
-    // added again (its title names the owner, which the reader is).
+    // With no Buddy running it reads as plain "Buddy" (its chat's title names
+    // the owner, which the reader is).
     final name = agent == null
         ? 'Buddy'
         : snapshot.agentName(agent.id, fallback: agent.name);
-    return SuperTabPmChatRow(
+    return SuperTabBuddyRow(
       key: ValueKey('super-buddy-${project.id}'),
       agentId: agent?.id,
       name: name,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
       note: switch ((agent, controller.buddyStart(project.id))) {
-        (null, {'error': String _}) => 'not started',
-        (null, {'harnessId': null}) => 'starting',
-        (null, _) => 'removed',
+        (null, {'harnessId': null, 'error': null}) => 'starting',
+        (null, _) => 'not started',
         (final agent?, _) when agent.downSince != null => 'offline',
         _ => null,
       },
       selected:
+          chat != null &&
           !devicesSelected &&
           !notificationsSelected &&
           controller.selectedId == chat.id,
-      unread: controller.unread(chat),
-      unreadCount: controller.unreadCount(chat),
-      onTap: () => onSelect(chat.id),
+      unread: chat != null && controller.unread(chat),
+      onTap: chat != null
+          ? () => onSelect(chat.id)
+          : controller.saving || controller.hasPendingAction
+          ? null
+          : () => _openBuddyChat(project.id),
     );
   }
 
@@ -623,12 +603,10 @@ class ProjectSidebar extends StatelessWidget {
   /// has the highest number, and one without a number predates numbering.
   List<SuperTabConversation> _newestFirst(_ProjectReading reading) {
     final project = reading.project;
-    final pmChat = reading.pmChat?.id;
     final groups = reading.conversations
         .where(
           (g) =>
               g.id != project.leadConversationId &&
-              g.id != pmChat &&
               !g.isBuddyChat &&
               !controller.hiddenByBuddies(g) &&
               !g.closed,
@@ -759,9 +737,7 @@ class ProjectSidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
-    final buddiesOn = controller.buddiesOn;
     final reading = _SidebarReading(controller, needsHuman);
-    final pmChats = buddiesOn ? const <Widget>[] : _pmChats(projects, reading);
     return Material(
       color: DesktopChrome.surface,
       child: ListView(
@@ -820,17 +796,8 @@ class ProjectSidebar extends StatelessWidget {
           if (controller.projectsGroupOpen)
             for (final (_, channel) in _channels(snapshot, reading)) channel,
           const SizedBox(height: 16),
-          if (pmChats.isNotEmpty) ...[
-            SuperTabSectionHeading(
-              'Direct messages',
-              endInset: 0,
-              startInset: SuperTabSectionHeading.indentFor(0),
-            ),
-            ...pmChats,
-            const SizedBox(height: 16),
-          ],
-          // Buddies take Chat with PM's place (spec: Buddies, 10-28).
-          if (buddiesOn) ...[
+          // Buddies replaced Chat with PM in every Swarm (Ken, 10-29).
+          ...[
             SuperTabSectionHeading(
               'Buddies',
               onAdd:
@@ -838,13 +805,13 @@ class ProjectSidebar extends StatelessWidget {
                       !controller.saving &&
                       !controller.hasPendingAction &&
                       buddyProjects(controller).isNotEmpty
-                  ? () => unawaited(showAddBuddy(context, controller))
+                  ? () => unawaited(showAddBuddy(context, controller, app: app))
                   : null,
               addTooltip: 'Add a Buddy',
               endInset: 0,
               startInset: SuperTabSectionHeading.indentFor(0),
             ),
-            ..._buddies(projects),
+            ..._buddies(projects, reading),
             const SizedBox(height: 16),
           ],
           // Machine online/offline, unread marks and theme changes do not touch
@@ -964,19 +931,16 @@ class _ProjectReading {
           .where((g) => g.id == project.leadConversationId)
           .firstOrNull ??
       sidebar.controller.snapshot?.conversation(project.leadConversationId);
-  late final pmChat = sidebar.controller.pmChat(project.id);
-  late final pmUnread = switch (pmChat) {
-    final chat? => sidebar.controller.unreadCount(chat),
-    null => 0,
-  };
+  late final buddyChat = sidebar.controller.buddyChat(project.id);
 
-  /// The open conversations that need a human, and those with unread messages.
+  /// The open conversations that need a human, and those with unread messages;
+  /// never the reader's Buddy chat, which has its own row under Buddies.
   Set<String> get waiting => _open.waiting;
   Set<String> get unread => _open.unread;
   late final _open = () {
     final waiting = <String>{}, unread = <String>{};
     for (final g in conversations) {
-      if (g.closed) continue;
+      if (g.closed || g.isBuddyChat || g.audience != null) continue;
       if (sidebar.needsHuman(g) > 0) waiting.add(g.id);
       if (sidebar.controller.unread(g)) unread.add(g.id);
     }

@@ -136,6 +136,28 @@ describe('socket meter', () => {
     await web.closed
   })
 
+  // Two daemons of one account declare the same client, version and token, so only where they dial tells them apart
+  // (Lead, 2026-10-29): each gets its own entry, and every socket and HTTP request through it carries that name.
+  it('names the entry a socket came through, and forwards it like any other', async () => {
+    const backend = await standIn()
+    stops.push(() => { backend.server.closeAllConnections(); backend.server.close() })
+    const meter = await SocketMeter.start(backend.url)
+    stops.push(() => meter.close())
+    const a = await meter.entry('a')
+    const b = await meter.entry('b')
+
+    const fromA = await dial(`${a.wsUrl}/api/web-ws?autonomousEnv=prod&client=relay&v=1.2.3`)
+    fromA.ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: KNOWN } }))
+    await until('the select answer', () => fromA.frames.length === 2)
+    const fromB = await dial(`${b.wsUrl}/api/web-ws?autonomousEnv=prod&client=relay&v=1.2.3`)
+    const direct = await dial(`${meter.wsUrl}/api/web-ws?autonomousEnv=prod&client=web`)
+    expect(await (await fetch(`${b.url}/api/machines`)).json()).toEqual({ path: '/api/machines', method: 'GET' })
+
+    expect(meter.sockets.map((s) => s.via)).toEqual(['a', 'b', null])
+    expect(meter.sockets[0].selects).toMatchObject([{ machineId: KNOWN, outcome: 'accepted' }])
+    for (const c of [fromA, fromB, direct]) { c.ws.close(); await c.closed }
+  })
+
   it('closes its side to the backend when the client gives up before the upgrade completes', async () => {
     const backend = await standIn()
     stops.push(() => { backend.server.closeAllConnections(); backend.server.close() })
@@ -199,8 +221,8 @@ describe('socket meter', () => {
         { endpoint: '/api/web-ws', client: 'web', version: '2.0.0', openedAt: at + 20_000, closedAt: at + 50_000, closeCode: 1006, closeReason: '',
           selects: [{ machineId: KNOWN, at: at + 20_000, outcome: 'accepted' }] },
         // A daemon relay that never selected, 90 s.
-        { endpoint: '/api/web-ws', client: 'unknown', version: null, openedAt: at, closedAt: at + 90_000, closeCode: 1000, closeReason: '', selects: [] },
-        { endpoint: '/api/adapter-ws', client: 'daemon', version: '1.0.0', openedAt: at, closedAt: null, closeCode: null, closeReason: '', selects: [] },
+        { endpoint: '/api/web-ws', client: 'unknown', version: null, openedAt: at, closedAt: at + 90_000, closeCode: 1000, closeReason: '', selects: [], via: null },
+        { endpoint: '/api/adapter-ws', client: 'daemon', version: '1.0.0', openedAt: at, closedAt: null, closeCode: null, closeReason: '', selects: [], via: null },
         // Opened before the clock started (the daemons' own start): outside the report.
         { endpoint: '/api/web-ws', client: 'relay', version: '1.0.0', openedAt: at - 5_000, closedAt: at - 4_000, closeCode: 1011, closeReason: '',
           selects: [{ machineId: DELETED, at: at - 5_000, outcome: 'NOT_YOUR_MACHINE' }] },

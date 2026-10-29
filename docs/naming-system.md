@@ -104,7 +104,7 @@ Its sidebar reads like a chat app's. It starts with **New project**, **Your devi
 **Your models** (and **Notifications** where no menu-bar list carries it: on a Mac, what needs
 the person is in the menu bar's Harness menu and on the Dock's badge), then three sections in this
 order: **Projects**,
-**Direct messages** and **Machines**. Projects and Machines have section headings with disclosure
+**Buddies** and **Machines**. Projects and Machines have section headings with disclosure
 after the label and an add action at the right. Project rows read as channels, from A to Z:
 **#** at the left, then their name and status, with no chevron. The Product Managers'
 conversation is one of them, **# product-managers**, with no workgroups. A click on a project row
@@ -112,11 +112,13 @@ opens its product manager chat and reveals its workgroups; a second click on the
 hides them. Workgroups are shown by their number in grey with no **#**
 and then their title (`12  Offline editing`), aligned with the project name. An expanded project
 without workgroups says **No workgroups yet**. An open channel's heading reads as its row
-(`# openharness`). **Direct messages** holds the person's **Chat with PM** for each project,
-listed by the product manager's name and avatar; opening one highlights only that row and leaves
-the projects as they were. The project's name is in grey brackets when
-the Swarm has several (`Finn (web-2)`) and a count of new messages. Hovering says
-**Chat with PM**, and ⇧⌘K opens the current project's.
+(`# openharness`). **Buddies** holds the person's **Buddy chat** for each project, from the
+start, listed by their Buddy's name and avatar, or **Buddy** while none runs; the product
+manager's private lines to them land there. Opening one highlights only that row and leaves the
+projects as they were. The project's name is in grey brackets when the Swarm has several
+(`Wren (web-2)`); new lines show the name in bold, with no count. Hovering says
+**Your Buddy · project**, and ⇧⌘K (**Buddy chat** in the shortcuts) opens the current project's.
+There is no **Chat with PM** any more.
 **Your devices** opens the Devices dashboard and its existing agent conversation inside the
 current Swarm, preserving project drafts and the selected workgroup. Ordinary tabs retain
 their standalone Devices view. The navigation, conversation and people panes have

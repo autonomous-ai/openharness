@@ -28,6 +28,7 @@ import { HostReads } from '../superTabs/read/host.js'
 import { UPDATE_REQUIRED } from '../superTabs/read/contract.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../lib/teamSession.js'
 import type { AuthUser } from '../lib/ssoAuth.js'
+import { DEFAULT_DAYS, MAX_DAYS } from '../superTabs/costs/read.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const tabParams = z.object({ tabId: id })
@@ -50,6 +51,7 @@ const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESS
 const listQuery = z.object({ after: id.optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
+const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
 const leaderboardQuery = z.object({ projectId: id, week: z.coerce.number().int().nonnegative().safe().optional() }).strict()
 const dormantQuery = agentQuery.extend({ dormant: z.literal('1'), projectId: id.optional(), before: cursor.optional() })
 const groupParams = tabParams.extend({ conversationId: id })
@@ -448,6 +450,10 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
     { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))
+  // What routed attempts cost and how they went over a period (superTabs/costs/read.ts).
+  app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof costsQuery> }>('/api/super-tabs/:tabId/costs',
+    { preHandler: [validateParams(tabParams), validateQuery(costsQuery)] },
+    (req, reply) => respond(reply, () => store.costSummary(req.user!, req.params.tabId, req.query.days, req.query.asAgentId)))
   app.get<{ Params: z.infer<typeof tabParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/route-decisions',
     { preHandler: [validateParams(tabParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.routeDecisions(req.user!, req.params.tabId, req.query.asAgentId)))

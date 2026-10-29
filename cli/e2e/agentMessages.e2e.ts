@@ -219,6 +219,23 @@ describe('Agent Messages, end to end', () => {
     client.close()
   })
 
+  it('reads the account\'s tabs again within seconds of a machine renamed, in the edge host, with no timer due', async () => {
+    // Its own read waits 5 minutes (messages/directory.ts SAFETY_NET_MS): the machine list's push is what tells it, through the
+    // core's link to the edge host (core/messagesLink.ts). Printed as the PR's receipt.
+    const { d, relay, client } = await team('claude')
+    await until('Agent Messages to have read the tabs', () => reads(relay) >= 1 || null, 30_000, 200)
+    await new Promise((settle) => setTimeout(settle, 2_000))
+    const before = reads(relay), at = Date.now()
+    relay.renameMachine(ME.machineId, 'studio (renamed)')
+    await until('Agent Messages to read the tabs again for the rename', () => reads(relay) > before || null, 10_000, 50)
+    const took = Date.now() - at
+    const edge = /\[harnessd\] service edge started \(pid (\d+)\)/.exec(d.log())?.[1]
+    process.stdout.write(`RECEIPT machines_changed sent ${new Date(at).toISOString()}; GET /api/agent-messages again after ${took} ms `
+      + `(reads ${before} -> ${reads(relay)}); edge host pid ${edge ?? 'unknown'}; HARNESSD_SERVICES unset\n`)
+    expect(took).toBeLessThan(5_000)
+    client.close()
+  })
+
   it('refuses a hand-over from a process on this machine: only another machine hands messages over', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

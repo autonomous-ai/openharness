@@ -11,7 +11,6 @@ import 'controller.dart';
 import 'identity.dart';
 import 'machine_status.dart' show superTabAgo;
 import 'model.dart';
-import 'pm_chat.dart';
 import 'section_heading.dart';
 
 /// A Lead's tag of the reader in one message (spec 2026-10-24-lead-mentions.md).
@@ -310,15 +309,13 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
 
   Widget _row(SuperTabMention mention, {required bool waiting}) {
     final time = mention.createdAt;
-    // The reader's own chat with the Product Manager is named as the sidebar
-    // names it, not by the reader's own name. With Buddies on there is none:
-    // it opens the project's chat, and is named so.
+    // An old Chat with PM an older server still sends opens the project's
+    // chat, and is named so; every other place by its title.
     final c = widget.mentions.controller;
-    final place = c.pmChat(mention.projectId)?.id != mention.conversationId
+    final hidden = c.snapshot?.conversation(mention.conversationId);
+    final place = hidden == null || !c.hiddenByBuddies(hidden)
         ? mention.conversationTitle
-        : c.buddiesOn
-        ? '#${c.snapshot?.projects.where((p) => p.id == mention.projectId).firstOrNull?.name ?? mention.projectName}'
-        : kChatWithPm;
+        : '#${c.snapshot?.projects.where((p) => p.id == mention.projectId).firstOrNull?.name ?? mention.projectName}';
     // A person who tagged the reader is named as they are now.
     final person = c.snapshot?.people
         .where((p) => p.id == mention.leadId)

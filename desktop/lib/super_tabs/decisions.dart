@@ -97,7 +97,7 @@ class SuperTabDecisions extends ChangeNotifier {
   String get _path =>
       '/api/super-tabs/${Uri.encodeComponent(controller.tabId)}';
 
-  /// The open ones asked in [projectId]'s conversations, for its Chat with PM.
+  /// The open ones asked in [projectId]'s conversations, for its Buddy chat.
   List<SuperTabDecision> openIn(String projectId) => [
     for (final d in open)
       if (d.projectId == projectId) d,
@@ -112,12 +112,12 @@ class SuperTabDecisions extends ChangeNotifier {
     ];
   }
 
-  /// Not now and Hide: folded in Chat with PM until the reader shows them
+  /// Not now and Hide: folded in the Buddy chat until the reader shows them
   /// again; a decision asked later still shows.
   void setAside(Iterable<SuperTabDecision> decisions) =>
       controller.setDecisionsAside(decisions.map((d) => d.id), aside: true);
 
-  /// Show: every open decision of [projectId] in its Chat with PM again.
+  /// Show: every open decision of [projectId] in its Buddy chat again.
   void showAgain(String projectId) => controller.setDecisionsAside(
     openIn(projectId).map((d) => d.id),
     aside: false,

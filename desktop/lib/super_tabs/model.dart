@@ -220,7 +220,13 @@ class SuperTabConversation {
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
-          : Map.unmodifiable(superTabMap(row['assignment']));
+          : Map.unmodifiable(superTabMap(row['assignment'])),
+      liveness = row['liveness'] is Map
+          ? Map.unmodifiable(superTabMap(row['liveness']))
+          : null,
+      leadAction = row['leadAction'] is Map
+          ? Map.unmodifiable(superTabMap(row['leadAction']))
+          : null;
   final String id, projectId, title, brief;
 
   /// What the backend calls it apart from a workgroup: `leads` for the Product
@@ -253,6 +259,14 @@ class SuperTabConversation {
   final List<String> pullRequestUrls;
   final int lastMessageSequence;
   final Map<String, dynamic>? assignment;
+
+  /// Whether its task waits on purpose or is stuck, as the server last found
+  /// it (`state`, `why`, `since`, `personId`); absent while it is working,
+  /// and from older backends (task_status.dart).
+  final Map<String, dynamic>? liveness;
+
+  /// The Product Manager's last action on its task (`kind`, `at`).
+  final Map<String, dynamic>? leadAction;
 }
 
 class SuperTabRole {
@@ -338,7 +352,6 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
-      buddiesEnabled = row['buddies'] == true,
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -368,10 +381,6 @@ class SuperTabSnapshot {
   final String id, name, ownerId;
   final Map<String, dynamic>? project;
   final bool paused;
-
-  /// The Swarm's Buddies setting: off unless its owner turned it on, and off
-  /// from a backend before Buddies.
-  final bool buddiesEnabled;
 
   /// The starts of Buddies, oldest first: a Buddy's add is under way while
   /// its start has neither a harness nor an error.
@@ -506,7 +515,7 @@ class SuperTabSnapshot {
 
   /// The pool whose reading [accountId] sees for the machine row [machineId]: the Mac's Harness Team account for
   /// everyone but the Mac's own contributor, since it runs their agents, also while the owner is away from the Mac; the
-  /// machine's own pool otherwise. The Machines view and Team at a glance read a machine by this one rule.
+  /// machine's own pool otherwise. The Machines view reads a machine by this one rule.
   Map<String, dynamic>? readingPoolOf(String machineId, String? accountId) {
     final own = pool(machineId), team = teamPoolOf(machineId);
     final contributor =

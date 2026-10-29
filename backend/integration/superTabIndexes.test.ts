@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { inConversationOrder, pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
+import { costRows } from '../src/superTabs/costs/read.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
@@ -179,6 +180,17 @@ describe('the delivery pass', () => {
   })
 })
 
+describe('cost summary', () => {
+  // The Swarm's cost read (superTabs/costs/read.ts) takes the decisions routed in a period. Never a collection scan, and never
+  // more documents than the period holds, however many the Swarm keeps.
+  it('reads the decisions of a period with one index scan, examining only those', async () => {
+    const [found, profile] = await profiled('SuperTabRouteDecision', () => costRows(db, 'A', T0 + 1500 * 1000))
+    // The fixture's decisions carry no runs, so none is an attempt to summarize; what matters is what Mongo read.
+    expect(found).toEqual({ rows: [], truncated: false })
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 500, returned: 500 })
+  })
+})
+
 describe('route decision list', () => {
   const prismaRead = (tabId: string, conversationIds: string[]) => db.superTabRouteDecision.findMany({ where: { tabId, conversationId: { in: conversationIds } },
     orderBy: { createdAt: 'desc' }, take: 100 })
@@ -203,11 +215,11 @@ describe('route decision list', () => {
     expect(rows.find(row => row.id === 'A-d1800')).toEqual({ id: 'A-d1800', tabId: 'A', conversationId: 'g000',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 1800' },
       final: { kind: 'new', startId: 's1800' }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: 'as1800', outcome: 'done',
-      outcomeAt: new Date(T0 + 1_800_500), createdAt: new Date(T0 + 1_800_000) })
+      outcomeAt: new Date(T0 + 1_800_500), run: null, createdAt: new Date(T0 + 1_800_000) })
     // Written as an older record: none of the optional fields exist.
     expect(rows.find(row => row.id === 'A-d0721')).toEqual({ id: 'A-d0721', tabId: 'A', conversationId: 'g001',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 721' },
-      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, createdAt: new Date(T0 + 721_000) })
+      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, createdAt: new Date(T0 + 721_000) })
     expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
     expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
     expect(await recentDecisions(db, 'B', [])).toEqual([])
@@ -271,8 +283,13 @@ describe('terminal context revoke', () => {
     await db.superTabNativeContext.createMany({ data: [{ ...context('peer-worker', open, peer.userId), agentId: worker },
       { ...context('outsider-worker', open, outsider.userId), agentId: worker }, { ...context('owner-worker', open, s.state.ownerId), agentId: worker }] })
     const before = structuredClone(s.state) as SuperTabState
-    const chat = s.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: [peer.userId] } }, peer).conversationId as string
-    s.edit(state => { state.conversations.find(c => c.id === chat)!.agentIds.push(worker) })
+    // A private conversation now is a Buddy chat (buddies.ts), which only its owner's Buddy joins: written here as that join leaves it.
+    s.edit(state => {
+      const generation = state.people.find(p => p.id === peer.userId)!.generation
+      state.conversations.push({ id: 'peer-buddy', kind: 'buddy', projectId: state.conversations.find(c => c.id === open)!.projectId, title: 'Peer\'s Buddy',
+        leadId: null, agentIds: [worker], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+        audience: { people: [{ id: peer.userId, generation }] } })
+    })
     await revokeNativeContexts(db, before, s.state)
     expect(await revoked()).toEqual(['outsider-worker', 'owner-worker'])
   })

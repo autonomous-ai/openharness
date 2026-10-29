@@ -451,6 +451,104 @@ describe('work that loses its owner', () => {
   })
 })
 
+/** A client that records the key of every SwarmGroup row a read returns. */
+function recordingGroups() {
+  const keys: string[] = []
+  const client = db.$extends({ query: { swarmGroup: { async $allOperations({ args, query }) {
+    const rows = await query(args)
+    for (const row of Array.isArray(rows) ? rows as Array<{ key?: unknown }> : []) if (typeof row?.key === 'string') keys.push(row.key)
+    return rows
+  } } } }) as unknown as PrismaClient
+  return { client, keys }
+}
+
+// Every machine reports every 15 s, and each report loaded, copied and compared the whole Swarm: about 1.1 MB for a busy one
+// (#876). It reads only the conversations its checks read, whole, and writes only what it changed.
+describe('a machine\'s report', () => {
+  /** `n` conversations whose work finished but that are not yet quiet, each with a long brief: copies of a real one. */
+  async function finishedGroups(f: Awaited<ReturnType<typeof swarm>>, n: number) {
+    const first = String((await f.execute({ type: 'conversation.create', title: 'Finished', brief: 'b'.repeat(2000),
+      checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const { id: _id, ...row } = (await db.swarmGroup.findFirst({ where: { tabId: f.tab, key: first } }))!
+    const assignment = { id: 'finished', agentId: f.worker, status: 'done', result: 'Shipped', configuration: config,
+      execution: { machineId: 'test-host', harnessId: f.harness.worker, machineOwnerId: host.sub } }
+    const keys = Array.from({ length: n }, (_, i) => `finished-${String(i).padStart(2, '0')}`)
+    await db.swarmGroup.createMany({ data: keys.map((key, i) => ({ ...row, id: `${f.tab}:${key}`, key, ordinal: row.ordinal + i + 1,
+      agentIds: [...row.agentIds, f.worker], workFinished: true,
+      data: { ...row.data as object, id: key, title: key, agentIds: [...row.agentIds, f.worker], assignment } as Prisma.InputJsonValue })) })
+    return keys
+  }
+
+  it('never reads a finished conversation, only the running work and Lead conversations its checks read', async () => {
+    const recorded = recordingGroups()
+    const f = await swarm({ client: recorded.client })
+    const finished = await finishedGroups(f, 30)
+    recorded.keys.length = 0
+    // The first report of this store runs the time checks too (liveness.ts SWEEP_EVERY_MS).
+    await f.beat(f.clock.now)
+    expect(recorded.keys).toContain(f.group)
+    expect(recorded.keys.filter(key => finished.includes(key))).toEqual([])
+    // The report still did its work: both machines' readings are stored, and the worker keeps its task.
+    expect((await f.assignment()).status).toBe('working')
+    const machines = (await f.timed.read(owner, f.tab)).state.machines!
+    expect(machines.map(m => m.observation?.receivedAt)).toEqual([f.clock.now, f.clock.now])
+  })
+
+  it('still loses a task through a light load, and leaves the finished conversations as they were', async () => {
+    const f = await swarm()
+    const finished = await finishedGroups(f, 3)
+    const before = await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: finished } }, orderBy: { key: 'asc' } })
+    await f.beat(f.clock.now)
+    f.clock.now += 2 * MINUTE + 5_000
+    await f.observe('lead-host', [f.harness.lead])
+    expect((await f.assignment()).status).toBe('lost')
+    expect((await f.leadInbox()).filter(m => (m.source as { kind?: string }).kind === 'work-lost')).toHaveLength(1)
+    expect(await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: finished } }, orderBy: { key: 'asc' } })).toEqual(before)
+  })
+
+  it('finds the Leads conversation of a Swarm whose head never stored its id, as a full load does', async () => {
+    const f = await swarm()
+    const head = (await db.swarmHead.findFirst({ where: { tabId: f.tab } }))!
+    const { leadsConversationId, ...rest } = head.data as { leadsConversationId?: string }
+    expect(leadsConversationId).toBe(stableId(f.tab, 'leads'))
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: rest as Prisma.InputJsonValue } })
+    await f.beat(f.clock.now)
+    expect((await f.timed.read(owner, f.tab)).state.machines!.map(m => m.observation?.receivedAt)).toEqual([f.clock.now, f.clock.now])
+  })
+
+  // Ruling (#876): whether a worker leads a conversation is judged from the conversations the report loads, so a former Lead
+  // named only on an old finished one is a worker like any other. Before, any open conversation it led kept its task forever.
+  it('judges a former Lead still named on an old open conversation like any worker, and loses its task', async () => {
+    const f = await swarm()
+    const [old] = await finishedGroups(f, 1)
+    const row = (await db.swarmGroup.findFirst({ where: { tabId: f.tab, key: old } }))!
+    await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object, leadId: f.worker } } })
+    await f.beat(f.clock.now)
+    f.clock.now += 2 * MINUTE + 5_000
+    await f.observe('lead-host', [f.harness.lead])
+    expect((await f.assignment()).status).toBe('lost')
+  })
+
+  it('credits no Lent hours to a worker that is in a private chat (leaderboard/lent.ts)', async () => {
+    const f = await swarm()
+    const lent = async () => (await db.swarmMachine.findFirst({ where: { tabId: f.tab, key: 'test-host' } }))!.data as
+      { contribution?: { lent?: Array<{ busyMs?: number }> } }
+    // Control: the worker's work is for someone else (the owner asked), so two readings credit it.
+    await f.observe('test-host', [f.harness.worker])
+    f.clock.now += 15_000
+    await f.observe('test-host', [f.harness.worker])
+    expect((await lent()).contribution?.lent?.[0]?.busyMs).toBe(15_000)
+    const chat = String((await f.execute({ type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [] })).result.conversationId)
+    await f.execute({ type: 'conversation.agent', conversationId: chat, agentId: f.worker, present: true, lead: false })
+    const row = (await db.swarmGroup.findFirst({ where: { tabId: f.tab, key: chat } }))!
+    const generation = (await f.timed.read(owner, f.tab)).state.people.find(p => p.id === owner.sub)!.generation
+    await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object, audience: { people: [{ id: owner.sub, generation }] } } } })
+    f.clock.now += 15_000
+    await f.observe('test-host', [f.harness.worker])
+    expect((await lent()).contribution?.lent?.[0]?.busyMs).toBe(15_000)
+  })
+})
+
 // After a release every machine went offline for about 2 minutes while its CLI updated: 16 tasks were lost, their agents came
 // back, and every assignment to the same agent was refused as busy for good, even after the Lead cancelled the lost task.
 describe('an agent whose task was lost', () => {
@@ -675,6 +773,125 @@ describe('a start that never runs', () => {
     expect(raced).toBe(true)
     expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)).toMatchObject({ error: null, preparing: true })
     expect((await db.superTabMessage.findMany({ where: { tabId: f.tab } })).filter(m => (m.source as { kind?: string } | null)?.kind === 'start-timeout')).toEqual([])
+  })
+})
+
+describe('a task that stalls', () => {
+  type Swarm = Awaited<ReturnType<typeof swarm>>
+  /** The rows that woke the Lead for stalled tasks, each with the tasks it listed. */
+  const stalledRows = async (f: Swarm) => (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
+    .filter(m => (m.source as { kind?: string } | null)?.kind === 'work-stalled')
+  const liveness = async (f: Swarm, group = f.group) => (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === group)!.liveness
+  /** Both machines report, the worker's first with its screen changing (a clock jump spans many beats), then the Lead polls:
+   *  its time checks run there. */
+  const tick = async (f: Swarm, at: number) => {
+    f.clock.now = at
+    await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: at } })
+    await f.observe('lead-host', [f.harness.lead])
+    return f.leadInbox()
+  }
+  /** A second task, with nobody on it yet, that the Lead routes and starts "Builder" for on Worker Mac. */
+  const started = async (f: Swarm) => {
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
+      checks: [{ description: 'Read', independent: false }] })).result.conversationId)
+    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
+        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
+    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, host, f.lead)).result.routeDecisionId)
+    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+      cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
+    return { group, startId }
+  }
+
+  it('turns quiet when its agent reports nothing for 30 minutes while its screen still changes, and wakes the Lead once', async () => {
+    const f = await swarm()
+    const posted = f.clock.now
+    await f.beat(posted)
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
+    for (const minutes of [5, 10, 15, 20, 25, 29]) await tick(f, posted + minutes * MINUTE)
+    expect(await liveness(f)).toBeUndefined()
+    expect(await stalledRows(f)).toEqual([])
+    // The first time checks past 30 minutes find it quiet: the Lead hears in that same poll.
+    const inbox = await tick(f, posted + 30 * MINUTE)
+    expect(await liveness(f)).toEqual({ state: 'quiet', why: 'silent', since: posted })
+    const [row] = await stalledRows(f)
+    expect(inbox.map(m => m.id)).toContain(row!.id)
+    expect(row!.text).toBe(`A task needs you:\n- #${(await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.number} "Ship the parser": `
+      + `quiet, ${await f.name(f.worker)} has reported nothing for 30 minutes.\nAct on it now: nudge its agent, reassign it, or post in its chat why it waits.`)
+    for (const minutes of [31, 40, 90]) await tick(f, posted + minutes * MINUTE)
+    expect(await stalledRows(f)).toHaveLength(1)
+    expect((await f.assignment()).status).toBe('working')
+  })
+
+  it('is orphaned when its agent is removed, and the Lead is woken once by the next time checks', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    await f.execute({ type: 'agent.remove', agentId: f.worker } as Command)
+    await tick(f, f.clock.now + SWEEP_EVERY_MS)
+    expect(await liveness(f)).toMatchObject({ state: 'orphaned', why: 'removed' })
+    expect((await stalledRows(f)).map(r => r.text)).toEqual([expect.stringContaining('"Ship the parser": orphaned, its agent was removed from the Swarm.')])
+    await tick(f, f.clock.now + 5 * MINUTE)
+    expect(await stalledRows(f)).toHaveLength(1)
+  })
+
+  it('is orphaned when its agent\'s session stops, the Lead woken once by the lost-work notice', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    // The machine's report loses the task; the Lead's next poll records it orphaned.
+    await f.leadInbox()
+    expect(await liveness(f)).toMatchObject({ state: 'orphaned', why: 'lost' })
+    f.clock.now += 5 * MINUTE
+    await f.observe('lead-host', [f.harness.lead])
+    await f.leadInbox()
+    expect((await f.lostRows()).filter(r => r.text.includes('lost its task'))).toHaveLength(1)
+    expect(await stalledRows(f)).toEqual([])
+  })
+
+  it('is orphaned when its start fails, the Lead woken once by the failure notice, and stays so once the start is no longer loaded', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { group, startId } = await started(f)
+    // Its own machine reports the failure.
+    await f.timed.execute(host, f.tab, { operationId: randomUUID(), command: { type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' } as Command }, undefined, 'test-host')
+    for (const minutes of [1, 15]) await tick(f, f.clock.now + minutes * MINUTE)
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    const told = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: group } })).filter(m => m.text.startsWith('Could not start Builder'))
+    expect(told).toHaveLength(1)
+    expect(await stalledRows(f)).toEqual([])
+  })
+
+  it('is orphaned when a machine\'s report times its launched start out, and stays so once the start has ended', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { group, startId } = await started(f)
+    await f.timed.execute(host, f.tab, { operationId: randomUUID(), command: { type: 'agent.startDispatch', startId } as Command }, undefined, 'test-host')
+    // Only the worker's machine reports: its time checks fail the start.
+    f.clock.now += 3 * MINUTE + 1_000
+    await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })
+    expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).not.toBeNull()
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    await tick(f, f.clock.now + 5 * MINUTE)
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    expect(await stalledRows(f)).toEqual([])
+  })
+
+  it('waits queued while its start is not launched, and is orphaned 10 minutes after it was asked for, waking the Lead once', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const asked = f.clock.now
+    const { group } = await started(f)
+    await tick(f, asked + 9 * MINUTE)
+    expect(await liveness(f, group)).toEqual({ state: 'waiting', why: 'queued', since: asked })
+    expect(await stalledRows(f)).toEqual([])
+    await tick(f, asked + 10 * MINUTE)
+    expect(await liveness(f, group)).toEqual({ state: 'orphaned', why: 'unstarted', since: asked })
+    expect((await stalledRows(f)).map(r => r.text)).toEqual([expect.stringContaining('"Write the docs": orphaned, its agent has not started for 10 minutes.')])
+    await tick(f, asked + 20 * MINUTE)
+    expect(await stalledRows(f)).toHaveLength(1)
   })
 })
 
@@ -1157,7 +1374,11 @@ describe('the morning digest', () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
     await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
-    const secret = String((await f.execute({ type: 'conversation.create', title: 'Salaries', brief: '', checks: [], audience: { personIds: [owner.sub] } } as Command)).result.conversationId)
+    // owner's Chat with PM from before Buddies replaced it: nobody opens one any more, so its stored row is made one.
+    const secret = String((await f.execute({ type: 'conversation.create', title: 'Salaries', brief: '', checks: [] })).result.conversationId)
+    const generation = (await f.timed.read(owner, f.tab)).state.people.find(p => p.id === owner.sub)!.generation
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: secret } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object, audience: { people: [{ id: owner.sub, generation }] } } } })
     const asked = (conversationId: string, count: number, from: number) => Array.from({ length: count }, (_, i) => ({ id: randomUUID(), tabId: f.tab,
       batchId: 'batch', projectId, conversationId, assignmentId: null, personId: owner.sub, askerAgentId: f.lead, question: `Question ${i}?`,
       options: ['Yes', 'No'], recommended: 0, unblocks: 'Work', createdAt: new Date(from + i) }))

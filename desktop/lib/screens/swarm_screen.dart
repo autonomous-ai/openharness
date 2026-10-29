@@ -75,8 +75,8 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
-import '../super_tabs/pm_chat.dart' show countText;
-import '../super_tabs/pm_chat_shortcut.dart';
+import '../super_tabs/buddy_chat.dart' show countText;
+import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
@@ -542,7 +542,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             onRetry: app.firstArrival.canRetry
                                 ? _retryFirstArrival
                                 : null,
-                            onStartNew: app.firstArrival.canRetry &&
+                            onStartNew:
+                                app.firstArrival.canRetry &&
                                     !app.firstArrival.checkingStatus
                                 ? _startFreshAfterArrival
                                 : null,
@@ -612,8 +613,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final tab = app.activeSwarmId;
     final work = app.firstArrival.retry(
       app,
-      stillCurrent: () => mounted && app.activeSwarmId == tab &&
-          _newHarness == null && _search == null && !_pickingFolder,
+      stillCurrent: () =>
+          mounted &&
+          app.activeSwarmId == tab &&
+          _newHarness == null &&
+          _search == null &&
+          !_pickingFolder,
     );
     setState(() {});
     await work;
@@ -625,12 +630,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final session = arrival.selectedSession;
     final engine = arrival.selectedEngine;
     arrival.dismiss();
-    unawaited(_newAgent(
-      machineId: app.localMachineState?.machine.machineId,
-      folder: session?.cwd,
-      engine: engine,
-      task: session == null ? FirstArrival.starterTask : null,
-    ));
+    unawaited(
+      _newAgent(
+        machineId: app.localMachineState?.machine.machineId,
+        folder: session?.cwd,
+        engine: engine,
+        task: session == null ? FirstArrival.starterTask : null,
+      ),
+    );
   }
 
   void _scheduleWelcomeComposer() {
@@ -2261,13 +2268,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
             'iconAsset': swarm.isStore
                 ? kStoreMarkAsset
                 : engineIdentity(_tabEngine(swarm)).asset,
-            'attention': swarm.panes
-                .where(
-                  (p) =>
-                      p.agentId != null &&
-                      app.questionFor(p.machineId, p.agentId!) != null,
-                )
-                .length +
+            'attention':
+                swarm.panes
+                    .where(
+                      (p) =>
+                          p.agentId != null &&
+                          app.questionFor(p.machineId, p.agentId!) != null,
+                    )
+                    .length +
                 tabWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
@@ -7541,7 +7549,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget? _asleepBand() => _showsAsleepBand
       ? _AsleepBand(
           names: [
-            for (final machine in app.asleepComputers) machine.machine.displayName,
+            for (final machine in app.asleepComputers)
+              machine.machine.displayName,
           ],
         )
       : null;
@@ -7697,7 +7706,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     for (var i = 1; i <= 9; i++)
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
-    'swarm.chat_with_pm': () => unawaited(openActivePmChat(app)),
+    'swarm.chat_with_pm': () => unawaited(openActiveBuddyChat(app)),
     'agent_messages.show': () => _showAgentMessages(app.activeSwarmId),
     'agent_messages.activity': _toggleTabActivity,
     'agent_messages.make_leader': _toggleFocusedLeader,

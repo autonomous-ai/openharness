@@ -65,11 +65,11 @@ describe('built-in Swarm skills', () => {
   // The plan line (Lead's brief for v2 M, 2026-10-27; docs/plans/2026-10-27-swarm-scheduler.md): the Lead's alone, in both modes.
   const plan = '- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan\'s order and start the plan\'s pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.\n'
   // The decision lines (Lead's brief for v2 decisions, 2026-10-27): the Lead's and the Builder's alone, in both modes.
-  const decision = '- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.\n'
+  const decision = '- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: to tell one person something directly, send person.tell; it lands in their Buddy chat, which you cannot read. Project members watching your terminal see what you send. Put nothing there you wouldn\'t say in the project chat.\n'
   const ask = '- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.\n'
   // The requests section (Lead's ruling for v2 G, the human leaderboard, 2026-10-27): the Lead's alone, in both modes, in a
   // section of its own so other groups' edits to the Lead text merge cleanly.
-  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
+  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
@@ -101,8 +101,43 @@ describe('built-in Swarm skills', () => {
     ['default', 'dev', "- Mark ready for review, with the revision and the PR link, when the work needs review: the Swarm opens the review from your handoff. Otherwise mark done.\n",
       "- Mark ready for review when the group has a Reviewer; otherwise mark done.\n"],
   ]
-  const approved = (text: string, mode: 'orchestration' | 'default') =>
-    autoReview.filter(([m]) => m === mode).reduce((t, [, , line, before]) => t.replace(line, before), text)
+  // Fail fast on a missing tool (Tony 10-29: a device build sat an hour on his Mac's Team account, which had no Flutter and no
+  // iPhone): the Builder's and the Reviewer's check, in both modes, and the Lead's move, in both modes.
+  const toolCheck = '- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).\n'
+  // The stop lives in the Builder's Blocked section, the only place its skill lets it stop (review of #2096).
+  const missingStop = '- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner\'s or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.\n'
+  // The Reviewer's, at the end of its first paragraph.
+  const reviewCheck = ' In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine, and whether it is the owner\'s or the Team account (no emails or tokens), and stop: the Lead moves the task.'
+  const moveMissing = '- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac\'s own account and its Team account are different: the Team account has none of the owner\'s tools, devices or sign-ins. If none has it, tag the requester with the choice.\n'
+  // The Builder's check replaces its machine-or-device line; the Default Builder keeps the person part of it. The orchestration
+  // Builder's "missing machine" now means another machine, since its own is the stop above.
+  const failFast: Array<['orchestration' | 'default', 'lead' | 'dev', string, string]> = [
+    ['orchestration', 'dev', toolCheck, '- If the brief needs a machine or device, check it is reachable and usable before you start; if not, mark blocked with a "Needs:" line.\n'],
+    ['orchestration', 'dev', 'Another machine the work needs, test data, or a person\'s hands is still a "Needs:" line;', 'A missing machine, test data, or a person\'s hands is still a "Needs:" line;'],
+    ['default', 'dev', `${toolCheck}- If the brief needs a person, check they are available; if not, post a "Needs:" line and do the parts that don't depend on it.\n`,
+      '- If the brief needs a machine, device or person, check it is available; if not, post a "Needs:" line and do the parts that don\'t depend on it.\n'],
+  ]
+  // The Swarm wakes the Lead when a task stalls (Ken, 2026-10-29; liveness.ts recordTaskStates): each Lead's 6-hour rule gives
+  // way to acting on that wake within minutes. [mode, role, new text, approved text].
+  const stallWake: Array<['orchestration' | 'default', 'lead', string, string]> = [
+    ['orchestration', 'lead', 'when the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits; ',
+      'reassign work that has not moved for 6 hours; '],
+    ['default', 'lead', '- When the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits.\n',
+      '- Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.\n'],
+  ]
+  // By role too: the Builder's and the Reviewer's tool-check line is the same, and only the Builder's replaced an approved one.
+  const approved = (text: string, mode: 'orchestration' | 'default', role: 'lead' | 'dev' | 'review') =>
+    [...autoReview, ...failFast, ...stallWake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
+  it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
+    for (const [mode, , line, before] of stallWake) {
+      expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
+      for (const role of ['lead', 'dev', 'review'] as const) {
+        const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+        expect(text, `${mode} ${role}`).not.toContain(before)
+        if (role !== 'lead') expect(text, `${mode} ${role}`).not.toContain('a task stalled')
+      }
+    }
+  })
   it('tells each Lead the Swarm opens reviews by itself, and each Builder to hand off with a pull request link', () => {
     for (const [mode, role, line, before] of autoReview) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
@@ -140,13 +175,18 @@ describe('built-in Swarm skills', () => {
       expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
       expect(text.split(shared)).toHaveLength(role === 'lead' ? 1 : 2)
       expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
-      expect(sha(approved(text, 'orchestration').replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, ''))).toBe(sha256)
+      expect(text.split(toolCheck)).toHaveLength(role === 'dev' ? 2 : 1)
+      expect(text.split(missingStop)).toHaveLength(role === 'dev' ? 2 : 1)
+      expect(text.split(reviewCheck)).toHaveLength(role === 'review' ? 2 : 1)
+      expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
+      expect(sha(approved(text, 'orchestration', role).replace(twoHours, '').replace(terminal, '').replace(overlap, '').replace(local, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+        .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requests, '').replace(shared, '').replace(report, '')
+        .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, ''))).toBe(sha256)
     }
   })
-  it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
+  it('adds the 2-hour line to section 7 right after the stall rule', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(text).toContain(`reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
+    expect(text).toContain(`post in its chat why it waits; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
   })
   it('adds the failed-start line right after each Lead skill\'s local models line, and to no other role', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -179,7 +219,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`- Needs-human: get the person's decision now.\n${mention}${decision}- Blocked: change something.`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}${decision}- Settle ambiguities`)
+    expect(plain).toContain(`- Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.\n${mention}${decision}`)
   })
   it('adds the decision lines right after the mention line for the Lead, and after the needs-human rule for the Builder', () => {
     for (const mode of ['orchestration', 'default'] as const) {
@@ -213,7 +253,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`${twoHours}${lost}`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- Work with no progress`)
+    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- When the Swarm tells you a task stalled`)
   })
   it('adds the usage-limit and digest lines right after each Lead skill\'s lost-work line', () => {
     for (const mode of ['orchestration', 'default'] as const) {
@@ -229,6 +269,30 @@ describe('built-in Swarm skills', () => {
     expect(orchestration).not.toContain('only for review, only when the group needs it')
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session', mode: 'default' }).file, 'utf8')
     expect(plain).toContain(`- Have something to show at least every 20 minutes: a push or a short progress line.\n${checkpoint}`)
+  })
+  it('has each Builder check its tools first, and stop from its Blocked section when one is missing', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`and rule on mismatches.\n${toolCheck}- If something you need is missing,`)
+    expect(orchestration).toContain(`- Post a "Needs:" line, continue the independent parts, and mark working again once it moves.\n${missingStop}- Stop for a decision only`)
+    expect(orchestration).not.toContain('check it is reachable and usable before you start')
+    expect(orchestration).not.toContain('A missing machine, test data')
+    expect(orchestration).toContain('Another machine the work needs, test data, or a person\'s hands is still a "Needs:" line; continue the independent parts.')
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'dev', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`- Read how the code behaves today before changing it.\n${toolCheck}- If the brief needs a person, check they are available;`)
+    expect(plain).toContain(`- Can't go on: mark blocked with why and what would unblock you, then do the independent parts.\n${missingStop}- Stop and ask`)
+    expect(plain).not.toContain('If the brief needs a machine, device or person')
+  })
+  it('has each Reviewer check its tools at the end of its first paragraph', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'review', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`if you cannot, tell the Lead.${reviewCheck}\n\n## 2. What to check, in order`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'review', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`If you cannot, tell the Lead.${reviewCheck}\n\n## 2. What to look for`)
+  })
+  it('has each Lead move a task blocked on a missing tool: after its blocked rule, or after the decision lines in Default', () => {
+    const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
+    expect(orchestration).toContain(`Never resend the same thing to the same model.\n${moveMissing}- Rulings, not stalls`)
+    const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
+    expect(plain).toContain(`${decision}${moveMissing}- Settle ambiguities`)
   })
   // The owner's approved Default texts (attached to the spec, 2026-10-23), byte for byte.
   it.each([
@@ -254,8 +318,13 @@ describe('built-in Swarm skills', () => {
     expect(text.split(failedStart)).toHaveLength(role === 'lead' ? 2 : 1)
     expect(text.split(sharedLast)).toHaveLength(role === 'lead' ? 1 : 2)
     expect(text.split(report)).toHaveLength(role === 'lead' ? 2 : 1)
-    expect(sha(approved(text, 'default').replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
-      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, ''))).toBe(sha256)
+    expect(text.split(toolCheck)).toHaveLength(role === 'dev' ? 2 : 1)
+    expect(text.split(missingStop)).toHaveLength(role === 'dev' ? 2 : 1)
+    expect(text.split(reviewCheck)).toHaveLength(role === 'review' ? 2 : 1)
+    expect(text.split(moveMissing)).toHaveLength(role === 'lead' ? 2 : 1)
+    expect(sha(approved(text, 'default', role).replace(terminal, '').replace(overlap, '').replace(localDefault, '').replace(failedStart, '').replace(mention, '').replace(lost, '').replace(checkpoint, '')
+      .replace(limit, '').replace(digest, '').replace(decision, '').replace(ask, '').replace(requestsLast, '').replace(sharedLast, '').replace(report, '')
+      .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, ''))).toBe(sha256)
     expect(prepared.instructions).toBe(`Use the swarm-${role} skill for this session: the team process; otherwise work your usual way. Before working, read ${JSON.stringify(prepared.file)} with your file or shell tool.`)
   })
 
@@ -505,6 +574,8 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('Only when your owner asks')
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
     expect(text).toContain('Never assign work, start agents, change code or open pull requests')
+    // Buddies replaced Chat with PM (Ken, 10-29): the PM's private lines to the owner land in the Buddy's chat, and are not its orders.
+    expect(text).toContain('The PM\'s private lines to your owner land in your chat too')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
   })
 })
