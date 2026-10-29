@@ -102,7 +102,7 @@ export function agentTarget(state: SuperTabState, worker: Agent): RunTarget {
   const launched = start?.request.effort
   return { machineId: worker.machineId, engine: worker.configuration.engine, model: worker.configuration.model,
     effort: reported && reported !== 'auto' ? reported : launched ?? reported, devices: start?.request.requirements?.devices ?? [],
-    ...(worker.gridModel ? { gridModel: worker.gridModel } : {}), ...(start && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}) }
+    ...(worker.gridModel ? { gridModel: worker.gridModel } : {}), ...(start && !worker.gridModel && !start.request.gridModel && (start.request.model ?? 'default') === 'default' ? { launchedDefault: true as const } : {}) }
 }
 
 /** The policy's strength of a subscription model, as the CLI's route rates it (cli superTabs/route.ts rateFor): its named row
@@ -115,25 +115,41 @@ export function policyQuality(policy: RoutingPolicy, engine: string, model: stri
     const rows = policy.models.filter(m => m.engine === engine && m.model === named)
     return rows.find(m => m.effort === (effort ?? 'default')) ?? rows[0]
   }
-  return (rowOf(name) ?? (engineDefault ? rowOf('default') : undefined))?.quality ?? 1
+  // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
+  return (rowOf(name) ?? (engineDefault && !SMALL.test(model ?? '') ? rowOf('default') : undefined))?.quality ?? 1
 }
+/** A small variant by its name: a mini or a nano. */
+const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 /** A target's strength: an agent launched on the engine's own model falls back to the `default` row (Codex reports its slug). */
 export const targetQuality = (policy: RoutingPolicy, t: RunTarget) => policyQuality(policy, t.engine, t.model, t.effort, !!t.launchedDefault)
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 
-/** Whether a strong Reviewer of another family than [builder]'s can run in this Swarm: an engine an agent runs or a contributed
- *  machine offers, other than the Builder's, with an enabled policy row of quality 2 or more. */
-function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy): boolean {
-  const engines = new Set([...state.agents.filter(a => !a.gridModel && !a.buddyOf).map(a => a.configuration.engine), ...(state.machines ?? []).flatMap(m => m.engines)])
-  return [...engines].some(e => familyOf({ engine: e }) !== familyOf(builder) && policy.models.some(m => m.enabled && m.engine === e && m.quality >= 2))
+/** Whether a new Reviewer may run [target] for [contributorId]'s machine: its owner's rules, the task's machine and team
+ *  access, as the command judges them. Busy, offline or short of quota still counts as able, within its start window. */
+export type MayRun = (target: RunTarget, contributorId: string) => boolean
+/** Whether a strong Reviewer of another family than [builder]'s can run in this Swarm: on a machine an agent runs on or a
+ *  contributed machine offers, with an engine other than the Builder's and an enabled policy row of quality 2 or more that
+ *  [mayRun] allows there (review of ee4ee6c9a: an engine the owner rules out blocked the fallback). */
+function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy, mayRun: MayRun): boolean {
+  const places = [...state.agents.filter(a => !a.gridModel && !a.buddyOf).map(a => ({ machineId: a.machineId, contributorId: a.contributorId, engines: [a.configuration.engine] })),
+    ...(state.machines ?? []).map(m => ({ machineId: m.machineId, contributorId: m.contributorId, engines: m.engines }))]
+  return places.some(place => place.engines.some(engine => familyOf({ engine }) !== familyOf(builder) && policy.models.some(row => row.enabled && row.engine === engine
+    && row.quality >= 2 && mayRun({ machineId: place.machineId, engine, model: row.model, effort: liftEffort(state.rules, engine, row.effort) }, place.contributorId))))
+}
+/** The effort a new agent on a row starts at: the row's, or the owner's minimum when the row leaves it to the engine (cli
+ *  superTabs/route.ts liftEffort). */
+function liftEffort(rules: SwarmRule[] | undefined, engine: string, effort: string): string {
+  if (rank(effort) >= 0) return effort
+  const least = Math.max(-1, ...(rules ?? []).flatMap(({ rule }) => rule.kind === 'minEffort' && (!rule.engine || rule.engine === engine) ? [rank(rule.effort)] : []))
+  return least < 0 ? effort : EFFORTS[least]!
 }
 
 /** How [target] may review the work of group [reviewed] (Ken, 2026-10-29: a small model never reviews again): never on a model
  *  served on the Swarm's grid or one the policy rates below 2, and on another model family than the reviewed Builder's while
  *  a strong Reviewer of another family can run here. With none, the Builder's own engine at its top tier, noted (Lead,
  *  2026-10-29: a Swarm of one engine keeps its automatic reviews). */
-function judgeReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): { refusal: string } | { note: string } | null {
+function judgeReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy, mayRun: MayRun): { refusal: string } | { note: string } | null {
   if (!reviewed) return null
   if (target.gridModel) return { refusal: 'A review never runs on a model served on the Swarm\'s grid.' }
   const quality = targetQuality(policy, target)
@@ -144,17 +160,24 @@ function judgeReview(state: SuperTabState, reviewed: string | undefined, target:
   const builder = worker ? agentTarget(state, worker) : assignment ? { engine: assignment.configuration.engine } : null
   // A grid target was refused above, so the same family is the target's engine.
   if (!builder || familyOf(builder) !== familyOf(target)) return null
-  if (otherFamilyReviews(state, builder, policy)) return { refusal: `A review runs on another engine than the reviewed Builder's, ${engine}.` }
+  if (otherFamilyReviews(state, builder, policy, mayRun)) return { refusal: `A review runs on another engine than the reviewed Builder's, ${engine}.` }
   return quality === 3 ? { note: `No Reviewer on another engine than the Builder's (${engine}) can run in this Swarm, so the review runs on it at the top tier.` }
     : { refusal: `A review on the reviewed Builder's engine, ${engine}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.` }
 }
 /** Why [target] may not review the work of group [reviewed]; null when it may, or nothing is reviewed. */
-export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
-  const judged = judgeReview(state, reviewed, target, policy)
+/** Without the command's own judgement, a machine may run a review where the owner's rules for the reviewed group's project
+ *  allow it. */
+const ownerAllows = (state: SuperTabState, reviewed: string | undefined): MayRun => {
+  const projectId = state.conversations.find(c => c.id === reviewed)?.projectId
+  const rules = (state.rules ?? []).filter(r => !r.projectId || !projectId || r.projectId === projectId)
+  return target => !broken(rules, target)
+}
+export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy, mayRun: MayRun = ownerAllows(state, reviewed)): string | null {
+  const judged = judgeReview(state, reviewed, target, policy, mayRun)
   return judged && 'refusal' in judged ? judged.refusal : null
 }
 /** Why [target] reviews on the reviewed Builder's own engine, when it may only because no other engine can; null otherwise. */
-export function sameEngineReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
-  const judged = judgeReview(state, reviewed, target, policy)
+export function sameEngineReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy, mayRun: MayRun = ownerAllows(state, reviewed)): string | null {
+  const judged = judgeReview(state, reviewed, target, policy, mayRun)
   return judged && 'note' in judged ? judged.note : null
 }

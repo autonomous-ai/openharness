@@ -267,6 +267,27 @@ describe('routeTask', () => {
     Object.assign(t.state.conversations[2]!, { assignment: null })
     expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true })
   })
+  it('lets the Builder\'s engine review at its top tier when the only other engine is on a machine the task may not use', async () => {
+    const pool = (machineId: string, engines: string[], patch: Record<string, unknown> = {}) => ({ machineId, name: machineId, cwd: '/w', engines, paused: false, contributorId: 'owner',
+      observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],
+        quotas: engines.map(engine => ({ engine, known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }, { name: 'weekly', usedPercent: 10, resetsAt: Date.now() + 5 * 86400000 }] })) }, ...patch })
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const routeWith = async (codexBox: Record<string, unknown>, requires?: string[]) => {
+      const t = tab(); t.state.agents = [agents[1]] as never
+      t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+        assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
+      Object.assign(t.state.conversations[1]!, { reviewOf: 'g0', ...requires ? { task: { goal: 'g', changes: 'c', constraints: 'k', owns: [], requires: { machines: requires } } } : {} })
+      Object.assign(t.state, { machines: [pool('m1', ['claude']), codexBox] })
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [] } } })
+      return routeTask(input, s, where as never, opener(), () => 'op')
+    }
+    // Codex on m2 reviews, so Claude may not.
+    expect(await routeWith(pool('m2', ['codex']))).toMatchObject({ ok: true, pick: { engine: 'codex', machineId: 'm2' } })
+    // The task runs only on m1, or m2 may not take a teammate's project: Claude reviews at its top tier on m1.
+    expect(await routeWith(pool('m2', ['codex']), ['m1'])).toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+    expect(await routeWith(pool('m2', ['codex'], { contributorId: 'mate', teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: 'Not a Team machine.' } })))
+      .toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+  })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     // Cheapest first: the member on sonnet.

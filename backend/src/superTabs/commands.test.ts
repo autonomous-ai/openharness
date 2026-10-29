@@ -1210,8 +1210,14 @@ describe('Reviewer role', () => {
     expect(() => route({ model: 'default', effort: 'default' })).toThrow('Claude default is 1.')
     expect(() => route({ model: 'default', effort: 'default', gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' })).toThrow('never runs on a model served on the Swarm\'s grid')
     // A machine that offers Codex makes the other engine available, and the same engine is refused again.
-    f.state.machines = [{ machineId: 'codex-box', engines: ['codex'] } as never]
+    f.state.machines = [{ machineId: 'codex-box', contributorId: 'owner', engines: ['codex'] } as never]
     expect(() => route({})).toThrow('A review runs on another engine than the reviewed Builder\'s, Claude. Route again.')
+    // Unless that machine may not run the review: the owner's rules, or the task's own machine (review of ee4ee6c9a).
+    f.run({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['host', 'machine'] }, text: 'Only our machines.' } as Command)
+    expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: expect.stringContaining('top tier') } })
+    f.run({ type: 'rule.remove', ruleId: f.state.rules!.at(-1)!.id } as Command)
+    f.state.conversations.find(c => c.id === review)!.task = { goal: 'g', changes: 'c', constraints: 'k', owns: [], requires: { machines: ['machine'] } }
+    expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: expect.stringContaining('top tier') } })
   })
 
   it('never lets a small or unnamed model review: a review needs a model the policy names at quality 2 or more', () => {
@@ -1230,9 +1236,12 @@ describe('Reviewer role', () => {
       Object.assign(f.state.agents.find(a => a.id === reviewer)!.configuration, configuration)
       return () => route({ kind: 'member', agentId: reviewer, machineId: 'host' })
     }
-    expect(member({ engine: 'codex', model: 'gpt-5.5-mini' })).not.toThrow()
-    f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-5.5-mini'
+    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
+    // A known small model it reports is never promoted by its launch (review of ee4ee6c9a).
     expect(member({ engine: 'codex', model: 'gpt-5.5-mini' })).toThrow('Codex gpt-5.5-mini is 1.')
+    expect(member({ engine: 'codex', model: 'gpt-5-nano' })).toThrow('Codex gpt-5-nano is 1.')
+    f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-6.1-sol'
+    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).toThrow('Codex gpt-6.1-sol is 1.')
   })
 
   it('stores the role chosen at start and reads agents without one as Builders', () => {
@@ -3342,6 +3351,19 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp).toMatchObject({ attempt: 2, floor: 2, reason: 'Its grid host did not start the agent.' })
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
     expect(effects.messages.map(m => m.text)).toContain(`#${g().number} stepped up to attempt 2: its grid host did not start the agent. Route it again: the route leaves out models on the grid and below quality 2, and the new attempt's brief carries the branch, the last result and the findings.`)
+  })
+
+  it('never steps up again from a top-tier attempt that its ledger names by a slug the policy does not', () => {
+    const { f, builder, assign, fail, g } = cheap()
+    g().stepUp = { attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1, carry: '' }
+    // Launched on Codex's own model, it reports its slug: rated by the default row, the top tier.
+    const codex = builder('codex', 'gpt-6.1-sol')
+    Object.assign(f.state.agents.find(a => a.id === codex)!.configuration, { engine: 'codex' })
+    f.state.starts = [...f.state.starts ?? [], { harnessId: 'codex', request: { machineId: 'host', engine: 'codex', model: 'default' } } as never]
+    const attempt = assign(codex)
+    fail(attempt.assignmentId, codex)
+    expect(g().stepUp!.attempt).toBe(2)
+    expect(g().assignment).toMatchObject({ id: attempt.assignmentId, status: 'review' })
   })
 
   it('steps up once for one failed grid start, however often its failure is reported', () => {

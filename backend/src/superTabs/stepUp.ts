@@ -22,12 +22,13 @@ export interface StepUp { attempt: number; floor: number; reason: string; at: nu
 
 const lower = (text: string) => `${text[0]!.toLowerCase()}${text.slice(1)}`
 
-/** Whether [group]'s current attempt is on the cheap path: on a grid model, or already stepped up and below the top tier. */
+/** Whether [group]'s current attempt is on the cheap path: on a grid model, or already stepped up and below the top tier as
+ *  its ledger rates it, its launch on the engine's own model included (review of ee4ee6c9a). */
 export function cheapAttempt(group: Conversation, policy: RoutingPolicy): boolean {
   const run = group.ledger?.runs?.find(r => r.assignmentId === group.assignment?.id)
   if (!run) return false
   if (run.grid) return true
-  return !!group.stepUp && policyQuality(policy, run.engine, run.model, run.effort ?? null) < 3
+  return !!group.stepUp && policyQuality(policy, run.engine, run.model, run.effort ?? null, !!run.engineDefault) < 3
 }
 
 /** Steps [group] up for [reason]: records the step, closes its attempt if one is going, and says what to tell its Lead and

@@ -284,7 +284,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     return required.devices.every(d => Array.isArray(devices) && devices.includes(d))
   }
   const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents) : null
-  const otherFamily = otherFamilyReviews(probes, builder)
+  // Another engine counts only on a machine the task may run on, and that its access lets take this project's work.
+  const teamRefused = (p: Probe) => { const why = machines.get(p.machineId)?.pool?.teammatesRefused; return typeof why === 'string' && p.refusals.includes(why) }
+  const otherFamily = otherFamilyReviews(probes.filter(p => !outside(p.machineId) && !teamRefused(p)), builder, rules)
   const step = finite(object(group.stepUp).floor) ? { floor: object(group.stepUp).floor as number } : null
   for (const [i, p] of probes.entries()) {
     const refusals = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),

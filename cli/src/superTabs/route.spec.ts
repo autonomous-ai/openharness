@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, gridQuality, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, LOCAL_NONE, breaks, choose, gridQuality, otherFamilyReviews, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -284,6 +284,10 @@ describe('edges', () => {
     expect(rateFor(policy, 'claude', 'sonnet', null)).toEqual({ quality: 2, cost: 2 })
     expect(rateFor(policy, 'codex', 'gpt-x', 'high')).toEqual({ quality: 1, cost: 1 })
     expect(rateFor(policy, 'codex', 'gpt-x', 'high', true)).toEqual({ quality: 3, cost: 2 })
+    // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
+    expect(rateFor(policy, 'codex', 'gpt-5.5-mini', 'high', true)).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'codex', 'gpt-5-nano', 'high', true)).toEqual({ quality: 1, cost: 1 })
+    expect(rateFor(policy, 'claude', null, null, true)).toEqual({ quality: 1, cost: 1 })
     expect(rateFor(policy, 'other', 'gpt-x', 'high')).toEqual({ quality: 1, cost: 1 })
   })
   it('rates a working member by the model its engine reported, not only by the catalog alias', () => {
@@ -653,6 +657,14 @@ describe('local models on the Swarm\'s grid', () => {
     expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' }, true)).toEqual([])
     expect(reviewRefusals(probe(), { engine: 'claude' }, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Claude.'])
     expect(reviewRefusals(probe(), null, true)).toEqual([])
+    // Another engine counts only where the owner's rules let it run, at the effort a new agent starts at (review of ee4ee6c9a).
+    const codexElsewhere = probe({ machineId: 'm2', engine: 'codex', model: 'default', effort: 'default', quality: 3 })
+    const only = (machineIds: string[]) => [{ rule: { kind: 'machines', machineIds }, text: 'Only ours.' } as SwarmRule]
+    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, [])).toBe(true)
+    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, only(['m1']))).toBe(false)
+    expect(otherFamilyReviews([probe(), codexElsewhere], { engine: 'claude' }, [{ rule: { kind: 'minEffort', effort: 'high' }, text: 'High.' }])).toBe(true)
+    expect(otherFamilyReviews([probe(), probe({ engine: 'codex', model: 'gpt-5.5-mini', quality: 1 })], { engine: 'claude' }, [])).toBe(false)
+    expect(otherFamilyReviews([codexElsewhere], null, [])).toBe(false)
     // With no Reviewer of another engine anywhere, the Builder's own engine reviews at its top tier only (Lead, 2026-10-29).
     expect(reviewRefusals(probe({ model: 'opus', quality: 3 }), { engine: 'claude' }, false)).toEqual([])
     expect(reviewRefusals(probe(), { engine: 'claude' }, false))

@@ -626,13 +626,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** The owner's rules for the group's project, then the group's own requirement, each with its own code so a caller can tell
    *  an owner's rule from where the task can be done at all. */
   const policy = context.routingPolicy ?? DEFAULT_ROUTING_POLICY
+  /** Whether a new agent may run [target] for group [conversationId]: the owner's rules, the task's own machine
+   *  ([requirement]) and team access. Whether another engine could review is judged by it (rules.ts reviewRefusal). */
+  const mayRun = (conversationId: string, requirement: boolean) => (target: RunTarget, contributorId: string) =>
+    !broken(groupRules(conversationId), target, machineName, macOf) && (!requirement || !unmet(conversation(state, conversationId).task?.requires, target, macOf))
+    && !teamWorkCheck(state, target.machineId, contributorId, groupProject(state, conversation(state, conversationId)), context.now, context.teamMachines, context.otherWorkspaceMachines)
   /** [builds]: the target would do the group's work, so a step up's floor holds too (stepUp.ts). */
   const refusal = (target: RunTarget, conversationId: string, builds = true): { code: string; why: string } | null => {
     const rule = broken(groupRules(conversationId), target, machineName, macOf)
     if (rule) return { code: 'RULE_BROKEN', why: rule }
     const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
     if (requirement) return { code: 'REQUIREMENT_UNMET', why: requirement }
-    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy)
+    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy, mayRun(conversationId, true))
     if (review) return { code: 'REVIEW_REFUSED', why: review }
     const stepped = builds ? stepUpRefusal(conversation(state, conversationId), target, policy) : null
     return stepped ? { code: 'STEPPED_UP', why: stepped } : null
@@ -1838,7 +1843,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // The step this attempt is comes from the group alone (stepUp.ts), and why a review stays on its Builder's engine from
       // the server's own judgement (rules.ts).
       const step = conversation(state, command.conversationId).stepUp
-      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy)
+      const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true))
       const { stepUp: _sent, sameEngine: _said, ...made } = decision
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
         record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, ...sameEngine ? { sameEngine } : {} } })
@@ -2014,7 +2019,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy) })
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy, mayRun(group.id, false)) })
         if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {

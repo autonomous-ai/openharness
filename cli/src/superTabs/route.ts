@@ -215,9 +215,12 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
   const name = engine === 'claude' && model ? claudeAliasForModel(model.replace(/\[1m\]$/i, '')) ?? model : model ?? 'default'
   const rowOf = (named: string) => policy.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
     ?? policy.models.find(m => m.engine === engine && m.model === named)
-  const row = rowOf(name) ?? (engineDefault ? rowOf('default') : undefined)
+  // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
+  const row = rowOf(name) ?? (engineDefault && !SMALL.test(model ?? '') ? rowOf('default') : undefined)
   return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
 }
+/** A small variant by its name: a mini or a nano (backend superTabs/rules.ts). */
+const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
 
 /** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
 export interface Reviewed { engine: string; gridModel?: string }
@@ -235,9 +238,11 @@ export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: 
   return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.`] : []
 }
 /** Whether a strong Reviewer of another family than [builder]'s can run: a candidate off the grid, rated 2 or more, of
- *  another family, wherever it is and whatever keeps it out now. */
-export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null) =>
-  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder))
+ *  another family, that the owner's [rules] let run at the effort it would start at. Busy, offline or short of quota it
+ *  still counts, within its start window; the caller leaves out the machines the task or its access rules out (review of
+ *  ee4ee6c9a: an engine the owner ruled out blocked the fallback). */
+export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[]) =>
+  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !breaks(rules, lifted(rules, p)))
 
 /** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
  *  the same (backend superTabs/stepUp.ts stepUpRefusal). */
