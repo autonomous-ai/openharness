@@ -1050,6 +1050,7 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   it.each([
     ['project news from outside its chat', {}, {}, { buddyNews: true }],
     ['the PM\'s private line to its person, in its chat', { author: { kind: 'agent', id: 'lead-agent', name: 'PM', membershipGeneration: 'g' } }, {}, {}],
+    ['an agent\'s line under an id like its person\'s', { author: { ...person, kind: 'agent', name: 'PM' } }, {}, {}],
     ['another person', { author: { ...person, id: 'sam', name: 'sam@example.com' } }, {}, {}],
     ['its person from an earlier membership', { author: { ...person, membershipGeneration: 'before' } }, {}, {}],
     ['a message with no author', { author: undefined }, {}, {}],
