@@ -39,5 +39,7 @@ describe('the Swarm\'s marks on Share, read with the Swarm off', () => {
     expect(marks.allows(grant('lead'))).toBe(false)
     expect(marks.allows(grant('member', 'super:tab'))).toBe(false)
     expect(marks.allows(grant('member'))).toBe(true)
+    // The Swarm off is no restart: a Super Tab's viewer is not told to retry.
+    expect(marks.paused(grant('member', 'super:tab'))).toBe(false)
   })
 })

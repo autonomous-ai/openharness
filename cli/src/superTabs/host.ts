@@ -8,7 +8,7 @@ import { attachedFiles, attachmentsOf } from './attachments.js'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { CoreApi, TurnDelivery } from '../core/api.js'
+import type { BackendNotice, CoreApi, TurnDelivery } from '../core/api.js'
 import { shellQuote } from '../orchestrator/prompts.js'
 import { agentCommandPrefix, fullCommandPrefix } from './shortCommand.js'
 import { readAuthSession } from '../lib/authSession.js'
@@ -62,9 +62,11 @@ export async function swarmRoleFor(sources: SwarmSources, harnessId: string): Pr
     if (led) return { role: 'lead' as const, mode: groupSkillMode(state, led) }
     const member = groups.find(group => Array.isArray(group.agentIds) && group.agentIds.includes(target.id)
       || object(group.assignment).agentId === target.id && object(object(group.assignment).execution).machineId === machineId)
-    return member ? { role: agent.role === 'reviewer' ? 'review' as const : 'dev' as const, mode: groupSkillMode(state, member) } : null
+    // A Buddy names its owner (backend buddies.ts); its role field stays a builder's for older readers.
+    const role = agent.buddyOf && typeof agent.buddyOf === 'object' ? 'buddy' as const : agent.role === 'reviewer' ? 'review' as const : 'dev' as const
+    return member ? { role, mode: groupSkillMode(state, member) } : null
   }))
-  return (['lead', 'dev', 'review'] as const).map(role => grants.find(grant => grant?.role === role)).find(Boolean) ?? null
+  return (['lead', 'dev', 'review', 'buddy'] as const).map(role => grants.find(grant => grant?.role === role)).find(Boolean) ?? null
 }
 
 interface Entry {
@@ -137,6 +139,14 @@ const JOIN_FINAL = new Set(['MACHINES_FULL', 'OWNER_REQUIRED'])
  *  added to an overloaded backend (production at 5 pods, 2026-10-27). */
 const DELIVERY_RETRY_MS = 1_000
 const DELIVERY_RETRY_MAX_MS = 30_000
+/** Stability roadmap 2.4 (2026-10-28): every host read each running agent's delivery list each second, almost always to find
+ *  nothing. A server that says it pushes (a `super_tab_deliveries` notice over the daemon socket, backend lib/adapterWs.ts)
+ *  names the agent when work waits; an idle agent's list is then read only this often, as the safety net for a lost push.
+ *  It matches the backend's quiet poll (liveness.ts SWEEP_EVERY_MS), so each read still runs a Lead's time checks. */
+const DELIVERY_FALLBACK_MS = 30_000
+/** The server repeats that it pushes every 4 minutes on each socket: without it for this long (an older server, a rollback,
+ *  this process started after the last one), every list is read each second again. */
+const PUSH_LEASE_MS = 10 * 60_000
 const LEAD_RETRY_MS = 5_000
 const LEAD_RETRY_MAX_MS = 30 * 60_000
 const LEAD_REOPEN_WAIT_MS = 60_000
@@ -195,6 +205,15 @@ export class SuperTabHost {
   private readonly authorized = new Map<string, number>()
   private readonly withheld = new WithheldDeliveries()
   private readonly stopHearing: () => void
+  private readonly stopNotices: () => void
+  /** Until when the server is known to push deliveries (PUSH_LEASE_MS). */
+  private pushUntil = 0
+  /** The agents' lists the server said have work since the last poll took them, by list key; `pushAll` reads every one. */
+  private readonly pushes = new Set<string>()
+  private pushAll = false
+  /** Per agent's list, when it was last read, what it held, and whether any of it is still in this host's hands: input in
+   *  flight needs a fresh read each second for its 2.5 s lease (accept), so only a list with nothing to do may wait. */
+  private readonly lists = new Map<string, { readAt: number; ids: string[]; busy: boolean }>()
   private stopped = false
   private running: Promise<void> | null = null
   private stopsRunning: Promise<void> | null = null
@@ -215,7 +234,7 @@ export class SuperTabHost {
   private nextReplacementsAt = 0
   private timer: ReturnType<typeof setTimeout> | null = null
   /** Per agent's delivery list and per delivery's claim, the failures in a row and when it may be asked again. */
-  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; list?: string }>()
+  private readonly deliveryRetries = new Map<string, { failures: number; retryAt: number; since: number; list?: string }>()
   private native: NativeRecorder | null = null
   private machines: ContributedMachines | null = null
   private readonly machineDeps: Partial<MachineDeps>
@@ -295,6 +314,7 @@ export class SuperTabHost {
     }
     this.persist()
     this.stopHearing = core.turns.onDelivery(event => this.heard(event))
+    this.stopNotices = core.account.onNotice(notice => this.pushed(notice))
     if (existsSync(nativeJournalFile(core.dataDir, machineId))) {
       try { this.native = new NativeRecorder(core, machineId) } catch (error) { this.log(String(error)) }
     }
@@ -316,12 +336,17 @@ export class SuperTabHost {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.stopHearing()
+    this.stopNotices()
     this.native?.stop()
     this.machines?.stop()
     this.authorized.clear()
-    // An empty roster in force, which Share reads as everyone gone and withdraws their invitations; a lapsed one
-    // would only pause their views (superTabs/observers.ts `known`).
-    try { this.observers(this.core.dataDir, this.machineId, [], this.now() + OBSERVER_VALID_MS, this.stillRuns) } catch { /* The old snapshot expires. */ }
+    // A roster that lapses now: viewing pauses at once, and Share keeps the invitations (superTabs/observers.ts `known`)
+    // until the next host's first roster says who is still a member. A host stops when its backend link drops and when
+    // the daemon restarts for an update; an empty roster in force here withdrew every member's invitation each time,
+    // which took this computer out of their machine lists until their apps next read them, up to 5 minutes later, and
+    // their panes said Harness here was out of date (Ken, 2026-10-28). No roster, not an empty one: the confidential marks
+    // and the current Leads' openings are kept as they are, so members watching a Lead are told to retry too.
+    try { this.observers(this.core.dataDir, this.machineId, null, this.now(), this.stillRuns) } catch { /* The old snapshot expires. */ }
     // Signed out or another machine: this host's alerts are no longer anyone's. A core that is gone heard nothing, and
     // the next host's first roster replaces them anyway.
     if (this.attention !== null && this.attention !== '[]') {
@@ -345,6 +370,8 @@ export class SuperTabHost {
   }
   private pollMachines() {
     void this.contributed().tick().catch(error => this.log(error instanceof Error ? error.message : String(error)))
+    // Beside the pass, never behind it: a slow pass still keeps the machine's reading fresh (machines.ts beat).
+    this.contributed().beat()
     this.grids ??= new SwarmGrids(this.core, this.machineId)
     void this.grids.tick().catch(error => this.log(`Swarm grid: ${error instanceof Error ? error.message : String(error)}`))
   }
@@ -356,7 +383,25 @@ export class SuperTabHost {
   }
   tick(): Promise<void> {
     if (this.stopped || this.now() < this.updateUntil) return Promise.resolve()
-    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => { this.running = null })
+    return this.running ??= this.poll().catch(error => this.failed(error)).finally(() => {
+      this.running = null
+      // Work the server announced during that poll is read now, not at the next second.
+      if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
+    })
+  }
+  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. */
+  private pushed(notice: BackendNotice): void {
+    if (notice.type !== 'super_tab_deliveries' || this.stopped) return
+    this.pushUntil = this.now() + PUSH_LEASE_MS
+    if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
+    else this.pushAll = true
+    void this.tick()
+  }
+  /** A delivery this host has nothing more to do for until someone acts: withheld from an agent that may not read it, or
+   *  reported uncertain and waiting for a person. Any other keeps its agent's list read each second. */
+  private settled(delivery: Json): boolean {
+    const id = delivery.id as string, entry = this.journal.entries[id]
+    return this.unreadable.has(id) || (!!entry && entry.stage === 'uncertain' && delivery.status === 'uncertain' && delivery.receipt === entry.receipt)
   }
   /** Logged, except that an update-required answer is said once and then waits a minute, rather than every second. */
   private failed(error: unknown): void {
@@ -532,8 +577,10 @@ export class SuperTabHost {
       try {
         const result = object(await backend(this.core, 'GET', `/api/super-tabs/${entry.tabId}/agents/${entry.agentId}/deliveries/${entry.deliveryId}`))
         if (this.stopped) return
-        // Held input is retired only by an answer. A cancelled one leaves the roster, so the claim path never sees it again; it stays in the journal.
-        const terminal = entry.stage === 'prepared' ? ['answered'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
+        // Held input is retired by an answer, or once the backend ended it: it leaves the list, so the claim path never sees it
+        // again. Kept, every hold the backend's delivery pass ends (backend superTabs/deliverySettle.ts) would stay here, and
+        // at 1,000 entries this host accepts no more deliveries.
+        const terminal = entry.stage === 'prepared' ? ['answered', 'cancelled'] : ['delivered', 'confirmed', 'superseded', 'cancelled', 'answered']
         if (result.id !== entry.deliveryId || !terminal.includes(String(result.status))) continue
         if (this.journal.entries[entry.deliveryId] !== entry || this.active.has(typedId(entry))) continue
         delete this.journal.entries[entry.deliveryId]
@@ -550,14 +597,19 @@ export class SuperTabHost {
     const retry = this.deliveryRetries.get(key)
     return !!retry && this.now() < retry.retryAt
   }
-  private retryLater(key: string, list?: string): void {
-    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, ...(list ? { list } : {}) }
+  private retryLater(key: string, list?: string) {
+    const retry = this.deliveryRetries.get(key) ?? { failures: 0, retryAt: 0, since: this.now(), ...(list ? { list } : {}) }
     retry.retryAt = this.now() + Math.min(DELIVERY_RETRY_MAX_MS, DELIVERY_RETRY_MS * 2 ** retry.failures++)
     this.deliveryRetries.set(key, retry)
+    return retry
   }
   private async poll(): Promise<void> {
     const data = (await this.sources.feed.refresh()).roster
     if (this.stopped) return
+    // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
+    const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
+    this.pushes.clear()
+    this.pushAll = false
     // Multiply was closed by the ordinary 30-minute idle cleanup while still a
     // shared member. Membership outlives its task, terminal view and host process.
     // Retention only pauses cleanup when it fails; it must never hold up delivery.
@@ -637,6 +689,12 @@ export class SuperTabHost {
       const path = `/api/super-tabs/${target.tabId}/agents/${target.agent.id}/deliveries`
       const listKey = `list:${target.tabId}:${target.agent.id}`
       if (this.backedOff(listKey)) continue
+      const last = this.lists.get(listKey)
+      if (last && !pushAll && !last.busy && !pushes.has(listKey) && this.now() - last.readAt < DELIVERY_FALLBACK_MS) {
+        // Unread this time, its deliveries are as the last read left them: none is taken as gone.
+        for (const id of last.ids) seen.add(id)
+        continue
+      }
       let listRead = false
       try {
         const deliveries = await backend(this.core, 'GET', path)
@@ -645,6 +703,8 @@ export class SuperTabHost {
         listRead = true
         listsRead.add(listKey)
         for (const item of deliveries) { const id = object(item).id; if (identifier(id)) listed.add(id) }
+        const read = { readAt: this.now(), ids: deliveries.map(item => object(item).id).filter(identifier), busy: true }
+        this.lists.set(listKey, read)
         this.deliveryRetries.delete(listKey)
         for (const item of deliveries) {
           const delivery = object(item)
@@ -664,10 +724,18 @@ export class SuperTabHost {
             this.retire(delivery.id as string)
           }
         }
+        read.busy = deliveries.some(item => !this.settled(object(item)))
       } catch (error) {
-        if (!listRead) this.retryLater(listKey)
         // Authority checks and network failures both withhold input. A later fresh read may grant it again.
-        this.log(error instanceof Error ? error.message : String(error))
+        const message = error instanceof Error ? error.message : String(error)
+        if (listRead) this.log(message)
+        else {
+          // 2026-10-28: a Lead's list failed for 45 minutes while this log said only the backend's words, with no agent.
+          const retry = this.retryLater(listKey), code = error instanceof SuperTabHostError ? ` (${error.code})` : ''
+          this.log(`Could not read the deliveries for agent ${target.agent.id} (session ${target.agent.harnessId.slice(0, 8)}) in Swarm ${target.tabId}: `
+            + `${message}${code}. Failing since ${new Date(retry.since).toISOString()}, ${retry.failures} ${retry.failures === 1 ? 'try' : 'tries'}; `
+            + `next try in ${Math.round((retry.retryAt - this.now()) / 1_000)} s.`)
+        }
       }
     }
     if (this.stopped) return
@@ -675,6 +743,7 @@ export class SuperTabHost {
     for (const [harnessId, state] of this.keepAlives) if (!leads.has(harnessId) && !state.running) this.keepAlives.delete(harnessId)
     for (const [key, state] of this.endings) if (!ended.has(key) && !state.running) this.endings.delete(key)
     for (const deliveryId of this.unreadable) if (!seen.has(deliveryId)) this.unreadable.delete(deliveryId)
+    for (const key of this.lists.keys()) if (!running.some(r => `list:${r.tabId}:${r.agent.id}` === key)) this.lists.delete(key)
     // Diego's issue, 2026-10-27: kept for every session ever seen, a daemon running for weeks held each Custom role's text.
     for (const skills of [this.skillChecks, this.skillModes, this.roleTexts]) {
       for (const harnessId of skills.keys()) if (!this.rosterSkills.has(harnessId)) skills.delete(harnessId)

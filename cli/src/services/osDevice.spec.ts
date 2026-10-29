@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encryptDownFrame, encryptRpcResult } from '../lib/e2ee/applicationFrames.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import {
-  activeSsid, CMDLINE, deviceCodeOf, execBounded, GH, githubDeviceSignIn, githubLoginOf, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
+  activeSsid, CHECK_NOW, CMDLINE, deviceCodeOf, execBounded, GH, githubDeviceSignIn, githubLoginOf, joinRequest, LIVE_UPDATE, MAX_OUTPUT, nmcliFields, OS_DEVICE_REQUESTS, SETUP, SETUP_RESULT, spawnDetached,
   startOsDevice, UPDATE_BUSY_MS, updateOf, wifiNetworks, type OsDeviceDeps,
 } from './osDevice.js'
 
@@ -77,7 +77,7 @@ describe('the Harness OS computer, managed from the phone', () => {
           cli: { running: '0.9.1', available: true, next: null },
         },
       },
-      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true, features: ['sign_out', 'password', 'ssh', 'github'],
+      wifi: { ssid: 'Home: 5G' }, hotspot: 'Harness-BD19', encrypted: true, features: ['sign_out', 'password', 'ssh', 'github', 'check_update'],
     })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [LIVE_UPDATE, 'status'], { timeout: 15_000 })
     expect(exec).toHaveBeenCalledWith('/usr/bin/python3', [SETUP, 'name'], { timeout: 10_000 })
@@ -88,8 +88,8 @@ describe('the Harness OS computer, managed from the phone', () => {
 
   it('still answers on Harness OS when its update tool or nmcli fails', async () => {
     const failing = (reason: unknown) => service({ exec: vi.fn(async () => { throw reason }) }).ask({ action: 'status' })
-    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh', 'github'] })
-    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh', 'github'] })
+    expect(await failing(new Error('Command failed: python3\nTraceback ...'))).toEqual({ harnessOs: true, update: { available: false, error: 'Command failed: python3' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh', 'github', 'check_update'] })
+    expect(await failing('killed')).toEqual({ harnessOs: true, update: { available: false, error: 'killed' }, wifi: { ssid: null }, hotspot: null, encrypted: true, features: ['sign_out', 'password', 'ssh', 'github', 'check_update'] })
     const notJson = service({ exec: vi.fn(async () => 'not json') })
     expect(await notJson.ask({ action: 'status' })).toMatchObject({ update: { available: false, error: expect.stringContaining('JSON') } })
     const notObject = service({ exec: vi.fn(async () => '[1]') })
@@ -189,6 +189,93 @@ describe('the Harness OS computer, managed from the phone', () => {
     expect(await ask({ action: 'update' })).toEqual({ error: 'FAILED', message: 'spawn EAGAIN' })
     spawnDetached.mockImplementation(() => {})
     expect(await ask({ action: 'update' })).toEqual({ started: true })
+  })
+
+  describe('computer use, turned on and off from the phone', () => {
+    function tools(available = true) {
+      const state = { on: false }
+      const computerUse = {
+        available: () => available,
+        on: () => state.on,
+        set: vi.fn((on: boolean) => { state.on = on; return { on } }),
+      }
+      return { ...service({ computerUse }), computerUse }
+    }
+
+    it('names them among its features only on a computer that carries them', async () => {
+      expect(await tools().ask({ action: 'status' })).toMatchObject({ features: expect.arrayContaining(['computer_use']) })
+      expect((await tools(false).ask({ action: 'status' }) as { features: string[] }).features).not.toContain('computer_use')
+    })
+
+    it('says how they are, and turns them on and off', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, computerUse } = tools()
+      expect(await ask({ action: 'computer_use' })).toEqual({ on: false })
+      expect(await ask({ action: 'computer_use', state: 'on' })).toEqual({ on: true })
+      expect(await ask({ action: 'computer_use' })).toEqual({ on: true })
+      expect(await ask({ action: 'computer_use', state: 'off' })).toEqual({ on: false })
+      expect(computerUse.set.mock.calls).toEqual([[true], [false]])
+    })
+
+    it('answers why it could not, and nothing on a computer without them', async () => {
+      const { ask, computerUse } = tools()
+      computerUse.set.mockReturnValueOnce({ error: 'Fix or remove it first: not JSON' } as never)
+      expect(await ask({ action: 'computer_use', state: 'on' })).toEqual({ error: 'FAILED', message: 'Fix or remove it first: not JSON' })
+      expect(await tools(false).ask({ action: 'computer_use', state: 'on' })).toEqual({ error: 'UNSUPPORTED_OS' })
+      expect(await tools().ask({ action: 'computer_use', state: 'on' }, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+    })
+  })
+
+  describe('checking for updates now, from the phone', () => {
+    /** A computer whose check is held until [done] settles it. */
+    function holding() {
+      let settle!: (error?: Error) => void
+      const { ask, exec } = service()
+      const base = exec.getMockImplementation()!
+      exec.mockImplementation(async (file: string, args: readonly string[]) => {
+        if (args[0] !== '-c') return base(file, args)
+        await new Promise<void>((resolve, reject) => { settle = (error) => error ? reject(error) : resolve() })
+        return ''
+      })
+      const done = async (error?: Error) => { settle(error); await new Promise((resolve) => setImmediate(resolve)) }
+      return { ask, exec, done }
+    }
+
+    it('runs the timer\'s check with the OS release asked now, bounded, and says so until it is done', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, exec, done } = holding()
+      expect(await ask({ action: 'check_update' })).toEqual({ started: true })
+      expect(exec).toHaveBeenCalledWith('/usr/bin/python3', ['-c', CHECK_NOW], { timeout: 360_000 })
+      expect(CHECK_NOW).toContain('live_update.check(force_system=True)')
+      expect(await ask({ action: 'status' })).toMatchObject({ update: { checking: true } })
+      await done()
+      const status = await ask({ action: 'status' }) as { update: Record<string, unknown> }
+      expect(status.update.checking).toBeUndefined()
+      expect(status.update.checkError).toBeUndefined()
+    })
+
+    it('runs one check at a time', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, exec, done } = holding()
+      await ask({ action: 'check_update' })
+      expect(await ask({ action: 'check_update' })).toEqual({ started: true })
+      expect(exec.mock.calls.filter(([, args]) => args[0] === '-c')).toHaveLength(1)
+      await done()
+    })
+
+    it('says a check that failed in words, until the next one', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const { ask, done } = holding()
+      await ask({ action: 'check_update' })
+      await done(new Error('Command failed: python3 -c\nValueError: Could not check for updates.'))
+      expect(await ask({ action: 'status' })).toMatchObject({
+        update: { checkError: 'Could not check for updates. Check its internet, then try again.' },
+      })
+      await ask({ action: 'check_update' })
+      expect(await ask({ action: 'status' })).toMatchObject({ update: { checking: true } })
+      await done()
+    })
   })
 
   it('lists the networks it sees, the one in use first', async () => {

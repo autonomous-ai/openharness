@@ -12,6 +12,7 @@ import 'package:harness/api/access_token_source.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/super_tabs/attachment_upload.dart';
+import 'package:harness/super_tabs/avatar_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
 
 void main() {
@@ -177,6 +178,93 @@ void main() {
       ),
     );
     expect(seen.single.local, '1');
+  });
+
+  group('a profile picture', () {
+    late SuperTabAvatarUpload avatar;
+
+    setUp(() {
+      avatar = uploadAvatarWith(
+        () => ApiClient(
+          config: AppConfig(
+            apiBaseUrl: 'http://unused.invalid',
+            localCliBaseUrl: 'http://127.0.0.1:${server.port}',
+          ),
+          session: AuthSession(),
+        ),
+      );
+    });
+
+    Future<Map<String, dynamic>> sendPicture() =>
+        avatar(tabId: 'tab 1', png: Uint8List.fromList(List.filled(500, 7)));
+
+    test('goes through the daemon as a one-file form', () async {
+      reply = (
+        200,
+        {
+          'success': true,
+          'data': {
+            'avatar': {'id': 'p1', 'url': 'https://signed.example/p1'},
+          },
+        },
+      );
+
+      final answer = await sendPicture();
+
+      expect((answer['avatar'] as Map)['id'], 'p1');
+      final request = seen.single;
+      expect(request.path, '/api/super-tabs/tab%201/avatars');
+      expect(request.local, '1');
+      expect(request.type, 'multipart/form-data');
+      expect(request.body, contains('filename="avatar.png"'));
+    });
+
+    // Desktop 1.3.30 on a CLI that did not pass /avatars on: the daemon's
+    // own 404 read only "Could not upload the file. Try again.", which no
+    // retry fixes.
+    test('a daemon without the route says to update Harness', () async {
+      reply = (404, {'error': 'not found'});
+
+      await expectLater(
+        sendPicture(),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'UPDATE_HARNESS')
+              .having(
+                (f) => f.message,
+                'message',
+                'Update Harness on this computer to upload pictures.',
+              )
+              .having((f) => f.statusCode, 'status', 404),
+        ),
+      );
+    });
+
+    test('a backend refusal keeps its own words', () async {
+      reply = (
+        503,
+        {
+          'success': false,
+          'error': {
+            'code': 'AVATARS_UNAVAILABLE',
+            'message': 'Uploading pictures is not set up on this server yet.',
+          },
+        },
+      );
+
+      await expectLater(
+        sendPicture(),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'AVATARS_UNAVAILABLE')
+              .having(
+                (f) => f.message,
+                'message',
+                'Uploading pictures is not set up on this server yet.',
+              ),
+        ),
+      );
+    });
   });
 
   group('from a browser, straight to the backend', () {

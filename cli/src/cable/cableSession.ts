@@ -167,10 +167,27 @@ const RECAP_FRAME_MAX = 6 * 1024
 /** Repeats of one Lead's recap request inside this are ignored; a device that picks another stale announce within this is not followed. */
 const RECAP_REPEAT_MS = 1000
 const PICK_ECHO_MS = 2000
-/** The recap frame, its text shortened (on a character) until the whole JSON fits what the Pro reads. */
+/** The recap frame, its text shortened (on a character) until the whole JSON fits what the Pro reads. A chat's recap names
+ *  its chat (`chatId`), for a round dial that speaks swarmChat; any other is today's frame. */
 export function recapFrame(r: LeadRecap): Message {
-  const make = (text: string): Message => ({ t: 'supertab.recap', tab: r.tabId, lead: r.leadId, text, at: r.at, none: r.none })
-  let text = r.text
+  return fitText(r.text, (text) => ({ t: 'supertab.recap', tab: r.tabId, lead: r.leadId, text, at: r.at, none: r.none, ...(r.chatId ? { chatId: r.chatId } : {}) }))
+}
+/** A Lead's entry for a swarmChat dial: its face chat, `work` only for a working group (with that group's clock), and never
+ *  `ask` or `stuck`, which a group's state used to raise. A Lead whose chat did not come through reads as its Lead chat. */
+function chatLead(l: SwarmLead): Record<string, unknown> {
+  const working = l.chat?.kind === 'group' && l.chat.working
+  return { id: l.id, projectId: l.projectId, project: l.project, engine: l.engine, owner: l.owner, local: l.local,
+    state: working ? 'work' : 'done', order: l.order, ...(working && l.chat!.since !== undefined ? { since: l.chat!.since } : {}),
+    ...(l.chat ? { chat: l.chat.kind, chatId: l.chat.id, chatName: l.chat.name } : {}) }
+}
+/** A Lead's new message as the round dial's alert, sized as the recap is. */
+function noticeFrame(tab: string, lead: string, n: LeadNotice): Message {
+  return fitText(n.text, (text) => ({ t: 'supertab.notice', tab, lead, chat: n.chat, chatId: n.chatId, id: n.id, text, at: n.at }))
+}
+/** `make(text)`, with the text shortened (on a character) until the whole JSON fits what a dial reads: escapes can grow
+ *  1,500 bytes of text past it. */
+function fitText(full: string, make: (text: string) => Message): Message {
+  let text = full
   while (text && Buffer.byteLength(JSON.stringify(make(text))) > RECAP_FRAME_MAX) text = truncateUtf8(text, Math.floor(Buffer.byteLength(text) * 0.9))
   return make(text)
 }
@@ -277,6 +294,8 @@ export interface AppSwarms {
     id: string; name: string; agentIds: string[]; panes: number
     /** A Super Tab (Swarm) tab: which Swarm it shows and the project the window has open in it. Absent on any other tab. */
     superTabId?: string; projectId?: string
+    /** The conversation the window has open in that Swarm tab, when it is one (its Lead's, Chat with PM or a group). */
+    conversationId?: string
   }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
@@ -304,7 +323,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import type { LeadRecap, SwarmCard } from '../superTabs/cards.js'
+import type { LeadNotice, LeadRecap, SwarmCard, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 
 export interface RouteDecision {
@@ -340,15 +359,15 @@ export interface CableHost {
   /** A device that speaks `swarmCard: 'v1'` is attached (true) or gone (false): the core starts or stops reading the Swarms. */
   swarmCardsWanted?(on: boolean): void
   /** One Lead's last message, read on request; null when it could not be read. */
-  swarmCardRecap?(tabId: string, leadId: string): Promise<LeadRecap | null>
+  swarmCardRecap?(tabId: string, leadId: string, chat?: boolean): Promise<LeadRecap | null>
   /** The recap a device has open (its Lead), or null once it closes: the only one pushed when its text changes. */
-  swarmCardOpen?(session: string, tabId: string, leadId: string | null): void
+  swarmCardOpen?(session: string, tabId: string, leadId: string | null, chat?: boolean): void
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. False: not a Lead, send the turn as before. */
-  swarmSay?(harnessId: string, text: string): Promise<boolean>
+  swarmSay?(harnessId: string, text: string, chat?: boolean): Promise<boolean>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
-  /** The Swarm tab the window has on screen and the project open in it; null when the active tab is not a Swarm or there is no window. */
-  activeSwarmProject?(): { superTabId: string; projectId: string; fromDevice: boolean } | null
+  /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
+  activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null
   appName(): string
   voiceLang(): string
   /** The window's latest selected pane, including selections made before this dial attached. */
@@ -437,9 +456,10 @@ export interface CableHost {
   pets?(): PetStore | null
   /**
    * The image to offer a dial running `runningVersion`, or null for "nothing to do" — which covers a
-   * dial that is current, a dev build that must not be touched, and an unreachable manifest.
+   * dial that is current, a dev build that must not be touched, and an unreachable manifest. `keepalive`
+   * says the same dial on the same image greeted again, so a recent manifest read may answer it.
    */
-  firmwareFor?(runningVersion: string, key: string): Promise<{ version: string; image: Buffer; sha256: string } | null>
+  firmwareFor?(runningVersion: string, key: string, keepalive?: boolean): Promise<{ version: string; image: Buffer; sha256: string } | null>
   /**
    * A dial greeted us, or the port went away.
    *
@@ -662,6 +682,10 @@ export class CableSession {
   private superTabWaits = false
   /** `swarmCard: 'v1'` (a Pro): the Swarm cards, their Leads' recaps and the Swarm focus travel on the cable. */
   private swarmCard = false
+  /** `swarmChat: 'v1'` (the round dial, design 2026-10-28-round-dial-swarm-chat): each Lead's face is the chat the desktop has
+   *  open in its project, its recap is that chat's, `work` only for a working group, and the alerts are the Lead's new
+   *  messages (`supertab.notice`). Any other device gets today's frames byte for byte. */
+  private swarmChat = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -675,14 +699,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard', this.swarmChat && 'swarmChat']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.superTabWaits = false
-    this.swarmCard = false
+    this.swarmCard = this.swarmChat = false
     this.dropCards()
     this.seqOn = false
     this.seq = 0
@@ -1244,6 +1268,7 @@ export class CableSession {
         this.playerCapable = str('player') === 'library-v1'
         this.superTabWaits = str('superTab') === 'wait-v1'
         this.swarmCard = str('swarmCard') === 'v1'
+        this.swarmChat = this.swarmCard && str('swarmChat') === 'v1'
         this.wantCards(this.swarmCard)
         this.seqOn = str('board') === 'pro'
         this.seq = 0
@@ -1294,8 +1319,9 @@ export class CableSession {
         const settingsChanged = JSON.stringify(settings) !== JSON.stringify(this.greetedSettings)
         this.greetedSettings = settings
         this.skinReported = hasUiSkin(msg.settings)
-        if (settingsChanged && mac === this.greetedMac && fw === this.greetedFw) this.report()
-        if (mac !== this.greetedMac || fw !== this.greetedFw) {
+        const keepalive = mac === this.greetedMac && fw === this.greetedFw
+        if (settingsChanged && keepalive) this.report()
+        if (!keepalive) {
           this.playerOffset = this.playerRequest = 0
           this.playerLibraryKey = ''
           const returning = mac === this.greetedMac
@@ -1318,7 +1344,7 @@ export class CableSession {
         // Offered on every greeting, but only ONCE per version per session: accepting makes the dial erase
         // a flash slot before it answers, so a cadence of retries would spend erase cycles on the user's
         // hardware every fifteen seconds, and nothing about the next greeting changes what went wrong.
-        await this.maybeOfferFirmware(str('fw') ?? '')
+        await this.maybeOfferFirmware(str('fw') ?? '', keepalive)
         // AFTER the firmware offer, so a pending image is already `this.transfer` and the pets wait for it.
         this.readPetHello(msg)
         await this.syncPets()
@@ -1866,7 +1892,7 @@ export class CableSession {
     this.fwStall.unref?.()
   }
 
-  private async maybeOfferFirmware(runningVersion: string): Promise<void> {
+  private async maybeOfferFirmware(runningVersion: string, keepalive: boolean): Promise<void> {
     // A pack in flight also holds it back: the reader task that writes flash is busy with the pack, and the
     // next hello (every fifteen seconds) asks again.
     if (!this.host.firmwareFor || this.transfer || this.petTransfer || !runningVersion) return
@@ -1881,7 +1907,8 @@ export class CableSession {
       }
       return
     }
-    const candidate = await this.host.firmwareFor(runningVersion, key).catch(() => null)
+    const ask = keepalive ? this.host.firmwareFor(runningVersion, key, true) : this.host.firmwareFor(runningVersion, key)
+    const candidate = await ask.catch(() => null)
     // A pet transfer may have started while that await was parked (petsChanged); never start an image beside it.
     if (this.petTransfer || this.transfer) return
     // Keyed by DIAL as well as version. Holding bare version strings made this a statement about the
@@ -2264,7 +2291,7 @@ export class CableSession {
     }
     // Spoken to a Swarm Lead (its card or its tile): the words go to the Swarm chat as the person's, where everyone in the
     // tab sees them, not typed into the Lead's terminal. Any other harness, or a failed post, gets the turn as before.
-    if (turn.agentId && !carried && !selection?.ok && await this.host.swarmSay?.(agentId, instruction).catch(() => false)) {
+    if (turn.agentId && !carried && !selection?.ok && await this.host.swarmSay?.(agentId, instruction, ...this.chatFlag()).catch(() => false)) {
       if (!current()) return
       this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
       await reply({ t: 'voice.transcript', routeId: '', text: transcript, agentId, agentName, needsConfirm: false })
@@ -2597,11 +2624,24 @@ export class CableSession {
   private openLead: { tabId: string; leadId: string } | null = null
   /** The Swarm project the Pro was last pointed at (or picked itself), so a repeat announce sends nothing. */
   private focusedKey = ''
+  /** The last focus decision logged, so a burst of the same answer is one line. */
+  private focusLogged = ''
   /** This cable session's name for the service, so one Pro closing its recap does not close another's. */
   private readonly cardSession = `c${++nextCardSession}`
   /** The project this Pro itself picked last and when: the desktop's announce of it is no news, and a stale one of another is held off. */
   private picked: { key: string; at: number } | null = null
   private lastRecapGet: { key: string; at: number } | null = null
+  /** A swarmChat dial's alerts (`${tab}:${lead}`): the notice it was last given or shown as already there, and whether it
+   *  was read on the desktop since. A notice is sent once, never on an attach or resync (it was there before), never for
+   *  the chat the desktop has open; `notice.read` once when the desktop opens the chat of one that was sent. */
+  private readonly notices = new Map<string, { id: string; chatId: string; open: boolean }>()
+  /** Until this session has seen a list with Swarms in it: the first one is a replay too. A dial can attach before its
+   *  process has the cards (the devices' process started again), and the core's replay of the last list then comes as an
+   *  ordinary push, whose notices are old. */
+  private noticesReplay = true
+
+  /** The extra argument a swarmChat dial's requests carry; none for any other device, whose calls stay as they were. */
+  private chatFlag(): [] | [true] { return this.swarmChat ? [true] : [] }
 
   /** Tell the core a capable device is here (or gone), once per change: it reads the Swarms only while one is. */
   private wantCards(on: boolean): void {
@@ -2617,9 +2657,12 @@ export class CableSession {
     this.cardKeys.clear()
     this.cardIdsKey = ''
     this.focusedKey = ''
+    this.focusLogged = ''
     this.picked = null
     this.lastRecapGet = null
-    if (this.openLead) this.host.swarmCardOpen?.(this.cardSession, this.openLead.tabId, null)
+    this.notices.clear()
+    this.noticesReplay = true
+    if (this.openLead) this.host.swarmCardOpen?.(this.cardSession, this.openLead.tabId, null, ...this.chatFlag())
     this.openLead = null
     this.wantCards(false)
   }
@@ -2660,36 +2703,95 @@ export class CableSession {
       // The desk tab of the same Swarm, when the window has one: empty when it is closed or never opened it.
       const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count,
-        leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => ({ id: l.id, projectId: l.projectId, project: l.project,
-          engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) })) }
+        leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmChat ? chatLead(l) : { id: l.id, projectId: l.projectId, project: l.project,
+          engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)
       await this.send(frame)
     }
+    if (this.swarmChat) await this.pushNotices(cards, force)
     await this.pushSwarmFocus()
   }
 
-  /** Point the Pro at the Lead of the project the window has open, once per change and never at its own pick. */
+  /**
+   * A swarmChat dial's alerts, after the Leads they name. `replay` (attach, resync): the notices there now were there before
+   * the dial came, so they are noted and not sent; one that arrives later is sent once. One for the chat the desktop has
+   * open is read there already: noted, not sent. A sent one whose chat the desktop then opens is read on the dial too.
+   */
+  private async pushNotices(cards: SwarmCard[], force: boolean): Promise<void> {
+    const replay = force || this.noticesReplay
+    if (cards.length) this.noticesReplay = false
+    const open = this.host.activeSwarmProject?.()
+    const live = new Set<string>()
+    for (const card of cards) {
+      for (const lead of card.leads.slice(0, SWARM_LEADS_MAX)) {
+        const key = `${card.id}:${lead.id}`
+        live.add(key)
+        const notice = lead.notice
+        const opened = open?.superTabId === card.id && open.conversationId === notice?.chatId
+        const held = this.notices.get(key)
+        if (!notice) { this.notices.delete(key); continue }
+        if (held?.id !== notice.id) {
+          // Replayed or read on the desktop: noted as not open on the dial, so nothing is sent for it now or later.
+          const sent = !replay && !opened
+          this.notices.set(key, { id: notice.id, chatId: notice.chatId, open: sent })
+          if (sent) await this.send(noticeFrame(card.id, lead.id, notice))
+          continue
+        }
+        if (held.open && opened) {
+          held.open = false
+          await this.send({ t: 'supertab.notice.read', tab: card.id, lead: lead.id, chatId: held.chatId })
+        }
+      }
+    }
+    for (const key of [...this.notices.keys()]) if (!live.has(key)) this.notices.delete(key)
+  }
+
+  /**
+   * Point the Pro at the Lead of the project the window has open, once per change and never at its own pick. A Swarm tab
+   * with no project open (its Chat with PM, a DM) still takes the device into that Swarm: `lead: ''` lets it open on the
+   * Lead it last showed there, else its first. A device from before that ignores an empty Lead, as it always has.
+   *
+   * Every decision is logged, once per change. This used to log nothing, and "the dial stayed on an empty tab" could
+   * not be told apart from "no project", "no Lead" or "already sent" from the logs (Diego's dial, 2026-10-28).
+   */
   private async pushSwarmFocus(): Promise<void> {
     const open = this.host.activeSwarmProject?.()
-    if (!open) { this.focusedKey = ''; return }
+    if (!open) { this.focusedKey = ''; this.logFocus('cable: swarm focus · not a Swarm tab'); return }
     const key = `${open.superTabId}/${open.projectId}`
-    if (key === this.focusedKey) return
+    const named = open.projectId ? key : `${open.superTabId} (no project)`
+    if (key === this.focusedKey) { this.logFocus(`cable: swarm focus ${named} · already sent`); return }
     // Only the Pro that picked has nothing to follow; every other Pro still goes where the window went.
-    if (open.fromDevice && this.picked?.key === key) { this.focusedKey = key; return }
+    if (open.fromDevice && this.picked?.key === key) { this.focusedKey = key; this.logFocus(`cable: swarm focus ${named} · the device's own pick`); return }
     // The desktop's announce from before it heard the pick: not where the window is going.
-    if (!open.fromDevice && this.picked && this.picked.key !== key && Date.now() - this.picked.at < PICK_ECHO_MS) return
-    const lead = this.host.swarmCards?.().find((c) => c.id === open.superTabId)?.leads.find((l) => l.projectId === open.projectId)
+    if (!open.fromDevice && this.picked && this.picked.key !== key && Date.now() - this.picked.at < PICK_ECHO_MS) {
+      this.logFocus(`cable: swarm focus ${named} · held: the device just picked another`)
+      return
+    }
     // Not in the list yet: asked again when it arrives.
-    if (!lead) return
+    const card = this.host.swarmCards?.().find((c) => c.id === open.superTabId)
+    if (!card) { this.logFocus(`cable: swarm focus ${named} · held: no such Swarm in the list`); return }
+    const lead = open.projectId ? card.leads.find((l) => l.projectId === open.projectId) : undefined
+    if (open.projectId && !lead) { this.logFocus(`cable: swarm focus ${named} · held: no Lead for that project`); return }
     this.focusedKey = key
-    await this.send({ t: 'supertab.focus', tab: open.superTabId, lead: lead.id })
+    // A send is always logged: one again after the dial rebooted on an update read as "never sent" (Diego's dial, 2026-10-28).
+    this.focusLogged = ''
+    this.logFocus(`cable: swarm focus ${named} → ${lead ? lead.id : 'its Leads'}`)
+    await this.send({ t: 'supertab.focus', tab: open.superTabId, lead: lead?.id ?? '' })
+  }
+
+  private logFocus(line: string): void {
+    if (line === this.focusLogged) return
+    this.focusLogged = line
+    this.log(line)
   }
 
   /** A Lead's changed text, for the Pro that has that Lead's recap open. */
   async swarmCardRecap(recap: LeadRecap): Promise<void> {
     if (!this.swarmCard || this.openLead?.tabId !== recap.tabId || this.openLead.leadId !== recap.leadId) return
+    // The service pushes a Lead's recap and its face chat's apart: each device takes only the kind it asked for.
+    if (this.swarmChat !== (recap.chatId !== undefined)) return
     return this.queued(async () => { await this.send(recapFrame(recap)) })
   }
 
@@ -2699,13 +2801,13 @@ export class CableSession {
     // The recap closing names no Lead: it is the one request that may leave a field empty.
     if (type === 'supertab.open' && lead === '') {
       this.openLead = null
-      this.host.swarmCardOpen?.(this.cardSession, tab, null)
+      this.host.swarmCardOpen?.(this.cardSession, tab, null, ...this.chatFlag())
       return
     }
     if (!CARD_ID.test(tab) || !CARD_ID.test(lead)) return
     if (type === 'supertab.open') {
       this.openLead = { tabId: tab, leadId: lead }
-      this.host.swarmCardOpen?.(this.cardSession, tab, lead)
+      this.host.swarmCardOpen?.(this.cardSession, tab, lead, ...this.chatFlag())
       return
     }
     if (type === 'supertab.select') {
@@ -2722,7 +2824,7 @@ export class CableSession {
     if (this.lastRecapGet?.key === asked && now - this.lastRecapGet.at < RECAP_REPEAT_MS) return
     this.lastRecapGet = { key: asked, at: now }
     let recap: LeadRecap | null = null
-    try { recap = await this.host.swarmCardRecap?.(tab, lead) ?? null } catch (err) { this.log(`cable: recap for ${lead} failed (${(err as Error).message})`) }
+    try { recap = await this.host.swarmCardRecap?.(tab, lead, ...this.chatFlag()) ?? null } catch (err) { this.log(`cable: recap for ${lead} failed (${(err as Error).message})`) }
     // Nothing on a failure: the Pro keeps its "…" and asks again on the next open.
     if (recap) await this.queued(async () => { await this.send(recapFrame(recap)) })
   }

@@ -6,11 +6,11 @@ const mocks = vi.hoisted(() => ({
     machine: { findMany: vi.fn() },
     user: { findMany: vi.fn() },
   },
-  presence: vi.fn(), keys: vi.fn(),
+  presence: vi.fn(), keys: vi.fn(), keysOf: vi.fn(),
 }))
 vi.mock('./prisma.js', () => ({ prisma: mocks.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
 vi.mock('./bus.js', () => ({ getAgentPresenceMany: mocks.presence }))
-vi.mock('./deviceKeyLog.js', () => ({ activeMachineKeys: mocks.keys }))
+vi.mock('./deviceKeyLog.js', () => ({ activeMachineKeys: mocks.keys, activeMachineKeysOf: mocks.keysOf }))
 import { machinesSharedWith, shareMembers, sharedMachineAccess, sharedVia } from './machineAccess.js'
 import { emailDomain, isPublicEmailDomain } from './publicEmailDomains.js'
 
@@ -126,6 +126,17 @@ describe('shareMembers', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     mocks.keys.mockImplementation(async (id: string) => [{ machineId: `${id}-mac`, pub: pub(id.length), label: `${id}'s Mac`, kind: 'machine', addedAt: 1, seq: 1 }])
+    mocks.keysOf.mockImplementation(async (ids: string[]) => new Map(ids.map(id => [id, [{ machineId: `${id}-mac`, pub: pub(id.length), label: `${id}'s Mac`, kind: 'machine', addedAt: 1, seq: 1 }]])))
+  })
+
+  // Diego's issue file (2026-10-27): one log replay per member made a 200-person domain 400+ parallel queries a read.
+  it('shareMembers reads device key snapshots in one query', async () => {
+    mocks.prisma.user.findMany.mockResolvedValue(['a', 'b', 'c', 'd', 'e'].map(id => ({ id, email: `${id}@acme.io`, name: null })))
+    const members = await shareMembers(share({ domain: 'acme.io' }))
+    expect(members.map(m => m.machines)).toEqual(['a', 'b', 'c', 'd', 'e'].map(id => [{ machineId: `${id}-mac`, name: `${id}'s Mac`, pub: pub(1) }]))
+    expect(mocks.keysOf).toHaveBeenCalledTimes(1)
+    expect(mocks.keysOf).toHaveBeenCalledWith(['a', 'b', 'c', 'd', 'e'])
+    expect(mocks.keys).not.toHaveBeenCalled()
   })
 
   it('names the addresses, then everyone at the domain, with their machines’ keys', async () => {

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../core/models.dart';
 import '../core/permission_modes.dart';
 import '../core/relative_time.dart';
+import '../core/runtime_model_name.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -14,6 +15,7 @@ import '../widgets/engine_identity.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'profile_sheet.dart';
 import 'pull_requests.dart';
 
 /// Facts already observed by the Swarm or the agent's machine. Unknown facts
@@ -67,9 +69,14 @@ class SuperTabAgentInfo {
   final Agent? native;
   final SuperTabConversation? taskGroup;
 
+  /// The model as people know it ("Opus 5.5"): the native agent's reading is already one; the configuration holds the
+  /// engine's own word ("opus", "claude-opus-5-5").
   String? get model =>
       _known(native?.modelName) ??
-      _known(agent.configuration['model'] as String?);
+      switch (_known(agent.configuration['model'] as String?)) {
+        final String id => modelDisplayName(id),
+        null => null,
+      };
   String? get engine =>
       _known(agent.engine) == null ? null : engineIdentity(agent.engine).label;
 
@@ -248,8 +255,18 @@ Future<void> showSuperTabAgentDetails(
         final group = info.taskGroup;
         final pr = info.latestGroupPr;
         final name = controller.snapshot?.agentName(agent.id) ?? agent.name;
+        // Its contributor dresses it; its Lead may too, from the CLI.
+        final dresses =
+            controller.canWrite &&
+            current.contributorId == controller.accountId;
         return AlertDialog(
-          title: Text(name),
+          title: Row(
+            children: [
+              SuperTabAvatar.agent(current, name: name, size: 32),
+              const SizedBox(width: 12),
+              Expanded(child: Text(name)),
+            ],
+          ),
           content: SizedBox(
             width: 440,
             child: SingleChildScrollView(
@@ -304,6 +321,13 @@ Future<void> showSuperTabAgentDetails(
             ),
           ),
           actions: [
+            if (dresses)
+              TextButton(
+                onPressed: () => unawaited(
+                  showSuperTabProfile(context, controller, agentId: agent.id),
+                ),
+                child: const Text('Change avatar'),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Close'),

@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
+import type { AuthSession } from './authSession.js'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 
@@ -12,9 +13,13 @@ const {
   AuthSessionManager,
   clearAuthSession,
   ensureSignInEpoch,
+  hasAuthSession,
+  markSignedOut,
   newSignInEpoch,
   readAuthSession,
+  readSignedOut,
   releaseHeldAuthLock,
+  updateAuthSession,
   signInOf,
   writeAuthSession,
 } = await import('./authSession.js')
@@ -122,13 +127,15 @@ describe('AuthSessionManager', () => {
 
     writeAuthSession({ ...baseSession(), clientId: 'harness-desktop' })
     await manager.accessToken()
-    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop' })
+    // An SSO sign-in's renewal also asks to become a Harness session (backend lib/ssoSession.ts).
+    const harnessSession = { kind: 'computer', label: expect.any(String) }
+    expect(sent(0)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', clientId: 'harness-desktop', harnessSession })
     // The client outlives the refresh: the next one names it too.
     expect(readAuthSession()).toMatchObject({ accessToken: 'new-access', clientId: 'harness-desktop' })
 
     writeAuthSession(baseSession())
     await manager.accessToken()
-    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod' })
+    expect(sent(1)).toEqual({ refreshToken: 'refresh-1', autonomousEnv: 'prod', harnessSession })
   })
 
   it('reads back only a client that is ours', async () => {
@@ -198,6 +205,17 @@ describe('AuthSessionManager', () => {
     expect(err.message).toMatch(/Authentication service unavailable/)  // the upstream's own words, kept
   })
 
+  it('a renewal answered "sign in again" says so and keeps the session, unmarked', async () => {
+    writeAuthSession({ ...baseSession(), accessToken: 'hna_old', refreshToken: 'hnr_1' })
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      success: false, error: { code: 'SIGN_IN_AGAIN', message: 'Sign in again: not confirmed for 7 days' },
+    }), { status: 403 })))
+    const manager = new AuthSessionManager('https://api.example.test')
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'SIGN_IN_AGAIN', message: expect.stringMatching(/harness login/) })
+    expect(readAuthSession()).toMatchObject({ refreshToken: 'hnr_1' })
+    expect(readSignedOut()).toBeNull()
+  })
+
   it('keeps the session when the refresh service is merely unavailable', async () => {
     // The other half of the same ambiguity, and the reason this must NOT be reclassified as
     // INVALID_REFRESH: that branch deletes the session, and deleting it on a transient blip
@@ -235,15 +253,140 @@ describe('AuthSessionManager', () => {
     expect(readAuthSession()).toMatchObject({ refreshToken: 'refresh-1' })
   })
 
-  it('clears an invalid refresh session instead of retrying it forever', async () => {
+  // 10-27: a sign-out nobody asked for stalled a whole Mac. Nothing automatic deletes the sign-in: it is kept,
+  // marked signed out, and nothing reads it as signed in again until a new sign-in replaces it.
+  const refusal = (): Response => new Response(JSON.stringify({
+    success: false,
+    error: { code: 'REFRESH_TOKEN_INVALID', message: 'expired' },
+  }), { status: 401 })
+  const renewal = (): Response => new Response(JSON.stringify({
+    success: true,
+    data: { token: 'renewed-access', refreshToken: 'refresh-2', expiresIn: 3600 },
+  }), { status: 200 })
+
+  it('a refused refresh keeps the sign-in, marked signed out: nothing uses it, nor refreshes it again', async () => {
     writeAuthSession(baseSession())
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
-      success: false,
-      error: { code: 'REFRESH_TOKEN_INVALID', message: 'expired' },
-    }), { status: 401 })))
+    const refused = vi.fn<typeof fetch>().mockImplementation(async () => refusal())
+    vi.stubGlobal('fetch', refused)
     const manager = new AuthSessionManager('https://api.example.test')
 
     await expect(manager.accessToken()).rejects.toMatchObject({ name: AuthSessionError.name, code: 'INVALID_REFRESH' })
+
     expect(readAuthSession()).toBeNull()
+    expect(readSignedOut()).toMatchObject({ reason: 'refresh-refused' })
+    expect(JSON.parse(await readFile(AUTH_SESSION_FILE, 'utf8'))).toMatchObject({ refreshToken: 'refresh-1' })
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'MISSING' })
+    expect(refused).toHaveBeenCalledTimes(1)
+  })
+
+  // The app asks `auth status` often; each ask must not be a refresh request (review of #1866).
+  it('a refused refresh is tried again a minute on, then twice as long each time, and a refresh that now works '
+    + 'signs the computer back in', async () => {
+    const at = 1_000_000
+    writeAuthSession(baseSession())
+    await markSignedOut('refresh-refused', at)
+    const refused = vi.fn<typeof fetch>().mockImplementation(async () => refusal())
+    vi.stubGlobal('fetch', refused)
+    const manager = new AuthSessionManager('https://api.example.test')
+
+    expect(await manager.retrySignedOut(at + 30_000)).toBe(false)
+    expect(refused).not.toHaveBeenCalled()
+    expect(await manager.retrySignedOut(at + 60_000)).toBe(false)
+    expect(refused).toHaveBeenCalledTimes(1)
+    expect(await manager.retrySignedOut(at + 60_000 + 119_000)).toBe(false)
+    expect(refused).toHaveBeenCalledTimes(1)
+    expect(readSignedOut()).toMatchObject({ reason: 'refresh-refused' })
+
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => renewal()))
+    expect(await manager.retrySignedOut(at + 60_000 + 120_000)).toBe(true)
+
+    expect(readSignedOut()).toBeNull()
+    expect(readAuthSession()).toMatchObject({ accessToken: 'renewed-access', refreshToken: 'refresh-2', machineId: 'machine-1' })
+  })
+
+  // Review of #1866: a revoke marked while another process refreshed was written over by that refresh's
+  // save, and the revoked sign-in was used again.
+  it('a revoke that lands while a refresh runs holds: the refresh saves first, and the mark stays', async () => {
+    writeAuthSession(baseSession())
+    let answer!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(() => new Promise<Response>((resolve) => { answer = resolve })))
+    const refreshing = new AuthSessionManager('https://api.example.test').accessToken()
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+
+    const marked = markSignedOut('revoked')
+    answer(renewal())
+    await refreshing
+    await marked
+
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+    expect(readAuthSession()).toBeNull()
+  })
+
+  // The daemon stops on a revoke and comes back signed out (core/main.ts `onRevoked`): it boots signed in
+  // only on a sign-in it can read, and every request takes its token from here.
+  it('a revoked sign-in is never acted on again: no token, no refresh, until a new sign-in', async () => {
+    writeAuthSession({ ...baseSession(), expiresAt: Date.now() + 3_600_000 })
+    await markSignedOut('revoked')
+    const fetched = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetched)
+    const manager = new AuthSessionManager('https://api.example.test')
+
+    expect(hasAuthSession()).toBe(false)
+    await expect(manager.accessToken()).rejects.toMatchObject({ code: 'MISSING' })
+    await expect(manager.accessToken({ force: true })).rejects.toMatchObject({ code: 'MISSING' })
+    expect(await manager.retrySignedOut()).toBe(false)
+
+    expect(fetched).not.toHaveBeenCalled()
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  // Follow-up to the review of #1866: a rewrite that read the session before another process marked it
+  // wrote it back without the mark.
+  it('a rewrite never writes over a mark that landed after it read the session', async () => {
+    writeAuthSession(baseSession())
+
+    const written = await updateAuthSession((latest) => {
+      // Another process marks it while this one works out its change.
+      writeAuthSession({ ...latest, signedOut: { at: 1, reason: 'revoked' } } as typeof latest)
+      return { ...latest, machineId: 'machine-2' }
+    })
+
+    expect(written).toBeNull()
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  it('a rewrite of a marked sign-in writes nothing', async () => {
+    writeAuthSession(baseSession())
+    await markSignedOut('revoked')
+    const change = vi.fn((latest: AuthSession): AuthSession => ({ ...latest, machineId: 'machine-2' }))
+
+    expect(await updateAuthSession(change)).toBeNull()
+
+    expect(change).not.toHaveBeenCalled()
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+  })
+
+  // Follow-up to the review of #1866: a revoke whose lock stayed busy stopped the daemon unmarked, and the
+  // core that came back used the revoked sign-in until it was refused again.
+  it('a revoke marks even when the lock cannot be had', async () => {
+    writeAuthSession(baseSession())
+    const busy = async (): Promise<never> => {
+      throw new AuthSessionError('Another Harness process is refreshing SSO credentials. Please retry.', 'UNAVAILABLE')
+    }
+
+    await markSignedOut('revoked', Date.now(), busy)
+
+    expect(readSignedOut()).toMatchObject({ reason: 'revoked' })
+    expect(readAuthSession()).toBeNull()
+  })
+
+  it('a new sign-in replaces one marked signed out', async () => {
+    writeAuthSession(baseSession())
+    await markSignedOut('revoked')
+
+    writeAuthSession({ ...baseSession(), accessToken: 'new-sign-in' })
+
+    expect(readSignedOut()).toBeNull()
+    expect(readAuthSession()).toMatchObject({ accessToken: 'new-sign-in' })
   })
 })

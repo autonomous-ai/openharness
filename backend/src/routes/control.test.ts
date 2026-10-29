@@ -58,6 +58,7 @@ import { errorHandler } from '../middlewares/errorHandler.js'
 import { redeemHandoff, startHandoff } from '../lib/harnessSession.js'
 import { TEAM_ROUTES } from '../lib/teamSession.js'
 import { registerControlRoutes } from './control.js'
+import { createReadiness } from '../lib/readiness.js'
 
 let app: FastifyInstance
 let token: string
@@ -72,7 +73,7 @@ beforeAll(async () => {
     for (const method of [route.method].flat()) if (method !== 'HEAD' && method !== 'OPTIONS') routes.push({ method, url: route.url })
   })
   registerAuthMiddleware(app)
-  await registerControlRoutes(app, { daemons: { on: true, users: null }, count: async () => 0 })
+  await registerControlRoutes(app, { daemons: { on: true, users: null }, count: async () => 0, readiness: createReadiness({}) })
   await app.ready()
 })
 afterAll(async () => { await app?.close() })

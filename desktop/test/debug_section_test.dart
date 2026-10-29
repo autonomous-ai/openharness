@@ -62,6 +62,14 @@ void main() {
     expect(find.text('2 entries'), findsOneWidget);
   });
 
+  testWidgets('Paths names the per-device dial log folders', (tester) async {
+    await pumpDebug(tester, LogStream());
+    expect(
+      find.text('/tmp/logs/usb-<device>/dial-YYYYMMDD.log'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('the Failed lens keeps the failures and the warnings', (
     tester,
   ) async {

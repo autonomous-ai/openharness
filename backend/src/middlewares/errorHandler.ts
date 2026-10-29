@@ -1,7 +1,26 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify'
-import { AppError } from '../errors/index.js'
+import { AppError, ValidationError } from '../errors/index.js'
 import { sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
+import { SuperTabError } from '../superTabs/model.js'
+import { RETRYABLE_SWARM_CODES } from '../superTabs/retry.js'
+
+/** The Swarm 503s that waiting fixes. Others (no attachment store, no picture uploads) are this server's setup. */
+
+/** How long a busy answer asks the caller to wait: just past the Swarm transaction's longest backoff (1.5 s). */
+const BUSY_RETRY_AFTER_SECONDS = 2
+
+/** A 503 the caller should simply try again: it carries Retry-After. Every client retries a 5xx (store.ts `transaction`). */
+function sendBusy(reply: FastifyReply, message: string, code: string): void {
+  reply.header('Retry-After', String(BUSY_RETRY_AFTER_SECONDS))
+  sendError(reply, message, code, 503)
+}
+
+/** Prisma's own failure code, when the error is one. */
+const prismaCode = (error: unknown): string | null => {
+  const code = error && typeof error === 'object' && 'code' in error ? (error as { code: unknown }).code : null
+  return typeof code === 'string' && /^P\d{4}$/.test(code) ? code : null
+}
 
 export async function errorHandler(
   error: FastifyError,
@@ -15,9 +34,31 @@ export async function errorHandler(
       path: request.url,
       method: request.method,
       message: error.message,
+      ...(error instanceof ValidationError && error.fields.length ? { fields: error.fields } : {}),
     })
     sendError(reply, error.message, error.code || 'APP_ERROR', error.statusCode)
     return
+  }
+
+  // A Swarm refusal or busy answer thrown outside the Super Tab routes (the harness-shares list asks the Swarm store).
+  if (error instanceof SuperTabError) {
+    if (RETRYABLE_SWARM_CODES.has(error.code)) {
+      logger.warn('Swarm busy', { code: error.code, path: request.url, method: request.method })
+      return sendBusy(reply, error.message, error.code)
+    }
+    return sendError(reply, error.message, error.code, error.status)
+  }
+
+  // A database transaction that expired or could not start (P2028) is load, not a fault: the caller retries.
+  // A unique key still taken after the retries (P2002) is a genuine duplicate: a conflict, never a 500.
+  const prisma = prismaCode(error)
+  if (prisma === 'P2028') {
+    logger.warn('Database transaction expired or could not start', { path: request.url, method: request.method, error: error.message })
+    return sendBusy(reply, 'The server is busy. Try again in a moment.', 'BUSY')
+  }
+  if (prisma === 'P2002') {
+    logger.warn('Duplicate key', { path: request.url, method: request.method, error: error.message })
+    return sendError(reply, 'This already exists, so nothing new was saved.', 'DUPLICATE', 409)
   }
 
   if (error.validation) {
@@ -37,7 +78,8 @@ export async function errorHandler(
     return
   }
 
-  logger.error('Unhandled error', error, { name: error.name, path: request.url, method: request.method })
+  // The stack always, production too: an unhandled 500 is a bug, and its message alone rarely says where.
+  logger.error('Unhandled error', error, { name: error.name, path: request.url, method: request.method, trace: error.stack })
   // Only hide the real message in explicit production. Local dev often has NODE_ENV unset, and masking
   // there just surfaces a useless "internal server error" to the caller (e.g. the UI toast).
   const hideDetail = process.env.NODE_ENV === 'production'

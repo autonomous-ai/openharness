@@ -35,6 +35,7 @@ import type { ScmLaunchRecord } from './scm/types.js'
 import type { StartedBy } from './lib/agentAttribution.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
+import { supportsFirstPrompt } from './lib/engineLaunch.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import type { AgentTokenUsage } from './lib/agentUsageWire.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
@@ -44,6 +45,7 @@ import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
 import { sid, logFrame } from './lib/log.js'
+import { spreadNotice } from './lib/spreadNotice.js'
 import { eventAgentId, GUEST_REFUSALS, guestVerdict } from './core/guestPolicy.js'
 
 export { isLocalClientId, type DownTransport }
@@ -51,6 +53,9 @@ export { isLocalClientId, type DownTransport }
 /** Requests one local connection may queue before the daemon is ready (see `openRequests`). The app
  *  sends a handful on connect; hundreds is a client looping, not a person. */
 const MAX_REQUESTS_BEFORE_READY = 256
+/** Within how long this computer's windows hear an invitation given or taken back: the backend now answers the shares list in
+ *  tens of milliseconds, and 10 s spreads every member's read of it over a hundred times that. */
+const SHARES_NOTICE_SPREAD_MS = 10_000
 /** A terminal stream's bookkeeping, handled as it arrives rather than in its connection's line — see `enqueueDown`. */
 const TERMINAL_BOOKKEEPING_TYPES: ReadonlySet<string> = new Set(['terminal_ack', 'terminal_alive'])
 /** An upload's control frames, which go in line with its chunks — see `enqueueDown`. */
@@ -221,6 +226,8 @@ export class BackendSocket {
   /** The account's notices the backend announces (`desk_changed`, …), for the experiments that hear them
    *  (Agent Messages reads its tabs again), as well as the windows here. */
   onAccountNotice: ((notice: BackendNotice) => void) | null = null
+  /** An invitation given or taken back, which has the windows read the shares list (lib/spreadNotice.ts). */
+  private readonly sharesNotice = spreadNotice(() => this.sendLocal({ type: 'machines_changed', payload: { reason: 'harness_shares' } }), SHARES_NOTICE_SPREAD_MS)
   /** What a shared tab's relay said (gateway/tabRelay.ts), for Agent Messages. */
   onTabFrame: ((event: TabFrame) => void) | null = null
   /**
@@ -442,6 +449,9 @@ export class BackendSocket {
     },
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
+      // Only the Swarm host acts on it (superTabs/host.ts): the windows have nothing to re-read.
+      if (notice.type === 'super_tab_deliveries') return
+      if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })
@@ -513,6 +523,7 @@ export class BackendSocket {
 
   async stop(): Promise<void> {
     this.closed = true
+    this.sharesNotice.stop()
     this.closeAgentService?.dispose()
     this.viewerStreams?.closedAll(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()
@@ -1126,6 +1137,10 @@ export class BackendSocket {
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
                 // than "no", per the desktop app's `EngineAvailability.fromJson`.
                 ...(entry.engine === 'codex' ? { supportsCodexHome: true } : {}),
+                // Static too, and this machine's own: whether `harness new` here can hand the engine a
+                // first prompt (engineLaunch.ts FIRST_PROMPT_ARGS), so a caller on another version reads
+                // it from the machine that will start the agent (#1788).
+                firstPrompt: supportsFirstPrompt(entry.engine),
                 // Static too: a pane whose engine is still downloading beside Desktop Harness's setup
                 // waits for that download (engineLaunch.ts `harness_wait_download`) rather than
                 // installing it again, so the desktop may open the pane before the download ends.

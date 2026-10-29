@@ -15,6 +15,7 @@ import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
+import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/machine_details.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/model.dart';
@@ -175,6 +176,21 @@ Finder _slotsStep(String direction) =>
 AppIconButton _slotsButton(WidgetTester tester, String direction) =>
     tester.widget<AppIconButton>(_slotsStep(direction));
 
+/// Which Agents choice machine settings hold: `memory` or `atMost`.
+String? _agentsChoice(WidgetTester tester) => tester
+    .widget<RadioGroup<String>>(find.byKey(const ValueKey('machine-agents')))
+    .groupValue;
+
+/// The number beside At most in machine settings.
+String? _limit(WidgetTester tester) =>
+    tester.widget<Text>(find.byKey(const ValueKey('agent-limit-value'))).data;
+
+Finder _limitStep(String direction) =>
+    find.byKey(ValueKey('agent-limit-$direction'));
+
+AppIconButton _limitButton(WidgetTester tester, String direction) =>
+    tester.widget<AppIconButton>(_limitStep(direction));
+
 /// Saving reads preparation more than once: a new operation answers `preparing`
 /// and is only ready from a later read, a second apart — what the real daemon
 /// does (`cli/src/superTabs/contribution.ts`), and the fixture with it.
@@ -299,7 +315,7 @@ void main() {
       expect(find.text('Offline · 1'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('super-machine-online')));
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(_hw(tester, 'online', 'CPU'), '0%');
       expect(_hw(tester, 'online', 'RAM'), '0 GB');
       expect(_hw(tester, 'online', 'SSD'), '141 GB');
@@ -354,23 +370,21 @@ void main() {
         tester
             .widget<EngineMark>(
               find.descendant(
-                of: find.byType(AlertDialog),
+                of: find.byType(SuperTabDetailDialog),
                 matching: find.byType(EngineMark),
               ),
             )
             .engine,
         'codex',
       );
-      await tester.tap(find.text('Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await openMachineDetails(tester, offline);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(
         find.descendant(
-          of: find.byWidget(
-            tester.widget<AlertDialog>(find.byType(AlertDialog)).title!,
-          ),
+          of: find.byType(DesktopDialogHeader),
           matching: find.text('M2'),
         ),
         findsOneWidget,
@@ -491,6 +505,248 @@ void main() {
     },
   );
 
+  group('an expanded machine shows its agents as one count', () {
+    Future<dynamic> mount(WidgetTester tester, int agents) async {
+      final server = ConversationServer();
+      server.state['agents'] = [
+        for (var i = 0; i < agents; i++)
+          {
+            'id': 'a$i',
+            'name': 'Agent $i',
+            'displayName': 'Agent $i',
+            'machineId': 'm',
+            'harnessId': 'native-a$i',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+          },
+      ];
+      server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Studio Mac',
+          'contributorId': 'owner',
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {'cpuPercent': 12},
+          },
+        },
+      ];
+      final c = server.controller();
+      await c.refresh();
+      c.toggleMachineExpanded('m');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return c;
+    }
+
+    Future<void> unmount(WidgetTester tester, dynamic c) async {
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    }
+
+    final line = find.byKey(const ValueKey('super-machine-agents-m'));
+    final entry = find.byKey(const ValueKey('super-machine-entry-m'));
+    // The machine row keeps its owner's avatar; no agent has one here.
+    final agentAvatar = find.byWidgetPredicate(
+      (w) => w is SuperTabAvatar && w.identity.startsWith('agent:'),
+    );
+
+    testWidgets('none: no count line, and the machine says it has none', (
+      tester,
+    ) async {
+      final c = await mount(tester, 0);
+      expect(line, findsNothing);
+      expect(find.text('No agents yet'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('super-machine-readings-m')),
+        findsOneWidget,
+      );
+      await unmount(tester, c);
+    });
+
+    testWidgets('one: "1 agent" with a chevron, no avatar and no agent row', (
+      tester,
+    ) async {
+      final c = await mount(tester, 1);
+      expect(
+        find.descendant(of: line, matching: find.text('1 agent')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: line, matching: find.byIcon(AppIcons.chevronRight)),
+        findsOneWidget,
+      );
+      expect(find.descendant(of: entry, matching: agentAvatar), findsNothing);
+      expect(find.text('Agent 0'), findsNothing);
+      expect(find.text('No agents yet'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('super-machine-readings-m')),
+        findsOneWidget,
+      );
+      await unmount(tester, c);
+    });
+
+    testWidgets('twenty: one "20 agents" line, not twenty rows', (
+      tester,
+    ) async {
+      final c = await mount(tester, 20);
+      expect(line, findsOneWidget);
+      expect(
+        find.descendant(of: line, matching: find.text('20 agents')),
+        findsOneWidget,
+      );
+      for (var i = 0; i < 20; i++) {
+        expect(find.byKey(ValueKey('super-machine-agent-m-a$i')), findsNothing);
+      }
+      expect(find.descendant(of: entry, matching: agentAvatar), findsNothing);
+      await unmount(tester, c);
+    });
+
+    testWidgets('twenty: the list scrolls to the last agent', (tester) async {
+      final c = await mount(tester, 20);
+      await tester.tap(line);
+      await tester.pumpAndSettle();
+      final last = find.byKey(const ValueKey('super-machine-agent-m-a19'));
+      await tester.ensureVisible(last);
+      await tester.pumpAndSettle();
+      expect(last.hitTestable(), findsOneWidget);
+      await unmount(tester, c);
+    });
+
+    testWidgets(
+      'tapping the line lists every agent, Working, Waiting, then Idle, with name, role and status',
+      (tester) async {
+        final f = SuperTabLaunchFixture();
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+        final server = f.connection.server;
+        Map<String, dynamic> agent(String id, String name) => {
+          'id': id,
+          'name': name,
+          'displayName': name,
+          'machineId': 'm',
+          'harnessId': 'native-$id',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        };
+        server.state['agents'] = [
+          agent('pm', 'Quinn'),
+          agent('dev', 'Nova'),
+          agent('rev', 'Sage'),
+          agent('idle', 'Iris'),
+        ];
+        (server.state['agents'] as List)[2]['role'] = 'reviewer';
+        (server.state['conversations'] as List)[0]
+          ..['leadId'] = 'pm'
+          ..['agentIds'] = ['pm', 'dev', 'rev', 'idle']
+          ..['assignment'] = {'agentId': 'rev', 'status': 'needs_human'};
+        f.app.machineStates['m']!
+          ..agents = [
+            for (final id in ['pm', 'dev', 'rev', 'idle'])
+              Agent.fromJson({
+                'id': 'native-$id',
+                'name': id,
+                'engine': 'codex',
+              }),
+          ]
+          ..processingAgentIds.addAll(['native-pm', 'native-dev']);
+        final c = await f.app.superTabs.open(tabId);
+        await c.refresh();
+        c.toggleMachineExpanded('m');
+        final opened = <String>[];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                onOpenAgent: (agent) => opened.add(agent.id),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(
+          find.descendant(of: line, matching: find.text('4 agents')),
+          findsOneWidget,
+        );
+        expect(find.text('Nova'), findsNothing);
+
+        await tester.tap(line);
+        await tester.pump();
+        await tester.pump();
+        final list = find.byKey(const ValueKey('super-machine-agent-list-m'));
+        expect(list, findsOneWidget);
+        double top(Finder finder) => tester.getTopLeft(finder).dy;
+        final headings = [
+          for (final group in ['Working', 'Waiting', 'Idle'])
+            find.descendant(of: list, matching: find.text(group)),
+        ];
+        for (final heading in headings) {
+          expect(heading, findsOneWidget);
+        }
+        Finder row(String id) =>
+            find.byKey(ValueKey('super-machine-agent-m-$id'));
+        // Working: Nova and Quinn, by name; Waiting: Sage; Idle: Iris.
+        final order = [
+          headings[0],
+          row('dev'),
+          row('pm'),
+          headings[1],
+          row('rev'),
+          headings[2],
+          row('idle'),
+        ];
+        for (var i = 1; i < order.length; i++) {
+          expect(top(order[i]), greaterThan(top(order[i - 1])));
+        }
+        for (final (id, name, badge, activity) in [
+          ('pm', 'Quinn', 'PM', HarnessActivity.working),
+          ('dev', 'Nova', 'Dev', HarnessActivity.working),
+          ('rev', 'Sage', 'Rev', HarnessActivity.needsInput),
+          ('idle', 'Iris', 'Dev', HarnessActivity.idle),
+        ]) {
+          expect(
+            find.descendant(of: row(id), matching: find.text(name)),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: row(id), matching: find.text(badge)),
+            findsOneWidget,
+          );
+          expect(
+            tester
+                .widget<ActivityMark>(
+                  find.descendant(
+                    of: row(id),
+                    matching: find.byType(ActivityMark),
+                  ),
+                )
+                .activity,
+            activity,
+          );
+        }
+        expect(find.descendant(of: list, matching: agentAvatar), findsNothing);
+
+        await tester.tap(row('rev'));
+        await tester.pump();
+        await tester.pump();
+        expect(opened, ['rev']);
+        expect(list, findsNothing);
+        await tester.pumpWidget(const SizedBox());
+        await c.flush();
+        f.app.superTabs.dispose();
+      },
+    );
+  });
+
   testWidgets(
     'expanded agents keep roster identities, roles and lifecycle status and open the selected agent',
     (tester) async {
@@ -540,6 +796,9 @@ void main() {
       expect(find.text('Quinn'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('super-machine-m')));
       await tester.pumpAndSettle();
+      final count = find.byKey(const ValueKey('super-machine-agents-m'));
+      await tester.tap(count);
+      await tester.pumpAndSettle();
       final pm = find.byKey(const ValueKey('super-machine-agent-m-pm'));
       final dev = find.byKey(const ValueKey('super-machine-agent-m-dev'));
       expect(
@@ -555,8 +814,18 @@ void main() {
           ...projectFixture('lead', 'Pilot', 'lead'),
           'skillSet': 'custom',
           'roles': [
-            {'id': 'lead', 'name': 'Product Manager', 'kind': 'lead', 'version': 'v1'},
-            {'id': 'research', 'name': 'Research Engineer', 'kind': 'builder', 'version': 'v1'},
+            {
+              'id': 'lead',
+              'name': 'Product Manager',
+              'kind': 'lead',
+              'version': 'v1',
+            },
+            {
+              'id': 'research',
+              'name': 'Research Engineer',
+              'kind': 'builder',
+              'version': 'v1',
+            },
           ],
         },
       ];
@@ -570,14 +839,6 @@ void main() {
       );
       expect(
         tester
-            .widget<SuperTabAvatar>(
-              find.descendant(of: dev, matching: find.byType(SuperTabAvatar)),
-            )
-            .identity,
-        'agent:dev',
-      );
-      expect(
-        tester
             .widget<ActivityMark>(
               find.descendant(of: dev, matching: find.byType(ActivityMark)),
             )
@@ -587,11 +848,13 @@ void main() {
       await tester.tap(dev);
       await tester.pumpAndSettle();
       expect(opened, ['dev']);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       (server.state['machines'] as List)[0]['observation']['receivedAt'] =
           at - 600000;
       await c.refresh();
       await show();
+      await tester.pumpAndSettle();
+      await tester.tap(count);
       await tester.pumpAndSettle();
       expect(
         tester
@@ -647,6 +910,9 @@ void main() {
           ),
         ),
       );
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('super-machine-agents-m')));
+      await tester.pump();
       await tester.pump();
       final row = find.byKey(const ValueKey('super-machine-agent-m-dev'));
       expect(
@@ -974,7 +1240,7 @@ void main() {
       expect(row, findsOneWidget);
       await openMachineDetails(tester, row);
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Attach running agent'));
+      await tester.tap(find.text('Attach running agent'));
       await tester.pumpAndSettle();
       expect(attached, [c.selected!.id]);
       await tester.pumpWidget(const SizedBox());
@@ -1093,7 +1359,7 @@ void main() {
           find.byKey(const ValueKey('super-machine-local-models-run')),
           findsNothing,
         );
-        await tester.tap(find.widgetWithText(TextButton, 'Close'));
+        await tester.tap(find.byTooltip('Close'));
         await tester.pumpAndSettle();
         await tester.pumpWidget(const SizedBox());
         await c.flush();
@@ -1295,12 +1561,11 @@ void main() {
       await tester.pumpAndSettle();
       final remove = find.byKey(const ValueKey('super-machine-remove'));
       expect(remove, findsOneWidget);
-      expect(
-        find.text(
-          'Mira is the Product Manager of project Pilot. Delete the project first.',
-        ),
-        findsOneWidget,
-      );
+      // Why, on the unavailable control itself, not as a sentence under the title (Ken, 2026-10-28).
+      const why =
+          'Mira is the Product Manager of project Pilot. Delete the project first.';
+      expect(find.text(why), findsNothing);
+      expect(find.byTooltip(why), findsOneWidget);
       expect(server.posts, isEmpty);
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -1422,7 +1687,9 @@ void main() {
         await c.refresh();
         await tester.pumpAndSettle();
         expect(
-          find.textContaining('Product Manager of project Pilot'),
+          find.byTooltip(
+            'Mira is the Product Manager of project Pilot. Delete the project first.',
+          ),
           findsOneWidget,
         );
         final remove = tester.widget<AppIconButton>(
@@ -1456,7 +1723,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('super-machine-remove')), findsNothing);
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await owner.flush();
@@ -1477,7 +1744,7 @@ void main() {
         find.byKey(const ValueKey('super-machine-remove')),
         findsOneWidget,
       );
-      await tester.tap(find.widgetWithText(TextButton, 'Close'));
+      await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -1712,7 +1979,7 @@ void main() {
               );
               await tester.pumpAndSettle();
             }
-            final dialog = find.byType(AlertDialog);
+            final dialog = find.byType(SuperTabDetailDialog);
             final details = find.byType(SuperTabMachineDetails);
             expect(dialog, findsOneWidget);
             expect(details, findsOneWidget);
@@ -1733,18 +2000,14 @@ void main() {
             expect(
               find.descendant(
                 of: details,
-                matching: find.textContaining(
-                  '5-hour: 70% remaining\nResets in ',
-                ),
+                matching: find.textContaining('70% left · resets in '),
               ),
               findsOneWidget,
             );
             expect(
               find.descendant(
                 of: details,
-                matching: find.textContaining(
-                  'Weekly: 90% remaining\nResets in ',
-                ),
+                matching: find.textContaining('90% left · resets in '),
               ),
               findsOneWidget,
             );
@@ -1770,7 +2033,7 @@ void main() {
                 'machine-details-more-$captureName',
               );
             }
-            await tester.tap(find.widgetWithText(TextButton, 'Close'));
+            await tester.tap(find.byTooltip('Close'));
             await tester.pumpAndSettle();
             expect(tester.takeException(), isNull);
             await tester.pumpWidget(const SizedBox());
@@ -1818,6 +2081,53 @@ void main() {
     expect(superTabRepositoryUrl('github.com'), isNull);
   });
   testWidgets(
+    'Add machine shows a long hostname whole, over two lines if it must',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      const host = 'autonomous-code-vm-01.c.autonomous-code.internal';
+      f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
+          .copyWith(name: host);
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.dark),
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async => _reading(freeGiB: 8),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Add machine'));
+      await tester.pumpAndSettle();
+      final label = find.descendant(
+        of: _picker,
+        matching: find.textContaining(host),
+      );
+      expect(label, findsOneWidget);
+      final paragraph = tester.renderObject<RenderParagraph>(label);
+      expect(
+        paragraph.didExceedMaxLines,
+        isFalse,
+        reason: 'the whole hostname is readable',
+      );
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      c.dispose();
+    },
+  );
+
+  testWidgets(
     'Add machine has one field and contributes the prepared project and installed engines',
     (tester) async {
       final f = SuperTabLaunchFixture();
@@ -1849,12 +2159,15 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Add machine'));
       await tester.pumpAndSettle();
+      // One short paragraph instead of three (Ken, 2026-10-28).
       expect(
         find.text(
-          'Agents the Swarm starts on this machine run without asking for permission.',
+          "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
+          'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
         ),
         findsOneWidget,
       );
+      expect(find.textContaining('Harness clones each project'), findsNothing);
       expect(_picker, findsOneWidget);
       expect(
         find.text('This Mac (${f.app.stateOf('m')!.machine.displayName})'),
@@ -1862,19 +2175,9 @@ void main() {
       );
       expect(find.byType(Checkbox), findsNothing);
       expect(find.text('Choose project folder'), findsNothing);
-      expect(
-        find.descendant(
-          of: find.byType(AlertDialog),
-          matching: find.text(
-            'Harness clones each project into ~/harnesses/swarms and lets '
-            "the Swarm's agents work in it.",
-          ),
-        ),
-        findsOneWidget,
-      );
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command'], {
         'type': 'machine.contribute',
         'machineId': 'm',
@@ -2189,7 +2492,7 @@ void main() {
       expect(_option('m2'), findsOneWidget);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(_option('m2'), findsNothing);
       expect(tester.widget<TextButton>(_picker).focusNode!.hasFocus, isTrue);
       expect(tester.takeException(), isNull);
@@ -2221,7 +2524,7 @@ void main() {
         ),
         isEmpty,
       );
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await c.flush();
@@ -2356,52 +2659,6 @@ void main() {
   });
 
   testWidgets(
-    'Configure on a machine card reads as editing: title "Configure machine", button "Save"',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['machines'] = [
-        {'machineId': 'm', 'contributorId': 'owner'},
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      // Never reported, so offline: under the disclosure.
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: 300,
-              height: 400,
-              child: SuperTabMachines(
-                controller: c,
-                app: f.app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await openMachineDetails(
-        tester,
-        find.byKey(const ValueKey('super-machine-m')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Configure'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Configure machine'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Add machine'), findsNothing);
-
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
-
-  testWidgets(
     'Add machine starts at the suggested slots and contributes the number the owner picks',
     (tester) async {
       final f = SuperTabLaunchFixture();
@@ -2451,7 +2708,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command'], {
         'type': 'machine.contribute',
         'machineId': 'm',
@@ -2470,11 +2727,15 @@ void main() {
     },
   );
 
+  // Every 2 GiB of total RAM may run an agent, and every machine may offer
+  // four; the suggestion keeps its 16 (Ken, 2026-10-28).
   for (final (totalGiB, suggested, maximum) in [
     (32.0, 8, 16),
     (16.0, 4, 8),
-    (64.0, 16, 16),
-    (2.0, 1, 1),
+    (64.0, 16, 32),
+    (192.0, 16, 96),
+    (8.0, 2, 4),
+    (2.0, 1, 4),
   ]) {
     testWidgets(
       'Add machine with $totalGiB GiB total offers $suggested of $maximum slots',
@@ -2508,111 +2769,6 @@ void main() {
   }
 
   testWidgets(
-    'Configure keeps the owner’s 12 slots even when total RAM offers eight',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['machines'] = [
-        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      await _openConfigureDialog(
-        tester,
-        f,
-        c,
-        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
-      );
-
-      expect(_agentSlots(tester), '12');
-      expect(_slotsButton(tester, 'more').onPressed, isNull);
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-      await _settleSave(tester);
-      expect(f.connection.server.posts.single['command']!['maxAgents'], 12);
-      expect(tester.takeException(), isNull);
-
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
-
-  testWidgets('Configure keeps the owner’s slots when RAM cannot be read', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
-
-    expect(_agentSlots(tester), '12');
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-    await _settleSave(tester);
-    expect(f.connection.server.posts.single['command']!['maxAgents'], 12);
-    expect(tester.takeException(), isNull);
-
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
-
-  testWidgets(
-    'Configure starts at the machine’s own slots and saves the new number',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['machines'] = [
-        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      // Sixteen gibibytes free would suggest 8: this machine's own 2 is what
-      // the field shows, because its own number is not a suggestion.
-      await _openConfigureDialog(
-        tester,
-        f,
-        c,
-        readLocal: (_) async => _reading(freeGiB: 16),
-      );
-
-      // The machine's own number — 2, not the 8 its memory would suggest: an
-      // owner who opens this form and saves it keeps what they had chosen.
-      expect(_agentSlots(tester), '2');
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-      expect(_agentSlots(tester), '4');
-
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-      await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
-      expect(f.connection.server.posts.single['command'], {
-        'type': 'machine.contribute',
-        'machineId': 'm',
-        'name': f.app.stateOf('m')!.machine.displayName,
-        'cwd': '/work/project',
-        'scope': 'swarm',
-        'engines': ['claude', 'codex'],
-        'maxAgents': 4,
-      });
-      expect(tester.takeException(), isNull);
-
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
-
-  testWidgets(
     'an unconfirmed contribution is checked first, then the number on screen saves',
     (tester) async {
       final f = SuperTabLaunchFixture();
@@ -2637,7 +2793,7 @@ void main() {
       f.connection.server.loseReply = true;
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
 
       // The owner changes their mind before trying again.
@@ -2649,7 +2805,7 @@ void main() {
 
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       // The stored attempt is settled first, and then the six on screen — the
       // four it was built with is not what the machine ends up with.
       expect(f.connection.server.posts.last['command']!['maxAgents'], 6);
@@ -2686,7 +2842,7 @@ void main() {
       // suggestion is the number the field would have shown.
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
       expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
       expect(tester.takeException(), isNull);
 
@@ -2719,7 +2875,7 @@ void main() {
       f.connection.server.loseReply = true;
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
 
       // Now the earlier attempt cannot be checked either, and the reason it
       // gives is the one worth reading.
@@ -2729,7 +2885,7 @@ void main() {
       };
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(
         find.text('This machine is no longer linked to this Swarm.'),
         findsOneWidget,
@@ -2751,12 +2907,147 @@ void main() {
     },
   );
 
-  testWidgets('a machine already set to 16 keeps that number when configured', (
-    tester,
-  ) async {
+  testWidgets(
+    'machine settings show its name, Agents as memory allows, and Remove from this Swarm',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 8;
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
+      );
+
+      final name = superTabMachineName(f.app.stateOf('m')!.machine.displayName);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabDetailDialog),
+          matching: find.text(name),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Configure machine'), findsNothing);
+      // One machine's settings: no picker to switch to another.
+      expect(_picker, findsNothing);
+      expect(find.text('Agents'), findsOneWidget);
+      // Stored at the machine's maximum: that is "as memory allows".
+      expect(_agentsChoice(tester), 'memory');
+      expect(find.text('As memory allows'), findsOneWidget);
+      expect(find.text('At most'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Remove from this Swarm'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      expect(f.connection.server.posts.single['command'], {
+        'type': 'machine.contribute',
+        'machineId': 'm',
+        'name': f.app.stateOf('m')!.machine.displayName,
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'engines': ['claude', 'codex'],
+        'maxAgents': 8,
+      });
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'machine settings keep a stored limit below the maximum as At most, and save the new number',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 16),
+      );
+
+      // The machine's own 2, not the 16 its memory allows: an owner who opens
+      // this form and saves it keeps what they had chosen.
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '2');
+      await tester.tap(_limitStep('more'));
+      await tester.pumpAndSettle();
+      await tester.tap(_limitStep('more'));
+      await tester.pumpAndSettle();
+      expect(_limit(tester), '4');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'choosing As memory allows saves the machine’s maximum: 96 for 192 GiB',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 96;
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 192, freeGiB: 100),
+      );
+
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '16');
+      await tester.tap(find.byKey(const ValueKey('machine-agents-memory')));
+      await tester.pumpAndSettle();
+      expect(_agentsChoice(tester), 'memory');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 96);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('changing the At most number chooses At most', (tester) async {
     final f = SuperTabLaunchFixture();
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    // The backend accepts 16, and opening Configure must preserve that choice.
+    f.connection.maxAvailableAgents = 16;
     f.connection.server.state['machines'] = [
       {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
     ];
@@ -2769,22 +3060,18 @@ void main() {
       readLocal: (_) async => _reading(totalGiB: 32, freeGiB: 1),
     );
 
-    expect(_agentSlots(tester), '16');
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
-    expect(_slotsButton(tester, 'fewer').onPressed, isNotNull);
+    expect(_agentsChoice(tester), 'memory');
+    // At the maximum there is nothing above it: the number starts at what
+    // the machine's memory alone would suggest, half of it.
+    expect(_limit(tester), '8');
+    await tester.tap(_limitStep('fewer'));
+    await tester.pumpAndSettle();
+    expect(_agentsChoice(tester), 'atMost');
+    expect(_limit(tester), '7');
 
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await _settleSave(tester);
-    // The owner’s chosen 16 is still sent unchanged.
-    expect(f.connection.server.posts.single['command'], {
-      'type': 'machine.contribute',
-      'machineId': 'm',
-      'name': f.app.stateOf('m')!.machine.displayName,
-      'cwd': '/work/project',
-      'scope': 'swarm',
-      'engines': ['claude', 'codex'],
-      'maxAgents': 16,
-    });
+    expect(f.connection.server.posts.single['command']!['maxAgents'], 7);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());
@@ -2793,47 +3080,526 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('Agent slots stop at 1 and the machine’s eight-slot RAM limit', (
-    tester,
-  ) async {
+  testWidgets(
+    'a stored limit above what memory allows opens as As memory allows and saves the maximum',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 8;
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
+      );
+
+      expect(_agentsChoice(tester), 'memory');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'machine settings keep the owner’s number when memory cannot be read',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
+      ];
+      // Setup will say this machine allows only 8, but only after Save is
+      // pressed: what the owner saw, At most 12, is what saves.
+      f.connection.maxAvailableAgents = 8;
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
+
+      // Nothing says how much this machine's memory allows, so its own 12 is
+      // the most the field can offer, and it is kept.
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '12');
+      expect(_limitButton(tester, 'more').onPressed, isNull);
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 12);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'machine settings read the memory the machine reported to the Swarm',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 8;
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'contributorId': 'owner',
+          'maxAgents': 8,
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {
+              'memoryUsedBytes': 4 * 1024 * 1024 * 1024,
+              'memoryTotalBytes': 16 * 1024 * 1024 * 1024,
+            },
+          },
+        },
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      // This Desktop's own reading does not answer; the Swarm's does.
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
+
+      expect(_agentsChoice(tester), 'memory');
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'an unconfirmed save is checked first, then the number on screen saves',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 4},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 8),
+      );
+      // The first attempt reaches the server and its reply is lost, which
+      // leaves that attempt holding its own receipt — the state the next press
+      // finds.
+      f.connection.server.loseReply = true;
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsOneWidget);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+
+      // The owner changes their mind before trying again.
+      await tester.tap(_limitStep('more'));
+      await tester.pumpAndSettle();
+      await tester.tap(_limitStep('more'));
+      await tester.pumpAndSettle();
+      expect(_limit(tester), '6');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      // The stored attempt is settled first, and then the six on screen — the
+      // four it was built with is not what the machine ends up with.
+      expect(f.connection.server.posts.last['command']!['maxAgents'], 6);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'Remove from this Swarm in machine settings asks the removal question',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 4},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
+
+      await tester.tap(
+        find.widgetWithText(TextButton, 'Remove from this Swarm'),
+      );
+      await tester.pumpAndSettle();
+      final name = superTabMachineName(f.app.stateOf('m')!.machine.displayName);
+      expect(find.text('Remove $name from this Swarm?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('machine-agents')), findsNothing);
+      // Asking sends nothing.
+      expect(f.connection.server.posts, isEmpty);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('only the machine’s owner sees its settings', (tester) async {
     final f = SuperTabLaunchFixture();
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
     f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 3},
+      {'machineId': 'm', 'contributorId': 'teammate', 'maxAgents': 4},
     ];
     final c = await f.app.superTabs.open(tabId);
     await c.refresh();
-    await _openConfigureDialog(
-      tester,
-      f,
-      c,
-      readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 400,
+            child: SuperTabMachines(
+              controller: c,
+              app: f.app,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      ),
     );
-
-    expect(_agentSlots(tester), '3');
-    for (var i = 0; i < 5; i++) {
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-    }
-    expect(_agentSlots(tester), '8');
-    // Neither end is a press that lands and does nothing: the button is dead.
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
-    expect(_slotsButton(tester, 'fewer').onPressed, isNotNull);
-
-    for (var i = 0; i < 7; i++) {
-      await tester.tap(_slotsStep('fewer'));
-      await tester.pumpAndSettle();
-    }
-    expect(_agentSlots(tester), '1');
-    expect(_slotsButton(tester, 'fewer').onPressed, isNull);
-    expect(_slotsButton(tester, 'more').onPressed, isNotNull);
-    expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    await openMachineDetails(
+      tester,
+      find.byKey(const ValueKey('super-machine-m')),
+    );
+    expect(find.widgetWithText(TextButton, 'Configure'), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
     await c.flush();
     f.app.superTabs.dispose();
     await tester.pump();
   });
+
+  testWidgets(
+    'the Agents choice is one Tab stop, and Up selects As memory allows',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 16),
+      );
+      expect(_agentsChoice(tester), 'atMost');
+
+      /// The choice keyboard focus is on, or null.
+      String? focusedChoice() => FocusManager.instance.primaryFocus?.context
+          ?.findAncestorWidgetOfExactType<RadioListTile<String>>()
+          ?.value;
+
+      // A full trip round the dialog stops on the choice once.
+      final stops = <String?>[];
+      FocusNode? first;
+      for (var i = 0; i < 30; i++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        final node = FocusManager.instance.primaryFocus;
+        if (first == null) {
+          first = node;
+        } else if (identical(node, first)) {
+          break;
+        }
+        stops.add(focusedChoice());
+      }
+      expect(stops.whereType<String>().toList(), ['atMost']);
+
+      // On it, Up moves the choice.
+      while (focusedChoice() == null) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      expect(_agentsChoice(tester), 'memory');
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'a screen reader can change the At most number apart from the choice',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 16),
+      );
+
+      // The number is its own adjustable control, not part of the At most
+      // choice's single tap target.
+      final number = find.bySemanticsLabel('Most agents');
+      expect(
+        tester.getSemantics(number),
+        isSemantics(
+          value: '2',
+          increasedValue: '3',
+          decreasedValue: '1',
+          hasIncreaseAction: true,
+          hasDecreaseAction: true,
+        ),
+      );
+      final more = tester.getSemantics(find.byTooltip('More agents'));
+      expect(
+        more,
+        isSemantics(isButton: true, hasTapAction: true, tooltip: 'More agents'),
+      );
+      expect(
+        more.id,
+        isNot(
+          tester
+              .getSemantics(
+                find.byKey(const ValueKey('machine-agents-at-most')),
+              )
+              .id,
+        ),
+      );
+      tester.semantics.increase(find.semantics.byLabel('Most agents'));
+      await tester.pumpAndSettle();
+      expect(_limit(tester), '3');
+      expect(_agentsChoice(tester), 'atMost');
+      semantics.dispose();
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'a machine with no stored number opens at At most its suggested number',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      // 32 GiB: sixteen allowed, eight suggested.
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 32, freeGiB: 1),
+      );
+
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '8');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'with no stored number and no reading, At most opens at four and saves four',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner'},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
+
+      // Every machine may offer four, whatever its memory.
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '4');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'an offline machine’s settings say why Save is off, in settings’ words',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 4},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      f.app.machineStates['m']!.nodeOnline = false;
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
+
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        // The machine by name: "this computer" is the one you're on.
+        find.text('Offline. Open Harness on Test host to change its settings.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('to add it'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'settings of a machine this computer does not list say why Save is off',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'elsewhere',
+          'name': 'Studio',
+          'contributorId': 'owner',
+          'maxAgents': 4,
+        },
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+                readLocal: (_) async => null,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openMachineDetails(
+        tester,
+        find.byKey(const ValueKey('super-machine-elsewhere')),
+      );
+      await tester.tap(find.widgetWithText(TextButton, 'Configure'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Studio'), findsWidgets);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        find.text(
+          'This computer can’t reach that machine. Sign in to Harness there with this account to change its settings.',
+        ),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'At most stops at 1 and at the machine’s eight-agent memory limit',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 3},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
+      );
+
+      expect(_limit(tester), '3');
+      for (var i = 0; i < 5; i++) {
+        await tester.tap(_limitStep('more'));
+        await tester.pumpAndSettle();
+      }
+      expect(_limit(tester), '8');
+      // Neither end is a press that lands and does nothing: the button is dead.
+      expect(_limitButton(tester, 'more').onPressed, isNull);
+      expect(_limitButton(tester, 'fewer').onPressed, isNotNull);
+
+      for (var i = 0; i < 7; i++) {
+        await tester.tap(_limitStep('fewer'));
+        await tester.pumpAndSettle();
+      }
+      expect(_limit(tester), '1');
+      expect(_limitButton(tester, 'fewer').onPressed, isNull);
+      expect(_limitButton(tester, 'more').onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 }
 
 /// A hardware reading's value in a machine's expanded readings.

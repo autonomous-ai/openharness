@@ -22,6 +22,25 @@ const envSchema = z.object({
   // manager socket may land on different backend instances; Redis pub/sub bridges them
   // (channels up:{machineId} / down:{machineId}) plus an agent→manager presence key. See lib/bus.ts.
   REDIS_URL: z.string().default('redis://localhost:6379'),
+  // The longest one Redis command may take on the shared command connection (lib/bus.ts). Redis answers in well under a
+  // millisecond; past this it is stuck, and a request should not wait on it (Stability 3.5).
+  REDIS_COMMAND_TIMEOUT_MS: z.coerce.number().int().positive().default(1_000),
+  // Signed-in requests per route, across every pod (middlewares/routeRateLimit.ts). Far above what a working client
+  // sends, so only a loop meets them. 0 turns one off. Revisit with per-route counts from the ingress logs.
+  // Per caller and second: the agent or machine the route names (with its person), else the person.
+  ROUTE_RATE_LIMIT_PER_CALLER_SECOND: z.coerce.number().int().min(0).default(50),
+  // Per person and minute, whatever agents or machines the calls name. The busiest working client is an older CLI's
+  // delivery poll, one call a second per running agent. A late poll can land in the next minute, so a minute can see an
+  // agent 61 times: 200 agents are 12200. 15000 leaves room above that.
+  ROUTE_RATE_LIMIT_PER_PERSON_MINUTE: z.coerce.number().int().min(0).default(15_000),
+  // Per person and second, whatever agents or machines the calls name, so made-up ids cannot spend the minute's budget
+  // at once. 200 agents polling once a second can land up to 400 in one second when polls arrive late: 500 is above it.
+  ROUTE_RATE_LIMIT_PER_PERSON_SECOND: z.coerce.number().int().min(0).default(500),
+  // What each process keeps of the Swarms it read, by their stamps in Redis (superTabs/cache.ts). 'off' is the kill switch:
+  // every read goes to Mongo again, while writes still bump the stamps, so processes that keep theirs on stay right.
+  SWARM_READ_CACHE: z.enum(['on', 'off']).default('on'),
+  // Its size per process, counted as the JSON size of what it holds.
+  SWARM_CACHE_MB: z.string().default('64').transform(Number),
 
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
@@ -32,12 +51,21 @@ const envSchema = z.object({
   // that lands on an instance NOT holding the agent's manager socket is forwarded to the instance that
   // does (agent:{machineId}:appinst), so the data path is a direct backpressured socket, not Redis relay.
   // Off by default (single-instance/dev needs nothing — it's always co-located). Enable in multi-instance.
+  // Roadmap Phase 1.3: refuse a bad token on /api/web-ws with HTTP 401 before the upgrade, instead of upgrading and closing
+  // 4401, for sockets that declare `auth=http` (the daemon's relay from 1.3.64). Off by default; turn on once that release
+  // is out. Browsers and the phone keep the 4401, since a browser cannot read the status of a failed upgrade.
+  WEB_WS_AUTH_HTTP_401: z.string().default('false').transform((v) => v === 'true'),
   MESH_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Host the mesh endpoint is reachable at from OTHER instances: 127.0.0.1 for a single-host pm2 cluster,
   // the VM's routable IP for multi-VM. Advertised verbatim in Redis.
   MESH_HOST: z.string().default('127.0.0.1'),
   // Base internal port; each worker binds MESH_PORT_BASE + NODE_APP_INSTANCE (distinct per worker).
   MESH_PORT_BASE: z.string().default('8095').transform(Number),
+
+  // On SIGTERM the API answers /api/ready with 503 at once, then keeps serving this long before it closes its
+  // listeners, so the load balancer stops sending new connections first. 0 (the default) closes at once, as before;
+  // Kubernetes sets it, with probes and grace period, as backend/README.md describes.
+  DRAIN_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(0),
 
   // Remote-terminal WebRTC is STUN-only: successful ICE bypasses the backend data relay; failed ICE
   // keeps using the existing WebSocket route. Enabled by default; percentage 0 is the kill switch.
@@ -116,6 +144,11 @@ const envSchema = z.object({
   // How long a token the profile API just accepted is trusted without asking again (0 = ask every
   // time). This is also the longest a token revoked at the SSO keeps working here.
   SSO_PROFILE_CACHE_TTL_MS: z.coerce.number().int().min(0).default(60_000),
+  // While the profile service cannot answer (down, slow, circuit open), a token this process validated up to this long
+  // past its TTL keeps working, so an SSO outage does not sign out people who are working (lib/ssoProfileCache.ts).
+  // Never past the token's own expiry, never for a token the service rejected. The cost: during an outage a token revoked
+  // at the SSO keeps working this long. Off (0) until the owner decides; 600000 (10 min) is the value it was built for.
+  SSO_PROFILE_STALE_GRACE_MS: z.coerce.number().int().min(0).default(0),
   // Forces the SSO account picker so users can switch accounts (not silently auto-login the last one).
   // Set to '' to disable, or 'login' to force re-entering credentials.
   SSO_PROMPT: z.string().default('select_account'),
@@ -235,6 +268,10 @@ const envSchema = z.object({
   SUPER_TAB_ATTACHMENTS_PREFIX: z.string().default('super-tabs'),
   // Where clients read the files. https:// in production (superTabs/attachments.ts refuses anything else at startup).
   SUPER_TAB_ATTACHMENTS_PUBLIC_BASE: z.string().url().default('https://cdn.harness.autonomous.ai'),
+  // A private bucket (no public read) for Swarm avatars, served only through signed links that expire. Unset: avatars go in
+  // the attachments bucket under avatars/ and are linked on its public CDN like chat files, links that never expire
+  // (docs/swarms.md). No attachments bucket either: avatar uploads are off.
+  SUPER_TAB_AVATARS_BUCKET: z.string().default(''),
 
   // The Harness GitHub App (github/app.ts, docs/swarm-github-app.md): a Swarm agent doing a task pushes and opens pull
   // requests with a one-hour token for its project's repository alone. Both empty: off, and POST
@@ -245,6 +282,10 @@ const envSchema = z.object({
   GITHUB_APP_PRIVATE_KEY: z.string().default(''),
   // The app's name in github.com/apps/NAME, for the install link a refusal gives. Optional.
   GITHUB_APP_SLUG: z.string().default(''),
+  // The app's own GitHub sign-in (its Client ID and a client secret), with which a person who can push to a repository
+  // approves it for a Swarm (github/approvals.ts). Unset, no repository can be approved and the app gives no token.
+  GITHUB_APP_CLIENT_ID: z.string().default(''),
+  GITHUB_APP_CLIENT_SECRET: z.string().default(''),
 
   // TTL for the in-memory subdomain→machineId cache on the public app-proxy hot path
   // (avoids a Mongo lookup per request). Bounds staleness after a cross-instance app teardown.

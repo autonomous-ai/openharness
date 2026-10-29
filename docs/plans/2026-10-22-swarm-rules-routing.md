@@ -22,6 +22,7 @@ interface Rule {
     | { kind: 'minEffort'; engine?: 'claude' | 'codex'; effort: Effort }   // hard
     | { kind: 'preferEngine'; taskKind: string | null; engine: 'claude' | 'codex' } // soft
     | { kind: 'preferIdle' }                                               // soft
+    | { kind: 'noGridFirst' }                                              // soft (2026-10-27)
   text: string                  // the owner's words, 1–200 characters, e.g. "No Haiku, ever."
   askedBy: string               // the owner's user id
   askedIn: { conversationId: string; messageId: string } | null   // the owner's message, when a Lead relays it
@@ -49,6 +50,10 @@ The meaning of each rule:
   (`"kind":"ui"`). A review group's kind is always `review`.
 - **preferIdle** (soft): an idle member ranks before a new agent. Among new agents, a machine with fewer
   running agents ranks first.
+- **noGridFirst** (soft, 2026-10-27): turns off grid models first. By default a low-difficulty, low-risk
+  task that is not a review ranks models served on the Swarm's grid (Kimi K3, DeepSeek) before subscription
+  candidates, right after the preferred engine (roadmap, Dec: about 30% of work on cheaper models). The owner
+  opts out with this rule.
 
 Routing already removes an offline machine, a stopping agent (it is busy or refused) and an exhausted
 quota. Those stay as they are and are not rules.

@@ -6,6 +6,11 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
+
+/// A signed link as the backend's private avatar bucket hands it out (avatarLinks.ts).
+String superTabSignedAvatar(String id) =>
+    'https://storage.googleapis.com/avatars/$id?X-Goog-Expires=3600&X-Goog-Signature=fixture';
 
 Map<String, dynamic> conversationFixture(String id, String title) => {
   'id': id,
@@ -140,12 +145,15 @@ class SwarmPartsBackend {
     'machines': <String, dynamic>{},
     if (state['mentionsWaiting'] != null)
       'mentionsWaiting': state['mentionsWaiting'],
+    if (state['mentionsDigest'] != null)
+      'mentionsDigest': state['mentionsDigest'],
     if (state['decisionsWaiting'] != null)
       'decisionsWaiting': state['decisionsWaiting'],
     if (state['decisionsDigest'] != null)
       'decisionsDigest': state['decisionsDigest'],
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
+    if (state['avatars'] != null) 'avatars': state['avatars'],
   };
 
   List<MapEntry<String, _HeldPart>> _ordered() =>
@@ -164,6 +172,10 @@ class SwarmPartsBackend {
   ) {
     if (reader == null || part.deleted || !id.startsWith('groups:')) {
       return false;
+    }
+    // A Buddy chat is read by its person alone (backend Buddies, 10-28).
+    if (part.data['kind'] == 'buddy') {
+      return part.data['buddyOwnerId'] != reader;
     }
     final audience = part.data['audience'];
     if (audience is! Map) return false;
@@ -402,6 +414,11 @@ class ConversationServer {
   Completer<void>? holdDecisions;
   // Every read of a decisions list fails, as offline.
   bool failDecisions = false;
+  // The most each decisions list returns, newest first, as the backend caps
+  // it; set, a list also says whether it left others out, as the backend does.
+  int? decisionPage;
+  // A backend from before Let PM decide: no list of every answered one.
+  bool settledMissing = false;
   // A backend from before the decisions digest: it sends the count alone.
   bool decisionsDigestMissing = false;
   // How many times the mentions list was read.
@@ -410,6 +427,8 @@ class ConversationServer {
   bool mentionsMissing = false;
   // While set, every read of the mentions list waits for it.
   Completer<void>? holdMentions;
+  // Every read of the mentions list fails, as offline.
+  bool failMentions = false;
   // The effective routing policy answered by GET .../routing-policy.
   Map<String, dynamic>? routingPolicy;
   final state = <String, dynamic>{
@@ -457,6 +476,84 @@ class ConversationServer {
     (state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere(
       (g) => g['id'] == conversationId,
     )['lastMessageSequence'] = revision;
+  }
+
+  // Avatar pictures uploaded, as the backend's avatar route keeps them.
+  final avatarUploads = <Uint8List>[];
+
+  /// What the backend's avatar route does with a picture.
+  Future<Map<String, dynamic>> uploadAvatar({
+    required String tabId,
+    required Uint8List png,
+  }) async {
+    avatarUploads.add(png);
+    final id = 'avatar-${avatarUploads.length}';
+    return {
+      'avatar': {'id': id},
+    };
+  }
+
+  /// A person's own status or avatar, or an agent's avatar, as the backend
+  /// stores it (profile.ts).
+  void _profile(Map command, String reader) {
+    final (key, id) = command['type'] == 'agent.avatar'
+        ? ('agents', command['agentId'])
+        : ('people', reader);
+    // An upload's record says only that there is one; its link comes signed with each read (backend avatarLinks.ts).
+    Map<String, dynamic> avatar(Map choice) {
+      if (choice['kind'] != 'upload') return Map<String, dynamic>.from(choice);
+      final links = state['avatars'] ??= <String, dynamic>{};
+      (links as Map)['${key == 'agents' ? 'agent' : 'person'}:$id'] =
+          superTabSignedAvatar(choice['id'] as String);
+      return {'kind': 'upload'};
+    }
+
+    state[key] = <dynamic>[
+      for (final row in state[key] as List)
+        if ((row as Map)['id'] != id)
+          row
+        else
+          <String, dynamic>{
+            ...row,
+            if (command['type'] == 'member.status')
+              'status': command['status']
+            else
+              'avatar': command['avatar'] == null
+                  ? null
+                  : avatar(command['avatar'] as Map),
+          },
+    ];
+    revision++;
+  }
+
+  /// A reaction as the backend keeps it (reactions.ts): one per reactor and
+  /// emoji, and the group bumped only on a change.
+  bool _react(Map command, String reader) {
+    final message = messages.firstWhere((m) => m['id'] == command['messageId']);
+    final counts = [
+      for (final row in message['reactions'] as List? ?? const [])
+        Map<String, dynamic>.from(row as Map),
+    ];
+    final row = counts.where((r) => r['emoji'] == command['emoji']).firstOrNull;
+    final by = [...(row?['by'] as List? ?? const [])];
+    final mine = by.any((who) => (who as Map)['id'] == reader);
+    if (mine == command['on']) return false;
+    if (command['on'] == true) {
+      by.add({'kind': 'person', 'id': reader});
+    } else {
+      by.removeWhere((who) => (who as Map)['id'] == reader);
+    }
+    counts.removeWhere((r) => r['emoji'] == command['emoji']);
+    if (by.isNotEmpty) {
+      counts.add({'emoji': command['emoji'], 'count': by.length, 'by': by});
+    }
+    message['reactions'] = counts;
+    final group = (state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == command['conversationId']);
+    group['reactionSeq'] = ((group['reactionSeq'] as int?) ?? 0) + 1;
+    revision++;
+    return true;
   }
 
   /// What the backend does with a file sent to its upload route.
@@ -541,17 +638,117 @@ class ConversationServer {
         );
         messages.last['replyTo'] = command['replyTo'];
         output['messageId'] = 'message-$revision';
+      } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.avatar' ||
+          command['type'] == 'agent.avatar') {
+        _profile(command, reader ?? 'owner');
+      } else if (command['type'] == 'message.react') {
+        output['changed'] = _react(command, reader ?? 'owner');
       } else if (command['type'] == 'decision.answer') {
-        answerDecision(
-          command['decisionId'] as String,
-          command['choice'] as int,
-        );
+        final id = command['decisionId'] as String;
+        if (command['delegate'] == true) {
+          // Left to the PM: the backend takes the recommended option.
+          final asked = decisions.firstWhere((d) => d['id'] == id);
+          answerDecision(id, asked['recommended'] as int, delegated: true);
+        } else {
+          answerDecision(id, command['choice'] as int);
+        }
       } else if (command['type'] == 'mention.done') {
         mentions.firstWhere((m) => m['id'] == command['mentionId'])
           ..['resolvedAt'] = '2026-10-24T06:00:00Z'
           ..['resolvedBy'] = 'done';
         state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
         revision++;
+      } else if (command['type'] == 'buddy.create') {
+        // As the backend's Buddy create: a start for the reader's Buddy and
+        // its chat, fixed per person and project. The fixture's host starts it
+        // at once.
+        final person = reader ?? 'owner';
+        final projectId = command['projectId'] as String;
+        bool mine(Object? a) =>
+            a is Map &&
+            (a['buddyOf'] as Map?)?['personId'] == person &&
+            a['projectId'] == projectId;
+        // As the backend: one Buddy per person and project. A running one
+        // refuses another; a down one is replaced.
+        if ((state['agents'] as List).any(
+          (a) => mine(a) && (a as Map)['downSince'] == null,
+        )) {
+          throw const SuperTabFailure(
+            'BUDDY_EXISTS',
+            'You already have a Buddy in this project.',
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final agentId = 'buddy-$revision';
+        final chatId = 'buddy-$person-$projectId';
+        final machine = (state['machines'] as List? ?? const [])
+            .cast<Map>()
+            .where((m) => m['machineId'] == command['machineId'])
+            .firstOrNull;
+        final owner = (state['people'] as List? ?? const [])
+            .cast<Map>()
+            .where((p) => p['id'] == person)
+            .firstOrNull;
+        // A test's lists may be typed literals: copy into plain lists.
+        state['agents'] = <dynamic>[
+          for (final a in state['agents'] as List)
+            if (!mine(a)) a,
+        ];
+        state['starts'] = <dynamic>[...state['starts'] as List? ?? const []];
+        (state['starts'] as List).add({
+          'id': 'start-$revision',
+          'machineOwnerId': machine?['contributorId'] ?? person,
+          'request': {
+            'conversationId': chatId,
+            'projectId': projectId,
+            'machineId': command['machineId'],
+            'engine': command['engine'],
+            'buddyOf': {'personId': person, 'generation': 'fixture'},
+          },
+          'harnessId': 'h-$agentId',
+          'error': null,
+        });
+        (state['agents'] as List).add({
+          'id': agentId,
+          'name': 'Buddy',
+          'projectId': projectId,
+          'buddyOf': {'personId': person, 'generation': 'fixture'},
+          'machineId': command['machineId'],
+          'harnessId': 'h-$agentId',
+          'contributorId': person,
+          'machineOwnerId': machine?['contributorId'] ?? person,
+          'confidential': true,
+          'configuration': {'engine': command['engine'], 'model': 'default'},
+        });
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        final chat = conversations.where((g) => g['id'] == chatId).firstOrNull;
+        if (chat != null) {
+          chat['agentIds'] = [agentId];
+        } else {
+          final name = (owner?['email'] as String? ?? person).split('@').first;
+          conversations.add({
+            ...conversationFixture(chatId, "$name's Buddy"),
+            'kind': 'buddy',
+            'projectId': projectId,
+            'buddyOwnerId': person,
+            'agentIds': [agentId],
+          });
+        }
+        output
+          ..['startId'] = 'start-$revision'
+          ..['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.remove') {
+        revision++;
+        final person = reader ?? 'owner';
+        (state['agents'] as List).removeWhere(
+          (a) =>
+              a is Map &&
+              (a['buddyOf'] as Map?)?['personId'] == person &&
+              a['projectId'] == command['projectId'],
+        );
       } else if (command['type'] == 'conversation.create') {
         revision++;
         final id = 'group-$revision';
@@ -680,6 +877,7 @@ class ConversationServer {
         throw const SuperTabFailure('NOT_FOUND', 'Not found.', statusCode: 404);
       }
       if (holdMentions case final hold?) await hold.future;
+      if (failMentions) throw StateError('Offline');
       final waiting = uri.queryParameters['state'] == 'waiting';
       return jsonDecode(
         jsonEncode({
@@ -701,12 +899,26 @@ class ConversationServer {
       decisionReads++;
       if (holdDecisions case final hold?) await hold.future;
       if (failDecisions) throw StateError('Offline');
-      final open = uri.queryParameters['state'] == 'open';
+      final state = uri.queryParameters['state'];
+      if (state == 'settled' && settledMissing) {
+        throw const SuperTabFailure(
+          'INVALID_REQUEST',
+          'Invalid query.',
+          statusCode: 400,
+        );
+      }
+      final open = state == 'open';
+      // What an older Desktop reads as answered leaves out those the PM
+      // decided; `settled` has them all.
+      final listed = decisions.reversed
+          .where((d) => (d['answeredAt'] == null) == open)
+          .where((d) => state != 'answered' || d['delegated'] != true)
+          .toList();
+      final page = decisionPage;
       return jsonDecode(
         jsonEncode({
-          'decisions': decisions.reversed
-              .where((d) => (d['answeredAt'] == null) == open)
-              .toList(),
+          'decisions': listed.take(page ?? listed.length).toList(),
+          if (page != null) 'more': listed.length > page,
         }),
       ) as Map<String, dynamic>;
     }
@@ -769,6 +981,12 @@ class ConversationServer {
         jsonEncode({
           'messages': after == null ? page.reversed.toList() : page,
           'next': next,
+          'reactionSeq':
+              (state['conversations'] as List)
+                  .cast<Map>()
+                  .where((g) => g['id'] == conversationId)
+                  .firstOrNull?['reactionSeq'] ??
+              0,
         }),
       ) as Map<String, dynamic>;
     }
@@ -799,8 +1017,10 @@ class ConversationServer {
     String conversationId = 'lead',
     String text = 'Please confirm the release.',
     String createdAt = '2026-10-24T05:00:00Z',
+    String? leadId,
   }) {
     mentions.add({
+      'leadId': ?leadId,
       'id': 'mention-${mentions.length + 1}',
       'projectId': 'lead',
       'projectName': 'web-project',
@@ -848,6 +1068,7 @@ class ConversationServer {
         'answeredAt': null,
         'choice': null,
         'note': null,
+        'delegated': false,
       });
     }
     state['decisionsWaiting'] =
@@ -857,9 +1078,10 @@ class ConversationServer {
   }
 
   /// The reader answers one, here or on another device.
-  void answerDecision(String id, int choice) {
+  void answerDecision(String id, int choice, {bool delegated = false}) {
     decisions.firstWhere((d) => d['id'] == id)
       ..['choice'] = choice
+      ..['delegated'] = delegated
       ..['answeredAt'] = '2026-10-27T06:00:00Z';
     state['decisionsWaiting'] = (state['decisionsWaiting'] as int) - 1;
     _digestDecisions();
@@ -896,7 +1118,10 @@ class ConversationServer {
     Map<String, dynamic>? initial,
     String account = 'owner',
     SuperTabUpload? upload,
+    SuperTabReading reading = const SuperTabReading(),
   }) => SuperTabController(
+    avatarUpload: uploadAvatar,
+    reading: reading,
     tabId: 'tab',
     accountId: account,
     request: (method, path, {body}) => runZoned(

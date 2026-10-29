@@ -1,6 +1,11 @@
 #include "terminal.h"
 #include <stdio.h>
 #include <string.h>
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#else
+#include <stdlib.h>
+#endif
 #include "arc_geometry.inc"
 #include "display_fallbacks.inc"
 
@@ -667,6 +672,9 @@ bool ht_ring_arc(ht_scene_t *s, int cx16, int cy16, int radius16, int width16, i
  * bounds can never be smaller than the ink.
  */
 enum { ARC_PROP_MID = 11, ARC_PROP_RADIUS = 205, ARC_PROP_LOWER = 202, ARC_PROP_SPAN16 = HT_ARC_SPAN * 16 };
+// The inner upper arc (ht_arc_inner_face): its caps' middle 33 px inside the title's, and a span of about 30 degrees each
+// side of 12 o'clock, so a Swarm face's chat name stays in the gap above the pet (option A of the mockup, 2026-10-28).
+enum { ARC_PROP_INNER = 172, ARC_INNER_SPAN16 = 176 * 16 };
 #ifdef DEVICE_LAYOUT_BENCH
 static bool arc_tight;   // defined below with the mask cache
 #endif
@@ -708,6 +716,8 @@ static void arc_prop_walk(const ht_run_t *r, const ht_pfont_t *f,
         pen += adv;
         if (!gl->w || !gl->h) continue;
         int mag = s16 < 0 ? -s16 : s16;
+        // The table steps 1 px of arc on the 205 px curve: on the inner one the same length is a wider angle.
+        if (r->arc == 3) mag = mag * ARC_PROP_RADIUS / ARC_PROP_INNER;
         if (mag > limit) mag = limit;
         int i = mag >> 4, fr = mag & 15;
         arc_pplace_t pl = {.g = g, .index = at};
@@ -715,7 +725,7 @@ static void arc_prop_walk(const ht_run_t *r, const ht_pfont_t *f,
         pl.cs = (arc_prop_trig[i][1] * (16 - fr) + arc_prop_trig[i + 1][1] * fr) >> 4;
         if (s16 < 0) pl.sn = -pl.sn;
         bool lower = r->arc == 2;
-        int radius = lower ? ARC_PROP_LOWER : ARC_PROP_RADIUS;
+        int radius = lower ? ARC_PROP_LOWER : r->arc == 3 ? ARC_PROP_INNER : ARC_PROP_RADIUS;
         pl.cx = (233 - r->x) * 256 + (radius * pl.sn * 256 >> 14);
         pl.cy = (233 - r->y) * 256 + (lower ? 1 : -1) * (radius * pl.cs * 256 >> 14);
         if (lower) pl.sn = -pl.sn;   // the lower arc reads left to right with upright letters
@@ -743,7 +753,12 @@ static void arc_prop_walk(const ht_run_t *r, const ht_pfont_t *f,
 // `text` cut to what fits the span: whole, else at the last word when that keeps at least half the span
 // (as the mono rule keeps half the columns), else per character, before "…" (none when `bare`).
 // Newlines are spaces.
+static void arc_prop_fit_span(char *dst, size_t cap, const ht_pfont_t *f, const char *text, bool bare, int span16);
 static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char *text, bool bare)
+{
+    arc_prop_fit_span(dst, cap, f, text, bare, ARC_PROP_SPAN16);
+}
+static void arc_prop_fit_span(char *dst, size_t cap, const ht_pfont_t *f, const char *text, bool bare, int span16)
 {
     char flat[HT_TEXT_BYTES];
     size_t len = strlen(text), n = len < sizeof flat - 4 ? len : sizeof flat - 4;
@@ -757,7 +772,7 @@ static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char 
         memcpy(dst, flat, n);
         dst[n] = 0;
         if (cut && !bare) strcpy(dst + n, "\xe2\x80\xa6");
-        if (arc_prop_width16(f, dst) <= ARC_PROP_SPAN16 || !n) return;
+        if (arc_prop_width16(f, dst) <= span16 || !n) return;
         size_t k = n, word = 0;
         while (k && flat[k - 1] != ' ') k--;
         if (k) {
@@ -765,7 +780,7 @@ static void arc_prop_fit(char *dst, size_t cap, const ht_pfont_t *f, const char 
             while (word && flat[word - 1] == ' ') word--;
             memcpy(dst, flat, word);
             dst[word] = 0;
-            if (arc_prop_width16(f, dst) < ARC_PROP_SPAN16 / 2) word = 0;   // too little left: cut letters
+            if (arc_prop_width16(f, dst) < span16 / 2) word = 0;   // too little left: cut letters
         }
         if (word) n = word;
         else do n--; while (n && ((uint8_t)flat[n] & 0xc0) == 0x80);
@@ -825,15 +840,19 @@ static void arc_union_visit(void *ctx, const arc_pplace_t *g)
     u->x0 = imin(u->x0, g->x0); u->y0 = imin(u->y0, g->y0);
     u->x1 = imax(u->x1, g->x1); u->y1 = imax(u->y1, g->y1);
 }
-static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom,
+// `kind`: 1 the upper arc, 2 the lower, 3 the inner upper arc (proportional faces only).
+static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, uint8_t kind,
                      const ht_arc_face_t *face)
 {
     if (!text || !*text) return;
     if (!face) face = &ht_arc_geist;
+    if (kind == 3 && !face->prop) return;
+    bool bottom = kind == 2;
     char visible[HT_TEXT_BYTES];
     if (face->prop) {
         // The run carries the pfont's base as its font; a proportional run is fitted by the caller.
-        arc_prop_fit(visible, sizeof visible, face->prop, text, face->bare);
+        if (kind == 3) arc_prop_fit_span(visible, sizeof visible, face->prop, text, face->bare, ARC_INNER_SPAN16);
+        else arc_prop_fit(visible, sizeof visible, face->prop, text, face->bare);
         if (!ht_text(s, HT_ARC_X, HT_ARC_Y, HT_ARC_WIDTH, &face->prop->base, fg, s->background, visible)) return;
     } else {
         bool complete = ht_display_text(visible,sizeof visible,text,face->mono);
@@ -847,7 +866,7 @@ static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom,
         }
     }
     ht_run_t *r = &s->runs[s->count - 1];
-    r->arc = bottom ? 2 : 1;
+    r->arc = kind;
     r->y = bottom ? HT_HEIGHT - HT_ARC_Y - HT_ARC_HEIGHT : HT_ARC_Y;
     r->w = HT_ARC_WIDTH;
     if (face->prop) {
@@ -863,21 +882,25 @@ static void arc_text(ht_scene_t *s, uint16_t fg, const char *text, bool bottom,
             r->ink_box = (ht_rect_t){r->x + u.x0, r->y + u.y0, u.x1 - u.x0, u.y1 - u.y0};
     }
 }
-void ht_arc_title(ht_scene_t *s, uint16_t fg, const char *text) { arc_text(s, fg, text, false, &ht_arc_geist); }
+void ht_arc_title(ht_scene_t *s, uint16_t fg, const char *text) { arc_text(s, fg, text, 1, &ht_arc_geist); }
 void ht_arc_title_face(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face)
 {
-    arc_text(s, fg, text, false, face);
+    arc_text(s, fg, text, 1, face);
 }
-void ht_arc_status(ht_scene_t *s, uint16_t fg, const char *text) { arc_text(s, fg, text, true, &ht_arc_geist); }
+void ht_arc_status(ht_scene_t *s, uint16_t fg, const char *text) { arc_text(s, fg, text, 2, &ht_arc_geist); }
 void ht_arc_status_face(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face)
 {
-    arc_text(s, fg, text, true, face);
+    arc_text(s, fg, text, 2, face);
+}
+void ht_arc_inner_face(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face)
+{
+    arc_text(s, fg, text, 3, face);
 }
 void ht_arc_status_sweep(ht_scene_t *s, uint16_t fg, const char *text, const ht_arc_face_t *face,
                          const uint8_t *gain)
 {
     int before = s->count;
-    arc_text(s, fg, text, true, face);
+    arc_text(s, fg, text, 2, face);
     if (!gain || s->count == before || !face || !face->prop) return;
     ht_run_t *r = &s->runs[s->count - 1];
     r->gained = 1;
@@ -1302,6 +1325,21 @@ typedef struct {
 } arc_cache_t;
 _Static_assert(ARC_HALF <= UINT8_MAX, "arc span coordinates must fit in a byte");
 static arc_cache_t arc_caches[2];
+// The inner arc's cache: 10.6 KB the dial spends only once a chat name is drawn, in PSRAM, beside the two above.
+static arc_cache_t *arc_inner;
+bool ht_arc_inner_cache_made(void) { return arc_inner != NULL; }
+static arc_cache_t *arc_cache_for(const ht_run_t *r)
+{
+    if (r->arc != 3) return &arc_caches[r->arc == 2];
+    if (!arc_inner) {
+#ifdef ESP_PLATFORM
+        arc_inner = heap_caps_calloc(1, sizeof *arc_inner, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+#else
+        arc_inner = calloc(1, sizeof *arc_inner);
+#endif
+    }
+    return arc_inner;   // NULL when PSRAM is out: the chat name is not drawn, nothing else changes
+}
 static uint32_t arc_builds;
 uint32_t ht_arc_cache_builds(void) { return arc_builds; }
 #ifdef DEVICE_LAYOUT_BENCH
@@ -1311,12 +1349,14 @@ void ht_arc_tight_bounds(bool enabled)
     arc_tight = enabled;
     arc_caches[0].face = arc_caches[1].face = NULL;
     arc_caches[0].prop = arc_caches[1].prop = NULL;
+    if (arc_inner) arc_inner->face = NULL, arc_inner->prop = NULL;
 }
 void ht_arc_fast_sampling(bool enabled)
 {
     arc_fast = enabled;
     arc_caches[0].face = arc_caches[1].face = NULL;
     arc_caches[0].prop = arc_caches[1].prop = NULL;
+    if (arc_inner) arc_inner->face = NULL, arc_inner->prop = NULL;
 }
 static unsigned glyph_alpha_reference(const uint8_t *glyph, int x, int y)
 {
@@ -1533,7 +1573,8 @@ static void arc_prepare(const ht_run_t *r, arc_cache_t *cache)
 }
 static void arc_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
 {
-    arc_cache_t *cache = &arc_caches[r->arc == 2];
+    arc_cache_t *cache = arc_cache_for(r);
+    if (!cache) return;
     arc_prepare(r, cache);
     if (!cache->mask_bytes) return;
     // Colour a cached mask: no glyph rotation, allocations or extra text runs. The 4-bit (proportional)

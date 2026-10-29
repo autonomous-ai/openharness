@@ -29,6 +29,7 @@ import {
 } from './bus.js'
 import { trackSocketLiveness } from './hub.js'
 import { guardedSend, guardedSendJson } from './wsSend.js'
+import { trackSocket } from './wsAttribution.js'
 import { attachNodeRole, PRESENCE_TTL_SEC } from './nodeRole.js'
 import { presenceTracker, presenceWriteDue, recordTurnStarted, touchClientOnlineDay, touchMachineOnlineDay, touchUserOnlineDay, TUI_SURFACES, type ClientSurface, type PresenceWriteState } from './dailyTracking.js'
 import { countryCodeFromHeaders } from './clientGeo.js'
@@ -40,6 +41,7 @@ import { machineBillingAllowsDataPlane } from './billingState.js'
 import { normalizeComputerId } from './deviceAuth.js'
 import { authenticateAccessToken, SsoAuthError } from './ssoAuth.js'
 import { relayAccountPushes } from './adapterAccountPushes.js'
+import { relaySwarmDeliveries } from './swarmDeliveryPushes.js'
 import { DAEMONS } from '../config/env.js'
 import { parseAutonomousEnvironment } from './autonomousEnvironment.js'
 import { machineService } from '../services/MachineService.js'
@@ -62,6 +64,7 @@ import {
   P2pSignalRateGuard,
   terminalP2pPolicy,
 } from './p2pSignaling.js'
+import { ShortTurnGuard } from './shortTurnGuard.js'
 
 const wss = createWss(WS_LIMITS.adapter, { echoFirstProtocol: true })
 
@@ -86,10 +89,10 @@ const APP_STATES = new Set(['open', 'closed', 'missing'])
 // semver-ish token (or longer than 64 chars) is dropped rather than stored.
 const CLIENT_VERSION_RE = /^[A-Za-z0-9._+-]{1,64}$/
 
-// Daily presence (`machine_daily_presence`): how often an OPEN adapter socket refreshes its row's
-// `lastSeenAt`. Rides the node role's existing 15s heartbeat (plus every app ping) rather than a
-// timer of its own — this is just the floor between two Mongo writes, so a machine that is up all
-// day costs ~300 upserts, not ~6000. Connect and close always write regardless.
+// How often an OPEN adapter socket refreshes `machines.lastSeenAt`. Rides the node role's existing 15s
+// heartbeat (plus every app ping) rather than a timer of its own — this is just the floor between two
+// Mongo writes, so a machine that is up all day costs ~300 updates, not ~6000. Connect and close always
+// write regardless.
 const MACHINE_PRESENCE_WRITE_MS = 5 * 60_000
 
 // Daily presence of the PERSON (`user_daily_presence`): the daemon reports its own loopback clients —
@@ -228,12 +231,17 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   owners.get(machineId)?.close(4000, 'superseded')
   owners.set(machineId, ws)
   const send = (obj: unknown): boolean => guardedSendJson(ws, obj, 'must', { machineId, kind: 'adapter' })
-  logger.info('adapter connected', { machineId, computer: label })
+  // Its connect and disconnect lines (lib/wsAttribution.ts): 227 adapter reconnects in 45 minutes in prod (2026-10-28)
+  // could not be explained without the close codes.
+  const track = trackSocket('adapter', 'adapter', ws, { client: 'daemon', version: clientVersion ?? null, machineId, computer: label })
+  ws.once('close', (code: number, reason?: Buffer) => track.closed(code, reason?.toString()))
   send({ t: 'connected', machineId })
   // What changed for the ACCOUNT on some worker (its tabs, its machine list): this computer's app
   // re-reads through its daemon rather than polling for it. See adapterAccountPushes.ts.
   // A team machine reads none of the account's desk, zoo, machines or connections: it hears only the device-key pushes.
   const accountPushesUnsub = await relayAccountPushes(userId, send, { zoo: DAEMONS.on, team })
+  // Work waiting for this machine's Swarm agents, team machine or not: its host reads it at once (swarmDeliveryPushes.ts).
+  const swarmPushesUnsub = await relaySwarmDeliveries(machineId, send)
 
   // Last desktop-app state THIS socket asserted. Socket-scoped on purpose: a new adapter connection
   // starts with no claim and must re-assert, so a fresh value can never renew a stale one.
@@ -246,6 +254,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     if (nowMs - turnWindowStart >= 60_000) { turnWindowStart = nowMs; turnWindowCount = 0 }
     return ++turnWindowCount <= TURN_WRITES_PER_MINUTE
   }
+  const shortTurns = new ShortTurnGuard()
   const p2pSignalRate = new P2pSignalRateGuard()
   // A machine appends its own key once per sign-in, a removal when someone asks for one: a few a minute
   // is generous, and it keeps a looping daemon from rebuilding the log on every frame.
@@ -305,8 +314,8 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     .catch(() => null))?.gridName ?? null
   send({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: currentName?.trim() || seededName, gridName } } })
 
-  // Daily presence row for the machine, mirroring the user/device variants in webWs/deviceWs. The
-  // guard only advances on a SUCCESSFUL write, so a transient DB failure is retried on the next
+  // The machine's last-seen stamp (plus the fleet's connect total), mirroring the user/device variants in
+  // webWs/deviceWs. The guard only advances on a SUCCESSFUL write, so a transient DB failure is retried on the next
   // heartbeat instead of being silently skipped until the interval elapses again. Heartbeats also
   // skip while a write is still in flight: `onHeartbeat` fires from two 15s sources (node role
   // interval + app ping), and before the connect write lands `presenceWriteDue` would say "due" —
@@ -396,7 +405,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
   // and counted pongs only, so an adapter that was actively sending application traffic could still
   // be killed if one pong went missing. `trackSocketLiveness` counts message/ping/pong against a time
   // deadline instead, which is the same fix already applied to the hub's own sockets.
-  const releaseLiveness = trackSocketLiveness(ws)
+  const releaseLiveness = trackSocketLiveness(ws, 'adapter')
 
   onMessage = (raw: RawData, isBinary: boolean): void => {
     if (isBinary) {
@@ -525,6 +534,13 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
         // (measured 2026-09-17: 42 such frames in one second credited to one agent). It still relays,
         // it is just not a turn today. A frame with no (or a malformed) agentId has nothing to
         // attribute the turn to and is not counted.
+        // A machine starting turns in a loop (lib/shortTurnGuard.ts): past the cap its turn starts are neither counted
+        // nor relayed for a while. Everything else it sends still is.
+        const verdict = shortTurns.admit()
+        if (verdict !== 'relay') {
+          if (verdict === 'pause_started') logger.warn('machine is starting turns in a loop; holding its turn starts for 60 s', { machineId, userId })
+          return
+        }
         const now = new Date()
         const agentId = typeof f.agentId === 'string' && TURN_AGENT_ID_RE.test(f.agentId) ? f.agentId : undefined
         if (agentId && allowTurnWrite(now.getTime())) {
@@ -559,6 +575,7 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
     releaseLiveness()
     terminalDownUnsub()
     accountPushesUnsub()
+    swarmPushesUnsub()
     // Only the CURRENT owner tears the role down — a superseded socket must not mark the fresh
     // connection offline. A superseded socket still releases its own liveness tracking above.
     if (owners.get(machineId) === ws) {
@@ -570,7 +587,6 @@ async function attachAdapter(ws: WebSocket, machineId: string, userId: string, c
       // this delete is what stops a reconnect from briefly re-reading the dead value.
       void clearMachineAppState(machineId)
       touchMachinePresence('close') // exact lastSeenAt at disconnect; a superseded socket must not stamp it
-      logger.info('adapter disconnected', { machineId })
     }
   }
   ws.on('close', cleanup)

@@ -1,7 +1,9 @@
-import { activeWork, stableId, type Agent, type Assignment, type Author, type Conversation, type MessageDraft,
+import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { agentDisplayName } from './agentNames.js'
+import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
+import { MACHINE_FRESH_MS } from './machines.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -23,6 +25,10 @@ const PROGRESS_FRESH_MS = QUIET_RUNNING_MS - LEASE_MS
 const OFFLINE_LOST_MS = 2 * 60_000
 /** A dispatched start not running this long after has failed. */
 const START_RUN_MS = 3 * 60_000
+/** A start its machine keeps reporting as preparing may take this long: the worktree checkout's own limit (10 minutes,
+ *  cli lib/gitProject.ts WORKTREE_ADD_TIMEOUT) and the fetch before it. 3 minutes failed starts on a busy Mac that was
+ *  still fetching and checking out a 470 MB project (2026-10-27). */
+const START_PREPARE_MS = 15 * 60_000
 /** Any machine's report runs the time checks for its Swarm at most this often. */
 export const SWEEP_EVERY_MS = 30_000
 
@@ -130,8 +136,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
     + (resumeAt ? `It resumes by itself when its limit resets at ${resumeAt.slice(11, 16)} UTC, unless you hand it on first. `
       + 'If another account or engine has allowance now, assign it there now with its branch and last progress note, or cancel it.'
       : 'Assign it to another agent now, or cancel it.')
-  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
-    { id: stableId('work-lost', assignment.id, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
+  // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
+  const loss = String(now)
+  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
+    { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
       text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }]
     .map(row => reachable(state, row))
 }
@@ -146,30 +154,60 @@ export function loseTasks(state: SuperTabState, now: number, which: (worker: Age
   })
 }
 
-/** The machine parts a loss was judged from (offline, stopped, its reports' renewals). The write that records the loss
- *  touches them, so a fresh report committed since the read makes it retry on current data instead of fencing a live worker. */
-export function judgedMachines(state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
+/** The machine parts a loss was judged from (offline, stopped, its reports' renewals), and those a start failed since
+ *  `before` was judged from (its own machine's preparing report). The write touches them, so a fresh report committed since
+ *  the read makes it retry on current data instead of fencing a live worker or failing a start still being prepared. */
+export function judgedMachines(before: SuperTabState, state: SuperTabState, rows: MessageDraft[]): Array<{ kind: 'machine'; key: string }> {
   const lost = new Set(rows.flatMap(r => r.source?.kind === 'work-lost' ? [r.source.agentId as string] : []))
-  const machines = new Set(state.agents.filter(a => lost.has(a.id)).map(a => a.machineId))
+  const failed = (state.starts ?? []).filter(s => s.error && !before.starts?.find(b => b.id === s.id)?.error).map(s => s.request.machineId)
+  const machines = new Set([...state.agents.filter(a => lost.has(a.id)).map(a => a.machineId), ...failed])
   return [...machines].filter(id => state.machines?.some(m => m.machineId === id)).map(key => ({ kind: 'machine' as const, key }))
 }
 
+/** A Buddy chat has no Lead: its owner reads why their Buddy did not start, written as theirs and sent to no one. */
+function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
+  const owner = state.people.find(p => p.id === start.request.buddyOf!.personId && p.generation === start.request.buddyOf!.generation)
+  if (!owner || !state.conversations.some(c => c.id === start.request.conversationId)) return []
+  return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
+    author: { kind: 'person', id: owner.id, name: owner.email, membershipGeneration: owner.generation },
+    // Their own Buddy on a machine of the Swarm: the reason names only that machine, so its owner reads it whole.
+    text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
+}
+
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
- *  every start dispatched over 3 minutes ago that is not running fails. */
+ *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
   return [...loseTasks(state, now), ...failStalledStarts(state, now)]
 }
 
+/** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
+ *  host from before Buddies never sees one (read/hostRows.ts). */
+export const BUDDY_PICKUP_MS = 5 * 60_000
+
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
+    if (start.request.buddyOf && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+      && now - start.requestedAt > BUDDY_PICKUP_MS) {
+      const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
+      if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
+      start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
+      return buddyNotice(state, start)
+    }
     if (!start.dispatched || start.harnessId || start.error || start.dispatchedAt === undefined || now - start.dispatchedAt <= START_RUN_MS) return []
-    start.error = `${machineName(state, start.request.machineId)} did not start it within 3 minutes`
+    // Only its own machine's report can say it is preparing; one before preparingStartIds never does, so its starts get 3 minutes.
+    const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
+    const named = !!report?.preparingStartIds?.includes(start.id)
+    const silent = !!report && now - report.receivedAt > MACHINE_FRESH_MS
+    if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
+    const machine = machineName(state, start.request.machineId)
+    start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
     // Never a lookup that throws: these checks run inside every machine's report.
+    if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: `Could not start ${start.request.name}: ${start.error}.`, source: { kind: 'start-timeout', startId: start.id } })]
+      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
   })
 }

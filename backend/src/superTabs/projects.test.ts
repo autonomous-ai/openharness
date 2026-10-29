@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, visibleState, type Actor, type MessageDraft } from './model.js'
-import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf } from './projects.js'
+import { createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
+import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost } from './projects.js'
+import { mayDrive } from './terminal.js'
 
 const owner: Actor = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Actor = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -533,6 +534,29 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     expect(canWatchAgent(f.state, host, target(former))).toBe(true)
   })
 
+  it('lets every reader watch the project\'s current Lead, private chats included, but only its machine\'s person type or read it on request', () => {
+    const f = setup()
+    const host: Actor = { kind: 'person', userId: 'host', email: 'host@example.com' }
+    f.state.people.push({ id: 'host', email: 'host@example.com', role: 'collaborator', generation: 'first' })
+    const pm = f.add('lead', 'pm')
+    f.run({ type: 'conversation.create', title: 'Chat with PM', brief: '', checks: [], audience: { personIds: ['peer'] } }, peer)
+    const target = () => f.state.agents.find(a => a.id === pm)!
+    // Marked as any Lead is, so that it stays closed once it is no longer the Lead, and to other Swarms and ordinary shares.
+    expect(target().confidential).toBe(true)
+    // Ken, 2026-10-28: a member watching the Product Manager reads the private chats it is in, and every member may.
+    for (const reader of [owner, peer, host]) expect(canWatchAgent(f.state, reader, target())).toBe(true)
+    // Confidential in another Swarm too: that Swarm's chats are not this one's members' to read.
+    expect(canWatchAgent(f.state, peer, target(), true)).toBe(false)
+    const refusal = (actor: Actor) => { try { mayDrive(f.state, actor, target()); return null } catch (error) { if (error instanceof SuperTabError) return error.code; throw error } }
+    expect(refusal(owner)).toBe('TERMINAL_PRIVATE')
+    expect(refusal(peer)).toBe('TERMINAL_PRIVATE')
+    expect(refusal(host)).toBeNull()
+    // A Lead leaves only with its project, but a state from before that rule can hold a former one: its mark keeps it closed.
+    f.state.conversations.find(c => c.id === 'lead')!.leadId = null
+    expect(canWatchAgent(f.state, peer, target())).toBe(false)
+    expect(canWatchAgent(f.state, host, target())).toBe(true)
+  })
+
   it('keeps a session confidential once marked, after its private membership ends, until it leaves', () => {
     const f = setup()
     const former = f.add('lead', 'former', false)
@@ -546,5 +570,66 @@ describe('who may watch an agent\'s terminal (final review, Critical 1)', () => 
     delete f.state.agents.find(a => a.id === lead)!.confidential
     f.run({ type: 'conversation.create', title: 'Next', brief: '', checks: [] })
     expect(f.state.agents.find(a => a.id === lead)!.confidential).toBe(true)
+  })
+})
+
+describe('whether a commit narrows who may watch a terminal', () => {
+  // Each case starts where peer may watch a Builder in the main project, then runs one command.
+  function watched() {
+    const f = setup()
+    const builder = f.add('lead', 'builder', false)
+    expect(canWatchAgent(f.state, peer, f.state.agents.find(a => a.id === builder)!)).toBe(true)
+    const before = structuredClone(f.state)
+    return { f, builder, before, narrowed: () => watchersLost(before, f.state).length > 0 }
+  }
+
+  it('is narrowed when a session turns confidential, whatever the command, and not when it becomes its project’s Lead', () => {
+    const { f, builder, narrowed } = watched()
+    f.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: ['owner'] } })
+    expect(narrowed()).toBe(false)
+    // The current Lead is every reader's to watch (Ken, 2026-10-28), and marked: no longer the Lead, it is nobody's.
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
+    expect(narrowed()).toBe(false)
+    f.state.conversations.find(c => c.id === 'lead')!.leadId = null
+    expect(narrowed()).toBe(true)
+  })
+
+  it('is narrowed when a person leaves or a project stops being shared with them', () => {
+    const removed = watched()
+    removed.f.run({ type: 'member.remove', userId: 'peer' })
+    expect(removed.narrowed()).toBe(true)
+    const unshared = watched()
+    unshared.f.run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    expect(unshared.narrowed()).toBe(true)
+  })
+
+  it('is narrowed when a watched agent leaves', () => {
+    const { f, builder, narrowed } = watched()
+    f.run({ type: 'agent.remove', agentId: builder })
+    expect(narrowed()).toBe(true)
+  })
+
+  it('names each agent and the people who lost sight of it, never its machine\'s owner', () => {
+    const { f, builder, before } = watched()
+    f.state.people.push({ id: 'host', email: 'host@example.com', role: 'collaborator', generation: 'first' })
+    before.people.push({ id: 'host', email: 'host@example.com', role: 'collaborator', generation: 'first' })
+    expect(watchersLost(before, f.state)).toEqual([])
+    // Made Lead and joined to a private chat, it is still every reader's to watch (Ken, 2026-10-28).
+    f.run({ type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
+    const chat = String(f.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: ['owner'] } }).conversationId)
+    f.run({ type: 'conversation.agent', conversationId: chat, agentId: builder, present: true, lead: false })
+    expect(watchersLost(before, f.state)).toEqual([])
+    // A Lead leaves only with its project, but a state from before that rule can hold a former Lead still in the private chat:
+    // marked, it is closed to everyone but its machine's owner, the chat's member too.
+    f.state.conversations.find(c => c.id === 'lead')!.leadId = null
+    expect(watchersLost(before, f.state)).toEqual([{ agentId: builder, personIds: ['owner', 'peer'] }])
+  })
+
+  it('is not narrowed by a change that leaves every watcher watching', () => {
+    const { f, narrowed } = watched()
+    f.run({ type: 'conversation.create', title: 'Another task', brief: '', checks: [] })
+    f.run({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: ['peer'] })
+    f.add('lead', 'second', false)
+    expect(narrowed()).toBe(false)
   })
 })

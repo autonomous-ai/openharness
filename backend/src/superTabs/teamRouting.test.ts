@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
-import { admitMachineStart, machineObservationSchema, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
+import { admitMachineStart, machineObservationSchema, machineTeamWork, machineSlots, observedPrivacy, PRIVACY_FRESH_MS, removalPreview, teamAccountRequired, teamAccountSwarm, teamWorkRefusal, type ContributedMachine, type MachinePrivacy } from './machines.js'
 import { createSuperTab, SuperTabError, visibleState, type Actor, type AgentConfiguration, type AgentStart, type SuperTabState } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
 
@@ -38,7 +38,10 @@ function swarm() {
   let state: SuperTabState = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
   let sequence = 0
   const run = (command: Command, actor: Actor = owner, context: Partial<CommandContext> = {}) => {
-    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, ...context })
+    // As the store reads them (store.ts teamMachines): a machine reporting from a team sign-in has a team account row,
+    // unless a test says which rows are.
+    const teamMachines = (state.machines ?? []).filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
+    const effects = applyCommand(state, actor, command, { now: NOW, operationId: `op-${++sequence}`, teamMachines, ...context })
     state = effects.state
     return effects
   }
@@ -393,6 +396,20 @@ describe('the switch held to the Swarms of listed owners', () => {
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, f.pooled('mate-team')))?.code).toBe('PRIVACY_CHECK_FAILED')
   })
 
+  it('leaves a teammate\'s work on the Mac, not its team account, in a Swarm the team account is not tried in', () => {
+    const f = swarm(), group = f.group()
+    Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', cwd: '/team-swarm' })
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
+    expect(teamAccountSwarm(f.state)).toBe(false)
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts![0]!.request).toMatchObject({ machineId: 'mate-mac', cwd: '/swarm/lead' })
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'owner@example.com'
+    expect(teamAccountSwarm(f.state)).toBe(true)
+    f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac'))
+    expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
+  })
+
   it('is every Swarm\'s with no list, and none with the switch off, list or not', () => {
     const f = swarm()
     process.env.SWARM_TEAM_ACCOUNT_OWNERS = ' , '
@@ -426,6 +443,23 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.state.starts![1]!.request).toMatchObject({ machineId: 'mate-team', cwd: '/team-swarm/lead' })
   })
 
+  // 2026-10-28: every Mac read "has no Harness Team account yet" beside the account that took its teammates' work.
+  it('reads a Mac as its Harness Team account does, since that is where its teammates\' work runs', () => {
+    const f = oneMachine()
+    f.machine('mate-mac').observation = reading('computer')
+    f.machine('mate-team').observation = reading('team', PASSED)
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull()
+    f.machine('mate-team').observation = reading('team', FAILED)
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'], ['mate-team'])?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
+    // The account itself reads as itself; a Mac whose account is no longer signed in, or outside the Swarms it is tried in,
+    // reads as a Mac without one.
+    expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, ['mate-team'])?.code).toBe('PRIVACY_CHECK_FAILED')
+    expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    process.env.SWARM_TEAM_ACCOUNT_OWNERS = 'someone@example.com'
+    try { expect(machineTeamWork(f.state, f.machine('mate-mac'), NOW, ['mate-team'])).toBeNull() } finally { delete process.env.SWARM_TEAM_ACCOUNT_OWNERS }
+  })
+
   it('once the team account is removed, its pool left behind takes nothing: the Mac is a Mac without one again', () => {
     // Its machine is deleted, so the store no longer lists it among the tab's team machines.
     const f = oneMachine(), group = f.group()
@@ -439,6 +473,21 @@ describe('one machine: a Mac and its Harness Team account', () => {
     // While it is still an account row, it is the account that runs teammates' work, offline or not.
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, { ...f.pooled('mate-mac'), teamMachines: ['mate-team'] }))?.code)
       .toBe('MACHINE_OFFLINE')
+  })
+
+  // Local Team account run, 2026-10-28: for a minute after `harness team remove`, its last reading still read as taking
+  // teammates' work, and a Lead's route named it.
+  it('once the team account is removed, its pool takes nothing at once, though its last reading is still fresh', () => {
+    const f = oneMachine(), group = f.group()
+    f.machine('mate-team').observation = reading('team', PASSED)
+    expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, { ...f.pooled('mate-team'), teamMachines: [] }))?.code)
+      .toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(f.state.starts ?? []).toEqual([])
+    // Until the switch is on, the same: a removed Harness Team account is no Team machine.
+    delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+    expect(machineTeamWork(f.state, f.machine('mate-team'), NOW, [])?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
   })
 
   it('is refused with the team account\'s own reason, and never falls back to the Mac\'s owner', () => {
@@ -532,7 +581,10 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(f.machine('mate-team').paused).toBe(true)
     f.run({ type: 'machine.contribute', machineId: 'mate-mac', name: 'Work MacBook', cwd: '/swarm', scope: 'swarm', engines: ['codex'], maxAgents: 6 }, mate,
       { contribution: { machineOwnerId: 'mate', contributorId: 'mate' } })
-    expect(f.machine('mate-team')).toMatchObject({ maxAgents: 6, paused: false, name: 'Work MacBook', generation: 'g1' })
+    // New settings keep the pause the owner chose, on the Mac and its team account (review of #2084).
+    expect([f.machine('mate-mac').paused, f.machine('mate-team')]).toEqual([true, expect.objectContaining({ maxAgents: 6, paused: true, name: 'Work MacBook', generation: 'g1' })])
+    f.run({ type: 'machine.pause', machineId: 'mate-mac', paused: false }, mate)
+    expect(f.machine('mate-team').paused).toBe(false)
     const removed = f.run({ type: 'machine.remove', machineId: 'mate-mac' }, mate)
     expect(f.machine('mate-team').removal).toMatchObject({ state: 'cleaning' })
     expect(removed.result.removedAgents).toContain(teamAgent)
@@ -599,5 +651,31 @@ describe('one machine: a Mac whose Harness Team account was made again', () => {
     const f = swarm(), group = f.group()
     Object.assign(f.machine('mate-team'), { hostMachineId: 'mate-mac', name: 'MacBook Pro', removal: { id: 'r', state: 'cleaning', requestedAt: new Date(NOW).toISOString() } })
     expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-mac') }, owner, f.pooled('mate-mac')))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+  })
+})
+
+// A Harness Team account runs every teammate's work as one macOS user, so in Swarms of two Workspaces one Workspace's agents could
+// read the other's folders there (docs/plans/2026-10-27-swarm-workspaces.md, Audience). `otherWorkspaceMachines`: the machines this
+// Swarm's store found contributed to a Swarm of another Workspace.
+describe('a Team machine serving more than one Workspace', () => {
+  it('takes no teammate\'s work while it is in Swarms of another Workspace, and says why', () => {
+    const f = swarm(), group = f.group()
+    expect(refusal(() => f.run({ type: 'agent.start', request: f.request(group, 'mate-team') }, owner, { ...f.pooled('mate-team'), otherWorkspaceMachines: ['mate-team'] })))
+      .toMatchObject({ code: 'MACHINE_IN_OTHER_WORKSPACE', status: 403,
+        message: 'The Harness Team account on MacBook Pro · Team also serves another Workspace\'s Swarms, so it runs only its owner\'s projects here.' })
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('still runs its owner\'s own projects there, and a teammate\'s work once it serves this Workspace alone', () => {
+    const f = swarm()
+    f.run({ type: 'agent.start', request: f.request(f.group(f.mine, mate), 'mate-team', f.mine) }, mate, { ...f.pooled('mate-team'), otherWorkspaceMachines: ['mate-team'] })
+    f.run({ type: 'agent.start', request: f.request(f.group(), 'mate-team') }, owner, { ...f.pooled('mate-team'), otherWorkspaceMachines: [] })
+    expect(f.state.starts).toHaveLength(2)
+  })
+
+  it('shows routing the reason, like any other refusal', () => {
+    const f = swarm()
+    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, true)?.code).toBe('MACHINE_IN_OTHER_WORKSPACE')
+    expect(teamWorkRefusal(f.machine('mate-team'), NOW, true, true, false)).toBeNull()
   })
 })

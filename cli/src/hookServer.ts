@@ -59,6 +59,8 @@ export function chooseHookAgent<T>(byAncestry: readonly T[], byRuntimeOnly: read
 export interface PairOutcome {
   status: number
   body: Record<string, unknown>
+  /** A busy backend's Retry-After, passed on where an answer is forwarded whole (the usage report). */
+  retryAfterMs?: number
 }
 
 export interface HookServerHandlers {
@@ -1101,11 +1103,15 @@ export function startHookServer(
         }
         try {
           const result = await handlers.onProductUsageReport(report)
+          // The Desktop waits a busy answer out (desktop/lib/measurement/product_measurement.dart).
+          if (result.retryAfterMs !== undefined) res.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
           json(result.status, result.body)
         } catch { json(502, { success: false, error: { code: 'USAGE_UNAVAILABLE', message: 'Product usage unavailable' } }) }
         return
       }
-      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/attachments$/.exec(url) : null
+      // A profile picture (`/avatars`) too: without it the daemon answered 404 and Desktop's Upload picture… failed
+      // with only "Could not upload the file".
+      const attachment = req.method === 'POST' ? /^\/api\/super-tabs\/[A-Za-z0-9_-]{1,160}\/(attachments|avatars)$/.exec(url) : null
       if (attachment) {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onSuperTabAttachment) { json(503, { error: 'UNAVAILABLE' }); return }

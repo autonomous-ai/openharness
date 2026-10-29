@@ -1,8 +1,10 @@
+import { isBuddy, isBuddyChat } from './buddies.js'
 import type { PrismaClient } from '@prisma/client'
+import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
 import { downSince } from './machines.js'
-import { agentProjectId, isConfidential, ownSession, projectOf, readAgent } from './projects.js'
+import { agentProjectId, isConfidential, ledProject, ownSession, projectOf, readAgent } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -11,12 +13,13 @@ export const TERMINAL_KEYS = ['Enter', 'Esc', 'Tab', 'Up', 'Down', 'Left', 'Righ
 /** The host has this long to pick a request up, then this long to answer it; after either, the request fails with a plain reason. */
 export const TERMINAL_PICKUP_MS = 10_000
 export const TERMINAL_ANSWER_MS = 30_000
+/** A sender's wait reads its request again this often even unwoken, in case the notice of its answer was lost. */
+export const TERMINAL_RECHECK_MS = 5_000
 /** An unread answer, which can hold a screen's secrets, is gone after this long: refused on read, and removed by a TTL index. */
 export const TERMINAL_EXPIRY_MS = 120_000
 /** Run by the singleton worker at startup, like the product-usage expiry indexes. */
 export async function ensureTerminalExpiry(db: PrismaClient): Promise<void> {
-  await db.$runCommandRaw({ createIndexes: 'SuperTabTerminalRequest', indexes: [{ key: { createdAt: 1 }, name: 'terminal_request_expiry',
-    expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 }] })
+  await ensureIndex(db, 'SuperTabTerminalRequest', { key: { createdAt: 1 }, name: 'terminal_request_expiry', expireAfterSeconds: TERMINAL_EXPIRY_MS / 1000 })
 }
 /** A limited agent without a shown reset time is skipped by routing for this long. */
 export const LIMIT_FALLBACK_MS = 3_600_000
@@ -34,6 +37,10 @@ export interface TerminalRequest { id: string; agentId: string; harnessId: strin
 export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
+    // Members may watch a Lead, but only its machine's owner drives it, whether or not its session counts as private (Ken, 2026-10-28).
+    if (ledProject(state, target.id) && !ownSession(actor, target)) {
+      fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in a Product Manager’s terminal.', 403)
+    }
     if (isConfidential(state, target, elsewhere) && !ownSession(actor, target)) {
       fail('TERMINAL_PRIVATE', 'Only the person whose machine runs this agent can read or type in its terminal: it holds people’s private chats with the Product Manager.', 403)
     }
@@ -116,6 +123,9 @@ export function terminalAlert(state: SuperTabState, actor: Actor, sender: Author
   // Its engine has been retrying its model for 10 minutes (2026-10-24: a Builder on a small local model retried for an
   // hour while its Lead waited on it).
   if (command.alert === 'model') text = `${nameOf(target)} can't get answers from its model: its requests keep failing. Stop it, or give the work to another model.`
+  // A Buddy's alert is its owner's alone, in their chat: the PM neither reads that chat nor runs the Buddy (buddies.ts).
+  const chat = isBuddy(target) ? state.conversations.find(c => isBuddyChat(c) && c.agentIds.includes(target.id)) : undefined
+  if (chat) return [{ id, conversationId: chat.id, author: sender, replyTo: null, recipients: [], text, source }]
   return toLead(state, target, { id, conversationId: group.id, author: sender, replyTo: null, recipients: [], text, source })
 }
 

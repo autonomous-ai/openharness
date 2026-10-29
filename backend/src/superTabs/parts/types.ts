@@ -12,8 +12,10 @@ export interface Part<T = unknown> {
   key: string
   /** Moves on every write and every guarded touch; never resets. */
   version: number
-  /** Epoch ms of the last data change (or tombstone). A touch leaves it. */
+  /** Epoch ms of the last data change (or tombstone). A touch leaves it, and so does a machine's own reading (`readAt`). */
   changedAt: number
+  /** A machine part's last write of its own reading alone, when there was one (change reads only). */
+  readAt?: number
   deleted?: true
   dormant?: true
   ordinal: number
@@ -44,7 +46,7 @@ export interface MachineData {
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
   closingSessions: Array<{ agentId: string; harnessId: string; machineOwnerId: string }>
-  cleanups: Array<{ removalId: string; machineOwnerId: string }>
+  cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string }>
 }
 
 /** One project's report watermark (section 3.6). Group sequences are per group; floors carry pre-split tab revisions. */

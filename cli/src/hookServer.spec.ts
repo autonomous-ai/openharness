@@ -477,6 +477,25 @@ describe('Super Tab attachment pass-through', () => {
     expect(await person.json()).toEqual({ path: '/api/super-tabs/tab-1/attachments', bytes: 1 })
   })
 
+  // A profile picture goes the same way (Desktop's Upload picture…); before this, the daemon answered 404 and Desktop
+  // showed only "Could not upload the file".
+  it('hands an avatar picture to the pass-through, guarded the same way', async () => {
+    const forward = vi.fn(async (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse, path: string) => {
+      let bytes = 0
+      for await (const chunk of req) bytes += (chunk as Buffer).byteLength
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ path, bytes }))
+    })
+    const { base } = await start({ onSuperTabAttachment: forward })
+    const headers = { 'x-adapter-local': '1', 'content-type': 'multipart/form-data; boundary=x' }
+    expect((await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST',
+      headers: { ...headers, origin: 'https://untrusted.example' }, body: 'x' })).status).toBe(403)
+    expect(forward).not.toHaveBeenCalled()
+    const r = await fetch(`${base}/api/super-tabs/tab-1/avatars`, { method: 'POST', headers, body: 'picture' })
+    expect(r.status).toBe(200)
+    expect(await r.json()).toEqual({ path: '/api/super-tabs/tab-1/avatars', bytes: 7 })
+  })
+
   it('is unavailable on a daemon without it', async () => {
     const { base } = await start({})
     expect((await fetch(`${base}/api/super-tabs/tab-1/attachments`, { method: 'POST',
@@ -522,6 +541,14 @@ describe('account Experimental settings proxy', () => {
     const failed = await post(body)
     expect(failed.status).toBe(502)
     expect(await failed.text()).not.toContain('PRIVATE_CANARY')
+    // The backend's busy answer reaches the Desktop with its Retry-After, which the Desktop waits out.
+    const busy = { success: false, error: { code: 'USAGE_WRITE_CONFLICT', message: 'Usage measurement busy' } }
+    send.mockResolvedValueOnce({ status: 429, body: busy, retryAfterMs: 90_500 } as never)
+    const refused = await post(body)
+    expect(refused.status).toBe(429)
+    expect(refused.headers.get('retry-after')).toBe('91')
+    expect(await refused.json()).toEqual(busy)
+    expect((await post(body)).headers.get('retry-after')).toBeNull()
   })
   it('forwards the current Desktop health report intact while rejecting private context', async () => {
     const body = JSON.parse(readFileSync(new URL('../../tests/fixtures/desktop-product-usage-report.json', import.meta.url), 'utf8'))

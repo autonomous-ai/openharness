@@ -177,12 +177,46 @@ each person and project, and the server answers a repeat with the conversation
 it already made.
 
 It behaves like the project chat: replies, attachments, the unread mark and the
-product manager's tags in Notifications. Only that person and the product
+product manager's tags in Notifications. While the Swarm's Buddies are on, it is read-only (see Buddies). Only that person and the product
 manager read it. Other members, the project's owner and the Swarm's owner
 included, never receive it, its messages or its notifications. The chat is
 chat only: no work is assigned in it, and only the product manager joins it
 among agents. As with any session, the owner of the machine running the
 product manager can see what its terminal shows.
+
+## Buddies
+
+A Buddy is a person's own agent in one project. They brainstorm with it in a chat that only they and their Buddy read:
+it asks what they want and why, offers two or three options with the one it recommends, and agrees the scope with
+them. When they say to send it to the product manager, it posts one proposal (goal, scope and priority) in the project
+chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
+the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
+
+The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy, fails
+any still starting, and stops their posts. Their chats stay for their owners to read.
+
+- Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
+  list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  account: never on a machine shared with them, and never in a Harness Team account.
+- A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
+  the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
+  Swarm read shows no machines or routing rules.
+- A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
+  file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
+  full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the
+  Harness GitHub App's token.
+  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
+  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
+- Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
+- A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
+  or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
+- Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
+  stay there; the Buddy posts only what its owner asks it to send.
+- Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again
+  reopens the same chat. Adding one while the person's Buddy there is down replaces it in one step, in the same chat;
+  while it runs or starts, adding another is refused. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
+- While Buddies are on, Chat with PM is read-only. Nobody opens a new one or posts in an old one, the product manager
+  included, and old history stays readable. To talk to the product manager, people use the project chat.
 
 ## Leaderboard
 
@@ -206,14 +240,32 @@ Each person has three numbers:
   to four weeks back). The request ships at the merge, even if its work is lost
   or cancelled afterwards. A group that is Done with a linked PR ships too; the
   earlier of the merge and Done is when it shipped. 3 points each.
-- **Unblocked**: items needing a person that the person answered. An answer counts
-  when it comes from the person the item waits on, or when it replies to the
-  question itself. That person is the group's requester, or the project's owner
-  when the group has none. 1 point each, plus 1 point for every 2 hours the agents
-  waited for those answers.
-- **Lent**: hours Swarm agents ran on the person's contributed machines, added up
-  from each machine's readings. A product manager's session doesn't count: it
-  coordinates in confidence and doesn't build. 1 point for every 10 hours.
+- **Unblocked**: items needing a person that the person answered, each counted
+  once:
+  - a decision asked of them;
+  - a plan the product manager asked them to approve. A reply to the product
+    manager's message counts when it starts with GO, approve, approved or duyệt,
+    in any case and with or without accents. A bare "ok" doesn't count;
+  - an agent's "needs a human" question. The answer must come from the person the
+    item waits on, or reply to the question itself. That person is the group's
+    requester, or the project's owner when the group has none;
+  - a tag addressed to them, answered by their next post in that conversation.
+
+  One post counts once, even if it answers several of these. Approvals in the
+  project chat count too. Each answer is 1 point, plus 1 point for every 2 hours
+  the item waited, up to 3 points per answer.
+- **Lent**: hours Swarm agents on the person's contributed machines spent working
+  on tasks other people asked for, added up from each machine's readings. Idle or
+  waiting agents don't count, and neither do the person's own requests. A product
+  manager's session doesn't count either: it coordinates in confidence and doesn't
+  build. 1 point for every 10 hours.
+
+Each person also has last week's points, for the arrow against last week. Their
+details list what they shipped (title, PR, when it merged), what they unblocked
+(conversation, kind, how long it waited) and each machine's busy hours: the 20
+newest of each, and only from conversations the reader can read. People go by
+their profile name, or by the first part of their email when they haven't set
+one.
 
 People with the same points share a place. A streak counts the days in a row,
 up to today, with a shipped request. Tapping a name shows that person's week:
@@ -228,11 +280,66 @@ picker reaches back three weeks.
 items each, in name order. An item leaves the list as soon as it is answered. It is never ranked and never earns points. **Answer**
 opens the reader's own waiting item, or the first one when none waits on them.
 
-Only facts count, never text. The leaderboard records when work was asked for and
-shipped, who answered and how long agents waited. It never records what anyone
-wrote. Private conversations, Chat with PM among them, never count and never
-appear in it. Decisions asked of a person will count toward Unblocked once
-decisions ship.
+Only facts count, never message text. The leaderboard records when work was asked
+for and shipped, who answered what kind of item, and how long it waited. It
+never records what anyone wrote. The only text it shows is the title of a
+conversation the reader can read. Private conversations, Chat with PM among
+them, never count and never appear in it.
+
+## Avatars, status and celebrations
+
+People and agents each show one avatar wherever they appear: messages, the
+roster, machine rows and mentions. A person sets theirs from their own row in
+the roster. They can pick one of eight pictures or upload a PNG, JPEG or WebP.
+Desktop and the web app crop the upload square and resize it to 256 pixels
+before sending it. The server accepts only those three formats, judged by the
+file's own bytes, and at most 1 MB. Each upload can be used once. Without a picture, a person shows their initial. An
+agent shows a pattern made from its name, the same on every computer, with a
+small Claude or Codex badge. Its contributor changes it from the agent's
+details, and the project's product manager can change it with `agent.avatar`.
+
+A person can also set a short status, such as Focusing, Coffee break or their
+own words up to 80 characters. They can let it clear itself after an hour,
+after four hours or at the end of the day. It shows next to their name and as
+a small emoji on their avatar, and disappears at its time even on a page where
+nothing else changes.
+
+Avatars and status reach only the Swarm's members: only a member's read of
+the Swarm carries the link to a picture. Where the link points depends on the
+server:
+
+- With a private avatar bucket (`SUPER_TAB_AVATARS_BUCKET`), nobody can read a
+  picture directly. Each read carries signed links. A link stays the same for
+  half an hour, so pictures are not fetched on every poll, and stops opening
+  within an hour. A copied link expires, and someone removed from the Swarm
+  gets no new links.
+- Without one (production today, by the owner's choice on 2026-10-28),
+  pictures are kept in the chat files' bucket, in a folder of their own
+  (`avatars/`), and linked on the same public CDN. **They work like chat files:
+  a picture's link never expires.** Anyone who once had it, including someone
+  later removed from the Swarm or anyone they pass it to, can still open that
+  picture. Only the 128 random bits in its address keep it from being guessed.
+  A new picture gets a new address; the old one stays reachable. Chat files
+  never go in the avatar folder, and the server makes avatar links for that
+  folder alone.
+
+A server with no attachments bucket refuses uploads; the eight pictures still
+work.
+
+People and agents react to a message with a small set: 👍 🎉 ❤️ 😄 👀 🚀.
+Counts show under the message, with the reader's own highlighted and the names
+on hover. Reacting twice keeps one reaction, and reacting again takes it back.
+Someone who leaves the Swarm drops out of the counts. A reaction changes its
+conversation, so other readers see it within one poll, also when new messages
+arrive in the same poll.
+
+When linked work is marked Done (a group with a pull request, marked Done after
+its merge), the project chat shows one celebration line. It names the person
+who asked for the work, the engineer who built it and the reviewers. A group is
+one request, so only its first Done is celebrated, not a later attempt's. A new
+one throws confetti once on each computer. An old one in the history, or one
+seen with reduced motion, stays still. A private conversation is never celebrated,
+and the line never quotes the work's result.
 
 ## Lead updates
 

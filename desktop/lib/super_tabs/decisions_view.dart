@@ -47,11 +47,15 @@ class SuperTabDecisionList extends StatelessWidget {
         final count = d.open.where((o) => o.batchId == batch).length;
         // The reader's own chat with the PM is named as the sidebar names it,
         // not by the reader's own name (as notifications.dart does).
+        // With Buddies on there is no Chat with PM: it opens the project's
+        // chat, and is named so.
+        final c = d.controller;
         final place =
-            d.controller.pmChat(decision.projectId)?.id ==
-                decision.conversationId
-            ? 'Chat with PM'
-            : decision.conversationTitle;
+            c.pmChat(decision.projectId)?.id != decision.conversationId
+            ? decision.conversationTitle
+            : c.buddiesOn
+            ? '#${decision.projectName}'
+            : 'Chat with PM';
         yield _note(
           '${decision.askerName} asked $count '
           '${count == 1 ? 'question' : 'questions'} · '
@@ -68,7 +72,9 @@ class SuperTabDecisionList extends StatelessWidget {
   );
 }
 
-/// The open decisions asked in one project, above its Chat with PM.
+/// The open decisions asked in one project, above its Chat with PM. Hide
+/// and each card's Not now fold them into the one heading line until the
+/// reader shows them again; a decision asked later shows.
 class SuperTabDecisionsPanel extends StatelessWidget {
   const SuperTabDecisionsPanel({
     super.key,
@@ -85,19 +91,39 @@ class SuperTabDecisionsPanel extends StatelessWidget {
       grid.AppTheme.watch(context);
       final open = decisions.openIn(projectId);
       if (open.isEmpty) return const SizedBox.shrink();
+      final shown = decisions.shownIn(projectId);
+      final folded = shown.isEmpty;
       return ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 320),
         child: ListView(
           key: const ValueKey('super-pm-decisions'),
           shrinkWrap: true,
-          padding: const EdgeInsets.only(bottom: 8),
+          padding: EdgeInsets.only(bottom: folded ? 0 : 8),
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(12, 12, 12, 4),
-              child: SuperTabSectionHeading('Decisions for you', endInset: 0),
+            Padding(
+              padding: EdgeInsets.fromLTRB(12, 12, 12, folded ? 0 : 4),
+              child: SuperTabSectionHeading(
+                'Decisions for you (${open.length})',
+                endInset: 0,
+                trailing: folded
+                    ? quietDecisionAction(
+                        key: const ValueKey('super-pm-decisions-show'),
+                        label: 'Show',
+                        onPressed: () => decisions.showAgain(projectId),
+                      )
+                    : quietDecisionAction(
+                        key: const ValueKey('super-pm-decisions-hide'),
+                        label: 'Hide',
+                        onPressed: () => decisions.setAside(open),
+                      ),
+              ),
             ),
-            for (final decision in open)
-              SuperTabDecisionCard(decisions: decisions, decision: decision),
+            for (final decision in shown)
+              SuperTabDecisionCard(
+                decisions: decisions,
+                decision: decision,
+                onNotNow: () => decisions.setAside([decision]),
+              ),
           ],
         ),
       );
@@ -105,16 +131,41 @@ class SuperTabDecisionsPanel extends StatelessWidget {
   );
 }
 
-/// One question: what it unblocks, and one button per option, the
-/// recommended one marked. Answered, it shows the choice instead.
+/// A borderless text action, quieter than the options beside it (design
+/// system: quiet inline controls).
+Widget quietDecisionAction({
+  required Key key,
+  required String label,
+  required VoidCallback? onPressed,
+}) => TextButton(
+  key: key,
+  onPressed: onPressed,
+  style: TextButton.styleFrom(
+    foregroundColor: DesktopChrome.muted,
+    backgroundColor: Colors.transparent,
+    side: BorderSide.none,
+    minimumSize: const Size(0, 28),
+    padding: const EdgeInsets.symmetric(horizontal: 6),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    textStyle: DesktopChrome.metadata(),
+  ),
+  child: Text(label),
+);
+
+/// One question: what it unblocks, one button per option, the recommended
+/// one marked, and the quiet Let PM decide (only with a recommendation) and
+/// Not now ([onNotNow], in Chat with PM). Answered, it shows the choice, or
+/// that the PM decided.
 class SuperTabDecisionCard extends StatelessWidget {
   const SuperTabDecisionCard({
     super.key,
     required this.decisions,
     required this.decision,
+    this.onNotNow,
   });
   final SuperTabDecisions decisions;
   final SuperTabDecision decision;
+  final VoidCallback? onNotNow;
 
   @override
   Widget build(BuildContext context) {
@@ -140,10 +191,11 @@ class SuperTabDecisionCard extends StatelessWidget {
           const SizedBox(height: 8),
           if (choice != null)
             Text(
-              'You chose: ${decision.options.elementAtOrNull(choice) ?? ''}',
+              '${decision.delegated ? 'PM decided' : 'You chose'}: '
+              '${decision.options.elementAtOrNull(choice) ?? ''}',
               style: DesktopChrome.control(color: DesktopChrome.muted),
             )
-          else
+          else ...[
             Wrap(
               spacing: 8,
               runSpacing: 6,
@@ -152,6 +204,67 @@ class SuperTabDecisionCard extends StatelessWidget {
                   _option(index, option),
               ],
             ),
+            if (decisions.failedToSend(decision)) _failed(),
+            if (_later() case final later?) ...[
+              const SizedBox(height: 4),
+              later,
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Its answer did not reach the backend: said on the card it was sent
+  /// from, with Retry, wherever the card is shown.
+  Widget _failed() => Padding(
+    padding: EdgeInsets.only(top: grid.AppControl.menuGap),
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      children: [
+        Text(SuperTabDecisions.sendFailed, style: DesktopChrome.metadata()),
+        quietDecisionAction(
+          key: ValueKey('super-decision-${decision.id}-retry'),
+          label: 'Retry',
+          onPressed: decisions.answering.contains(decision.id)
+              ? null
+              : () => unawaited(decisions.retry(decision)),
+        ),
+      ],
+    ),
+  );
+
+  /// Let PM decide · Not now, whichever of them this card offers.
+  Widget? _later() {
+    final busy = decisions.answering.contains(decision.id);
+    final actions = [
+      if (decision.canDelegate)
+        quietDecisionAction(
+          key: ValueKey('super-decision-${decision.id}-delegate'),
+          label: 'Let PM decide',
+          onPressed: busy
+              ? null
+              : () => unawaited(decisions.delegate(decision)),
+        ),
+      if (onNotNow != null)
+        quietDecisionAction(
+          key: ValueKey('super-decision-${decision.id}-later'),
+          label: 'Not now',
+          onPressed: busy ? null : onNotNow,
+        ),
+    ];
+    if (actions.isEmpty) return null;
+    return Transform.translate(
+      // The actions' text lines up with the question above.
+      offset: const Offset(-6, 0),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          for (final (index, action) in actions.indexed) ...[
+            if (index > 0) Text('·', style: DesktopChrome.metadata()),
+            action,
+          ],
         ],
       ),
     );

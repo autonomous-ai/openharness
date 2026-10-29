@@ -16,6 +16,7 @@ vi.mock('ws', async () => {
 })
 vi.mock('../lib/wsLiveness.js', () => ({ BACKEND_IDLE_DEADLINE_MS: 75_000, watchSocketLiveness: (_ws: unknown, opts: unknown) => { state.liveness = opts; return { stop: state.stop } } }))
 import { HarnessShareRelay, SharingEndedError } from './relay.js'
+import { VERSION } from '../version.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from './protocol.js'
 describe('recipient relay', () => {
   const identity = newIdentity()
@@ -50,7 +51,9 @@ describe('recipient relay', () => {
   }
   it('uses the account token and exact grant, authenticates the owner, and decrypts terminal/viewer output', async () => {
     const { session, ws, owner } = await ready()
-    expect(ws.args).toEqual(['ws://localhost:1234/api/observer-ws?share=share&autonomousEnv=prod', ['signed-in-token'], expect.any(Object)])
+    // It says it is a daemon's relay, and which CLI (WebSocket roadmap Phase 0).
+    expect(ws.args).toEqual([`ws://localhost:1234/api/observer-ws?share=share&autonomousEnv=prod&client=relay&v=${encodeURIComponent(VERSION)}`,
+      ['signed-in-token'], expect.any(Object)])
     expect(sink.sendFrame).toHaveBeenCalledWith({ type: 'connected', payload: { machineId: 'machine', e2ee: false, readOnly: true } })
     await session.send({ type: 'terminal_open', payload: { agentId: 'agent' } })
     const packet = JSON.parse(ws.send.mock.calls.at(-1)[0])

@@ -80,6 +80,47 @@ enum ProductFlow {
 
 enum ProductOutcome { ok, failed, cancelled, unknown }
 
+/// Why a Desktop sign-in that did not go through ended (`setup_desktop_sign_in_reason_<wire>`), once
+/// per sign-in beside its outcome: the CLI's own result code, or what the app saw instead. Fixed
+/// names only; the backend refuses any other (`PRODUCT_USAGE_SIGN_IN_END_REASONS`).
+enum SignInEndReason {
+  /// The person pressed Cancel, chose the other button, or the app closed meanwhile.
+  cancelled('cancelled'),
+
+  /// Nobody came back from the browser page within the CLI's five minutes: the person left, or
+  /// finished there and the callback never reached the CLI.
+  timeout('timeout'),
+
+  /// The phone's QR ran out unscanned.
+  expired('expired'),
+
+  /// Turned down on the phone.
+  denied('denied'),
+
+  /// The CLI could not be started at all.
+  cliUnavailable('cli_unavailable'),
+
+  /// The CLI is too old for this way in.
+  cliTooOld('cli_too_old'),
+
+  /// The CLI ended without a result line: it crashed or was killed.
+  noResult('no_result'),
+  callbackError('callback_error'),
+  exchangeFailed('exchange_failed'),
+  backendError('backend_error'),
+  authError('auth_error'),
+  daemonBusy('daemon_busy'),
+  daemonDidNotStop('daemon_did_not_stop'),
+  ticketInvalid('ticket_invalid'),
+  unavailable('unavailable'),
+
+  /// A code not named here, or an error with none.
+  other('other');
+
+  const SignInEndReason(this.wire);
+  final String wire;
+}
+
 /// Where Add Phone was opened from, counted each time it opens
 /// (`ui_desktop_add_phone_<wire>`): which way in, nothing else.
 enum AddPhoneOpening {
@@ -126,12 +167,14 @@ class ProductMeasurement extends ChangeNotifier {
     required this.sendSetup,
     DateTime Function()? now,
     String Function()? receipt,
+    double Function()? random,
     this.automatic = true,
     this.context,
     LocalKeyValueStore? setupStorage,
   }) : assert(const ['desktop', 'phone', 'web'].contains(surface)),
        _setupStorage = setupStorage,
        _now = now ?? DateTime.now,
+       _random = random ?? Random().nextDouble,
        _receipt = receipt ?? newProductReceipt {
     signedOutSharing = surface == 'desktop' && setupStorage == null;
     choiceLoaded = setupStorage == null;
@@ -165,6 +208,7 @@ class ProductMeasurement extends ChangeNotifier {
   final ProductReportRequest sendSetup;
   final bool automatic;
   final DateTime Function() _now;
+  final double Function() _random;
   final String Function() _receipt;
   bool signedOutSharing = false, choiceLoaded = false;
   static const setupPreferenceKey = 'product_setup_sharing';
@@ -187,6 +231,10 @@ class ProductMeasurement extends ChangeNotifier {
   ProductReportRequest? _sendAccount;
   Timer? _timer;
   DateTime? _lastAttempt;
+  // A channel refused as busy or failing waits until here; [_backoffs] counts
+  // those refusals in a row ([_backOff]).
+  final _heldUntil = <String, DateTime>{};
+  final _backoffs = <String, int>{};
   final _active = <Object, String>{};
   Future<void>? _flushing;
   final _days = <String, Map<String, int>>{};
@@ -674,7 +722,8 @@ class ProductMeasurement extends ChangeNotifier {
       return 6;
     }
     if (metric.startsWith('health_desktop_first_run_') ||
-        metric.startsWith('health_desktop_shared_invites_')) return 5;
+        metric.startsWith('health_desktop_shared_invites_'))
+      return 5;
     for (final flow in _newerFlows) {
       if (metric.startsWith('ui_desktop_${flow.wire}_')) return flow.vocabulary;
     }
@@ -736,6 +785,17 @@ class ProductMeasurement extends ChangeNotifier {
             );
       }
     }
+  }
+
+  /// Why a sign-in that did not go through ended. A signed-out setup count only, like
+  /// [_countSetupMissing]: the reasons are names an older CLI's report proxy does not know.
+  void signInEnded(SignInEndReason reason) {
+    if (sharing || !_setupAllowed || surface != 'desktop' || _disposed) return;
+    _count(
+      'setup',
+      _now().toUtc().toIso8601String().substring(0, 10),
+      'setup_${surface}_sign_in_reason_${reason.wire}',
+    );
   }
 
   /// How many new computers needed a tool installed: a signed-out setup count only, because a
@@ -851,6 +911,8 @@ class ProductMeasurement extends ChangeNotifier {
       if (_disposed || (channel == 'setup' ? !_setupAllowed : !sharing)) {
         continue;
       }
+      final held = _heldUntil[channel];
+      if (held != null && _now().isBefore(held)) continue;
       final epoch = channel == 'setup' ? _guestEpoch : _accountEpoch;
       var report = _pending[channel];
       if (report == null) {
@@ -908,6 +970,7 @@ class ProductMeasurement extends ChangeNotifier {
                 : epoch != _accountEpoch)) {
           continue;
         }
+        _answered(channel);
         if (result['accepted'] == true || result['reason'] == 'EXPIRED') {
           _pending.remove(channel);
           if (result['reason'] == 'EXPIRED' && channel == 'ui') {
@@ -943,9 +1006,44 @@ class ProductMeasurement extends ChangeNotifier {
         // packet so new counts can proceed; transient failures keep the same receipt.
         if (error is ProductReportFailure && error.permanent)
           _pending.remove(channel);
-        /* Same receipt on the next timer. No logs, aggressive retry, or product failure. */
+        if (error is ProductReportFailure && error.backOff) {
+          _backOff(channel, error.retryAfter);
+        } else {
+          _answered(channel);
+        }
+        /* Same receipt later. No logs, aggressive retry, or product failure. */
       }
     }
+  }
+
+  // Every app of a release reported each minute whatever the answer: 165 of
+  // Desktop's 272 failed reports on 2026-10-28 were busy refusals sent again a
+  // minute later. As the CLI does (cli/src/gateway/productUsage.ts): full
+  // jitter under a ceiling that doubles with each refusal in a row, up to half
+  // an hour, and never before the answer's Retry-After (also held to that).
+  static const _backoffBase = Duration(minutes: 1);
+  static const _backoffMax = Duration(minutes: 30);
+
+  void _backOff(String channel, Duration? retryAfter) {
+    final count = min((_backoffs[channel] ?? 0) + 1, 16);
+    _backoffs[channel] = count;
+    final ceiling = min(
+      _backoffMax.inMilliseconds,
+      _backoffBase.inMilliseconds * (1 << count),
+    );
+    final r = _random();
+    final unit = r.isFinite && r >= 0 && r < 1 ? r : 0.5;
+    final wait = min(
+      _backoffMax.inMilliseconds,
+      max(retryAfter?.inMilliseconds ?? 0, (unit * ceiling).floor()),
+    );
+    _heldUntil[channel] = _now().add(Duration(milliseconds: wait));
+  }
+
+  /// An answer that was not busy: the next report goes at the next tick.
+  void _answered(String channel) {
+    _backoffs.remove(channel);
+    _heldUntil.remove(channel);
   }
 
   @override

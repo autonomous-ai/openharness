@@ -56,6 +56,43 @@ void main() {
     expect(row(announces(f).last)['projectId'], 'design');
   });
 
+  test('a Swarm tab restored on its project chat names that project once the Swarm loads', () async {
+    // Diego's dial, 2026-10-28: the app came back on the Swarm's project
+    // chat (`project-<id>`), the dial was told the tab before the Swarm had
+    // loaded, and nothing told it again once it had.
+    final f = SuperTabLaunchFixture(local: true);
+    final server = f.connection.server;
+    server.state['projects'] = [
+      projectFixture('lead', 'Lamp OS', 'lead'),
+      projectFixture('design', 'Design', 'project-design'),
+    ];
+    (server.state['conversations'] as List).add({
+      ...conversationFixture('project-design', 'Lead'),
+      'projectId': 'design',
+    });
+    await f.store.write(
+      'super_tab.owner.$tabId',
+      '{"tabId":"$tabId","accountId":"owner","selectedId":"project-design"}',
+    );
+    f.app.adoptPoolConnectionForTest('m', f.connection);
+    final hold = server.holdReads = Completer<void>();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    expect(c.selectedId, 'project-design');
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last).containsKey('projectId'), isFalse);
+    final before = announces(f).length;
+    server.holdReads = null;
+    hold.complete();
+    await c.refresh();
+    await settle();
+    expect(c.snapshot, isNotNull);
+    final after = announces(f).skip(before).toList();
+    expect(after, isNotEmpty);
+    expect(row(after.last)['projectId'], 'design');
+  });
+
   test('a draft tab has no tab id', () async {
     final (f, _) = await open();
     f.app.newSwarm(newTabPage: true);
@@ -85,7 +122,7 @@ void main() {
   });
 
   test('a pick for a closed Swarm opens it first', () async {
-    final (f, c) = await open();
+    final (f, closed) = await open();
     f.app.newSwarm(newTabPage: true);
     await f.app.closeSwarm(
       f.app.swarms.firstWhere((s) => s.superTabId == tabId).id,
@@ -95,6 +132,9 @@ void main() {
     await settle();
     final tab = f.app.swarms.singleWhere((s) => s.superTabId == tabId);
     expect(f.app.activeSwarmId, tab.id);
+    // Closing let go of the Swarm: it opened again with a fresh read.
+    final c = f.app.superTabs.peek(tabId)!;
+    expect(c, isNot(same(closed)));
     expect(c.selectedId, 'design-lead');
     // Opening the Swarm announces too, with the tab's old project; each of
     // those is the pick's, up to the one that names the picked project.
@@ -191,5 +231,88 @@ void main() {
     f.app.announceWindowForeground();
     await settle();
     expect(announces(f).last.containsKey('fromDevice'), isFalse);
+  });
+
+  // The round dial's face follows the chat the window has open (design
+  // 2026-10-28-round-dial-swarm-chat): the Lead's, Chat with PM or a group.
+  Future<(SuperTabLaunchFixture, SuperTabController)> openChats() async {
+    final f = SuperTabLaunchFixture(local: true);
+    final server = f.connection.server;
+    server.state['projects'] = [
+      projectFixture('lead', 'Lamp OS', 'lead'),
+      projectFixture('design', 'Design', 'design-lead'),
+    ];
+    (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
+      {...conversationFixture('design-lead', 'Lead'), 'projectId': 'design'},
+      {
+        ...conversationFixture('design-pm', 'Chat with PM'),
+        'projectId': 'design',
+        'audience': {
+          'people': [
+            {'id': 'owner'},
+          ],
+        },
+      },
+      {
+        ...conversationFixture('design-fix', 'Fix login'),
+        'projectId': 'design',
+      },
+    ]);
+    f.app.adoptPoolConnectionForTest('m', f.connection);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    return (f, c);
+  }
+
+  test('a Swarm tab announces the open conversation\'s id', () async {
+    final (f, c) = await openChats();
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last)['conversationId'], 'lead');
+    for (final id in ['design-lead', 'design-pm', 'design-fix']) {
+      c.select(id);
+      await settle();
+      expect(row(announces(f).last)['conversationId'], id);
+      expect(row(announces(f).last)['projectId'], 'design');
+    }
+  });
+
+  test('selecting another conversation re-announces', () async {
+    final (f, c) = await openChats();
+    c.select('design-pm');
+    await settle();
+    final before = announces(f).length;
+    // Another chat of the same project: the project is unchanged, the chat is news.
+    c.select('design-fix');
+    await settle();
+    final after = announces(f).skip(before).toList();
+    expect(after, isNotEmpty);
+    expect(row(after.last)['conversationId'], 'design-fix');
+  });
+
+  test('a decisions view or an unloaded Swarm leaves conversationId out', () async {
+    final (f, c) = await openChats();
+    c.select('design-pm');
+    await settle();
+    // The Swarm's machines view (the one view here that is no conversation; its
+    // decisions are a panel beside the chat, which keeps the chat selected).
+    c.selectDevices();
+    f.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(f).last).containsKey('conversationId'), isFalse);
+
+    // A Swarm tab shown before its Swarm loaded names no conversation.
+    final g = SuperTabLaunchFixture(local: true);
+    g.app.adoptPoolConnectionForTest('m', g.connection);
+    final hold = g.connection.server.holdReads = Completer<void>();
+    g.app.bindSuperTab(g.app.activeSwarmId, tabId, 'Pilot');
+    await g.app.superTabs.open(tabId);
+    g.app.announceWindowForeground();
+    await settle();
+    expect(row(announces(g).last).containsKey('conversationId'), isFalse);
+    g.connection.server.holdReads = null;
+    hold.complete();
+    await settle();
   });
 }

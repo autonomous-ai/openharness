@@ -24,17 +24,20 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 /** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
  *  invitations filtered (invitations only for the Swarm owner). */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels'>
-export type MemberView = Person
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies'>
+/** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
+export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
  *  role) come only in `derived.agents`, so an agent never changes without a new version. */
-export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'roleId'>
+export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' | 'roleId' | 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** A private conversation's audience: the people it is shared with. The project's Lead always reads it too. */
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'>
-  & { messageSeq: number; dormant?: true; audience?: Audience }
+export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'>
+  & { messageSeq: number; dormant?: true; audience?: Audience
+    /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
+    buddyOwnerId?: string }
 /** A contribution as `state.machines[]` has it, privacy detail only for its contributor, harness ids cut to what the
  *  reader can see. Machines without a contribution are never sent. */
 export type MachineView = ContributedMachine
@@ -60,10 +63,18 @@ export interface Derived {
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */
   mentionsWaiting?: number
+  /** A person only: a digest of which tags wait, moving when they change though the count may not. */
+  mentionsDigest?: string
+  /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
+   *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
+  avatars?: Record<string, string>
   /** A person only: decisions asked of them, still open. */
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
+   *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
+  teamAccounts?: false
 }
 export interface OtherProjectWorkView {
   conversationId: string; projectName: string; title: string; owns: string[]; status: WorkStatus; agentName: string; pr: string | null
@@ -127,7 +138,8 @@ export interface CommandReply {
 
 /** GET /api/super-tabs/list[?after=] */
 export interface SwarmList {
-  tabs: Array<{ id: string; name: string; ownerId: string; paused: boolean; lastChangedAt: number | null }>
+  /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
+  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null }>
   next: string | null
 }
 
@@ -137,7 +149,13 @@ export interface SwarmList {
  *  newest row the same way. `next` is null at the end. `after` alone (no `afterId`) means strictly after that sequence,
  *  which is all a poll for new messages needs. */
 export interface MessagePageCursor { sequence: number; id: string }
-export interface MessagePage<M = Record<string, unknown>> { messages: M[]; next: MessagePageCursor | null }
+export interface MessagePage<M = Record<string, unknown>> {
+  messages: M[]
+  next: MessagePageCursor | null
+  /** The conversation's reaction counter (reactions.ts): when it moved, read the page shown again for its counts. Each
+   *  message carries `reactions: [{ emoji, count, by: [{ kind, id }] }]`, current members only. */
+  reactionSeq: number
+}
 
 /** GET /api/super-tabs/hosts/:machineId/changes?cursor=[&full=1], or POST to the same path with this body when the host
  *  holds etags (up to 500 Swarms do not fit in a URL). Ask `full` at start and at least every 60 s. */
@@ -200,12 +218,17 @@ export interface HostAgentRow {
   observers: Array<{ email: string; userId: string }>
   /** Its session is confidential in some Swarm: the host refuses every share of it, ordinary ones too (Critical 1). */
   confidential: boolean
+  /** Confidential, but this Swarm's current Lead: the host lets `observers` watch it through this Swarm's shares while this
+   *  row is in force, and nobody else (Ken, 2026-10-28). An older host ignores it and refuses them, which errs closed. */
+  membersWatch: boolean
 }
 export interface HostPool {
   tabId: string
   paused: boolean
   machine: ContributedMachine
   starts: AgentStart[]
+  /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
+  buddyStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>

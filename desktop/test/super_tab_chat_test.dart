@@ -315,22 +315,30 @@ void main() {
       ..append('The lead update')
       ..append('An unread workgroup update', conversationId: 'offline');
     final c = await show(tester, server);
-    Finder projectDot() => find.descendant(
-      of: find.byKey(const ValueKey('super-group-lead')),
-      matching: find.byWidgetPredicate(
-        (widget) =>
-            widget is Semantics && widget.properties.label == 'Unread messages',
-      ),
-    );
+    // Unread is the project's name in bold, with no dot (Dee, 2026-10-29).
+    final name = c.snapshot!.projects.single.name;
+    FontWeight? projectWeight() => tester
+        .widget<RichText>(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-group-lead')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is RichText && widget.text.toPlainText() == name,
+            ),
+          ),
+        )
+        .text
+        .style
+        ?.fontWeight;
     expect(c.unread(c.selected!), isFalse);
-    expect(projectDot(), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('super-group-lead')));
+    expect(projectWeight(), grid.AppFont.semibold);
+    await tester.tap(find.byKey(const ValueKey('super-project-toggle-lead')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('super-group-offline')));
     await tester.pumpAndSettle();
     expect(find.text('An unread workgroup update'), findsOneWidget);
     expect(c.unread(c.selected!), isFalse);
-    expect(projectDot(), findsNothing);
+    expect(projectWeight(), isNot(grid.AppFont.semibold));
     await closeReadView(tester, c);
   });
 
@@ -576,7 +584,7 @@ void main() {
       }
       final c = await show(tester, server);
       ScrollController scroll() => tester
-          .widget<ListView>(
+          .widget<ScrollView>(
             find.byKey(const PageStorageKey('super-messages-tab-lead')),
           )
           .controller!;
@@ -608,6 +616,52 @@ void main() {
       expect(scroll().position.extentAfter, lessThan(40));
       expect(c.unread(c.selected!), isFalse);
       expect(find.text('The restart check passed too.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await closeReadView(tester, c);
+    },
+  );
+
+  testWidgets(
+    'more than a page arriving while scrolled up keeps the place, and the '
+    'jump reads the newest',
+    (tester) async {
+      final server = ConversationServer()..messagePage = 20;
+      for (var i = 1; i <= 40; i++) {
+        server.append(
+          'Agent update $i: checking the offline queue and reconnect behavior.',
+        );
+      }
+      final c = await show(tester, server);
+      ScrollController scroll() => tester
+          .widget<ScrollView>(
+            find.byKey(const PageStorageKey('super-messages-tab-lead')),
+          )
+          .controller!;
+      scroll().jumpTo(0);
+      await tester.pumpAndSettle();
+      final reading = scroll().offset;
+      for (var i = 41; i <= 90; i++) {
+        server.append('Agent update $i: still checking.');
+      }
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(scroll().offset, reading);
+      expect(
+        find.text(
+          'Agent update 21: checking the offline queue and reconnect behavior.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('20+ new messages'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('super-new-messages')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Agent update 90: still checking.'), findsOneWidget);
+      expect(find.byKey(const ValueKey('super-new-messages')), findsNothing);
+      expect(scroll().position.extentAfter, lessThan(40));
+      expect(c.hasNewer('lead'), isFalse);
+      expect(c.unread(c.selected!), isFalse);
       expect(tester.takeException(), isNull);
       await closeReadView(tester, c);
     },

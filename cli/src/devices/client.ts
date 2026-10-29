@@ -15,6 +15,8 @@ export interface DevicesClientDeps {
   fetch?: typeof fetch
   request?: (machineId: string, type: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>
   delay?: (ms: number) => Promise<void>
+  /** How long the other computer has to answer: 12 s unless a request needs longer (an engine probe's login shells). */
+  timeoutMs?: number
 }
 
 export function deviceRequest(deps: DevicesClientDeps, machineId: string, type: string, payload: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -29,7 +31,7 @@ export function deviceRequest(deps: DevicesClientDeps, machineId: string, type: 
       try { socket.close() } catch { /* already closed */ }
       if (error) reject(error); else resolve(reply!)
     }
-    const timer = setTimeout(() => finish(new Error('This computer did not answer in time.')), 12_000)
+    const timer = setTimeout(() => finish(new Error('This computer did not answer in time.')), deps.timeoutMs ?? 12_000)
     socket.on('open', () => socket.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1, tool: true } })))
     socket.on('error', error => finish(error))
     socket.on('close', code => finish(new Error(code === 4404 ? 'Link this computer in Machines first.' : 'The computer disconnected.')))

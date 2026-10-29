@@ -6,7 +6,9 @@ import { builtinSqlite } from '../lib/sqliteBuiltin.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from '../lib/secureState.js'
 import { creationObservation, type CreationObservation } from '../lib/creationObservation.js'
 import { readMachineResources } from '../lib/machineResources.js'
+import { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import { readCapacityDisk } from './disk.js'
+import { gibibytes, memoryShort } from './capacity.js'
 import { object } from './wire.js'
 
 type Json = Record<string, unknown>
@@ -19,7 +21,7 @@ interface Database { exec(sql: string): void; prepare(sql: string): Statement; c
 type DatabaseConstructor = new (path: string) => Database
 interface Reservation {
   creation_id: string; fingerprint: string; memory_bytes: number; disk_bytes: number
-  volume: string; harness_id: string | null; released: number
+  volume: string; harness_id: string | null; released: number; created_at: number
 }
 export interface ReservationBook {
   reserve(input: Json, closed?: AbortSignal): Promise<Json>
@@ -31,6 +33,9 @@ interface Dependencies {
   resources: typeof readMachineResources
   disk: typeof readCapacityDisk
   sqlite: () => DatabaseConstructor | null
+  now?: () => number
+  /** Each live agent's measured memory, by harness id. */
+  agentMemory?: () => Promise<Map<string, number>>
 }
 const MAX_ACTIVE = 256
 const MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -39,6 +44,14 @@ const creationIdValid = (v: unknown): v is string => typeof v === 'string' && /^
 const bytes = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const unavailable = (detail: string): Json => ({ error: 'CAPACITY_UNAVAILABLE', detail })
+/** How long a launched agent's reservation still counts. Free memory (vm_stat) already counts what a running agent uses,
+ *  so a reservation held past its start counted the agent twice: on Ken's MacBook Pro (2026-10-28) three settled builders
+ *  using about 0.4 GiB held 6 GiB, and a start was refused with 7.85 GiB free. The window covers an agent still loading. */
+export const START_WINDOW_MS = 5 * 60_000
+const memoryOf = (core: CoreApi) => {
+  const read = createHarnessResourcesReader(() => core.agents.live())
+  return async () => new Map((await read()).agents.flatMap(row => row.memoryBytes === null ? [] : [[row.agentId, row.memoryBytes] as const]))
+}
 
 /** All Super Tabs on this host share one ledger. SQLite serializes admission
  * across service restarts/overlap; no asynchronous work runs inside its write
@@ -48,6 +61,8 @@ export class CapacityReservations implements ReservationBook {
   private readonly file: string
   private readonly identity: { dev: number; ino: number }
   private stopped = false
+  private readonly now: () => number
+  private readonly agentMemory: () => Promise<Map<string, number>>
 
   constructor(private readonly core: CoreApi, private readonly machineId: string,
     private readonly deps: Dependencies = { resources: readMachineResources, disk: readCapacityDisk,
@@ -70,6 +85,8 @@ export class CapacityReservations implements ReservationBook {
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
       hardenPrivateStateFileIfPresent(this.file, MAX_FILE_BYTES)
     }
+    this.now = deps.now ?? Date.now
+    this.agentMemory = deps.agentMemory ?? memoryOf(core)
     this.identity = lstatSync(this.file)
     this.db = new Database(this.file)
     try {
@@ -150,6 +167,20 @@ export class CapacityReservations implements ReservationBook {
     }
   }
 
+  /** Whether a reservation is still in its start window: until its agent launched, then START_WINDOW_MS. A launched agent
+   *  the core no longer lists is timed from its reservation. */
+  private starting(row: Reservation, now: number): boolean {
+    if (!row.harness_id) return true
+    const started = this.core.agents.byAgent(row.harness_id)?.registeredAt
+    return now - (finite(started) ? started : row.created_at) < START_WINDOW_MS
+  }
+
+  /** What a reservation still holds of memory: all of it in its start window, unless the agent already measures as much itself. */
+  private held(row: Reservation, measured: Map<string, number> | null, now: number): number {
+    if (!this.starting(row, now)) return 0
+    return row.harness_id && (measured?.get(row.harness_id) ?? 0) >= row.memory_bytes ? 0 : row.memory_bytes
+  }
+
   async observe(creationId: unknown, closed?: AbortSignal): Promise<Json> {
     if (!creationIdValid(creationId)) return { error: 'INVALID_REQUEST' }
     this.check(closed)
@@ -183,8 +214,9 @@ export class CapacityReservations implements ReservationBook {
     this.check(closed)
     const existing = this.db.prepare('SELECT released, volume FROM reservations WHERE creation_id = ?').get(creationId)
     if (existing?.released === 1) return { error: 'START_FINISHED', detail: 'This native start has ended. Create a new start request.' }
-    const [native, resources, destination] = await Promise.all([
+    const [native, resources, destination, measured] = await Promise.all([
       this.native(creationId), this.deps.resources().catch(() => null), this.deps.disk(cwd, input.worktree === true).catch(() => null),
+      memory > 0 ? this.agentMemory().catch(() => null) : null,
     ])
     this.check(closed)
     if (!destination || !bytes(destination.freeBytes) || !destination.volume) return unavailable('The destination disk capacity could not be verified.')
@@ -207,12 +239,16 @@ export class CapacityReservations implements ReservationBook {
         : { error: 'CAPACITY_RECEIPT_CONFLICT', detail: 'This native start already has a different or finished capacity reservation.' }
       const active = this.rows()
       if (active.length >= MAX_ACTIVE) return unavailable('Reconcile pending starts on this machine before starting more agents.')
-      const memoryHeld = active.reduce((sum, row) => sum + row.memory_bytes, 0)
-      const diskHeld = active.filter(row => row.volume === destination.volume).reduce((sum, row) => sum + row.disk_bytes, 0)
-      if (memory > 0 && (!finite(freeMemory) || memory > freeMemory - memoryHeld)) return unavailable('Available memory is already in use or reserved for other agents. Choose another machine or wait for work to finish.')
+      const now = this.now(), memoryHeld = active.reduce((sum, row) => sum + this.held(row, measured, now), 0)
+      // Free disk is measured too, so it already counts a settled agent's worktree. On Diego's Mac (2026-10-28) 15 settled
+      // agents held 150 GiB against 140 GiB free and every start was refused; only starts still in their window hold disk.
+      const diskHeld = active.filter(row => row.volume === destination.volume && this.starting(row, now)).reduce((sum, row) => sum + row.disk_bytes, 0)
+      if (memory > 0 && !finite(freeMemory)) return unavailable('The free memory on this machine could not be read.')
+      if (memory > 0 && memory > freeMemory! - memoryHeld) return unavailable(memoryShort(freeMemory! - memoryHeld, memory)
+        + (memoryHeld > 0 ? ` ${gibibytes(memoryHeld)} more is set aside for agents still starting.` : ''))
       if (disk > destination.freeBytes - diskHeld) return unavailable('Destination disk space is already in use or reserved for other agents. Choose another machine or free space before retrying.')
       this.db.prepare(`INSERT INTO reservations (creation_id, fingerprint, memory_bytes, disk_bytes, volume, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)`).run(creationId, fingerprint, memory, disk, destination.volume, Date.now())
+        VALUES (?, ?, ?, ?, ?, ?)`).run(creationId, fingerprint, memory, disk, destination.volume, now)
       return { ok: true, reservationId: creationId }
     }, closed)
   }

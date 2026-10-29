@@ -17,10 +17,16 @@ import 'swarm_state_test.dart' show createApp;
 Finder inRow(String key, Finder finder) =>
     find.descendant(of: find.byKey(ValueKey(key)), matching: finder);
 
+/// A drawn unread dot; unread is now a bold name, heard as "Unread messages".
 Finder unreadDot(String groupId) => inRow(
   'super-group-$groupId',
   find.byWidgetPredicate(
-    (w) => w is Semantics && w.properties.label == 'Unread messages',
+    (w) =>
+        w is Container &&
+        w.decoration is BoxDecoration &&
+        (w.decoration! as BoxDecoration).shape == BoxShape.circle &&
+        // A dot holds nothing; an avatar holds its initial.
+        w.child == null,
   ),
 );
 
@@ -156,6 +162,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'lead');
       expect(inRow('super-group-lead', find.text('#')), findsOneWidget);
+      final toggle = find.byKey(const ValueKey('super-project-toggle-lead'));
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
       final work = find.byKey(const ValueKey('super-group-offline'));
       expect(work, findsOneWidget);
       final textX = tester
@@ -170,17 +179,13 @@ void main() {
       ]) {
         expect(tester.getTopLeft(label).dx, textX, reason: '$label');
       }
-      expect(
-        tester.getCenter(unreadDot('offline')).dx,
-        tester.getCenter(unreadDot('lead')).dx,
-      );
+      // Unread is a bold name, with no dot in either row (Dee, 2026-10-29).
+      expect(unreadDot('offline'), findsNothing);
+      expect(unreadDot('lead'), findsNothing);
       for (final row in [newProject, devices, work]) {
         final bounds = tester.getRect(row);
-        final projectBounds = tester.getRect(
-          find.byKey(const ValueKey('super-group-lead')),
-        );
-        expect(bounds.left, projectBounds.left);
-        expect(bounds.right, projectBounds.right);
+        expect(bounds.left, tester.getRect(project).left);
+        expect(bounds.right, tester.getRect(toggle).right);
       }
 
       await tester.tap(work);
@@ -189,10 +194,16 @@ void main() {
       await tester.tap(empty);
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'empty-lead');
+      expect(find.text('No workgroups yet'), findsNothing);
+      final emptyToggle = find.byKey(
+        const ValueKey('super-project-toggle-empty'),
+      );
+      await tester.tap(emptyToggle);
+      await tester.pumpAndSettle();
       expect(find.text('No workgroups yet'), findsOneWidget);
       expect(tester.getTopLeft(find.text('No workgroups yet')).dx, textX);
-      // A second click on the open project hides its workgroups again.
-      await tester.tap(empty);
+      // A second click on its chevron hides them again.
+      await tester.tap(emptyToggle);
       await tester.pumpAndSettle();
       expect(controller.selectedId, 'empty-lead');
       expect(find.text('No workgroups yet'), findsNothing);
@@ -263,8 +274,8 @@ void main() {
 
     final order = [
       find.byKey(const ValueKey('super-new-project')),
-      find.byKey(const ValueKey('super-local-models')),
       find.byKey(const ValueKey('super-your-devices')),
+      find.byKey(const ValueKey('super-local-models')),
       find.text('Projects'),
       find.byKey(const ValueKey('super-group-leads')),
       find.byKey(const ValueKey('super-group-empty-lead')),
@@ -332,8 +343,9 @@ void main() {
       }
       expect(
         tester.getCenter(find.byTooltip('New project')).dx,
-        tester.getRect(find.byKey(const ValueKey('super-group-lead'))).right -
-            16,
+        tester
+            .getCenter(find.byKey(const ValueKey('super-project-toggle-lead')))
+            .dx,
       );
       expect(tester.takeException(), isNull);
     }
@@ -529,16 +541,18 @@ void main() {
     final setUp = find.byKey(const ValueKey('super-local-models-setup'));
 
     testWidgets(
-      'the owner sets models up from Manage models; there is no switch',
+      'the owner sets models up from Your models; there is no switch',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [machine()];
         final c = server.controller();
         await c.refresh();
         await mount(tester, c);
-        expect(find.text('Manage models'), findsOneWidget);
+        expect(find.text('Your models'), findsOneWidget);
         await tester.tap(open);
         await tester.pumpAndSettle();
+        // The page is titled as the row that opens it.
+        expect(find.text('Your models'), findsNWidgets(2));
         expect(find.byType(Switch), findsNothing);
         expect(
           find.textContaining('Set up connects this computer to the Swarm'),
@@ -564,7 +578,7 @@ void main() {
     );
 
     testWidgets(
-      'everyone sees Manage models; before it is set up a member is told the owner sets it up',
+      'everyone sees Your models; before it is set up a member is told the owner sets it up',
       (tester) async {
         final server = ConversationServer();
         (server.state['people'] as List).add({

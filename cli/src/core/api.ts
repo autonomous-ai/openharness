@@ -1218,11 +1218,21 @@ export type AdoptSwarmSkill = (session: RegisteredSession, current: () => boolea
 export type LeadState = 'ask' | 'stuck' | 'work' | 'done'
 /** One Swarm's Lead on a Harness Pro's card (superTabs/cards.ts). `order`: the project's index in the Swarm (the app's
  *  order), so a dial can show the Leads as the app does whatever their urgency. */
-export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number }
+export interface SwarmLead { id: string; projectId: string; project: string; engine: string; owner: string; local: string; state: LeadState; order: number; since?: number; chat?: SwarmChat; notice?: LeadNotice }
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
-/** A Lead's last message, for its card. */
-export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean }
+/** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face. */
+export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string }
+/** A project's three places to chat (design 2026-10-28-round-dial-swarm-chat): its Lead conversation, the reader's Chat
+ *  with PM, and a group. */
+export type ChatKind = 'lead' | 'pm' | 'group'
+/** The chat on a project's face on the round dial: the Lead's, unless the window has the project's PM chat or a group
+ *  open. `working` only for a working group, `since` from one of its agents' turn here. */
+export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
+/** The newest message the project's Lead wrote in its Lead conversation or Chat with PM since the baseline: the dial's alert. */
+export interface LeadNotice { chat: 'lead' | 'pm'; chatId: string; id: string; text: string; at: number }
+/** The conversation the window has open in a Swarm tab. */
+export interface CardFocus { tabId: string; conversationId: string }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {
@@ -1510,6 +1520,9 @@ export type BackendNotice =
   | { type: 'machines_changed'; reason: string }
   | { type: 'device_keys_changed' }
   | { type: 'connectors_changed'; revision: number }
+  /** Work waits for an agent of this machine's (backend lib/adapterWs.ts): its Swarm host reads that agent's deliveries now.
+   *  Naming none, the server says it pushes them, and every list is read once (superTabs/host.ts PUSH_LEASE_MS). */
+  | { type: 'super_tab_deliveries'; tabId?: string; agentId?: string }
 
 /** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
@@ -1651,6 +1664,8 @@ export const LANE_OFF: LaneSeal = {
 export interface HttpAnswer {
   status: number
   body: Record<string, unknown>
+  /** A busy or failing answer's Retry-After, when it had one (gateway/accountHttp.ts). */
+  retryAfterMs?: number
 }
 
 /** What the core's status reads of the relay: the machine's E2EE fingerprint, its pairings and the one

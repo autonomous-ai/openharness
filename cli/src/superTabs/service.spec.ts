@@ -25,7 +25,7 @@ const leads = (state: Record<string, unknown>, agentId: unknown) => {
 const swarmData = (agent: Record<string, unknown>, path: string, state: Record<string, unknown> = { agents: [agent] }): unknown =>
   path.includes('/hosts/') ? hostForm([{ tabId: 'tab', agent, lead: leads(state, agent.id) }], { tabs: ['tab'] })
     : /^\/api\/super-tabs\/tab\/(parts|changes)/.test(path) ? swarmReply(path, state) : { state }
-function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution } = {}) {
+function setup(options: { prepareContribution?: typeof import('./contribution.js').prepareContribution; setMachineAgents?: typeof import('./contribution.js').setMachineAgents } = {}) {
   const agentId = createHash('sha256').update(JSON.stringify(['machine-1', 'native'])).digest('hex').slice(0, 24)
   const agent = { id: agentId, machineId: 'machine-1', harnessId: 'native' }
   const call = vi.fn<CoreApi['account']['backend']>(async (_method, path) => ({ status: 200, body: { success: true, data: swarmData(agent, path) } }))
@@ -190,6 +190,44 @@ it('limits the owner proxy to Super Tab endpoints and preserves backend failures
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab?asAgentId=agent' }, owner)).toMatchObject({ ok: true })
   vi.mocked(t.core.account.backend).mockResolvedValueOnce({ status: 403, body: { success: false, error: { code: 'FORBIDDEN', message: 'Access withdrawn' } } })
   expect(await t.ask({ action: 'backend', method: 'GET', path: '/api/super-tabs/tab' }, owner)).toEqual({ error: 'FORBIDDEN', detail: 'Access withdrawn', status: 403 })
+})
+it('sets a machine\'s agents only for the person at this computer, and says what the number means', async () => {
+  const setMachineAgents = vi.fn(async () => ({ ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 }))
+  const t = setup({ setMachineAgents })
+  const ask = { action: 'setMachineAgents', tabId: 'tab', machineId: 'studio', maxAgents: 96 }
+  for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) expect(await t.ask(ask, asker)).toEqual({ error: 'OWNER_REQUIRED' })
+  expect(setMachineAgents).not.toHaveBeenCalled()
+  for (const maxAgents of [0, 2.5, '96', 1025]) expect(await t.ask({ ...ask, maxAgents }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+  expect(await t.ask(ask, owner)).toEqual({ ok: true, machineId: 'studio', maxAgents: 96, maximum: 96 })
+  expect(setMachineAgents).toHaveBeenCalledWith(t.core, { tabId: 'tab', machineId: 'studio', maxAgents: 96 })
+  const help = (await t.ask({ action: 'help' }, owner) as { help: Record<string, string> }).help
+  expect(help.setAgents).toContain('how many Swarm agents may run on that machine at once')
+})
+describe('a machine offered with more than 16 agents', () => {
+  const contribute = (maxAgents: number) => ({ action: 'backend', method: 'POST', path: '/api/super-tabs/tab/commands', body: { operationId: 'add-studio',
+    command: { type: 'machine.contribute', machineId: 'studio', name: 'Studio', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents } } })
+  // What a server from before 1024 answers (backend middlewares/validation.ts, zod 4's message for .max(16)).
+  const refuse = (message: string) => ({ status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message } } })
+  it('is offered with 16 when an older server refuses more, under the same operation', async () => {
+    const t = setup()
+    t.call.mockResolvedValueOnce(refuse('command.maxAgents: Too big: expected number to be <=16'))
+    t.call.mockResolvedValueOnce({ status: 200, body: { success: true, data: { result: { machineId: 'studio' } } } })
+    expect(await t.ask(contribute(96), owner)).toEqual({ ok: true, value: { result: { machineId: 'studio' } } })
+    expect(t.call.mock.calls.map(([method, path, body]) => [method, path, object(object(body).command).maxAgents, object(body).operationId])).toEqual([
+      ['POST', '/api/super-tabs/tab/commands', 96, 'add-studio'],
+      ['POST', '/api/super-tabs/tab/commands', 16, 'add-studio'],
+    ])
+  })
+  it('keeps every other refusal as the server gave it', async () => {
+    const t = setup()
+    t.call.mockResolvedValueOnce(refuse('command.cwd: Use a full folder path, such as /home/me/work or C:\\Users\\me\\work.'))
+    expect(await t.ask(contribute(96), owner)).toMatchObject({ error: 'VALIDATION_ERROR', status: 400 })
+    t.call.mockResolvedValueOnce(refuse('command.maxAgents: Too big: expected number to be <=1024'))
+    expect(await t.ask(contribute(2048), owner)).toMatchObject({ error: 'VALIDATION_ERROR', status: 400 })
+    t.call.mockResolvedValueOnce(refuse('command.maxAgents: Too big: expected number to be <=16'))
+    expect(await t.ask(contribute(16), owner)).toMatchObject({ error: 'VALIDATION_ERROR', status: 400 })
+    expect(t.call).toHaveBeenCalledTimes(3)
+  })
 })
 it('documents how a lead shares its project repository for other machines', async () => {
   const t = setup()
@@ -591,6 +629,12 @@ it('says a server from before rules does not support them, and passes a malforme
   expect(await send({ type: 'rule.set', rule: { kind: 'minEffort', effort: 'huge' }, text: 'x' })).not.toMatchObject({ error: 'RULES_UNSUPPORTED' })
 })
 
+it('tells the Lead that simple work ranks grid models first, and how the owner opts out', async () => {
+  const help = (await setup().ask({ action: 'help' }, owner)).help as { commands: unknown[]; command: string }
+  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'rule.set', rule: { kind: 'noGridFirst' } }))
+  expect(help.command).toContain('ranks models on the Swarm\'s grid first unless the owner set noGridFirst')
+})
+
 it('documents finished worker decisions and explains an older backend without release support', async () => {
   const t = setup()
   const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }
@@ -606,7 +650,7 @@ it('documents finished worker decisions and explains an older backend without re
 
 describe('the Swarm cards the devices ask for', () => {
   function withCards() {
-    const cards = { want: vi.fn(), open: vi.fn(), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
+    const cards = { want: vi.fn(), open: vi.fn(), say: vi.fn(async () => true), worker: vi.fn((machineId: string, harnessId: string) => machineId === 'm2' && harnessId === 'h-r1'), recap: vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped', at: 5, none: false })), onCards: undefined as unknown, onRecap: undefined as unknown }
     const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
     const core = fakeCore({ superTabs })
     const make = vi.fn(() => cards as never)
@@ -616,11 +660,11 @@ describe('the Swarm cards the devices ask for', () => {
   it('starts and stops the reader as a capable Pro comes and goes, and hands what it reads to the core', async () => {
     const t = withCards()
     expect(await t.ask({ action: 'cardsWanted', on: true }, owner)).toEqual({ ok: true })
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, [])
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, [], null)
     expect(await t.ask({ action: 'cardsWanted', on: true, include: ['s1', 'bad id', 'x'.repeat(48), 7] }, owner)).toEqual({ ok: true })
-    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'])
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], null)
     expect(await t.ask({ action: 'cardsWanted', on: false }, owner)).toEqual({ ok: true })
-    expect(t.cards.want).toHaveBeenLastCalledWith(false, [])
+    expect(t.cards.want).toHaveBeenLastCalledWith(false, [], null)
     // One reader for the machine, whose answers go to the core.
     expect(t.make).toHaveBeenCalledOnce()
     ;(t.cards.onCards as (items: unknown[]) => void)([])
@@ -641,13 +685,42 @@ describe('the Swarm cards the devices ask for', () => {
     const t = withCards()
     expect(await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true, tabId: 't1', leadId: 'l1', text: 'Shipped', at: 5, none: false })
     expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1' }, owner)).toEqual({ ok: true })
-    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1')
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1', false)
     expect(await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: null }, owner)).toEqual({ ok: true })
-    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', null)
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', null, false)
     for (const bad of [{ action: 'cardRecap', tabId: 'bad id', leadId: 'l1' }, { action: 'cardRecap', tabId: 't1' }, { action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'bad id' }, { action: 'cardOpen', session: 's1', leadId: null },
       { action: 'cardOpen', tabId: 't1', leadId: null }, { action: 'cardRecap', tabId: 'x'.repeat(48), leadId: 'l1' }]) {
       expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
     }
+  })
+  it('cardsWanted passes focus to the cards; cardRecap, cardOpen and cardSay pass chat', async () => {
+    const t = withCards()
+    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', extra: 1 } }, owner)
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
+    // A focus that is not two ids is none.
+    for (const focus of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 's1', conversationId: 'x'.repeat(48) }, { tabId: 's1' }, 'g1']) {
+      await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus }, owner)
+      expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], null)
+    }
+    await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: true }, owner)
+    expect(t.cards.recap).toHaveBeenLastCalledWith('t1', 'l1', true)
+    await t.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' }, owner)
+    expect(t.cards.recap).toHaveBeenLastCalledWith('t1', 'l1', false)
+    await t.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: true }, owner)
+    expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1', true)
+    expect(await t.ask({ action: 'cardSay', harnessId: 'h1', text: ' ship it ', chat: true }, owner)).toEqual({ ok: true, said: true })
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', true)
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', false)
+  })
+  it('cardWorker says whether a machine\'s harness is one of a Swarm\'s workers, for the devices to keep its failure quiet', async () => {
+    const t = withCards()
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h-r1' }, owner)).toEqual({ ok: true, worker: true })
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm1', harnessId: 'h-r1' }, owner)).toEqual({ ok: true, worker: false })
+    for (const bad of [{ action: 'cardWorker', machineId: 'bad id', harnessId: 'h-r1' }, { action: 'cardWorker', machineId: 'm2' }, { action: 'cardWorker', harnessId: 'h-r1' }]) {
+      expect(await t.ask(bad, owner)).toEqual({ error: 'INVALID_REQUEST' })
+    }
+    expect(await t.ask({ action: 'cardWorker', machineId: 'm2', harnessId: 'h-r1' }, { local: false, owner: true })).toEqual({ error: 'OWNER_REQUIRED' })
   })
   it('answers a backend refusal while reading a recap as the service does any other', async () => {
     const t = withCards()
@@ -814,6 +887,25 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'later' }, owner)).toEqual({ error: 'INVALID_REQUEST' })
   })
 
+  it('offers nothing for a Swarm joined or added to that the team account is not tried in yet', async () => {
+    const offer = vi.fn(async () => ({ state: 'wanted' as const }))
+    const tabs: Record<string, Record<string, unknown>> = { elsewhere: { people: [{ id: 'me' }], teamAccounts: false }, mine: { people: [{ id: 'me' }] } }
+    const backend = vi.fn<CoreApi['account']['backend']>(async (_method, path) => {
+      const tab = tabs[path.split('/')[3]!]
+      return tab ? { status: 200, body: { success: true, data: swarmReply(path, tab) } } : { status: 503, body: { success: false } }
+    })
+    const service = superTabService(fakeCore({ account: { backend } }), { teamSetup: async () => ({ offer, decline: vi.fn() }) })
+    for (const reason of ['join', 'contribute']) {
+      expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason, tabId: 'elsewhere' }, owner)).toEqual({ ok: true, state: 'not-used' })
+    }
+    expect(offer).not.toHaveBeenCalled()
+    // Its own Swarm, one the server cannot read now, and an older Desktop that names none are offered, as before.
+    for (const tabId of ['mine', 'unreadable', undefined]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetupCheck', reason: 'join', tabId }, owner)).toEqual({ ok: true, state: 'wanted' })
+    }
+    expect(offer).toHaveBeenCalledTimes(3)
+  })
+
   it('tries again to make its setup when making it failed', async () => {
     const make = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValueOnce({ offer: async () => ({ state: 'exists' }), decline: vi.fn() })
     const service = superTabService(fakeCore(), { teamSetup: make })
@@ -835,6 +927,8 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     const shared = answers([{ tabId: 'solo' }, { tabId: 'gone' }, { tabId: 'team' }],
       { solo: { people: [{ id: 'me' }] }, team: { people: [{ id: 'me' }, { id: 'kim' }] } })
     expect(await sharedSwarm(sources(shared))).toBe(true)
+    // A Swarm the team account is not tried in yet (backend machines.ts teamAccountSwarm) does not count.
+    expect(await sharedSwarm(sources(answers([{ tabId: 'team' }], { team: { people: [{ id: 'me' }, { id: 'kim' }], teamAccounts: false } })))).toBe(false)
     expect(shared.mock.calls.map(c => c[1])).toEqual(['/api/super-tabs/hosts/machine-1/changes?full=1',
       '/api/super-tabs/solo/parts', '/api/super-tabs/gone/parts', '/api/super-tabs/team/parts'])
     expect(await sharedSwarm(sources(answers([{ tabId: 'solo' }, { tabId: '../x' }], { solo: { people: [{ id: 'me' }] } })))).toBe(false)

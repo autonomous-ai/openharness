@@ -3,6 +3,8 @@ import type { AgentStart, Conversation } from './model.js'
 import { clock, guardedWrite, PartConflict, type HeadData, type ProgressData } from './parts/index.js'
 import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { logger } from '../utils/logger.js'
+import { ensureIndex } from '../lib/db/indexes.js'
+import { swarmTransaction } from './cache.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
  *  A person, agent or machine can come back under the same key, so its tombstone is kept for good, compacted to its
@@ -10,8 +12,13 @@ import { logger } from '../utils/logger.js'
  *  startup, like the terminal and mention expiry indexes. */
 export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
   for (const collection of ['SwarmHead', 'SwarmGroup', 'SwarmStart', 'SwarmProgress']) {
-    await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 }] })
+    await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'part_purge', expireAfterSeconds: 0 })
   }
+  // Workspaces (workspaceStore.ts): a removed person's row, a finished removal and a deleted Workspace 30 days on, an invitation when it expires.
+  for (const collection of ['SwarmWorkspace', 'SwarmWorkspaceMember', 'SwarmWorkspaceRemoval']) {
+    await ensureIndex(db, collection, { key: { purgeAt: 1 }, name: 'workspace_purge', expireAfterSeconds: 0 })
+  }
+  await ensureIndex(db, 'SwarmWorkspaceInvitation', { key: { expiresAt: 1 }, name: 'workspace_invitation_expiry', expireAfterSeconds: 0 })
 }
 
 /** A removed person, agent or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds
@@ -29,7 +36,7 @@ const BATCH = 500
 /** One guarded write in its own transaction. A part that changed since it was read is left for the next sweep. */
 async function guarded(db: PrismaClient, write: Parameters<typeof guardedWrite>[2] & { tabId: string }): Promise<boolean> {
   try {
-    await db.$transaction(tx => guardedWrite(tx, write.tabId, write, clock.next()))
+    await swarmTransaction(db, tx => guardedWrite(tx, write.tabId, write, clock.next()))
     return true
   } catch (error) {
     if (error instanceof PartConflict) return false
@@ -97,10 +104,10 @@ async function expireInvitations(db: PrismaClient, now: number): Promise<number>
     const kept = data.invitations.filter(i => i.expiresAt > now)
     if (kept.length === data.invitations.length) continue
     try {
-      await db.$transaction(async tx => {
+      await swarmTransaction(db, async tx => {
         await guardedWrite(tx, head.tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version, data: { ...data, invitations: kept },
           head: { groupCounter: head.groupCounter, visibilityEpoch: head.visibilityEpoch, sequenceBase: head.sequenceBase } }, clock.next())
-        const row = await tx.superTab.findUniqueOrThrow({ where: { id: head.tabId } })
+        const row = await tx.superTab.findUniqueOrThrow({ where: { id: head.tabId }, select: { revision: true } })
         const updated = await tx.superTab.updateMany({ where: { id: head.tabId, revision: row.revision },
           data: { revision: row.revision + 1, invitedEmails: kept.map(i => i.email) } })
         if (!updated.count) throw new PartConflict('head', 'index')
@@ -117,9 +124,11 @@ export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
     tombstonesCompacted: await compactTombstones(db, now) }
 }
 
-/** Runs the sweeps every hour in the singleton worker. */
-export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000): () => void {
-  const run = () => void sweepSwarms(db).then(result => logger.info('[swarm-sweeps] done', result))
+/** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals
+ *  did not all run (workspaceStore.ts SwarmWorkspaces.finishRemovals); it needs the store, so the worker passes it in. */
+export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishWorkspaceRemovals?: () => Promise<number>): () => void {
+  const run = () => void sweepSwarms(db).then(async result => ({ ...result, workspaceRemovalsPending: await finishWorkspaceRemovals?.() }))
+    .then(result => logger.info('[swarm-sweeps] done', result))
     .catch(error => logger.warn('[swarm-sweeps] failed', { error: error instanceof Error ? error.message : String(error) }))
   run()
   const timer = setInterval(run, everyMs)

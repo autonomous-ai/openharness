@@ -4,10 +4,79 @@ import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'model.dart';
+import 'project_github.dart';
 import 'project_visibility.dart';
 import 'roles_editor.dart';
+
+/// The spacing scale's steps (4, 8, 12) from the shared control gap, as the leaderboard rows take them.
+const _gap = DesktopChrome.controlGap;
+const _halfGap = _gap / 2;
+
+/// A project's details, read only: its description, repository, Product Manager and whether teammates' agents can
+/// push there, in the shared details frame (Ken, 2026-10-28).
+Future<void> _showProjectDetails(
+  BuildContext context,
+  SuperTabController c,
+  SuperTabProject project,
+) => showAppDialog<void>(
+  context: context,
+  builder: (context) => SuperTabDialogScope(
+    controller: c,
+    projectId: project.id,
+    requireWrite: false,
+    child: ListenableBuilder(
+      listenable: c,
+      builder: (context, _) {
+        final current = c.snapshot?.projects
+            .where((p) => p.id == project.id)
+            .firstOrNull;
+        final group = c.snapshot?.conversation(project.leadConversationId);
+        final brief = group?.brief.trim() ?? '';
+        return SuperTabDetailDialog(
+          title: current?.name ?? project.name,
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: _gap + _halfGap),
+                child: brief.isEmpty
+                    ? Text(
+                        'No description yet',
+                        style: DesktopChrome.metadata(),
+                      )
+                    : SelectableText(brief, style: DesktopChrome.text()),
+              ),
+              SuperTabDetailRow(
+                label: 'Repository',
+                child: SelectableText(
+                  current?.repository?['repositoryUrl'] as String? ??
+                      current?.repository?['cwd'] as String? ??
+                      'Not set',
+                  style: DesktopChrome.control(),
+                ),
+              ),
+              SuperTabDetailRow(
+                label: 'Product Manager',
+                value: group?.leadId == null
+                    ? 'Starting…'
+                    : c.snapshot!.agentName(group!.leadId!),
+              ),
+              // Whether teammates' agents can push to its repository, and what to do about it.
+              ProjectGitHubAccess(
+                controller: c,
+                projectId: project.id,
+                detailRow: true,
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  ),
+);
 
 Future<void> showProjectAction(
   BuildContext context,
@@ -17,6 +86,10 @@ Future<void> showProjectAction(
 ) async {
   if (action == 'delete') {
     await _deleteProject(context, c, project);
+    return;
+  }
+  if (action == 'details') {
+    await _showProjectDetails(context, c, project);
     return;
   }
   var name = project.name;
@@ -30,7 +103,7 @@ Future<void> showProjectAction(
     builder: (context) => SuperTabDialogScope(
       controller: c,
       projectId: project.id,
-      requireWrite: action != 'details',
+      requireWrite: true,
       child: StatefulBuilder(
         builder: (context, update) => ListenableBuilder(
           listenable: c,
@@ -38,16 +111,13 @@ Future<void> showProjectAction(
             final current = c.snapshot?.projects
                 .where((p) => p.id == project.id)
                 .firstOrNull;
-            final group = c.snapshot?.conversation(project.leadConversationId);
             final canManage = current?.ownerId == c.accountId;
-            final readOnly = action == 'details';
             return AlertDialog(
               title: Text(switch (action) {
                 'rename' => 'Rename project',
                 'sharing' => 'Sharing',
                 'skills' => 'Instructions for this project',
-                'cadence' => 'Project updates',
-                _ => 'Project details',
+                _ => 'Project updates',
               }),
               content: SizedBox(
                 width: 400,
@@ -215,34 +285,6 @@ Future<void> showProjectAction(
                                     ),
                           ],
                         ),
-                      if (readOnly) ...[
-                        Text(
-                          current?.name ?? project.name,
-                          style: DesktopChrome.text(medium: true),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          group?.brief.isNotEmpty == true ? group!.brief : 'Discuss the project with its product manager to define the work.',
-                          style: DesktopChrome.text(),
-                        ),
-                        const SizedBox(height: 16),
-                        Text('Repository', style: DesktopChrome.metadata()),
-                        SelectableText(
-                          current?.repository?['repositoryUrl'] as String? ??
-                              current?.repository?['cwd'] as String? ??
-                              'Not set',
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Product Manager',
-                          style: DesktopChrome.metadata(),
-                        ),
-                        Text(
-                          group?.leadId == null
-                              ? 'Starting…'
-                              : c.snapshot!.agentName(group!.leadId!),
-                        ),
-                      ],
                       if (c.operationError != null) ...[
                         const SizedBox(height: 12),
                         Text(c.operationError!),
@@ -259,49 +301,48 @@ Future<void> showProjectAction(
               actions: [
                 TextButton(
                   onPressed: busy ? null : () => Navigator.pop(context),
-                  child: Text(readOnly ? 'Close' : 'Cancel'),
+                  child: const Text('Cancel'),
                 ),
-                if (!readOnly)
-                  FilledButton(
-                    onPressed:
-                        busy ||
-                            c.saving ||
-                            c.hasPendingAction ||
-                            name.trim().isEmpty ||
-                            (action == 'skills' &&
-                                mode == 'custom' &&
-                                current?.roles == null) ||
-                            (action != 'cadence' && !canManage)
-                        ? null
-                        : () async {
-                            update(() => busy = true);
-                            final result = await c.command({
-                              'type':
-                                  'project.${action == 'rename'
-                                      ? 'rename'
-                                      : action == 'sharing'
-                                      ? 'sharing'
-                                      : action == 'skills'
-                                      ? 'skills'
-                                      : 'cadence'}',
-                              'projectId': project.id,
-                              if (action == 'rename') 'name': name.trim(),
-                              if (action == 'sharing') ...{
-                                'visibility': visibility,
-                                'memberIds': members.toList(),
-                              },
-                              if (action == 'cadence') 'minutes': minutes,
-                              if (action == 'skills') 'mode': mode,
-                            });
-                            if (!context.mounted) return;
-                            if (result != null) {
-                              Navigator.pop(context);
-                            } else {
-                              update(() => busy = false);
-                            }
-                          },
-                    child: const Text('Save'),
-                  ),
+                FilledButton(
+                  onPressed:
+                      busy ||
+                          c.saving ||
+                          c.hasPendingAction ||
+                          name.trim().isEmpty ||
+                          (action == 'skills' &&
+                              mode == 'custom' &&
+                              current?.roles == null) ||
+                          (action != 'cadence' && !canManage)
+                      ? null
+                      : () async {
+                          update(() => busy = true);
+                          final result = await c.command({
+                            'type':
+                                'project.${action == 'rename'
+                                    ? 'rename'
+                                    : action == 'sharing'
+                                    ? 'sharing'
+                                    : action == 'skills'
+                                    ? 'skills'
+                                    : 'cadence'}',
+                            'projectId': project.id,
+                            if (action == 'rename') 'name': name.trim(),
+                            if (action == 'sharing') ...{
+                              'visibility': visibility,
+                              'memberIds': members.toList(),
+                            },
+                            if (action == 'cadence') 'minutes': minutes,
+                            if (action == 'skills') 'mode': mode,
+                          });
+                          if (!context.mounted) return;
+                          if (result != null) {
+                            Navigator.pop(context);
+                          } else {
+                            update(() => busy = false);
+                          }
+                        },
+                  child: const Text('Save'),
+                ),
               ],
             );
           },

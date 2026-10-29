@@ -62,6 +62,8 @@ class SuperTabPmChatRow extends StatelessWidget {
     this.selected = false,
     this.unread = false,
     this.unreadCount = 0,
+    this.tooltip,
+    this.note,
   });
 
   /// The Product Manager's agent, for its avatar; null while it has none.
@@ -74,12 +76,16 @@ class SuperTabPmChatRow extends StatelessWidget {
   final int unreadCount;
   final VoidCallback? onTap;
 
+  /// What hovering says; Chat with PM's name when not given.
+  final String? tooltip;
+
+  /// A quiet word after the name, such as a Buddy's "offline".
+  final String? note;
+
   static const _column = SuperTabSectionHeading.actionWidth;
-  static const _dotSize = 6.0;
 
   @override
   Widget build(BuildContext context) {
-    final strong = selected || unread;
     final color = onTap == null
         ? DesktopChrome.muted
         : DesktopChrome.foreground;
@@ -98,9 +104,9 @@ class SuperTabPmChatRow extends StatelessWidget {
             focusColor: grid.AppSurface.hoverFill,
             borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
             child: Tooltip(
-              message: project == null
-                  ? kChatWithPm
-                  : '$kChatWithPm · $project',
+              message:
+                  tooltip ??
+                  (project == null ? kChatWithPm : '$kChatWithPm · $project'),
               child: Row(
                 children: [
                   SizedBox(width: SuperTabSectionHeading.indentFor(0)),
@@ -128,10 +134,16 @@ class SuperTabPmChatRow extends StatelessWidget {
                                 name,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.control(
-                                  medium: strong,
-                                  color: color,
-                                ),
+                                // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                style:
+                                    DesktopChrome.control(
+                                      medium: selected,
+                                      color: color,
+                                    ).copyWith(
+                                      fontWeight: unread
+                                          ? grid.AppFont.semibold
+                                          : null,
+                                    ),
                               ),
                             ),
                             if (project case final project?) ...[
@@ -145,6 +157,10 @@ class SuperTabPmChatRow extends StatelessWidget {
                                 ),
                               ),
                             ],
+                            if (note case final note?) ...[
+                              const SizedBox(width: 8),
+                              Text(note, style: DesktopChrome.metadata()),
+                            ],
                           ],
                         ),
                       ),
@@ -152,22 +168,16 @@ class SuperTabPmChatRow extends StatelessWidget {
                   ),
                   SizedBox(
                     width: _column,
-                    child: Center(
-                      child: unreadCount > 0
-                          ? SuperTabPmUnread(unreadCount)
-                          : unread
-                          ? Semantics(
-                              label: 'Unread messages',
-                              child: Container(
-                                width: _dotSize,
-                                height: _dotSize,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: DesktopChrome.accent,
-                                ),
-                              ),
-                            )
+                    // Unread is drawn as a bold name and heard in words.
+                    child: Semantics(
+                      label: unread && unreadCount == 0
+                          ? 'Unread messages'
                           : null,
+                      child: Center(
+                        child: unreadCount > 0
+                            ? SuperTabPmUnread(unreadCount)
+                            : null,
+                      ),
                     ),
                   ),
                   const SizedBox(width: _column),

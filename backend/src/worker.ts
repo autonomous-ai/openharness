@@ -1,11 +1,11 @@
 import 'dotenv/config'
-import { closeBus } from './lib/bus.js'
+import { closeBus, redisSwarmStamps } from './lib/bus.js'
+import { configureSwarmStamps } from './superTabs/cache.js'
 import { reconcileCommunityLikeCounts } from './lib/db/communityLikeCounts.js'
 import { backfillMachineFreeEntitlements } from './lib/db/freeEntitlement.js'
 import {
   backfillMachineAuthMode,
   backfillMachinePresenceTurnsStarted,
-  ensureSchema,
   migrateAutonomousEnvironment,
   migrateMachineRename,
   migrateUserIdentityByEmail,
@@ -14,12 +14,12 @@ import {
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
-import { ensureProductUsageExpiry } from './lib/productUsage.js'
-import { ensureTerminalExpiry } from './superTabs/terminal.js'
-import { ensureMentionExpiry } from './superTabs/mentions.js'
-import { ensurePartExpiry, startSwarmSweeps } from './superTabs/sweeps.js'
+import { releaseSchema } from './lib/db/schemaRelease.js'
+import { startSwarmSweeps } from './superTabs/sweeps.js'
+import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
+import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
@@ -35,11 +35,7 @@ async function start(): Promise<void> {
   await migrateUserIdentityByEmail()
   // Same reason: the old (user, day) unique must be gone before the push installs its replacement.
   await migrateUserPresencePerMachine()
-  ensureSchema()
-  await ensureProductUsageExpiry()
-  await ensureTerminalExpiry(prisma)
-  await ensureMentionExpiry(prisma)
-  await ensurePartExpiry(prisma)
+  await releaseSchema()
   // After the push, which adds the finished mark: parts written before it are marked once, so the archive pass finds them.
   await markFinishedGroups(prisma)
   // AFTER the push: it creates the new collections + their unique indexes, and the copy uses $merge
@@ -56,6 +52,7 @@ async function start(): Promise<void> {
 
   let stopSweeps = (): void => {}
   let stopArchive = (): void => {}
+  let stopDeliveries = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -64,6 +61,7 @@ async function start(): Promise<void> {
     productUsagePeopleRollupService.stop()
     stopSweeps()
     stopArchive()
+    stopDeliveries()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))
@@ -71,11 +69,17 @@ async function start(): Promise<void> {
 
   machineBillingWorkerService.start()
   productUsagePeopleRollupService.start()
-  stopSweeps = startSwarmSweeps(prisma)
+  // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
+  configureSwarmStamps(redisSwarmStamps(), { reads: false })
+  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once.
+  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries })
+  stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
-  stopArchive = startSwarmArchive(prisma, new SuperTabStore(prisma), () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
+  stopArchive = startSwarmArchive(prisma, swarms, () => githubApp ? appPullRequests(githubApp) : unknownPullRequests)
+  // A delivery that can no longer move ends as Not sent, instead of waiting for good (superTabs/deliverySettle.ts).
+  stopDeliveries = startDeliverySettle(prisma, swarms)
   // PM2 wait_ready gates the singleton worker's "online" state on schema/catalog/backfill startup.
   // Plain node/tsx runs do not provide process.send and simply continue.
   process.send?.('ready')

@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/desktop_chrome.dart';
+import 'format.dart';
 import 'model.dart';
 
-/// "Agents waiting on a person now": who and how many, in name order, never a
-/// ranking or blame. Answer goes straight to the viewer's own waiting item, or
-/// to the first one when none waits on them.
+/// Who agents wait on now, in words: "3 agents are waiting on Ken", "1 agent
+/// is waiting on you", in name order, never a ranking or blame. Answer goes
+/// straight to the viewer's own waiting item, or to the first one when none
+/// waits on them.
 class LeaderboardWaitingLine extends StatelessWidget {
   const LeaderboardWaitingLine({
     super.key,
@@ -27,42 +29,41 @@ class LeaderboardWaitingLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final target = _target;
-    return Container(
+    // The team total's quiet hierarchy and inset.
+    return Padding(
       key: const ValueKey('leaderboard-waiting'),
-      padding: const EdgeInsets.fromLTRB(16, 10, 12, 12),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: DesktopChrome.rim)),
+      padding: const EdgeInsets.fromLTRB(
+        DesktopChrome.groupGap,
+        DesktopChrome.controlGap,
+        DesktopChrome.controlGap,
+        DesktopChrome.controlGap,
       ),
       child: waiting.total == 0
           ? Text(
               'No agent is waiting on a person.',
               style: DesktopChrome.metadata(),
             )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          : Row(
               children: [
-                // The whole width, so the count never wraps beside Answer.
-                Text(
-                  '⏳ Agents waiting on a person now: ${waiting.total}',
-                  style: DesktopChrome.control(),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final person in waiting.people)
+                        Text(
+                          '${plural(person.count, 'agent')} '
+                          '${person.count == 1 ? 'is' : 'are'} waiting on '
+                          '${person.personId == viewerId ? 'you' : nameOf(person.personId)}',
+                          style: DesktopChrome.metadata(),
+                        ),
+                    ],
+                  ),
                 ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        waiting.people
-                            .map((p) => '${nameOf(p.personId)} ${p.count}')
-                            .join(' · '),
-                        style: DesktopChrome.metadata(),
-                      ),
-                    ),
-                    if (target != null)
-                      TextButton(
-                        onPressed: () => onAnswer(target),
-                        child: const Text('Answer'),
-                      ),
-                  ],
-                ),
+                if (target != null)
+                  TextButton(
+                    onPressed: () => onAnswer(target),
+                    child: const Text('Answer'),
+                  ),
               ],
             ),
     );

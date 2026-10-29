@@ -42,7 +42,12 @@ class _Socket implements WebSocketChannel {
   @override
   WebSocketSink get sink => _sink;
   void emit(Map<String, dynamic> frame) => _down.add(jsonEncode(frame));
-  WebSocketChannel factory(Uri _, Iterable<String> _) => this;
+  /// The address the swap dialled.
+  Uri? dialled;
+  WebSocketChannel factory(Uri uri, Iterable<String> _) {
+    dialled = uri;
+    return this;
+  }
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -170,6 +175,11 @@ void main() {
       );
       expect(seen!['self'], containsPair('kind', 'viewer'));
       expect(outcome.pinned, [_c]);
+      // It says what it is (WebSocket roadmap Phase 0).
+      expect(
+        socket.dialled.toString(),
+        'wss://relay.test/api/web-ws?autonomousEnv=prod&client=group-sync',
+      );
       expect(b64e((await keys.peer(_c))!.pub), cPub);
     },
   );

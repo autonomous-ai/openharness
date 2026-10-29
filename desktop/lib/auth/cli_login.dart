@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../core/harness_cli_runner.dart';
+import '../core/test_run.dart';
 import 'phone_sign_in.dart';
 import 'sign_in_client.dart';
 import 'sign_in_provider.dart';
@@ -46,6 +47,17 @@ class CliNotAvailableException implements Exception {
   String toString() => message;
 }
 
+/// A test signed out through the real Harness CLI: `harness logout` would sign this computer out
+/// for real, and every agent on it with it (10-27). An [Error], not an exception: the test is wrong,
+/// and nothing should catch this and carry on.
+class CliSignOutUnderTestError extends Error {
+  @override
+  String toString() =>
+      'A test signed out through the real Harness CLI, which would sign this computer out for '
+      'real. Give the app a fake sign-in client (AppNotifier(cliLogin: ...)), or CliLogin a fake '
+      'runner.';
+}
+
 /// Talks to the local `harness` CLI for everything auth-related: whether this computer already has a
 /// signed-in session, and driving `harness login --json`'s NDJSON event stream when it does not. The
 /// CLI owns the SSO session end to end (`~/.harness/auth/session.json`) — this app never sees, stores,
@@ -55,7 +67,10 @@ class CliLogin implements SignInClient, PhoneSignInClient {
   Process? _activeProcess;
   int _loginRevision = 0;
 
-  CliLogin({HarnessCliRunner? runner}) : _runner = runner ?? HarnessCliRunner();
+  /// Under flutter test with no [runner], one that runs nothing ([_NoCliUnderTest]): a test must
+  /// not reach this computer's real CLI, whose `harness logout` signs the whole computer out.
+  CliLogin({HarnessCliRunner? runner})
+    : _runner = runner ?? (kUnderTest ? _NoCliUnderTest() : HarnessCliRunner());
 
   /// While a sign-in waits on something before it can start — another sign-in on this computer
   /// still holding the daemon spawn lock — what the CLI said about it (its `waiting` event); null
@@ -207,6 +222,11 @@ class CliLogin implements SignInClient, PhoneSignInClient {
         if (onQr != null && code != null) {
           throw PhoneSignInException(code, text);
         }
+        // A browser one says so too, for the count of why sign-ins did not go through. A CLI that
+        // ended without a result line crashed or was killed: that is a reason of its own.
+        if (onQr == null && (code != null || !gotResult)) {
+          throw SignInException(code ?? 'NO_RESULT', text);
+        }
         throw StateError(text);
       }
     } finally {
@@ -228,11 +248,20 @@ class CliLogin implements SignInClient, PhoneSignInClient {
 
   @override
   Future<void> logout() async {
+    if (_runner is _NoCliUnderTest) {
+      // Reported to the test's zone as well as thrown: the app's sign-out catches what this throws
+      // and shows "could not be cleared", which a test can pass straight through.
+      final error = CliSignOutUnderTestError();
+      Zone.current.handleUncaughtError(error, StackTrace.current);
+      throw error;
+    }
     // Own a process handle: a timed-out logout must not remain alive and erase
     // the credentials saved by the user's next sign-in.
     final Process process;
     try {
-      process = await _runner.start(['logout']);
+      // A person pressed Sign out: the CLI refuses a sign-out nothing says a person asked for (10-27, when
+      // a test's `harness logout` signed a whole Mac out). A CLI from before the flag ignores it.
+      process = await _runner.start(['logout', '--from-sign-out-button']);
     } catch (error) {
       throw CliNotAvailableException('Could not run the harness CLI: $error');
     }
@@ -270,4 +299,22 @@ class CliLogin implements SignInClient, PhoneSignInClient {
     final lines = stdout.trim().split('\n').where((l) => l.trim().isNotEmpty);
     return lines.isEmpty ? null : lines.last.trim();
   }
+}
+
+/// [CliLogin]'s runner under flutter test when a test gives none: the CLI reads as not installed
+/// here, as on a computer without Harness (CI), and nothing is ever run.
+class _NoCliUnderTest extends HarnessCliRunner {
+  ProcessException _refused(List<String> arguments) => ProcessException(
+    'harness',
+    arguments,
+    'The real Harness CLI is never run under flutter test.',
+  );
+
+  @override
+  Future<ProcessResult> run(List<String> arguments) async =>
+      throw _refused(arguments);
+
+  @override
+  Future<Process> start(List<String> arguments) async =>
+      throw _refused(arguments);
 }

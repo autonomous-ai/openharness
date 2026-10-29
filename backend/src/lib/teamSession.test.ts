@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import Fastify, { type FastifyInstance } from 'fastify'
 
@@ -31,7 +31,9 @@ const m = vi.hoisted(() => {
   }
 })
 vi.mock('./prisma.js', () => ({ prisma: m.prisma, machineAlive: { OR: [{ deletedAt: null }, { deletedAt: { isSet: false } }] } }))
-vi.mock('./bus.js', () => ({ publishShareChanged: m.bus.changed, publishDeviceMachineListChanged: m.bus.listChanged, getAgentPresenceMany: m.bus.presence }))
+// `pub`: the Swarm routes' store shares its delivery poll memory through it (routes/superTabs.ts); these tests never poll.
+vi.mock('./bus.js', () => ({ publishShareChanged: m.bus.changed, publishDeviceMachineListChanged: m.bus.listChanged, getAgentPresenceMany: m.bus.presence,
+  pub: {} }))
 vi.mock('./deviceKeyLog.js', () => ({ readDeviceKeyLog: m.deviceKeys.read, deviceKeysSeen: m.deviceKeys.seen, appendDeviceKey: m.deviceKeys.append,
   readDeviceAcks: m.deviceKeys.acks, appendDeviceAck: m.deviceKeys.ack, touchDeviceKey: m.deviceKeys.touch }))
 vi.mock('./machineAccess.js', () => ({ machinesSharedWith: vi.fn(async () => []) }))
@@ -54,6 +56,7 @@ import { machineRoutes } from '../routes/machines.js'
 import { SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { SuperTabStore } from '../superTabs/store.js'
 import { TEAM_ROUTES } from './teamSession.js'
+import { createReadiness } from './readiness.js'
 
 const OWNER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 const TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -92,6 +95,8 @@ function recorder() {
   return { store: methods() as unknown as SuperTabStore, calls }
 }
 
+/** The fake GitHub App's private key: made once, as it is slow to make. */
+const appKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey
 let app: FastifyInstance
 let store: ReturnType<typeof recorder>
 beforeEach(async () => {
@@ -109,8 +114,12 @@ beforeEach(async () => {
   app = Fastify()
   app.setErrorHandler(errorHandler)
   registerAuthMiddleware(app, authenticate as never)
-  // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment).
-  const github = { issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
+  // A GitHub App that hands out a fixed token: the route's own checks are the store's (githubAssignment). Its config is
+  // what the routes sign GitHub approval states with (github/approvals.ts `stateSecret`), and a team session's commits
+  // carry the app's bot identity (github/app.ts `commitIdentity`).
+  const github = { app: { config: { appId: '424242', privateKey: appKey, slug: null },
+    commitIdentity: vi.fn(async () => ({ name: 'harness-app[bot]', email: '424242+harness-app[bot]@users.noreply.github.com' })) },
+    issue: vi.fn(async () => ({ token: 'fixture-token', expiresAt: new Date(0).toISOString() })), release: vi.fn(async () => {}),
     prepare: vi.fn(async () => ({ token: 'fixture-read-token', expiresAt: new Date(0).toISOString(), repository: 'example/project' })) }
   // The read API by parts is recorded the same way: its classes reach the store only through it.
   await app.register(superTabRoutes, { store: store.store, reads: store.store as never, hosts: store.store as never, github: github as never })
@@ -378,7 +387,7 @@ describe('the allowlist', () => {
       for (const method of [route.method].flat()) seen.add(`${method} ${route.url}`)
     })
     const { registerControlRoutes } = await import('../routes/control.js')
-    await registerControlRoutes(probe, { daemons: { on: true, users: null } as never, count: async () => 0 })
+    await registerControlRoutes(probe, { daemons: { on: true, users: null } as never, count: async () => 0, readiness: createReadiness({}) })
     await probe.ready()
     const named = TEAM_ROUTES.map(r => `${r.method} ${r.url}`)
     expect(new Set(named).size).toBe(named.length)

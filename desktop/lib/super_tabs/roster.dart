@@ -2,11 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/widgets/app_dialog.dart';
-import '../shared/widgets/app_icon_button.dart';
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
@@ -17,18 +15,18 @@ import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
 import 'controller.dart';
+import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
-import 'leaderboard/goal_line.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/waiting_line.dart';
 import 'model.dart';
+import 'profile_sheet.dart';
 import 'section_heading.dart';
-import 'team_glance.dart';
-import 'team_glance_panel.dart';
+import 'agent_line.dart';
 
 /// The current Swarm's authorized people, each with their week on the
 /// leaderboard of the open conversation's project, and agents from the
@@ -240,23 +238,24 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     return native ?? HarnessActivity.unknown;
   }
 
-  /// A person's email and role, and their week when the board has them.
+  /// A person's email and role, and their week when the board has them. One's
+  /// own also opens the profile sheet, where one's avatar and status change.
   Future<void> _person(SuperTabPerson person, SuperTabPersonScore? score) =>
       showAppDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: Text(superTabPersonName(person.email)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${person.email}\n${person.role}'),
-              if (score != null) ...[
-                const SizedBox(height: 12),
-                LeaderboardPersonWeek(score: score),
-              ],
-            ],
-          ),
+        builder: (context) => SuperTabDetailDialog(
+          title: leaderboardName(person, score),
+          // Who they are on one line under the name (Ken, 2026-10-28).
+          detail:
+              '${person.email} · ${switch (person.role) {
+                'owner' => 'Owner',
+                'viewer' => 'Can view',
+                _ => 'Can collaborate',
+              }}',
+          leading: SuperTabAvatar.person(person, size: 40),
+          body: score == null
+              ? const SizedBox.shrink()
+              : LeaderboardPersonWeek(score: score),
           actions: [
             TextButton(
               onPressed: () {
@@ -265,10 +264,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               },
               child: const Text('Manage people'),
             ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
+            if (person.id == c.accountId && c.canWrite)
+              TextButton(
+                key: const ValueKey('super-profile-edit'),
+                onPressed: () {
+                  Navigator.pop(context);
+                  showSuperTabProfile(this.context, c);
+                },
+                child: const Text('Edit profile'),
+              ),
           ],
         ),
       );
@@ -359,6 +363,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? 'Product Manager'
             : agent.isReviewer
             ? 'Reviewer'
+            : agent.isBuddy
+            ? 'Buddy'
             : 'Engineer');
     final badge =
         customRole?.name ??
@@ -366,6 +372,8 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? 'PM'
             : agent.isReviewer
             ? 'Rev'
+            : agent.isBuddy
+            ? 'Buddy'
             : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
@@ -424,10 +432,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           title: Row(
             children: [
-              SuperTabAvatar(
-                identity: 'agent:${agent.id}',
+              SuperTabAvatar.agent(
+                agent,
                 name: name,
-                size: 24,
+                size: SuperTabAvatar.rowSize,
+                engineBadge: false,
               ),
               const SizedBox(width: 8),
               Expanded(child: _agentIdentity(name, role, badge)),
@@ -511,6 +520,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       ...people.where((p) => !scores.containsKey(p.id)),
     ];
     final current = leaderboardWeekOf(widget.now());
+    // One set of numeric columns for every row.
+    final columns = board == null || board.people.isEmpty
+        ? null
+        : LeaderboardColumns.of(context, board.people);
     return [
       SuperTabSectionHeading(
         'Humans',
@@ -538,22 +551,23 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ),
         ],
       ),
-      if (board != null)
-        LeaderboardGoalLine(
-          goal: board.goal,
-          weekName: weekName(_board.week, current),
-        ),
       if (_board.error case final error?)
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+          padding: const EdgeInsets.fromLTRB(
+            DesktopChrome.groupGap,
+            0,
+            DesktopChrome.groupGap,
+            DesktopChrome.controlGap / 2,
+          ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
       for (final person in ranked)
         LeaderboardPersonRow(
-          personId: person.id,
-          name: superTabPersonName(person.email),
-          email: person.email,
+          person: person,
           score: scores[person.id],
+          columns: columns,
+          own: person.id == c.accountId,
+          weekName: weekName(_board.week, current),
           onTap: () => _person(person, scores[person.id]),
         ),
       if (board != null && board.waiting.total > 0)
@@ -564,11 +578,11 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             final person = state?.people.where((p) => p.id == id).firstOrNull;
             return person == null
                 ? 'Former member'
-                : superTabPersonName(person.email);
+                : leaderboardName(person, scores[id]);
           },
           onAnswer: widget.onAnswer,
         ),
-      const SizedBox(height: 16),
+      const SizedBox(height: DesktopChrome.groupGap),
       SuperTabSectionHeading(
         'Agents',
         // An agent joins the Product Managers' conversation by leading a project,
@@ -581,14 +595,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? () => widget.onAddAgent(c.selected!)
             : null,
         addTooltip: 'Add agent',
-        actions: [
-          AppIconButton(
-            icon: AppIcons.layoutGrid,
-            tooltip: 'Team at a glance',
-            onPressed: () =>
-                unawaited(showSuperTabTeamGlance(context, c, widget.app)),
-          ),
-        ],
       ),
       for (final agent in [...leads, ...agents]) _agent(agent),
     ];

@@ -1,5 +1,6 @@
 import { realTeamRelayLaunch } from '../team/relay.js'
 import { createGridAssignments } from './agents/gridAssignments.js'
+import { createShortTurnGuard } from './turns/shortTurnGuard.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
 import { createModelControls } from './engines/modelControls.js'
@@ -60,7 +61,7 @@ import { awakeTimeout } from '../lib/sleepAware.js'
 import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { harnessdEnv, holdHarnessdEnv } from '../lib/harnessdEnv.js'
 import { dropAgentSessionEnv } from '../lib/agentSessionEnv.js'
-import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
+import { AUTH_DIR, AuthSessionManager, ensureSignInEpoch, markSignedOut, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
@@ -1341,8 +1342,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hermesDb })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
+  // An agent whose turns keep ending at once has its automatic writes held a while (core/turns/shortTurnGuard.ts).
+  const shortTurns = createShortTurnGuard({ now: Date.now, log: (line) => console.warn(line) })
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
+    shortTurns,
     // The Swarm's chat is queued in the engine's own input while an agent works (superTabs/inCore/deliveries.ts).
     ...(swarm ? { typesWhileBusy: swarm.typesWhileBusy } : {}),
     readScreen: screens.read,
@@ -1812,6 +1816,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A live turn, however short and with no input of its own (a /loop wake-up, a background notification), restarts
     // the agent's quiet period: the mover's ticks alone, seconds apart, would miss it.
     working: (agentId) => hostQuiet.noteActivity(agentId, 'working'),
+    shortTurns,
   })
   // Cursor's Task hooks and the sub-agents they start (core/engines/cursorTasks.ts).
   const cursorTasks = createCursorTaskHooks({ emitSessionEvents, watcher, registry, cursorNormalizers })
@@ -1825,6 +1830,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   conversationOwners.settle()
   const forgetSession = createForgetSession({
     owners: conversationOwners,
+    shortTurns,
     forgetAttach: attach.forget,
     onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,
@@ -1959,7 +1965,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Account HTTP and the persistent machine cache belong to the gateway. The core routes the request
   // and keeps only state reported by that service, so a backend outage cannot stall an agent's loop.
-  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
+  function proxyBackend(method: string, path: string, body?: unknown): Promise<{ status: number; body: Record<string, unknown>; retryAfterMs?: number }> {
     return gatewayOps.backend(method, path, body)
   }
 
@@ -3131,15 +3137,21 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Windows: the master's stop is a message (harnessd/protocol.ts `harnessd:shutdown`), never a signal.
   coreLink.onShutdown(() => void shutdown('the harnessd master asked this core to stop'))
 
-  // A machine revocation or invalid SSO refresh ends this adapter session permanently.
+  // A machine revocation, a 401/403 on the backend link, or a refused SSO refresh ends this signed-in
+  // session: the daemon stops and comes back signed out. The sign-in is kept, marked signed out, and nothing
+  // reads it again until a new sign-in replaces it. 10-27: a sign-out nobody asked for stalled a whole Mac;
+  // only a person deletes it (lib/signOut.ts).
   backend.onRevoked = () => {
-    console.log('[cli] this computer was removed from the machine — clearing credentials and stopping')
-    clearAuthSession()
+    console.log('[cli] this computer\'s sign-in was revoked or refused — signed out, keeping it until a new sign-in, and stopping')
     // The web-tools cache lives exactly as long as the sign-in. `harness logout` and `reset` stop
     // the daemon outright; this is the one sign-out the daemon learns of from inside.
     ports.models?.signedOut()
     swarmDoors?.cards.reset()
-    void shutdown('revoked')
+    // Marked before the stop: the core that comes back must read it as signed out. The mark waits for a
+    // refresh another process has under way, so that refresh's save cannot write over it.
+    void markSignedOut('revoked')
+      .catch((error: unknown) => console.log(`[cli] could not mark the sign-in signed out (${error instanceof Error ? error.message : String(error)})`))
+      .finally(() => void shutdown('revoked'))
   }
 
   // Mirror the machine's display name to disk so `harness status` (a separate process) can print it.

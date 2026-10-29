@@ -18,7 +18,10 @@
 import { Redis } from 'ioredis'
 import { env } from '../config/env.js'
 import { logger } from '../utils/logger.js'
+import { createCircuitBreaker } from './circuitBreaker.js'
+import { guardRedisCommands, isRedisFailure, wasNotSent } from './redisGuard.js'
 import type { Frame, UpBusMsg, DownBusMsg } from './tunnel.js'
+import { redisStamps, type SwarmStamps } from '../superTabs/cache.js'
 
 // A connection in subscriber mode must never fail its (re)SUBSCRIBE commands, so the sub side keeps
 // ioredis' "retry forever" setting.
@@ -27,14 +30,26 @@ const subOpts = { maxRetriesPerRequest: null as null, lazyConnect: false }
 // default offline queue, every `publish` issued during a Redis outage (every up-frame from every manager
 // socket, every terminal packet) was stringified and parked in this process' heap until reconnect, and
 // every `await pub.set(...)` in an attach path hung — pinning its closure — for the whole outage.
+// A Redis that is up but stuck is the other half: each command waits out `commandTimeout`, so it is short, and a circuit
+// breaker (lib/redisGuard.ts) refuses commands outright after a few in a row have failed (Stability 3.5).
 const pubOpts = {
   maxRetriesPerRequest: 1,
   enableOfflineQueue: false,
-  commandTimeout: 5_000,
+  commandTimeout: env.REDIS_COMMAND_TIMEOUT_MS,
   lazyConnect: false,
 }
 
 export const pub = new Redis(env.REDIS_URL, pubOpts)
+guardRedisCommands(pub, createCircuitBreaker({
+  name: 'redis',
+  failureThreshold: 5,
+  openMs: 5_000,
+  isFailure: isRedisFailure,
+  onStateChange: (state) => {
+    if (state === 'open') logger.warn('[bus] Redis commands failing; refusing them for 5 s')
+    else logger.info('[bus] Redis commands', { state })
+  },
+}))
 const sub = new Redis(env.REDIS_URL, subOpts)
 const terminalSub = new Redis(env.REDIS_URL, subOpts)
 // App-proxy replies (`appup:{streamId}`) can be multi-MiB base64 bodies. Redis cuts a subscriber that
@@ -43,15 +58,63 @@ const terminalSub = new Redis(env.REDIS_URL, subOpts)
 // Isolated here, a heavy app stream can only hurt app streams.
 const appSub = new Redis(env.REDIS_URL, subOpts)
 
-/** Every fan-out publish is best-effort: Redis unreachable → dropped with a warning, 0 subscribers.
- *  Callers already read 0 as "nobody holds this machine right now", which is exactly the truth. */
+/**
+ * Every fan-out publish is best-effort. Callers read 0 as "nobody holds this machine right now".
+ *
+ * Single-pod mode: while Redis cannot take a publish at all (no connection, or its circuit is open), the publish goes
+ * straight to this pod's own subscribers, so everything whose two ends share a pod keeps working; that is the whole
+ * deployment when it runs one pod. Only a publish that certainly never reached Redis is delivered here: one that timed
+ * out may still be delivered by Redis, and a terminal keystroke must not arrive twice. That one is dropped, as before.
+ */
+let singlePod = false
 async function safePublish(channel: string, payload: string | Buffer): Promise<number> {
   try {
-    return await pub.publish(channel, payload)
+    const receivers = await pub.publish(channel, payload)
+    if (singlePod) {
+      singlePod = false
+      logger.info('[bus] Redis takes publishes again; single-pod mode is over')
+    }
+    return receivers
   } catch (err) {
-    logger.warn('[bus] publish dropped', { channel, error: err instanceof Error ? err.message : String(err) })
-    return 0
+    const error = err instanceof Error ? err.message : String(err)
+    if (!wasNotSent(err)) {
+      logger.warn('[bus] publish dropped', { channel, error })
+      return 0
+    }
+    if (!singlePod) {
+      singlePod = true
+      logger.warn('[bus] Redis cannot take publishes; single-pod mode: they reach only this pod\'s subscribers', { error })
+    }
+    return deliverLocally(channel, payload)
   }
+}
+
+/** A publish handed to this pod's subscribers as Redis would hand it back: later, parsed afresh. 1 if any listen. */
+function deliverLocally(channel: string, payload: string | Buffer): number {
+  if (typeof payload !== 'string') {
+    if (!binarySubs.get(channel)?.size) return 0
+    queueMicrotask(() => dispatchBinary(channel, payload))
+    return 1
+  }
+  const registry = [mainSubscriber, appSubscriber].find((r) => r.channelSubs.get(channel)?.size)
+  if (!registry) return 0
+  queueMicrotask(() => dispatchJson(registry, channel, payload))
+  return 1
+}
+
+/** How long a new subscription waits for Redis to confirm it. Past that it is registered here anyway and Redis
+ *  confirms it when it can (ioredis queues it and re-subscribes on reconnect): a socket attach must not wait out an
+ *  outage, and in single-pod mode local publishes reach it at once. */
+const SUBSCRIBE_WAIT_MS = 1_000
+
+/** Resolves when `work` does or after `ms`, whichever is first; rejects only if `work` fails within `ms`. */
+function settledWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  work.catch(() => { /* a late failure is logged where the subscription is made */ })
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+    work.then(() => { clearTimeout(timer); resolve() }, (err) => { clearTimeout(timer); reject(err) })
+  })
 }
 
 pub.on('error', (err: Error) => logger.error('[bus] pub redis error', err))
@@ -68,30 +131,33 @@ type Cb = (msg: unknown) => void
 /** One refcounted JSON subscriber registry per subscribe-mode connection. */
 interface JsonSubscriber {
   conn: Redis
+  label: string
   channelSubs: Map<string, Set<Cb>>
   channelSubscribePromises: Map<string, Promise<void>>
 }
 
-function createJsonSubscriber(conn: Redis, label: string): JsonSubscriber {
-  const registry: JsonSubscriber = { conn, channelSubs: new Map(), channelSubscribePromises: new Map() }
-  conn.on('message', (channel: string, payload: string) => {
-    const set = registry.channelSubs.get(channel)
-    if (!set || set.size === 0) return
-    let msg: unknown
+function dispatchJson(registry: JsonSubscriber, channel: string, payload: string): void {
+  const set = registry.channelSubs.get(channel)
+  if (!set || set.size === 0) return
+  let msg: unknown
+  try {
+    msg = JSON.parse(payload)
+  } catch (err) {
+    logger.error(`[bus] bad JSON on channel (${registry.label})`, err, { channel })
+    return
+  }
+  for (const cb of set) {
     try {
-      msg = JSON.parse(payload)
+      cb(msg)
     } catch (err) {
-      logger.error(`[bus] bad JSON on channel (${label})`, err, { channel })
-      return
+      logger.error(`[bus] subscriber callback threw (${registry.label})`, err, { channel })
     }
-    for (const cb of set) {
-      try {
-        cb(msg)
-      } catch (err) {
-        logger.error(`[bus] subscriber callback threw (${label})`, err, { channel })
-      }
-    }
-  })
+  }
+}
+
+function createJsonSubscriber(conn: Redis, label: string): JsonSubscriber {
+  const registry: JsonSubscriber = { conn, label, channelSubs: new Map(), channelSubscribePromises: new Map() }
+  conn.on('message', (channel: string, payload: string) => dispatchJson(registry, channel, payload))
   return registry
 }
 
@@ -121,7 +187,7 @@ async function addSubOn(reg: JsonSubscriber, channel: string, cb: Cb): Promise<(
   set.add(cb)
   if (subscribePromise) {
     try {
-      await subscribePromise
+      await settledWithin(subscribePromise, SUBSCRIBE_WAIT_MS)
     } catch (err) {
       const s = channelSubs.get(channel)
       if (s === set) {
@@ -160,20 +226,23 @@ const terminalDownChannel = (machineId: string): string => `termdown:${machineId
 
 type BinaryCb = (payload: Buffer) => void
 const binarySubs = new Map<string, Set<BinaryCb>>()
-terminalSub.on('messageBuffer', (channelRaw: Buffer, payload: Buffer) => {
-  const callbacks = binarySubs.get(channelRaw.toString('utf8'))
+function dispatchBinary(channel: string, payload: Buffer): void {
+  const callbacks = binarySubs.get(channel)
   if (!callbacks) return
   for (const callback of callbacks) {
     try { callback(Buffer.from(payload)) } catch (err) { logger.error('[bus] binary subscriber callback threw', err) }
   }
-})
+}
+terminalSub.on('messageBuffer', (channelRaw: Buffer, payload: Buffer) => dispatchBinary(channelRaw.toString('utf8'), payload))
 
 async function addBinarySub(channel: string, callback: BinaryCb): Promise<() => void> {
   let callbacks = binarySubs.get(channel)
   if (!callbacks) {
     callbacks = new Set()
     binarySubs.set(channel, callbacks)
-    await terminalSub.subscribe(channel)
+    const subscribed = terminalSub.subscribe(channel)
+    subscribed.catch((err: unknown) => logger.error('[bus] terminal subscribe failed', err, { channel }))
+    await settledWithin(subscribed, SUBSCRIBE_WAIT_MS)
   }
   callbacks.add(callback)
   return () => {
@@ -226,12 +295,52 @@ export function publishAgentMessageShareChanged(id: string): Promise<number> {
   return safePublish(`amsg-share:${id}`, '{}')
 }
 
+/** Who may watch an agent's terminal in a Swarm may have narrowed (a member removed, a project's sharing changed): its
+ *  observer sockets, on any instance, check again at once. No content on this channel. */
+export function subscribeSwarmAccessChanged(tabId: string, cb: () => void): Promise<() => void> {
+  return addSub(`swarm-access:${tabId}`, cb)
+}
+export function publishSwarmAccessChanged(tabId: string): Promise<number> {
+  return safePublish(`swarm-access:${tabId}`, '{}')
+}
+
+/** A Swarm terminal request was answered or refused: its sender's wait, on any instance, reads it again. No content. */
+export function subscribeTerminalAnswered(requestId: string, cb: () => void): Promise<() => void> {
+  return addSub(`terminal-answer:${requestId}`, cb)
+}
+export function publishTerminalAnswered(requestId: string): Promise<number> {
+  return safePublish(`terminal-answer:${requestId}`, '{}')
+}
+
 /** Frames between daemons of a shared tab, by tab and machine: sealed, never read here. */
 export function subscribeTabRelay(share: string, machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
   return addSub(`amsg:${share}:${machineId}`, cb as Cb)
 }
 export function publishTabRelay(share: string, machineId: string, msg: unknown): Promise<number> {
   return safePublish(`amsg:${share}:${machineId}`, JSON.stringify(msg))
+}
+
+/** A Swarm's stamp moved (superTabs/cache.ts): every instance frees what it holds of the Swarm at the old stamp. One
+ *  channel for every Swarm; a broadcast lost while Redis is down costs nothing, since each read checks the stamp itself. */
+const SWARM_STAMP = 'swarm-stamp'
+type StampScopes = Array<'main' | 'machine'>
+export function publishSwarmStamp(tabId: string, scopes: readonly ('main' | 'machine')[]): Promise<number> {
+  return safePublish(SWARM_STAMP, JSON.stringify({ tabId, scopes }))
+}
+export function subscribeSwarmStamps(cb: (tabId: string, scopes: StampScopes) => void): Promise<() => void> {
+  return addSub(SWARM_STAMP, (msg: unknown) => {
+    const { tabId, scopes } = (msg ?? {}) as { tabId?: unknown; scopes?: unknown }
+    if (typeof tabId !== 'string' || !Array.isArray(scopes) || !scopes.every(s => s === 'main' || s === 'machine')) return
+    cb(tabId, scopes as StampScopes)
+  })
+}
+
+/** The Swarm stamps on this Redis (superTabs/cache.ts), their bumps broadcast on the bus. */
+export function redisSwarmStamps(): SwarmStamps {
+  return redisStamps(pub, { publish: publishSwarmStamp, subscribe: listener => {
+    const subscribed = subscribeSwarmStamps(listener).catch((err: unknown) => { logger.error('[bus] Swarm stamp subscribe failed', err); return () => {} })
+    return () => { void subscribed.then(stop => stop()) }
+  } })
 }
 
 /** A machine's sharing changed (routes/machineShares.ts): a session another account holds to it on any
@@ -667,7 +776,8 @@ export function subscribeDeviceStatus(userId: string, cb: (msg: DeviceStatusMsg)
 // create/delete/rename happens on normal REST workers, while device/web sockets may live on another
 // worker, so Redis fans out "re-query the DB now".
 export interface DeviceMachineListChangedMsg {
-  reason: 'created' | 'deleted' | 'renamed' | 'updated' | 'environment_changed'
+  /** `harness_shares`: a harness shared with the account was invited or taken back (routes/harnessShares.ts). */
+  reason: 'created' | 'deleted' | 'renamed' | 'updated' | 'harness_shares' | 'environment_changed'
   autonomousEnv?: 'prod' | 'stag'
 }
 
@@ -677,6 +787,20 @@ export function publishDeviceMachineListChanged(userId: string, msg: DeviceMachi
 
 export function subscribeDeviceMachineListChanged(userId: string, cb: (msg: DeviceMachineListChangedMsg) => void): Promise<() => void> {
   return addSub(deviceMachineListChannel(userId), cb as Cb)
+}
+
+// Per-MACHINE Swarm deliveries: a delivery committed for one of this machine's agents (superTabs/store.ts deliveriesWaiting),
+// on some REST worker; the worker holding that machine's adapter socket tells its host (lib/swarmDeliveryPushes.ts).
+export interface SwarmDeliveriesMsg { tabId: string; agentId: string }
+
+const swarmDeliveriesChannel = (machineId: string): string => `swarm-deliveries:${machineId}`
+
+export function publishSwarmDeliveries(machineId: string, msg: SwarmDeliveriesMsg): Promise<number> {
+  return safePublish(swarmDeliveriesChannel(machineId), JSON.stringify(msg))
+}
+
+export function subscribeSwarmDeliveries(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(swarmDeliveriesChannel(machineId), cb)
 }
 
 // Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every
