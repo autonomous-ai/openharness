@@ -4,7 +4,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/swarm/swarm_needs_page.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
@@ -400,7 +400,7 @@ void main() {
     );
   });
 
-  testWidgets('Activity opens Needs you, as a tab with no way back, and '
+  testWidgets('Activity opens Activity, as a tab with no way back, and '
       'counts what waits on the person', (tester) async {
     await pump(tester, _tabs, fake: _asking());
     final badge = find.byKey(const ValueKey('swarm-tab-badge-activity'));
@@ -411,10 +411,10 @@ void main() {
 
     await open(tester, SwarmTab.activity);
 
-    expect(find.byType(SwarmNeedsPage), findsOneWidget);
+    expect(find.byType(SwarmActivityView), findsOneWidget);
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('swarm-title'))).data,
-      'Needs you',
+      'Activity',
     );
     expect(find.byKey(const ValueKey('tty-back')), findsNothing);
     expect(find.text('Ship it?'), findsOneWidget);
@@ -428,7 +428,7 @@ void main() {
     expect(find.text('the settings'), findsOneWidget);
   });
 
-  testWidgets('Needs you open on Activity mutes the notices it shows, and '
+  testWidgets('Activity open mutes the notices it shows, and '
       'out of sight under Harness mutes none', (tester) async {
     final hidden = ValueNotifier(false);
     await pump(

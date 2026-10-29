@@ -8,7 +8,7 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
-import 'swarm_needs_page.dart';
+import 'swarm_activity_page.dart';
 import 'swarm_page.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
@@ -58,9 +58,9 @@ class SwarmTabEntry {
 }
 
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
-/// here, one entry each. Each opens a screen the phone already has: Home,
-/// Needs you with what waits on the person counted, and [settings], the
-/// phone's Settings, as You. [onSettings] opens Settings over Home.
+/// here, one entry each: Home; Activity ([SwarmActivityView]) with what
+/// waits on the person counted; and [settings], the phone's Settings, as
+/// You. [onSettings] opens Settings over Home.
 ///
 /// Buddies is not on the bar until its screen comes (part b of direction
 /// C): main has no list of Buddies, each is in its project.
@@ -78,8 +78,8 @@ List<SwarmTabEntry> swarmTabs({
     tab: SwarmTab.activity,
     label: 'Activity',
     icon: LucideIcons.bell300,
-    screen: (_) => const SwarmNeedsPage(),
-    badge: (session) => (count: session.inbox.needs.length, warn: true),
+    screen: (_) => const SwarmActivityView(),
+    badge: (session) => (count: session.activity.badge, warn: true),
   ),
   SwarmTabEntry(
     tab: SwarmTab.you,
