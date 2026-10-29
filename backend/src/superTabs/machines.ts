@@ -388,8 +388,9 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) return null
-  const contributor = person(state, pool.contributorId)
-  if (contributor.role === 'viewer' || contributor.generation !== pool.membershipGeneration) {
+  // Its owner may have left the Swarm: that withdraws the machine, and says nothing about the caller's own access.
+  const contributor = state.people.find(p => p.id === pool.contributorId)
+  if (!contributor || contributor.role === 'viewer' || contributor.generation !== pool.membershipGeneration) {
     fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
   }
   return pool

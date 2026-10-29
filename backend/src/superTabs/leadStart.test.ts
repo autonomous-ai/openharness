@@ -153,6 +153,28 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(f.state.starts ?? []).toEqual([])
   })
 
+  it('is refused on a teammate\'s Mac once they left the Swarm, or while it is being removed, and records nothing', () => {
+    const left = swarm()
+    left.run({ type: 'member.remove', userId: 'mate' })
+    expect(refusal(() => left.lead('mate-mac'))?.code).toBe('CONTRIBUTION_REVOKED')
+    expect(left.state.starts ?? []).toEqual([])
+    const removing = swarm()
+    removing.machine('mate-mac').removal = { id: 'r1', state: 'cleaning', requestedAt: new Date(NOW).toISOString() }
+    removing.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => removing.lead('mate-mac'))?.code).toBe('MACHINE_REMOVED')
+    expect(removing.state.starts ?? []).toEqual([])
+  })
+
+  it('refuses a private project it cannot read exactly as one that does not exist, naming neither', () => {
+    const f = swarm()
+    const hidden = refusal(() => f.lead('mate-mac', {}, mate))
+    const unknown = refusal(() => f.run({ type: 'lead.start', projectId: 'no-such-project', machineId: 'mate-mac', engine: 'claude', repositoryUrl: REPO }, mate))
+    expect(hidden).toMatchObject({ code: 'NOT_FOUND' })
+    expect([unknown?.code, unknown?.status, unknown?.message]).toEqual([hidden?.code, hidden?.status, hidden?.message])
+    expect(hidden?.message).not.toContain('App')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
   it('needs the repository when the project has none yet', () => {
     const f = swarm()
     expect(refusal(() => f.lead('owner-mac', { repositoryUrl: undefined }))?.code).toBe('REPOSITORY_REQUIRED')
@@ -311,6 +333,51 @@ describe('the terminal of a Product Manager in a Team account', () => {
     expect(t.screen(owner)).toBe('ok')
     expect(t.input(owner)).toBe('ok')
     expect(t.input(mate)).toBe('TERMINAL_PRIVATE')
+  })
+})
+
+// The trust change Ken chose (10-29): with no Team account able to take it, a teammate's Mac runs the Product Manager in
+// its owner's own account. That owner can read whatever the Product Manager reads on their Mac; the Swarm adds no more.
+describe('the terminal of a Product Manager on a teammate\'s Mac, as its owner', () => {
+  async function running(visibility: 'private' | 'public') {
+    const f = swarm()
+    if (visibility === 'public') f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'public', memberIds: [] })
+    f.machine('mate-team').observation = reading('team', FAILED)
+    const startId = f.lead('mate-mac').result.startId as string
+    const contribution = { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null }
+    const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, { contribution }).result.agentId as string
+    const { canWatchAgent } = await import('./projects.js')
+    const agent = f.state.agents.find(a => a.id === pm)!
+    const code = (actor: Actor, command: Command) => refusal(() => f.run(command, actor))?.code ?? 'ok'
+    return { agent, watch: (actor: Actor) => canWatchAgent(f.state, actor, agent),
+      screen: (actor: Actor) => code(actor, { type: 'agent.screen', agentId: pm, scrollback: 50 }),
+      input: (actor: Actor) => code(actor, { type: 'agent.input', agentId: pm, text: 'ls ~' }) }
+  }
+
+  it('runs on the Mac itself, outside any Team account', async () => {
+    const t = await running('private')
+    expect(t.agent).toMatchObject({ machineId: 'mate-mac', machineOwnerId: 'mate' })
+    expect((t.agent as { teamAccount?: boolean }).teamAccount).toBeUndefined()
+  })
+
+  it('its project\'s owner follows its chat, but neither reads nor types in the terminal of another person\'s account', async () => {
+    for (const visibility of ['private', 'public'] as const) {
+      const t = await running(visibility)
+      expect(t.watch(owner)).toBe(true)
+      expect(t.screen(owner)).toBe('TERMINAL_PRIVATE')
+      expect(t.input(owner)).toBe('TERMINAL_PRIVATE')
+    }
+  })
+
+  it('the Mac\'s owner reaches it through the Swarm only when they may read the project: a private one they are not in shows them nothing', async () => {
+    const hidden = await running('private')
+    expect(hidden.watch(mate)).toBe(false)
+    expect(hidden.screen(mate)).toBe('AGENT_UNAVAILABLE')
+    expect(hidden.input(mate)).toBe('AGENT_UNAVAILABLE')
+    const open = await running('public')
+    expect(open.watch(mate)).toBe(true)
+    expect(open.screen(mate)).toBe('ok')
+    expect(open.input(mate)).toBe('ok')
   })
 })
 

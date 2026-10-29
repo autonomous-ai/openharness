@@ -70,6 +70,21 @@ A new project's Product Manager starts on any machine of the Swarm (Ken, 2026-10
 that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account,
 unless the Mac was added to the Swarm as its person joined: such a Mac takes it only in its Team account.
 
+Who can start it, where, and who then reaches it:
+
+- **Who starts it**: only the project's owner, a person (not an agent), with `lead.start`. They always name the machine
+  (only they know which one stays on); with none named the server refuses (`MACHINE_REQUIRED`), and nothing places it on
+  another machine. New Project chooses none for them.
+- **Where**: a machine on the Swarm's Machines list whose contribution is still valid, not paused or offline, with a free
+  agent slot, an engine it runs, and a Harness that starts Product Managers. New Project lists only these as choosable
+  and greys out the rest with the reason.
+- **Whose account**: on the owner's own machine, theirs. On a teammate's Mac, its Harness Team account when it passes its
+  privacy check, its host starts Product Managers and it runs no other project's work; nobody types in it there, and the
+  Mac's owner does not watch it. Otherwise the Mac itself, in its owner's account: **that owner can read whatever the
+  Product Manager reads and writes on their Mac** (the trust change Ken chose, 10-29). Through the Swarm, the project's
+  owner follows its chat but neither reads nor types in its terminal there; the Mac's owner reaches its terminal only
+  when they may read the project, so a private project they are not in shows them nothing.
+
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
 date. A start that names no `branchRef` therefore bases its worktree on the
