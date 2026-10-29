@@ -211,6 +211,17 @@ describe('the automatic removal after a release', () => {
     expect(waits).toBe(2)
   })
 
+  it('stops after the write in flight when asked, leaving the rest alone', async () => {
+    await empty()
+    const [first, second] = [await migratedSwarm(), await migratedSwarm()]
+    const control = new AbortController()
+
+    const report = await dropLegacyUntilDone(db, { batch: 1, signal: control.signal, pause: async () => control.abort(), wait: async () => {} })
+
+    expect(report).toMatchObject({ removed: 1, batches: 1, done: false })
+    expect([await kept(first), await kept(second)].filter(state => state === null)).toHaveLength(1)
+  })
+
   it('runs by itself once started, and stops when asked', async () => {
     await empty()
     const ids = [await migratedSwarm(), await migratedSwarm()]

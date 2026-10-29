@@ -36,7 +36,7 @@ export async function dropLegacyUntilDone(db: PrismaClient, { batch = JOB_BATCH,
   let report: DropReport | null = null
   while (!signal?.aborted) {
     try {
-      report = await dropLegacyStates(db, { apply: true, batch, pause })
+      report = await dropLegacyStates(db, { apply: true, batch, pause, signal })
       log({ ...report })
       if (report.done) return report
     } catch (error) {
