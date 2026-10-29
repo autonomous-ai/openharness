@@ -4,6 +4,7 @@
  * work. The core is handed it while the Swarm is on, and refuses a start with a Swarm role while it is off.
  */
 import type { SwarmLaunch } from '../../core/api.js'
+import { swarmEngineArgs } from '../../lib/swarmEngineArgs.js'
 import { swarmGitHubLaunch } from '../../lib/swarmGitHub.js'
 import { isSwarmRole, isSwarmSkillMode, prepareSwarmSkill } from '../../lib/swarmSkills.js'
 
@@ -12,4 +13,5 @@ export const SWARM_LAUNCH: SwarmLaunch = {
   mode: isSwarmSkillMode,
   prepare: prepareSwarmSkill,
   github: (key) => swarmGitHubLaunch(key),
+  args: swarmEngineArgs,
 }
