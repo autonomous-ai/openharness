@@ -383,7 +383,15 @@ class SwarmLeaderboardReader extends ChangeNotifier {
       unavailable = false;
     } on SuperTabFailure catch (failure) {
       if (read != _read || _disposed) return;
-      if (failure.statusCode == 404) {
+      if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+        // Refused: the person left the Swarm or was removed, or the project
+        // is not theirs to read. Nothing of the board stays on screen.
+        board = null;
+        error = failure.message;
+        unavailable = false;
+      } else if (failure.statusCode == 404) {
+        // A server from before the leaderboard has no route for it, which
+        // reaches the phone without the backend's NOT_FOUND code.
         board = null;
         error = null;
         unavailable = true;

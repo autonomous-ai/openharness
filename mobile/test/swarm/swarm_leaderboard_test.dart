@@ -444,8 +444,16 @@ void main() {
     });
 
     test('a server without a leaderboard says it has none', () async {
-      // FakeSwarm answers 404 for a path it has no route for.
-      final read = reader(FakeSwarm());
+      // What the CLI hands on for a backend with no such route: Fastify's
+      // own 404 carries no code (cli/src/superTabs/wire.ts).
+      final read = reader(
+        FakeSwarm()
+          ..routes[path] = (_) => throw const SuperTabFailure(
+            'BACKEND_UNAVAILABLE',
+            'Route GET:/api/super-tabs/$tab/leaderboard not found',
+            statusCode: 404,
+          ),
+      );
 
       await read.refresh();
 
@@ -454,6 +462,42 @@ void main() {
       expect(read.error, isNull);
       expect(read.loading, isFalse);
     });
+
+    for (final (why, refusal) in [
+      (
+        'removed from the Swarm',
+        const SuperTabFailure(
+          'FORBIDDEN',
+          'You no longer have access to this Super Tab.',
+          statusCode: 403,
+        ),
+      ),
+      (
+        'the project is no longer theirs to read',
+        const SuperTabFailure(
+          'NOT_FOUND',
+          'This project is unavailable.',
+          statusCode: 404,
+        ),
+      ),
+    ]) {
+      test('a refusal ($why) clears the board at once and says why', () async {
+        var refuse = false;
+        final fake = FakeSwarm()
+          ..routes[path] = (_) => refuse ? throw refusal : leaderboardData();
+        final read = reader(fake);
+        await read.refresh();
+        expect(read.board, isNotNull);
+
+        refuse = true;
+        await read.refresh();
+
+        expect(read.board, isNull, reason: 'no row of it stays on screen');
+        expect(read.error, refusal.message);
+        expect(read.unavailable, isFalse, reason: 'not a server without one');
+        expect(read.loading, isFalse);
+      });
+    }
 
     test('reads again every five minutes, only while the app is in '
         'front', () {

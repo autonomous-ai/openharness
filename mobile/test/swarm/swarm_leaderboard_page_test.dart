@@ -477,7 +477,14 @@ void main() {
   testWidgets('a server without a leaderboard says it has none', (
     tester,
   ) async {
-    final fake = backend()..routes.remove(path);
+    // What the CLI hands on for a backend with no such route: Fastify's own
+    // 404 carries no code (cli/src/superTabs/wire.ts).
+    final fake = backend()
+      ..routes[path] = (_) => throw const SuperTabFailure(
+        'BACKEND_UNAVAILABLE',
+        'Route GET:/api/super-tabs/$tab/leaderboard not found',
+        statusCode: 404,
+      );
     await pump(tester, fake);
     await tester.pumpAndSettle();
 
