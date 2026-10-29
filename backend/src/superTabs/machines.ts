@@ -292,6 +292,11 @@ export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, 
   return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
 }
 
+/** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
+ *  from a team session). */
+export const teamAccountPool = (pool: ContributedMachine | null | undefined): boolean =>
+  !!pool && (!!pool.hostMachineId || pool.observation?.sessionKind === 'team')
+
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
 export function teamMachineFor(state: SuperTabState, machineId: string, project: SwarmProject, idle = false, live?: readonly string[]): string {

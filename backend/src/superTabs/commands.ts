@@ -1,4 +1,4 @@
-import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -1503,6 +1503,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
         ...(start.request.gridModel ? { gridModel: start.request.gridModel } : {}),
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
+        ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId

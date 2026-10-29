@@ -250,3 +250,44 @@ describe('a Product Manager waiting for a machine', () => {
     expect(f.project().lead).toMatchObject({ status: 'waiting', request: expect.objectContaining({ model: 'opus' }) })
   })
 })
+
+// R2 (Lead, #895): a Team account runs every teammate's work as one macOS user, its folders holding other projects' clones.
+// Typing in a Product Manager there is a shell that reads them, so nobody types in it through the Swarm; its project's owner
+// may watch it, and the Mac's owner neither watches nor types. On the project owner's own machine nothing changes.
+describe('the terminal of a Product Manager in a Team account', () => {
+  async function running(machineId: string) {
+    const f = swarm()
+    // Public, so the Mac's owner reads the project as every member does.
+    f.run({ type: 'project.sharing', projectId: f.app.projectId, visibility: 'public', memberIds: [] })
+    const startId = f.lead(machineId).result.startId as string
+    const pool = f.state.starts!.find(s => s.id === startId)!.request.machineId
+    const contribution = { machineOwnerId: f.machine(pool).contributorId, contributorId: f.machine(pool).contributorId, hostGrant: null }
+    const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, { contribution }).result.agentId as string
+    const { canWatchAgent } = await import('./projects.js')
+    const watch = (actor: Actor) => canWatchAgent(f.state, actor, f.state.agents.find(a => a.id === pm)!)
+    const screen = (actor: Actor) => refusal(() => f.run({ type: 'agent.screen', agentId: pm, scrollback: 50 }, actor))?.code ?? 'ok'
+    const input = (actor: Actor) => refusal(() => f.run({ type: 'agent.input', agentId: pm, text: 'ls ~' }, actor))?.code ?? 'ok'
+    return { f, pm, watch, screen, input }
+  }
+
+  it('its project\'s owner watches it but cannot type in it', async () => {
+    const t = await running('mate-mac')
+    expect(t.watch(owner)).toBe(true)
+    expect(t.screen(owner)).toBe('ok')
+    expect(t.input(owner)).toBe('TERMINAL_PRIVATE')
+  })
+
+  it('the Mac\'s owner neither watches it nor reads or types in it', async () => {
+    const t = await running('mate-mac')
+    expect(t.watch(mate)).toBe(false)
+    expect(t.screen(mate)).toBe('TERMINAL_PRIVATE')
+    expect(t.input(mate)).toBe('TERMINAL_PRIVATE')
+  })
+
+  it('on the project owner\'s own machine, its owner still reads and types in it', async () => {
+    const t = await running('owner-mac')
+    expect(t.screen(owner)).toBe('ok')
+    expect(t.input(owner)).toBe('ok')
+    expect(t.input(mate)).toBe('TERMINAL_PRIVATE')
+  })
+})
