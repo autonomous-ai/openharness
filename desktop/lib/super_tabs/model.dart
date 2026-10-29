@@ -196,6 +196,7 @@ class SuperTabConversation {
           row['projectId'] as String? ?? (row['kind'] == 'leads' ? '' : 'lead'),
       kind = row['kind'] as String?,
       buddyOwnerId = row['buddyOwnerId'] as String?,
+      buddyName = row['buddyName'] as String?,
       number = (row['number'] as num?)?.toInt(),
       title = _text(row, 'title'),
       leadId = row['leadId'] as String?,
@@ -247,6 +248,10 @@ class SuperTabConversation {
 
   /// The person a Buddy chat belongs to; only they read it.
   final String? buddyOwnerId;
+
+  /// The name a Buddy chat's person chose for their Buddy, kept while no
+  /// Buddy runs; null for the default (backend buddies.ts renameBuddy).
+  final String? buddyName;
   final SuperTabTask? task;
   final int? number;
   String get label => number == null ? title : '#$number $title';
@@ -569,6 +574,12 @@ class SuperTabSnapshot {
             ?.contributorId;
     return team != null && contributor != accountId ? team : own;
   }
+
+  /// The pool whose allowances the machine row [machineId] shows, to every viewer: the machine's own. A Mac's Harness
+  /// Team account holds no sign-in of its own; its agents spend the Mac owner's subscriptions, which the Mac reads.
+  /// The Team account's pool only for a row without one of its own.
+  Map<String, dynamic>? subscriptionPoolOf(String machineId) =>
+      pool(machineId) ?? teamPoolOf(machineId);
 
   /// The machine [machineId] is shown as in this Swarm, one row per computer: the Mac, for its Harness Team account
   /// while that Mac is in the Swarm too; [machineId] itself otherwise.

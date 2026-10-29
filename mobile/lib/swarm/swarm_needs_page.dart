@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -37,6 +38,9 @@ List<SwarmNeed> swarmNeedsOf(SwarmInbox inbox, String? swarmId) => [
 /// ([SwarmNeedRow]) — the one tapped, while it waits, else the first;
 /// answered or done, the next one opens — and the others a line each that
 /// opens it in its place.
+///
+/// Also the Activity tab ([SwarmTabsPage]): there, at the root, it has no
+/// back button, and it is kept out of sight while another tab is open.
 class SwarmNeedsPage extends StatefulWidget {
   const SwarmNeedsPage({super.key, this.focus, this.swarmId});
 
@@ -54,20 +58,29 @@ class _SwarmNeedsPageState extends State<SwarmNeedsPage> {
   SwarmSession? _session;
   late String? _focus = widget.focus;
 
+  /// Kept out of sight — a tab under another, or under Harness: no Swarm
+  /// screen meanwhile, so a notice tells what arrives. Shown again, it reads
+  /// the Swarms.
+  bool _hidden = false;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final session = SwarmScope.of(context);
-    if (session == _session) return;
-    _session?.leave();
-    _session = session?..enter();
+    final hidden = OutOfSight.of(context);
+    if (session == _session && hidden == _hidden) return;
+    if (!_hidden) _session?.leave();
+    _session = session;
+    _hidden = hidden;
+    if (hidden || session == null) return;
+    session.enter();
     // Joins Home's read when it opened from Home.
-    if (session != null) unawaited(session.inbox.refresh());
+    unawaited(session.inbox.refresh());
   }
 
   @override
   void dispose() {
-    _session?.leave();
+    if (!_hidden) _session?.leave();
     super.dispose();
   }
 
@@ -75,6 +88,8 @@ class _SwarmNeedsPageState extends State<SwarmNeedsPage> {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final session = _session;
+    // Pushed over Home, or a tab at the root.
+    final pushed = ModalRoute.isFirstOf(context) == false;
     return Scaffold(
       backgroundColor: AppPalette.windowBg,
       body: SafeArea(
@@ -82,18 +97,21 @@ class _SwarmNeedsPageState extends State<SwarmNeedsPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SwarmTopBar(
-              leading: SwarmBackButton(
-                onPressed: () => Navigator.of(context).maybePop(),
-              ),
-              title: 'Needs you',
-            ),
+            if (pushed)
+              SwarmTopBar(
+                leading: SwarmBackButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                ),
+                title: 'Needs you',
+              )
+            else
+              const SwarmTabHeader('Needs you'),
             Expanded(
               child: session == null
                   ? const SizedBox.shrink()
-                  : ListenableBuilder(
+                  : ListenWhileInSight(
                       listenable: Listenable.merge([session, session.inbox]),
-                      builder: (context, _) => ListView(
+                      builder: (context) => ListView(
                         padding: EdgeInsets.fromLTRB(
                           AppSpace.m,
                           AppSpace.s,

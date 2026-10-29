@@ -134,7 +134,7 @@ function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: C
   return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
 }
 
-/** Every model that worked this week: the requests its attempts shipped, the first reviews of its attempts, and the review
+/** Every model that worked this week: its attempts, the requests they shipped, their first reviews, and the review
  *  verdicts it gave. A request ships on its last attempt before it shipped. */
 function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], inWeek: (at: number) => boolean): ModelScore[] {
   const rows = new Map<string, ModelScore & { attemptMs: number[]; requestMs: number[] }>()
@@ -142,7 +142,7 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
     const key = JSON.stringify([on.engine, on.model, on.effort ?? null])
     let entry = rows.get(key)
     if (!entry) rows.set(key, entry = { engine: on.engine, model: on.model, effort: on.effort ?? null, grid: !!on.grid, points: 0, rank: 0,
-      shipped: { count: 0, medianAttemptMs: null, medianRequestMs: null }, firstReview: { reviewed: 0, passed: 0 }, reviews: 0,
+      attempts: 0, shipped: { count: 0, medianAttemptMs: null, medianRequestMs: null }, firstReview: { reviewed: 0, passed: 0 }, reviews: 0,
       attemptMs: [], requestMs: [] })
     return entry
   }
@@ -162,6 +162,7 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
     for (const run of group.ledger?.runs ?? []) {
       if (!inWeek(run.at)) continue
       const entry = row(run)
+      entry.attempts++
       if (run.firstReview === undefined) continue
       entry.firstReview.reviewed++
       if (run.firstReview) entry.firstReview.passed++
