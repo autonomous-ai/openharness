@@ -43,6 +43,7 @@ import { PaneInbox } from './inbox.js'
 import { Mailbox, type MailboxAgent } from './mailbox.js'
 import { type DeliveryStatus, LIMITS, LONG_TEXT, longAdvice, type Message, MessageError, messageId, note, parseMessage, type Recipient, rendered, type TabNote, type Teammate } from './model.js'
 import { TOLD_TAB, tellRefusal, toldText } from './tell.js'
+import { PERSON_AGENT_ID, REPLIED_TAB, replyRefusal } from './replyLocal.js'
 import { messagesRpc, RefusedError, type Rpc } from './rpc.js'
 import { RequestStore } from './requestStore.js'
 import { cleanName, type Roster } from './roster.js'
@@ -231,6 +232,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
   /** Whether a harness's starter may tell it more work (`agents-tell-agents`): read at each use, as few as they are, so
    *  a switch turned off stops what still waits at the mailbox's next look. */
   const tellOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).agentsTellAgents
+  /** Whether a program acting for the person may reply to a harness here (`programs-reply`): read at each use, as `tellOn`. */
+  const replyOn = (): boolean => readAgentSettings(options.dataDir ?? core.dataDir).programsReply
   let waking = false
   const later = (): void => {
     if (waking) return
@@ -282,6 +285,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     text: (delivery, message) => {
       // More work from its starter: no tab, so no roster note, which would invite it to message its teammates.
       if (message.tabId === TOLD_TAB) return toldText(message)
+      // The person's words, as they would type them: no header, as `harness reply` to a cloud harness sends them.
+      if (message.tabId === REPLIED_TAB) return message.text
       const roster = rosterOf(delivery.agentId)
       const text = rendered(message, account?.accountId)
       return roster && store.state.noted[delivery.agentId] !== roster.signature ? `${roster.text}\n\n${text}` : text
@@ -323,6 +328,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
       const refusal = tellRefusal({ on: tellOn(), lineage, self: self(), live: () => true }, entry.message.from, delivery.agentId)
       return refusal ? { refused: refusal.message } : null
     }
+    // A program's reply for the person: the switch is looked at again at each look, as a tell's is.
+    if (entry.message.tabId === REPLIED_TAB) return replyOn() ? null : { refused: 'programs-reply was turned off' }
     if (!directory.current() && directory.on()) return null
     const key = `${delivery.messageId} ${delivery.agentId}`
     const recipient = { machineId: self(), agentId: delivery.agentId }
@@ -655,6 +662,45 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
     store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
     mailbox.accept(message, agentId)
     // Asleep (Agent Messages off), the mailbox looks only while something waits: this does now.
+    mailbox.resume()
+    saveQuietly()
+    const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
+    return { id: message.id, state: status?.state ?? 'queued', ...(status?.reason ? { reason: status.reason } : {}) }
+  }
+
+  /** When programs replied to harnesses here, for the rate limit: the same 30 in 10 minutes a `tell` has. */
+  const repliedAt: number[] = []
+
+  /**
+   * `harness reply` to a harness in a pane here (replyLocal.ts), from a program acting for the person: a process of the
+   * owner's on this machine, or another of the owner's machines over the relay. Only an idle harness, only with the
+   * person's switch on; queued in the mailbox, which types it once the composer is free.
+   */
+  async function replyLocal(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const agentId = typeof payload.agentId === 'string' ? payload.agentId : ''
+    const text = typeof payload.text === 'string' ? payload.text : ''
+    if (!agentId) throw new MessageError('USAGE', 'Name the harness to reply to.')
+    if (!text.trim()) throw new MessageError('USAGE', 'Give the words: harness reply <name> -- <words>')
+    if (text.length > LIMITS.text) throw new MessageError('TOO_LONG', `A message holds at most ${LIMITS.text} characters.`)
+    const session = localAgent(agentId)
+    const activity = session ? (await core.agents.activity([agentId]))[agentId] ?? 'unknown' : 'unknown'
+    const refusal = replyRefusal({ on: replyOn(), live: !!session, activity })
+    if (refusal) throw new MessageError(refusal.code, refusal.message)
+    while (repliedAt.length && now() - repliedAt[0] >= LIMITS.window) repliedAt.shift()
+    if (repliedAt.length >= LIMITS.perSender) throw new MessageError('RATE_LIMITED', `Programs replied to your harnesses ${LIMITS.perSender} times in 10 minutes. Wait for their answers first.`)
+    if (store.state.local.filter((d) => d.state === 'queued').length >= LIMITS.waiting) {
+      throw new MessageError('MAILBOX_FULL', 'Too many messages are waiting on that machine. Try again once some are delivered.')
+    }
+    const machine = typeof payload.machine === 'string' && payload.machine.trim() ? payload.machine.trim().slice(0, 200) : machineName(self())
+    const message: Message = {
+      id: messageId(), tabId: REPLIED_TAB, text, at: now(),
+      to: [{ machineId: self(), agentId, name: core.agents.displayName(session!) || agentId.slice(0, 8) }],
+      from: { machineId: self(), agentId: PERSON_AGENT_ID, name: 'the person', engine: '', machine },
+    }
+    repliedAt.push(now())
+    store.record(message)
+    store.status({ messageId: message.id, machineId: self(), agentId, state: 'queued', at: now() })
+    mailbox.accept(message, agentId)
     mailbox.resume()
     saveQuietly()
     const status = store.entry(message.id)?.statuses.find((s) => s.machineId === self() && s.agentId === agentId)
@@ -1628,6 +1674,8 @@ export function startAgentMessages(core: CoreApi, options: MessagesOptions = {})
           case 'started': return started(payload)
           // From a pane here, or another of the owner's machines over the relay: `tell` tells them apart.
           case 'tell': return tell(payload, asker.local)
+          // A program acting for the person, here or on another of the owner's machines (replyLocal.ts).
+          case 'reply_local': return replyLocal(payload)
           case 'history': return history(payload)
           // The windows' sidebar: every harness of a desk tab, shared or not, with its state and one line on what it does.
           case 'tab_activity': return tabActivity(String(payload.tabId))

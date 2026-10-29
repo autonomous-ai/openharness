@@ -25,12 +25,12 @@ const _copies = {
 /// a computer and dropped on the phone. Back in [_copies] once the desktop's
 /// model carries them.
 ///
-/// Chat threads (#2132), PM ruling 10-29: the phone has no thread view yet,
-/// so a reply only in its thread stays in the chat, inline, and nothing is
-/// lost; but unread and bold follow the desktop's main-stream rule
-/// (`lastMainSequence`, [SuperTabConversation.mainSequence]), so a reply only
-/// in its thread makes a chat unread on neither. The phone reads a message's
-/// thread and the thread summaries as the desktop does, and shows none yet.
+/// Chat threads (#2132): the phone reads a message's thread and the thread
+/// summaries as the desktop does, and draws them as it does (Tony, option B,
+/// 10-29): the line under a root, a reply only in its thread out of the chat,
+/// and the thread on a screen of its own. Unread and bold follow the
+/// desktop's main-stream rule (`lastMainSequence`,
+/// [SuperTabConversation.mainSequence]) on both.
 const _model = ('lib/swarm/model.dart', 'lib/super_tabs/model.dart');
 
 void main() {

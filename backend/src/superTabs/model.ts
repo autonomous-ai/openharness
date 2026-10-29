@@ -124,6 +124,9 @@ export interface AgentStart {
   /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
    *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
+  /** The CLI version its machine's daemon had connected with when it was dispatched (store.ts machineFacts): a failed start
+   *  says nothing about that machine once it runs another version (cli routeCommand.ts `stalled`). */
+  dispatchedVersion?: string
   /** When it was asked for (absent on starts from before 2026-10-29): a Buddy's fails if its machine never takes it, and a
    *  task's start never launched leaves the task orphaned (liveness.ts). */
   requestedAt?: number
