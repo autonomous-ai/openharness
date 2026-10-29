@@ -84,10 +84,10 @@ class _SwarmBuddiesViewState extends State<SwarmBuddiesView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            SwarmTopBar(
-              leading: widget.leading ?? const SizedBox(width: AppSpace.s),
-              title: 'Buddies',
-            ),
+            if (widget.leading case final leading?)
+              SwarmTopBar(leading: leading, title: 'Buddies')
+            else
+              const SwarmTabHeader('Buddies'),
             if (session != null)
               Expanded(
                 child: ListenWhileInSight(
