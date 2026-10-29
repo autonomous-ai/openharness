@@ -560,6 +560,10 @@ model ProductUsageTotal {
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
+  /// Days the receipt lives past its report day (types/productUsageReceipt.ts). Required by the collection's rule once the
+  /// receipt sweep installs it (lib/productUsageReceiptSweep.ts): a server that writes receipts without it cannot count.
+  /// Absent on receipts written before 2026-10-29.
+  life      Int?
 
   @@map("product_usage_receipts")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.

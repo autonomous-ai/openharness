@@ -203,7 +203,7 @@ describe('aggregate ingestion', () => {
       ],
     })
     expect(db.productUsageReceipt.createMany).toHaveBeenCalledExactlyOnceWith({ data: [
-      { id: report.id, expiresAt: new Date('2026-10-17T00:00:00.000Z') }] })
+      { id: report.id, expiresAt: new Date('2026-10-17T00:00:00.000Z'), life: 4 }] })
     const stored = JSON.stringify([db.$runCommandRaw.mock.calls, db.productUsageReceipt.createMany.mock.calls])
     for (const forbidden of ['private-account', 'userId', 'machineId', 'agentId', 'revision', 'counters', 'receivedAt']) expect(stored).not.toContain(forbidden)
   })
@@ -225,7 +225,7 @@ describe('aggregate ingestion', () => {
   it('accepts the last day of the 3-day window, its receipt kept a day past the window', async () => {
     expect(await ingestProductUsage('a', { ...report, day: '2026-10-11' }, now)).toEqual({ accepted: true })
     expect(db.productUsageReceipt.createMany).toHaveBeenCalledExactlyOnceWith({ data: [
-      { id: report.id, expiresAt: new Date('2026-10-15T00:00:00.000Z') }] })
+      { id: report.id, expiresAt: new Date('2026-10-15T00:00:00.000Z'), life: 4 }] })
   })
   it('accepts a previously committed receipt without incrementing again', async () => {
     db.productUsageReceipt.findMany.mockResolvedValue([{ id: report.id }])

@@ -139,7 +139,8 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
         for (const r of permitted) if (!received.has(r.id)) { received.add(r.id); fresh.push(r) }
         if (!fresh.length) return results
         await tx.productUsageReceipt.createMany({ data: fresh.map(r => ({
-          id: r.id, expiresAt: new Date(Date.parse(r.day) + PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS * DAY) })) })
+          // [life]: once the receipt sweep's rule is installed, a server that does not write it cannot count (productUsageReceiptSweep.ts).
+          id: r.id, expiresAt: new Date(Date.parse(r.day) + PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS * DAY), life: PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS })) })
         const apart = await apartPrefixes(tx, fresh)
         await incrementUsageTotals(tx, summed(fresh.flatMap((r, i) =>
           apart[i] ? r.increments.map(inc => ({ ...inc, metric: apart[i] + inc.metric })) : r.increments)))
