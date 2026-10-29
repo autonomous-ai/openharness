@@ -234,7 +234,7 @@ export class SuperTabNativeStore {
       await tx.superTabMessage.create({ data: { id: eventId, tabId, conversationId: group.id, sequence,
         author: json(observedBy), source: json({ kind: 'native', phase: event.kind, turnId: event.turnId,
           operator: binding.operator, truncated: event.truncated, interrupted: event.interrupted, ...(recovery ? { recovery: recovery.source } : {}) }),
-        text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients } })
+        text, replyTo: event.kind === 'answer' ? promptId : null, recipientIds: recipients, thread: eventId } })
       for (const recipient of recipients) {
         const lead = agent(state, recipient)
         await tx.superTabDelivery.create({ data: { id: stableId(eventId, recipient), tabId, conversationId: group.id,
