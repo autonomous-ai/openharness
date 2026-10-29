@@ -1,7 +1,6 @@
-import 'dart:typed_data';
-
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/agent_details.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -153,6 +152,92 @@ void main() {
       'type': 'agent.avatar',
       'agentId': 'agent-1',
       'avatar': {'kind': 'preset', 'key': 'owl'},
+    });
+  });
+
+  group('username', () {
+    final field = find.byKey(const ValueKey('super-username-field'));
+    final save = find.byKey(const ValueKey('super-username-save'));
+    String text(WidgetTester tester) =>
+        tester.widget<TextField>(field).controller!.text;
+    bool enabled(WidgetTester tester) =>
+        tester.widget<ButtonStyleButton>(save).onPressed != null;
+
+    testWidgets('shows your name and saves a new one', (tester) async {
+      final server = ConversationServer();
+      final c = await openSheet(tester, server);
+      expect(text(tester), 'owner');
+      expect(
+        find.text('How people see and tag you in this Swarm.'),
+        findsOneWidget,
+      );
+      // Nothing to save until it changes.
+      expect(enabled(tester), isFalse);
+      await tester.enterText(field, 'River');
+      await tester.pump();
+      expect(enabled(tester), isTrue);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server), {
+        'type': 'member.username',
+        'username': 'River',
+      });
+      expect(c.snapshot!.people.single.username, 'river');
+      expect(text(tester), 'river');
+      expect(enabled(tester), isFalse);
+    });
+
+    testWidgets('Enter in the field saves too', (tester) async {
+      final server = ConversationServer();
+      await openSheet(tester, server);
+      await tester.enterText(field, 'pilot');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pumpAndSettle();
+      expect(lastCommand(server)['username'], 'pilot');
+    });
+
+    testWidgets(
+      'a taken name says so under the field and keeps what you typed',
+      (tester) async {
+        final server = ConversationServer();
+        await openSheet(tester, server);
+        server.refuse = {'code': 'USERNAME_TAKEN', 'message': 'dee is taken.'};
+        await tester.enterText(field, 'dee');
+        await tester.pump();
+        await tester.tap(save);
+        await tester.pumpAndSettle();
+        expect(find.text('dee is taken.'), findsOneWidget);
+        expect(text(tester), 'dee');
+        // Above Picture: the reason sits with the field it is about.
+        expect(
+          tester.getTopLeft(find.text('dee is taken.')).dy,
+          lessThan(tester.getTopLeft(find.text('Picture')).dy),
+        );
+      },
+    );
+
+    testWidgets('an empty name cannot be saved', (tester) async {
+      final server = ConversationServer();
+      await openSheet(tester, server);
+      await tester.enterText(field, '   ');
+      await tester.pump();
+      expect(enabled(tester), isFalse);
+    });
+
+    testWidgets('an agent’s sheet has no username', (tester) async {
+      final server = ConversationServer();
+      server.state['agents'] = [
+        {
+          'id': 'agent-1',
+          'name': 'Kai',
+          'machineId': 'm',
+          'harnessId': 'h',
+          'contributorId': 'owner',
+          'configuration': {'engine': 'codex'},
+        },
+      ];
+      await openSheet(tester, server, agentId: 'agent-1');
+      expect(field, findsNothing);
     });
   });
 
