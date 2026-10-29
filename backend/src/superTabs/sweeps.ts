@@ -5,6 +5,8 @@ import { DORMANT_AFTER_MS, RETENTION_MS } from './parts/types.js'
 import { logger } from '../utils/logger.js'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { swarmTransaction } from './cache.js'
+import { listNamedIndexes, readBy } from './parts/indexed.js'
+import { autonomousEnvironments } from '../lib/autonomousEnvironment.js'
 import { expireEvidence } from './evidence/store.js'
 
 /** Parts whose key is never used twice (conversations, starts, projects' progress) lose their tombstone at `purgeAt`.
@@ -25,9 +27,21 @@ export async function ensurePartExpiry(db: PrismaClient): Promise<void> {
 /** A removed person, agent or machine keeps its tombstone after its 7 days, with its data dropped: the version it holds
  *  is where a part added again under that key continues (parts/write.ts). Readers already passed its removal. */
 async function compactTombstones(db: PrismaClient, now: number): Promise<number> {
+  // Plain matches on the purge index (parts/indexed.ts). Through Prisma, `purgeAt: { lt }` was $expr, which no index bounds
+  // (a collection scan each hour) and where a null purge time is less than any date: every tombstone compacted before was
+  // compacted again, each hour (roadmap Phase 3.6).
+  const due = { deleted: true, purgeAt: { $lt: { $date: new Date(now).toISOString() } } }
   let compacted = 0
-  for (const model of [db.swarmMember, db.swarmAgent, db.swarmMachine] as unknown as Array<{ updateMany(args: unknown): Promise<{ count: number }> }>) {
-    compacted += (await model.updateMany({ where: { deleted: true, purgeAt: { lt: new Date(now) } }, data: { data: {}, purgeAt: null } })).count
+  for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine'] as const) {
+    for (;;) {
+      const ids = (await readBy(db, collection, 'purge', [{ $match: due }, { $limit: BATCH }, { $project: { _id: 1 } }])).map(row => row._id as string)
+      if (!ids.length) break
+      // The same match again: a tombstone revived since the read is left alone.
+      const reply = await db.$runCommandRaw({ update: collection, updates: [{ q: { _id: { $in: ids }, ...due }, u: { $set: { data: {}, purgeAt: null } }, multi: true }] }) as
+        unknown as { nModified?: number }
+      compacted += Number(reply.nModified ?? 0)
+      if (ids.length < BATCH) break
+    }
   }
   return compacted
 }
@@ -88,23 +102,29 @@ async function sleepQuietGroups(db: PrismaClient, now: number): Promise<number> 
 
 /** Finished starts are kept 7 days, then removed (spec, Archive); their tombstones go 7 days later (purge index). */
 async function expireStarts(db: PrismaClient, now: number): Promise<number> {
-  // A plain match: Prisma sent `finishedAt: { lt }` as $expr, where a null finish time is less than any date, so every start
-  // still starting was removed too (2026-10-29). Here a start with no finish time never matches.
-  const rows = await db.swarmStart.aggregateRaw({ pipeline: [
+  // A plain match on the expiry index: through Prisma, `finishedAt: { lt }` was $expr, where a null finish time is less than
+  // any date, so every start still starting was removed too (#2169). Here a start with no finish time never matches.
+  const rows = await readBy(db, 'SwarmStart', 'expiry', [
     { $match: { deleted: false, finishedAt: { $lt: { $date: new Date(now - RETENTION_MS).toISOString() } } } }, { $limit: BATCH },
-    { $project: { tabId: 1, key: 1, version: 1, data: 1 } }] }) as unknown as Array<{ tabId: string; key: string; version: number; data: unknown }>
+    { $project: { tabId: 1, key: 1, version: 1, data: 1 } }])
   let expired = 0
   for (const row of rows) {
-    if (await guarded(db, { tabId: row.tabId, op: 'remove', kind: 'start', key: row.key, seen: Number(row.version), data: row.data as AgentStart })) expired++
+    if (await guarded(db, { tabId: row.tabId as string, op: 'remove', kind: 'start', key: row.key as string, seen: Number(row.version), data: row.data as unknown as AgentStart })) expired++
   }
   return expired
 }
 
 /** Expired invitations leave the head and the index the invited person's list is read from (spec, Archive). */
 async function expireInvitations(db: PrismaClient, now: number): Promise<number> {
-  const heads = await db.swarmHead.findMany({ where: { deleted: false } })
+  // Only the Swarms with an invitation: their row's invitation index names each invited address (parts/commit.ts), so the
+  // invitation index holds exactly them. Every head was read whole each hour before (roadmap Phase 3.6).
+  // Each environment named, so the index bounds the addresses within it; an empty list holds no address.
+  const invited = await readBy(db, 'SuperTab', 'invited', [{ $match: { autonomousEnv: { $in: [...autonomousEnvironments] }, invitedEmails: { $gte: '' } } },
+    { $group: { _id: '$_id' } }])
   let expired = 0
-  for (const head of heads) {
+  for (const { _id: tabId } of invited) {
+    const head = await db.swarmHead.findUnique({ where: { id: `${tabId as string}:head` } })
+    if (!head || head.deleted) continue
     const data = head.data as unknown as HeadData
     const kept = data.invitations.filter(i => i.expiresAt > now)
     if (kept.length === data.invitations.length) continue
@@ -132,7 +152,9 @@ export async function sweepSwarms(db: PrismaClient, now = Date.now()) {
 /** Runs the sweeps every hour in the singleton worker. `finishWorkspaceRemovals` finishes Workspace removals whose Swarm removals
  *  did not all run (workspaceStore.ts SwarmWorkspaces.finishRemovals); it needs the store, so the worker passes it in. */
 export function startSwarmSweeps(db: PrismaClient, everyMs = 3_600_000, finishWorkspaceRemovals?: () => Promise<number>): () => void {
-  const run = () => void sweepSwarms(db).then(async result => ({ ...result, workspaceRemovalsPending: await finishWorkspaceRemovals?.() }))
+  // The worker names indexes as servers do: listed before each pass, so a pass after the schema push names them.
+  const run = () => void listNamedIndexes(db).catch(error => logger.warn('[swarm-sweeps] listing indexes failed', { error: error instanceof Error ? error.message : String(error) }))
+    .then(() => sweepSwarms(db)).then(async result => ({ ...result, workspaceRemovalsPending: await finishWorkspaceRemovals?.() }))
     .then(result => logger.info('[swarm-sweeps] done', result))
     .catch(error => logger.warn('[swarm-sweeps] failed', { error: error instanceof Error ? error.message : String(error) }))
   run()
