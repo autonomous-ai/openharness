@@ -173,52 +173,57 @@ class LeaderboardWeekSummary extends StatelessWidget {
                 container: true,
                 label: [row.spoken, ?row.trend?.words].join(', '),
                 excludeSemantics: true,
-                child: Row(
+                // The label shares its line with the change and the figure;
+                // the caption takes the full width beneath, so enlarged text
+                // wraps instead of being cut (review of #2117).
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
                             row.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                             style: DesktopChrome.control(),
                           ),
-                          // A long caption wraps rather than losing its end.
-                          Text(
-                            row.caption,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: DesktopChrome.metadata(),
+                        ),
+                        // Cheaper has no change to show: its word takes
+                        // that room instead of an empty column.
+                        if (row.key == 'cheaper')
+                          Flexible(
+                            fit: FlexFit.tight,
+                            child: Text(
+                              row.value,
+                              textAlign: TextAlign.right,
+                              style: valueStyle(row.key),
+                            ),
+                          )
+                        else ...[
+                          if (trendWidth > 0)
+                            SizedBox(
+                              width: trendWidth,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: row.trend == null
+                                    ? null
+                                    : _TrendMark(row.trend!),
+                              ),
+                            ),
+                          const SizedBox(width: _gap),
+                          SizedBox(
+                            width: valueWidth,
+                            child: Text(
+                              row.value,
+                              maxLines: 1,
+                              textAlign: TextAlign.right,
+                              style: valueStyle(row.key),
+                            ),
                           ),
                         ],
-                      ),
+                      ],
                     ),
-                    if (trendWidth > 0)
-                      SizedBox(
-                        width: trendWidth,
-                        child: Align(
-                          alignment: Alignment.centerRight,
-                          child: row.trend == null
-                              ? null
-                              : _TrendMark(row.trend!),
-                        ),
-                      ),
-                    const SizedBox(width: _gap),
-                    if (row.key == 'cheaper')
-                      Text(row.value, maxLines: 1, style: valueStyle(row.key))
-                    else
-                      SizedBox(
-                        width: valueWidth,
-                        child: Text(
-                          row.value,
-                          maxLines: 1,
-                          textAlign: TextAlign.right,
-                          style: valueStyle(row.key),
-                        ),
-                      ),
+                    Text(row.caption, style: DesktopChrome.metadata()),
                   ],
                 ),
               ),

@@ -428,6 +428,12 @@ describe('the week\'s summary: Faster and Better against the weeks before (Dee, 
     expect(board(swarm(), []).weeks.map(w => w.week)).toEqual([WEEK, LAST, LAST - WEEK_MS, LAST - 2 * WEEK_MS])
   })
 
+  it('gives only the weeks whose history is loaded, when an older week is picked (review of #2117)', () => {
+    // Three weeks back is the oldest a reader may pick; its four weeks reach six back, past the five weeks kept.
+    const picked = WEEK - 3 * WEEK_MS
+    expect(board(swarm(), [], picked).weeks.map(w => (WEEK - w.week) / WEEK_MS)).toEqual([3, 4])
+  })
+
   it('times each week\'s shipped requests from their first assignment to shipping, as a median', () => {
     const view = board(swarm(), [landedAfter(WEEK, WEEK + HOUR), landedAfter(WEEK, WEEK + 3 * HOUR), landedAfter(WEEK - DAY_MS, WEEK + 2 * DAY_MS),
       landedAfter(LAST, LAST + 4 * HOUR)])

@@ -8,8 +8,8 @@ import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
-import { DAY_MS, WEEK_MS } from './week.js'
+import { LEDGER_WEEKS, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
+import { DAY_MS, WEEK_MS, weekStart } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, TeamWeek, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
@@ -100,7 +100,10 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
     agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
     byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
-    weeks: [0, 1, 2, 3].map(back => teamWeek(requests, shippedRequests, week - back * WEEK_MS)),
+    // Only weeks whose history is loaded: the read keeps the last LEDGER_WEEKS, so an older picked week shows fewer weeks
+    // rather than missing ones as empty (review of #2117).
+    weeks: [0, 1, 2, 3].map(back => week - back * WEEK_MS).filter(start => start >= weekStart(now) - (LEDGER_WEEKS - 1) * WEEK_MS)
+      .map(start => teamWeek(requests, shippedRequests, start)),
   }
 }
 

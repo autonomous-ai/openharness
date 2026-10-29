@@ -103,6 +103,7 @@ export interface Leaderboard {
   agents: AgentScore[]
   /** Every model that worked this week, most points first. Absent from a backend before it. */
   byModel: ModelScore[]
-  /** The board's week and the three before it, newest first. Absent from a backend before it. */
+  /** The board's week and the three before it, newest first, as far back as history is kept (an older picked week has
+   *  fewer). Absent from a backend before it. */
   weeks: TeamWeek[]
 }
