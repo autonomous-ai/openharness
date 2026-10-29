@@ -74,7 +74,7 @@ class SwarmReadMarks extends ChangeNotifier {
   SwarmReadMarks(
     this.reader, {
     required this.store,
-    this.saveAfter = const Duration(seconds: 1),
+    this.saveAfter = Duration.zero,
   }) {
     _sender = SwarmReadMarkSender(
       (id, sequence) => reader.request(
@@ -95,8 +95,8 @@ class SwarmReadMarks extends ChangeNotifier {
 
   final SwarmReader reader;
 
-  /// How long marks wait to be written, so reading on in an open chat writes
-  /// once.
+  /// How long marks wait to be written: at once by default, after what moved
+  /// them together (a first read's, a chat read on), which is written once.
   final Duration saveAfter;
 
   /// Where the phone keeps its marks; null keeps them in memory only.

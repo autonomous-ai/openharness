@@ -374,6 +374,30 @@ class SwarmProjectTile extends StatelessWidget {
   }
 }
 
+/// The Lead's tags still waiting on the person in a chat or a project, at
+/// its row's trailing edge: "@2" in the warning ink, said in words (desktop
+/// design system: Mentions).
+class SwarmTags extends StatelessWidget {
+  const SwarmTags(this.count, {super.key});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: count == 1 ? '1 mention' : '$count mentions',
+    excludeSemantics: true,
+    child: Text(
+      '@$count',
+      maxLines: 1,
+      style: AppType.caption(
+        color: AppColors.warning,
+        fontWeight: AppFont.semibold,
+        fontFeatures: const [FontFeature.tabularFigures()],
+      ),
+    ),
+  );
+}
+
 /// A count in a filled circle: blue, or yellow for what waits on the person.
 class SwarmBadge extends StatelessWidget {
   const SwarmBadge(this.count, {super.key, this.warn = false});

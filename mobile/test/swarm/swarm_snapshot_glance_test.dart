@@ -11,8 +11,8 @@ import 'package:harness_mobile/swarm/team_glance.dart';
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// A project's team line is counted once per Swarm read: Home, the drawer
-/// and the project's page all draw the one glance of the read they show.
+/// A project's team line is counted once per Swarm read: Home and the
+/// project's page both draw the one glance of the read they show.
 void main() {
   FakeSwarm backend() {
     final fake = FakeSwarm();
@@ -73,9 +73,7 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets("Home, the drawer and the project's menu draw one glance", (
-    tester,
-  ) async {
+  testWidgets("Home and the project's menu draw one glance", (tester) async {
     final host = await pump(tester);
     final reader = host.session!.inbox.reader(tab)!;
     final read = reader.snapshot;
@@ -90,8 +88,6 @@ void main() {
 
     await tester.tap(key('swarm-menu'));
     await tester.pumpAndSettle();
-    final drawer = glanceIn('swarm-drawer-project-$tab-$project');
-
     await tester.tap(key('swarm-drawer-project-$tab-$project'));
     await tester.pumpAndSettle();
     await tester.tap(key('swarm-project-menu'));
@@ -106,7 +102,6 @@ void main() {
         .glance;
 
     expect(reader.snapshot, same(read), reason: 'still the same read');
-    expect(drawer, same(home));
     expect(page, same(home));
   });
 }

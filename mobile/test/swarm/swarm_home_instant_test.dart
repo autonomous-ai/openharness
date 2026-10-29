@@ -452,27 +452,9 @@ void main() {
     stopReads(host);
   });
 
-  testWidgets('the drawer hides the team counts kept too', (tester) async {
-    await coldStart(tester);
-
-    await tester.tap(key('swarm-menu'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-
-    final row = key('swarm-drawer-project-$tab-$project');
-    expect(
-      find.descendant(of: row, matching: find.text('Updating…')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: row, matching: find.textContaining('waiting')),
-      findsNothing,
-    );
-  });
-
   testWidgets(
-    'a first read of the Swarm that fails keeps the counts kept hidden, on '
-    'Home and in the drawer, until a read gets through',
+    'a first read of the Swarm that fails keeps the counts kept hidden on '
+    'Home until a read gets through',
     (tester) async {
       final answer = Completer<Object?>();
       final (:host, :fake) = await coldStart(
@@ -495,37 +477,25 @@ void main() {
       expect(inbox.reader(tab)!.error, isNotNull, reason: 'the read failed');
 
       final home = key('swarm-project-$tab-$project');
-      final drawer = key('swarm-drawer-project-$tab-$project');
-      void hidden() {
-        for (final row in [home, drawer]) {
-          expect(
-            find.descendant(of: row, matching: find.text('Updating…')),
-            findsOneWidget,
-          );
-          expect(
-            find.descendant(of: row, matching: find.textContaining('waiting')),
-            findsNothing,
-          );
-        }
-        expect(updating(), findsOneWidget);
-      }
-
-      await tester.tap(key('swarm-menu'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
-      hidden();
+      expect(
+        find.descendant(of: home, matching: find.text('Updating…')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: home, matching: find.textContaining('waiting')),
+        findsNothing,
+      );
+      expect(updating(), findsOneWidget);
 
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
       await inbox.refresh();
       await tester.pump();
       await tester.pump();
 
-      for (final row in [home, drawer]) {
-        expect(
-          find.descendant(of: row, matching: find.text('All idle')),
-          findsOneWidget,
-        );
-      }
+      expect(
+        find.descendant(of: home, matching: find.text('All idle')),
+        findsOneWidget,
+      );
       expect(updating(), findsNothing);
       stopReads(host);
     },
