@@ -275,9 +275,11 @@ describe('a Buddy through the store', () => {
     const pmRead = await new SwarmReads(f.store).firstLoad(owner, f.tab, f.lead)
     expect(pmRead.groups.find(g => g.key === group)!.data.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its session on Kens-MacBook-Pro.local stopped' } })
 
+    // The lost task's notices are the PM's and its agent's alone (Ken, 2026-10-29): a Buddy reads none of them, and reads the
+    // loss on the task and its agent, without the machine.
     const seen = (await f.store.messages(peer, f.tab, group, {}, agentId)).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
-    expect(seen.map(m => m.id).sort()).toEqual(lost.map(m => m.id).sort())
-    expect(seen.every(m => m.text.includes('its session stopped'))).toBe(true)
+    expect(seen).toEqual([])
+    for (const m of lost) expect((await f.store.messages(peer, f.tab, group, { messageId: m.id }, agentId)).messages).toEqual([])
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     expect(read.groups.find(g => g.key === group)!.data.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its session stopped' } })
     expect(read.agents.find(a => a.key === builder)!.data.lostTask).toMatchObject({ reason: 'its session stopped' })
