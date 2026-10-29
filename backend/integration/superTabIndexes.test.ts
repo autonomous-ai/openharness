@@ -8,6 +8,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from '../src/superTabs/pageReads.js'
 import { costRows } from '../src/superTabs/costs/read.js'
+import { readEvidence } from '../src/superTabs/evidence/store.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
 import { revokeNativeContexts } from '../src/superTabs/native.js'
@@ -210,6 +211,26 @@ describe('cost summary', () => {
     // The fixture's decisions carry no runs, so none is an attempt to summarize; what matters is what Mongo read.
     expect(found).toEqual({ rows: [], truncated: false })
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 500, returned: 500 })
+  })
+})
+
+describe('model evidence', () => {
+  // Routing and the weekly report read a Swarm's evidence (superTabs/evidence/store.ts): only the weeks asked for, by index.
+  it('reads the weeks of a period and the last-ten rows with one index scan each, examining only that Swarm\'s rows', async () => {
+    const WEEK = 7 * 86_400_000, MONDAY = Date.UTC(2026, 9, 26)
+    const rows = ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].flatMap(model => Array.from({ length: 26 }, (_, w) => ({
+      _id: `${tabId}-${model}-${w}`, tabId, engine: 'claude', model, kind: 'backend', week: { $date: new Date(MONDAY - w * WEEK).toISOString() },
+      attempts: 1, updatedAt: { $date: new Date(MONDAY).toISOString() } }))))
+    await db.$runCommandRaw({ insert: 'SuperTabModelEvidence', documents: rows as never })
+    await db.$runCommandRaw({ insert: 'SuperTabModelRecent', documents: ['A', 'B'].flatMap(tabId => ['opus', 'sonnet', 'kimi'].map(model => ({
+      _id: `${tabId}-${model}`, tabId, engine: 'claude', model, kind: 'backend', results: [{ a: 'x', at: MONDAY, passed: true }],
+      updatedAt: { $date: new Date(MONDAY).toISOString() } }))) as never })
+    // The last four weeks: 3 models x 4 weeks.
+    const [read, profile] = await profiled('SuperTabModelEvidence', () => readEvidence(db, 'A', MONDAY - 3 * WEEK))
+    expect(read.models.map(m => [m.model, m.attempts, m.recent])).toEqual([['kimi', 4, [true]], ['opus', 4, [true]], ['sonnet', 4, [true]]])
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, week: 1 }'], docsExamined: 12, returned: 12 })
+    const [, recent] = await profiled('SuperTabModelRecent', () => readEvidence(db, 'A', MONDAY))
+    expect(recent).toEqual({ plans: ['IXSCAN { tabId: 1, updatedAt: 1 }'], docsExamined: 3, returned: 3 })
   })
 })
 
