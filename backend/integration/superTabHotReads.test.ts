@@ -12,6 +12,7 @@ import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { waitingIn } from '../src/superTabs/decisions.js'
 import { HostReads } from '../src/superTabs/read/host.js'
+import { machineSwarms, swarmsIn } from '../src/superTabs/swarmRows.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { cursorFor } from '../src/superTabs/read/cursor.js'
 import { lastChangedAt } from '../src/superTabs/parts/index.js'
@@ -346,5 +347,24 @@ describe('the host poll\'s Swarm lookup', () => {
       expect(lookup.docsExamined, JSON.stringify(plan(lookups))).toBeLessThanOrEqual(lookup.nreturned!)
       expect(lookup.command?.hint, `the lookup names its index: ${JSON.stringify(plan(lookups))}`).toBeTruthy()
     }
+  })
+
+  it('never returns a Swarm of another environment, one that dropped the machine, or one not yet in parts', async () => {
+    const s = await scene()
+    // The same machine id listed by a Swarm of another environment, as a machine and for cleanup.
+    const dev = await scene({ sharedMachine: s.machineId }), devCleanup = await scene()
+    await db.superTab.update({ where: { id: dev.tabId }, data: { autonomousEnv: 'dev' } })
+    await db.superTab.update({ where: { id: devCleanup.tabId }, data: { autonomousEnv: 'dev', cleanupMachineIds: { set: [s.machineId] } } })
+    // A Swarm whose host cleaned up after the machine left: it lists the machine nowhere.
+    const dropped = await scene({ sharedMachine: s.machineId })
+    await db.superTab.update({ where: { id: dropped.tabId }, data: { machineIds: { set: [] }, cleanupMachineIds: { set: [] } } })
+    // A Swarm still in one row (format 1) is left for its migration.
+    const legacy = await scene({ sharedMachine: s.machineId })
+    await db.superTab.update({ where: { id: legacy.tabId }, data: { format: 1 } })
+    expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([s.tabId])
+    expect((await new HostReads(store, { now: () => Date.now() }).changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId)).toEqual([s.tabId])
+    // The removed Swarms' check keeps only this environment's ids, whatever ids it is handed.
+    expect(await swarmsIn(db, 'prod', [s.tabId, dev.tabId, devCleanup.tabId, 'no-such-swarm'])).toEqual([s.tabId])
+    expect(await swarmsIn(db, 'prod', [])).toEqual([])
   })
 })

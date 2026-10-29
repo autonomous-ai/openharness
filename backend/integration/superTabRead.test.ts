@@ -1177,7 +1177,10 @@ describe('what a read costs the database (group 3b)', () => {
     await db.superTab.update({ where: { id: s.tabId }, data: { legacyState: { padding } } })
     const reads: Array<{ operation: string; select: Record<string, unknown> | undefined }> = []
     const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      if (model === 'SuperTab') reads.push({ operation, select: (args as { select?: Record<string, unknown> }).select })
+      // A named-index read (parts/indexed.ts readBy) names its fields in its pipeline's $project.
+      const projected = operation === 'aggregateRaw'
+        ? (args as { pipeline?: Array<{ $project?: Record<string, unknown> }> }).pipeline?.find(stage => stage.$project)?.$project : undefined
+      if (model === 'SuperTab') reads.push({ operation, select: projected ?? (args as { select?: Record<string, unknown> }).select })
       return query(args)
     } } } }) as unknown as PrismaClient
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
@@ -1189,7 +1192,8 @@ describe('what a read costs the database (group 3b)', () => {
 
     expect(first.tabs).toHaveLength(1)
     expect(JSON.stringify([first, idle])).not.toContain('old-state-')
-    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields: none is the old state.
+    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields (Prisma's select, or a raw
+    // read's $project): none is the old state.
     expect(reads.length).toBeGreaterThan(0)
     for (const read of reads) expect(read.select, read.operation).toBeDefined()
     for (const read of reads) expect(read.select).not.toHaveProperty('legacyState')
