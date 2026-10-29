@@ -601,6 +601,16 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('The PM\'s private lines to your owner land in your chat too')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
   })
+
+  it('talks in its owner\'s chat, never only in its terminal, and waits for nothing (Scholes, 10-29)', () => {
+    const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'session' }).file, 'utf8')
+    // His Buddy wrote its findings and options in its terminal and waited there: his chat showed nothing for 15 minutes.
+    expect(text).toContain('Your owner reads your chat, never your terminal. Post what you found and your options there, briefly, '
+      + 'whenever you would otherwise write them only in your terminal, and ask them why there.')
+    // It started a loop polling its chat, which stopped it at a permission prompt nobody at its terminal answered.
+    expect(text).toContain('Your owner\'s new messages reach you by themselves. Never poll your chat, loop or start a background '
+      + 'wait for them: post your reply and end your turn.')
+  })
 })
 
 describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', () => {
