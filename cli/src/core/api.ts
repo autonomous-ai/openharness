@@ -1211,10 +1211,6 @@ export interface SwarmLaunch {
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
   /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
   args(engine: string): string[]
-  /** Whether a Buddy's launch was told a Swarm id its Codex rule can be written from (lib/buddyCodexRules.ts). */
-  tabId(value: unknown): value is string
-  /** Let a Codex Buddy's own chat commands leave its sandbox without asking: its Swarm's rule, in the Codex home [home]. */
-  codexRules(home: string, tabId: string): void
 }
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row

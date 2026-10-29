@@ -9,10 +9,9 @@ const permissionModes = {
   acceptEdits: ['--permission-mode', 'acceptEdits'],
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
-  // A Buddy's (superTabs/start.ts): what its folder's guard does not allow is refused, never asked (lib/buddyGuard.ts).
-  // It reads only its folder's settings and starts no MCP server: a hook or server a teammate commits to the project ran
-  // in a Buddy's folder with its person's credentials, guard or not (Claude Code 2.1.312, tried; Lead, 10-29).
-  // Harness's own hooks are copied into those settings (lib/swarmSkills.ts).
+  // A Buddy's from the morning of 10-29: what the guard its launch wrote in its folder did not allow was refused, never
+  // asked. Buddies started since run in full mode as the Swarm's agents do (Scholes, 10-29; superTabs/start.ts). Kept so
+  // a Buddy started before then relaunches as it was started, with that guard still in its folder.
   buddy: ['--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'],
   full: ['--dangerously-skip-permissions'],
 }

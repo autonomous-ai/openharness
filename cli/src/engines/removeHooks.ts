@@ -14,7 +14,6 @@ import { homeIsNetworkOrDevice } from './kit/homeAdoption.js'
 import { hookContracts } from './hooks.js'
 import { inspectHookFile } from './kit/nativeHookFiles.js'
 import { removeJsonHooks, removeOwnedFile, removeReviewedHooks, type HookFileRemoval } from './kit/hookRemoval.js'
-import { BUDDY_RULES_HEADER, buddyCodexRulesFiles } from '../lib/buddyCodexRules.js'
 import { defaultHookHome, harnessRules, notifyHookEntry, RULES_HEADER } from './kit/hookSettings.js'
 import { messagesCommand } from './kit/messagesHook.js'
 import { nativeHookHomes } from './kit/nativeHookHomes.js'
@@ -185,8 +184,6 @@ export async function removeEngineHooks(targets: HookTargets, platform: NodeJS.P
     // Only once the hooks are out (or were already, on a second uninstall): a record taken away from a hook still there makes Codex ask about it again.
     if (codex.reviewed && !hooks.failed) out.push(await removeReviewedHooks(codex.reviewed, home, settingsFile, { before, now: () => codexHooksNow(home) }))
     if (codex.allow && 'file' in codex.allow) out.push(await removeOwnedFile(join(home, codex.allow.file), (content) => content.startsWith(RULES_HEADER)))
-    // Each Codex Buddy's rule for its Swarm (lib/buddyCodexRules.ts).
-    for (const file of buddyCodexRulesFiles(home)) out.push(await removeOwnedFile(file, (content) => content.startsWith(BUDDY_RULES_HEADER)))
   }
   for (const rule of targets.native) {
     if (remote(rule.file)) continue

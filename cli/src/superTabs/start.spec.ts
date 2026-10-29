@@ -246,8 +246,6 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'reviewer-prompt', request: f.start.request }, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('review')
-  // Only a Buddy's launch is told its Swarm, for its Codex rule (lib/buddyCodexRules.ts).
-  expect(payload).not.toHaveProperty('swarmTabId')
   expect(payload.prompt).toContain('swarm-review skill')
   expect(payload.prompt).not.toContain('swarm-dev')
 })
@@ -258,16 +256,16 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request }, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('buddy')
-  // Its Swarm, so a Codex Buddy's launch lets its own chat commands run without asking (lib/buddyCodexRules.ts).
-  expect(payload.swarmTabId).toBe('tab')
   expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
   expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
   expect(payload.prompt).not.toContain('assign')
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
-it('starts no Buddy with full permissions or the GitHub App\'s token: Claude refusing what its guard does not allow, Codex in its read-only sandbox asking', async () => {
-  for (const [engine, mode, bypass] of [['claude', 'buddy', false], ['codex', 'readOnlyAsk', false]] as const) {
+// Scholes, 10-29: a Buddy stopped at a permission prompt in a terminal nobody watches. It now runs with the Swarm agents'
+// permissions (his decision, twice), replacing that morning's guard and read-only sandbox; still never the GitHub App's token.
+it('starts a Buddy in the Swarm agents\' full mode, asking nothing, and without the GitHub App\'s token', async () => {
+  for (const [engine, mode, bypass] of [['claude', 'full', true], ['codex', 'full', true]] as const) {
     const f = fixture()
     f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
     await startAgent({ action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, hostDispatch: true, github: { requester: 'peer' } } as never,

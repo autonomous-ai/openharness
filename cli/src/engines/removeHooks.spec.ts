@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { writeBuddyCodexRules } from '../lib/buddyCodexRules.js'
 import { COMMANDCODE_HOOK_SETTINGS } from './commandcode/contract.js'
 import { hookContracts } from './hooks.js'
 import { HERMES_HOOK_SETTINGS } from './hermes/contract.js'
@@ -55,9 +54,6 @@ describe('removeEngineHooks', () => {
     write(join(root, 'claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: OURS }] }] }, permissions: { allow: ['Bash(harness ps:*)', 'Bash(ls)'] } }))
     write(join(root, 'codex', 'hooks.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: OURS }] }] } }))
     write(join(root, 'codex', 'rules', 'harness.rules'), `${RULES_HEADER}prefix_rule(pattern=["harness"], decision="allow")\n`)
-    // A Codex Buddy's rule for its Swarm (lib/buddyCodexRules.ts), beside a rules file of the person's own.
-    writeBuddyCodexRules(join(root, 'codex'), 'tab1')
-    write(join(root, 'codex', 'rules', 'harness-buddy-mine.rules'), 'prefix_rule(pattern=["make"], decision="allow")\n')
     write(join(root, 'codex-profile', 'hooks.json'), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: OURS }] }] } }))
     write(join(root, 'cursor', 'hooks.json'), JSON.stringify({ version: 1, hooks: { stop: [{ command: OURS }, { command: '/mine' }] } }))
     write(targets.plugins[0].file, nativePluginSource(targets.plugins[0], values))
@@ -71,15 +67,13 @@ describe('removeEngineHooks', () => {
     expect(JSON.parse(readFileSync(join(root, 'claude', 'settings.json'), 'utf8'))).toEqual({ hooks: {}, permissions: { allow: ['Bash(ls)'] } })
     expect(JSON.parse(readFileSync(join(root, 'codex', 'hooks.json'), 'utf8'))).toEqual({ hooks: {} })
     expect(existsSync(join(root, 'codex', 'rules', 'harness.rules'))).toBe(false)
-    expect(existsSync(join(root, 'codex', 'rules', 'harness-buddy-tab1.rules'))).toBe(false)
-    expect(readFileSync(join(root, 'codex', 'rules', 'harness-buddy-mine.rules'), 'utf8')).toContain('make')
     expect(JSON.parse(readFileSync(join(root, 'codex-profile', 'hooks.json'), 'utf8'))).toEqual({ hooks: {} })
     expect(JSON.parse(readFileSync(join(root, 'cursor', 'hooks.json'), 'utf8'))).toEqual({ version: 1, hooks: { stop: [{ command: '/mine' }] } })
     expect(existsSync(targets.plugins[0].file)).toBe(false)
     expect(existsSync(dirname(targets.plugins[1].file)), 'the plugin\'s own folder goes with it').toBe(false)
     expect(readFileSync(join(root, 'hermes', 'config.yaml'), 'utf8')).toBe('model: x\n')
     expect(JSON.parse(readFileSync(join(root, 'hermes', 'shell-hooks-allowlist.json'), 'utf8'))).toEqual({ approvals: [{ event: 'x', command: '/mine' }] })
-    expect(outcomes.reduce((n, o) => n + o.removed, 0)).toBe(11)
+    expect(outcomes.reduce((n, o) => n + o.removed, 0)).toBe(10)
   })
 
   it('keeps a plugin somebody else wrote at Harness\'s path', async () => {

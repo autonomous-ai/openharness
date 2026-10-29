@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, opendirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -240,24 +240,6 @@ describe('creating an agent', () => {
     expect(pane.swarmSkill).toEqual({ role: 'dev', key: pane.sessionLabel, github: true })
     expect(pane.env).toMatchObject({ GIT_CONFIG_PARAMETERS: 'fixture', GH_CONFIG_DIR: '/fixture/gh' })
     expect(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1]?.clearEnv).toContain('GH_TOKEN')
-  })
-
-  it('lets a Codex Buddy\'s own chat commands leave its sandbox: the rule for its Swarm, in the Codex home it launches with', async () => {
-    const home = folder()
-    expect(await setup().create(request({ engine: 'codex', cwd: folder(), codexHome: home, swarmRole: 'buddy', swarmTabId: 'tab1' }))).toMatchObject({ ok: true })
-    expect(readFileSync(join(home, 'rules', 'harness-buddy-tab1.rules'), 'utf8')).toContain('"super-tab", "--tab", "tab1"')
-    // Claude Code's Buddy has its guard instead (lib/buddyGuard.ts), and no other agent gets the rule.
-    for (const over of [{ engine: 'claude', swarmRole: 'buddy', swarmTabId: 'tab2' }, { engine: 'codex', swarmRole: 'dev' }, { engine: 'codex', swarmRole: 'buddy' }]) {
-      const other = folder()
-      await setup().create(request({ cwd: folder(), codexHome: other, ...over }))
-      expect(existsSync(join(other, 'rules')), JSON.stringify(over)).toBe(false)
-    }
-  })
-
-  it('launches a Codex Buddy whose rule cannot be written, which asks as before', async () => {
-    const home = folder()
-    writeFileSync(join(home, 'rules'), 'a file where the folder goes')
-    expect(await setup().create(request({ engine: 'codex', cwd: folder(), codexHome: home, swarmRole: 'buddy', swarmTabId: 'tab1' }))).toMatchObject({ ok: true })
   })
 
   it('in the Harness Team account, points an engine it has not signed in at the owner\'s relay; never one on a grid', async () => {
