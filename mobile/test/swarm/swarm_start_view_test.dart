@@ -302,7 +302,8 @@ void main() {
       expect(find.text('Your team of agents, on your phone'), findsOneWidget);
       expect(find.text('See what needs you'), findsOneWidget);
       expect(find.text('Answer in one tap'), findsOneWidget);
-      expect(find.text('Chat with your PM'), findsOneWidget);
+      expect(find.text('Brainstorm with your Buddy'), findsOneWidget);
+      expect(find.text('Chat with your PM'), findsNothing);
       expect(primary(), findsOneWidget);
     });
 
