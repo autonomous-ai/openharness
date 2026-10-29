@@ -268,6 +268,21 @@ it('starts a Claude Buddy in asking mode, never with full permissions, and no Bu
   }
 })
 
+it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation, with the GitHub App\'s token', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'lead-prompt', request: f.start.request, hostDispatch: true, github: { requester: 'owner' } } as never,
+    f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('lead')
+  expect(payload.swarmGitHub).toBe(true)
+  expect(payload.prompt).toContain('swarm-lead skill')
+  expect(payload.prompt).toContain(`You are the Product Manager of the project whose conversation is ${f.start.request.conversationId}, started by the Swarm`)
+  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(payload.prompt).not.toContain('Your lead will assign')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
 describe('the skills of the project the agent joins', () => {
   const projects = (skillMode?: string) => ({ conversations: [{ id: 'other', projectId: 'p1' }, { id: 'group', projectId: 'p2' }],
     projects: [{ id: 'p1', skillMode: 'default' }, { id: 'p2', ...(skillMode ? { skillMode } : {}) }] })

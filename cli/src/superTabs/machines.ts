@@ -134,7 +134,11 @@ const CLEANING_WAIT = 'Waiting for this machine to finish cleaning up this Swarm
  * hold up a delivery lease. Only a tab's explicit owner grant wakes this queue. */
 /** A pool's starts this host launches: its agents', and its Buddies', which the backend lists apart so that a host from before
  *  Buddies never launches one as a Builder (backend read/hostRows.ts). */
-const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts)]
+/** A host's starts: its workers', and its Buddies' and Product Managers', which the backend lists apart so that a host from
+ *  before them never launches one as a worker. */
+const startsOf = (row: Record<string, unknown>) => [...list(row.starts), ...list(row.buddyStarts), ...list(row.leadStarts)]
+/** What this host launches beyond workers, said in its reading (backend leadStart.ts): a project's Product Manager. */
+const CAPABILITIES = ['leadStart']
 /** The backend's answer that this machine may no longer act in the Swarm: signed out, its contribution revoked or its host
  *  unavailable (backend store.ts observeMachine), or the Swarm gone. */
 const lostAccess = (error: unknown) => error instanceof SuperTabHostError && [401, 403, 404].includes(error.status)
@@ -423,7 +427,10 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
-        const observation = { generation: pool.generation, tools: reportedTools, ...(preparing.length ? { preparingStartIds: preparing } : {}),
+        // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
+        // every reading with it.
+        const observation = { generation: pool.generation, tools: reportedTools, ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
+          ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
           ...((readyEngines || checkouts) && began >= this.readinessRefusedUntil ? { readiness } : {}),

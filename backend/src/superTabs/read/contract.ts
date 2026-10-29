@@ -236,6 +236,8 @@ export interface HostPool {
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   githubApp?: true
+  /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
+  capabilitiesWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

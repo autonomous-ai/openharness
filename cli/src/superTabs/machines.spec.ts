@@ -238,6 +238,23 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true }])
   })
+  it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true }])
+  })
+  it('says in its reading that it starts Product Managers, to a backend that asks, and to no other', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { capabilitiesWanted: true })
+    await f.machine.tick()
+    const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart'] })
+    // A backend from before them does not ask, and would refuse the field.
+    const older = fixture()
+    await older.machine.tick()
+    expect(posted(older)[0]).not.toHaveProperty('capabilities')
+  })
   it('probes common tools plus pending-start requirements and publishes failures without calling them missing', async () => {
     const f = fixture()
     Object.assign(f.pool.starts[0]!, { request: { requirements: { tools: ['docker'] } } })

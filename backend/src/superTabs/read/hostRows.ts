@@ -114,7 +114,10 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),
       ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])],
-    ...(githubApp ? { githubApp: true as const } : {}) }
+    ...(githubApp ? { githubApp: true as const } : {}),
+    // Asks the host to say what it launches beyond workers (machines.ts `capabilities`): a host never sends a field this
+    // server did not ask for, so an older server, which would refuse every reading with it, never sees it.
+    capabilitiesWanted: true as const }
 }
 
 function assignments(tabId: string, state: SuperTabState, machineId: string, user: AuthUser) {
