@@ -3553,8 +3553,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 s.offset = (s.offset + (dx < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
             else if (surface && swarm_here() && swarm_here()->lead_n && s.connected) {
                 // A Swarm's next or previous project, by `order`, wrapping as the panes do (never `focus`).
-                int n = swarm_here()->lead_n;
-                swarm_show(swarm_here(), (sw.at + (dx < 0 ? 1 : n - 1)) % n, true);
+                // One project wraps onto itself: nothing to pick, ask or reopen on the desktop (Diego, 2026-10-29).
+                int n = swarm_here()->lead_n, i = (sw.at + (dx < 0 ? 1 : n - 1)) % n;
+                if (i != sw.at) swarm_show(swarm_here(), i, true);
             } else if (surface && swarm_mode()) {
                 // A Swarm with no projects has nowhere to swipe to.
             } else if (surface && s.count && s.connected && !s.loading) {

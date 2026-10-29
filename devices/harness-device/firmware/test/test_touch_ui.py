@@ -1594,6 +1594,21 @@ static void swarm_pane_checks(const char *dir) {
     swarm_sent = 0; surface_tick(fake_ms + 4999); assert(!swarm_sent);
     surface_tick(fake_ms + 5000); assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "recap.get s1 L4"));
     surface_tick(fake_ms + 11000); assert(swarm_sent == 1);
+    // A swipe on a Swarm of one project lands on the project already on the face: nothing happens. It used to empty
+    // the recap for 5 s and pick the project again, which reopened its Lead chat on the desktop (Diego, 2026-10-29).
+    swarm_setup(); enter_at("s2", "P0");
+    ui_supertab_recap("s2", "P0", "", "Sandbox rebuilt.", 1792560000u, false); scene_take();
+    assert(swarm.recap.state == HT_RECAP_LOADED); swarm_sent = 0;
+    habitat_touch(true, 320, 220, fake_ms); habitat_touch(false, 150, 220, fake_ms + 120); scene_take();
+    habitat_touch(true, 150, 220, fake_ms + 1000); habitat_touch(false, 320, 220, fake_ms + 1120); scene_take();
+    assert(!strcmp(sw.lead, "P0") && swarm.recap.state == HT_RECAP_LOADED && !strcmp(swarm.recap.text, "Sandbox rebuilt."));
+    assert(!swarm_sent);
+    // Two projects still move, both ways.
+    enter_at("s3", "K0"); swarm_sent = 0;
+    habitat_touch(true, 320, 220, fake_ms + 2000); habitat_touch(false, 150, 220, fake_ms + 2120);
+    assert(!strcmp(sw.lead, "K1") && swarm_sent == 3 && !strcmp(swarm_wire[0], "select s3 K1"));
+    habitat_touch(true, 320, 220, fake_ms + 3000); habitat_touch(false, 150, 220, fake_ms + 3120);
+    assert(!strcmp(sw.lead, "K0") && swarm_sent == 6 && !strcmp(swarm_wire[3], "select s3 K0"));
     // PANES (tap the name): one page per Lead in order, opened on the one on the face; a long name on two lines with
     // "…"; Done picks with the swipe's messages.
     swarm_setup(); enter_at("s1", "L2"); tap(fake_ms, 233, 30);
