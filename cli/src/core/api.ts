@@ -1235,7 +1235,9 @@ export interface SwarmLead {
   buddyNotice?: LeadNotice
 }
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
+/** `side` 'buddy' while a swarmBuddy dial keeps the Swarm on its Buddy side (spec 2026-10-29-round-dial-pm-buddy): the dial
+ *  follows it as the daemon's, which a face alone cannot tell where no project has a Buddy chat (review of #2218). */
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy' }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
  *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }
@@ -1262,7 +1264,9 @@ export type CardChat = boolean | 'buddy'
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
 export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
-export interface CardFocus { tabId: string; conversationId: string }
+/** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
+ *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */
+export interface CardFocus { tabId: string; conversationId: string; fromDevice?: true }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {

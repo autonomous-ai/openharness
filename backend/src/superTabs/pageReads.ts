@@ -1,7 +1,9 @@
-import type { Prisma, SuperTabDelivery } from '@prisma/client'
+import type { Prisma, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
 import { ms } from './parts/light.js'
 import type { ReactionRow } from './reactions.js'
 import { agentOnly, stableId, type Author } from './model.js'
+import { readBy } from './parts/indexed.js'
+import { prismaRow } from './rawRows.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -30,6 +32,18 @@ export async function pageDeliveries(tx: Transaction, tabId: string, messageIds:
     deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
 }
 
+/** The deliveries a host is still told about (the rest are answered, cancelled or confirmed). */
+export const OPEN_DELIVERY = ['queued', 'claimed', 'uncertain'] as const
+
+/** An agent's open deliveries, oldest first and each conversation's tied rows in its order: one indexed read, and the tied
+ *  messages' sequences only when there are ties. */
+export async function agentOpenDeliveries(tx: Transaction, tabId: string, agentId: string): Promise<SuperTabDelivery[]> {
+  // By the agent index (parts/indexed.ts): Prisma sent `status: { in }` as an $expr $or, planned as one scan per status.
+  const rows = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: { $in: [...OPEN_DELIVERY] } } },
+    { $sort: { createdAt: 1 } }, { $limit: 100 }])
+  return inConversationOrder(tx, tabId, rows.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
+}
+
 /** An agent's open deliveries, read by creation time, with each conversation's tied rows put in its message order. One
  *  write's deliveries share a creation time, and Mongo breaks that tie by insertion order alone. Each conversation keeps its
  *  places among the others; only tied rows have their messages' sequences read. */
@@ -55,6 +69,28 @@ export async function inConversationOrder<T extends Pick<SuperTabDelivery, 'conv
     places.forEach((index, at) => { ordered[index] = group[at]! })
   }
   return ordered
+}
+
+/** Where a page of messages starts: past this sequence, and within it past this id when one is given. */
+export interface MessageEdge { sequence: number; id?: string }
+
+/**
+ * Up to `limit` messages of one conversation past `edge` (from the newest or oldest without one), in (sequence, id) order
+ * forward or backward. A cursor inside a sequence is two reads its index bounds: the rest of that sequence by id, then the
+ * sequences past it. As one `$or`, the planner could not bound it: reading on from inside a sequence walked the whole
+ * conversation before it (roadmap Phase 3.5; integration/superTabNamedReads.test.ts).
+ */
+export async function messagesPast(tx: Transaction, at: { tabId: string; conversationId: string; messageId?: string; thread?: string },
+  edge: MessageEdge | undefined, forward: boolean, limit: number): Promise<SuperTabMessage[]> {
+  const [op, dir] = forward ? ['$gt', 1] as const : ['$lt', -1] as const
+  const index = at.messageId ? 'id' : at.thread ? 'thread' : 'sequence'
+  const read = async (sequence: unknown, after: string | undefined, take: number) => take <= 0 ? [] : (await readBy(tx, 'SuperTabMessage', index, [
+    { $match: { tabId: at.tabId, conversationId: at.conversationId, ...at.thread ? { thread: at.thread } : {},
+      ...at.messageId || after !== undefined ? { _id: { ...at.messageId ? { $eq: at.messageId } : {}, ...after !== undefined ? { [op]: after } : {} } } : {},
+      ...sequence !== undefined ? { sequence } : {} } },
+    { $sort: { sequence: dir, _id: dir } }, { $limit: take }])).map(row => prismaRow<SuperTabMessage>('SuperTabMessage', row))
+  const same = edge?.id !== undefined ? await read(edge.sequence, edge.id, limit) : []
+  return [...same, ...await read(edge ? { [op]: edge.sequence } : undefined, undefined, limit - same.length)]
 }
 
 /** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
