@@ -32,15 +32,19 @@ export const NAMED_INDEX = {
   SuperTab: {
     /** An owner's Swarms in id order: the grid poll. */
     owner: { autonomousEnv: 1, ownerId: 1, _id: 1 },
+    /** The Swarms inviting each address (invitedSwarms.ts), and every Swarm with an invitation (the hourly sweep). */
+    invited: { autonomousEnv: 1, invitedEmails: 1, _id: 1 },
     /** A member's Swarms in id order: Swarm lists and Workspace removals. */
     members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
   },
   /** Each part kind's changes since a cursor; machines also by when they were last read. */
   SwarmHead: { changes: { tabId: 1, changedAt: 1 } },
-  SwarmMember: { changes: { tabId: 1, changedAt: 1 } },
-  SwarmAgent: { changes: { tabId: 1, changedAt: 1 } },
-  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 } },
-  SwarmStart: { changes: { tabId: 1, changedAt: 1 } },
+  /** `purge`: tombstones past their purge time (the hourly sweep). */
+  SwarmMember: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 } },
+  SwarmAgent: { changes: { tabId: 1, changedAt: 1 }, purge: { purgeAt: 1 } },
+  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 }, purge: { purgeAt: 1 } },
+  /** `expiry`: live starts by finish time (the hourly sweep). */
+  SwarmStart: { changes: { tabId: 1, changedAt: 1 }, expiry: { deleted: 1, finishedAt: 1 } },
   SwarmProgress: { changes: { tabId: 1, changedAt: 1 } },
   SuperTabMessage: {
     /** A conversation's page in (sequence, id) order. */

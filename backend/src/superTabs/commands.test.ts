@@ -180,6 +180,22 @@ describe('Super Tab collaboration policy', () => {
     expect(machineSlots(f.state, f.state.machines![0]!)).toBe(1)
   })
 
+  it('counts a finished start\'s harness only while its agent or its host says it runs', () => {
+    const f = fixture()
+    const pool = { machineId: 'host', name: 'Host', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      generation: 'pool', cwd: '/work', engines: ['codex'], maxAgents: 2, paused: false }
+    f.state.machines = [pool]
+    // A read keeps finished starts until they expire: one whose harness is long gone takes no slot.
+    f.state.starts = [{ poolGeneration: 'pool', id: 'old', creationId: 'super-old', actorKey: 'person:owner', contributorId: 'owner',
+      membershipGeneration: f.state.people[0]!.generation, machineOwnerId: 'owner', hostGrant: null, harnessId: 'gone', dispatched: true,
+      error: null, poolSettled: true, request: { conversationId: 'lead', machineId: 'host', engine: 'codex', name: 'Builder', cwd: '/work/lead',
+        worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }]
+    expect(machineSlots(f.state, pool)).toBe(0)
+    // Started but not yet settled, it still holds its slot.
+    f.state.starts[0]!.poolSettled = false
+    expect(machineSlots(f.state, pool)).toBe(1)
+  })
+
   it('a person withdrawing a stuck stop keeps its native slot until the host reports stopping', () => {
     const f = fixture(), worker = f.add('worker')
     f.state.agents[0]!.workDecision = 'awaiting'

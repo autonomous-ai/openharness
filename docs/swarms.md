@@ -66,6 +66,28 @@ contributed machine, plus every machine an agent of the Swarm already runs on
 available, a person adds it to the Swarm under Machines; the host then clones
 the project there.
 
+A new project's Product Manager starts on any machine of the Swarm (Ken, 2026-10-29). On another person's Mac it runs in
+that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account,
+unless the Mac was added to the Swarm as its person joined: such a Mac takes it only in its Team account.
+
+Who can start it, where, and who then reaches it:
+
+- **Who starts it**: only the project's owner, a person (not an agent), with `lead.start`. They always name the machine
+  (only they know which one stays on); with none named the server refuses (`MACHINE_REQUIRED`), and nothing places it on
+  another machine. New Project chooses none for them.
+- **Where**: a machine on the Swarm's Machines list whose contribution is still valid, not paused or offline, with a free
+  agent slot, an engine it runs, and a Harness that starts Product Managers. New Project lists only these as choosable
+  and greys out the rest with the reason.
+- **Whose account**: on the owner's own machine, theirs. On a teammate's Mac, its Harness Team account when that account
+  admits this Product Manager with its engine now: privacy check passed, the engine offered, signed in and not suspended
+  there, a free slot, its host starts Product Managers, and no other project's work. Otherwise the Mac itself, in its
+  owner's account: **that owner can read whatever the Product Manager reads and writes on their Mac** (the trust change Ken
+  chose, 10-29). The server makes this choice for each engine (`leadChoices` in `leadStart.ts`), and New Project shows the
+  choice the start will make.
+- **Who watches it**: the project's members watch its terminal live, whichever account it runs in (the Mac's owner does
+  not when it runs in a Team account). Typing in it: nobody in a Team account; on a teammate's Mac itself, only that
+  Mac's owner, and only when they may read the project. A private project they are not in shows them nothing.
+
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
 date. A start that names no `branchRef` therefore bases its worktree on the
@@ -198,7 +220,7 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  list, and Claude Code (a Codex Buddy is refused for now; see below). A Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
   Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
   runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named

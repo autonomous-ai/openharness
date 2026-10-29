@@ -58,6 +58,9 @@ void main() {
     List<LeadMachine>? leadMachines,
     LeadModelList? leadModels,
     void Function(SuperTabLaunchFixture f)? setup,
+    // The machine its person chooses for the Product Manager, when the list
+    // can start it there.
+    String? lead = 'm',
   }) async {
     final oldBrightness = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
@@ -118,6 +121,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    if (leadMachines?.any((m) => m.id == lead && m.startable) ?? false) {
+      box.chooseLeadMachine(lead!);
+      await tester.pumpAndSettle();
+    }
     return (box, boundary);
   }
 
@@ -477,19 +484,21 @@ void main() {
     );
   }
 
-  testWidgets('The Swarm places the Product Manager on the best machine', (
+  testWidgets('Nothing moves the Product Manager to a machine by itself', (
     tester,
   ) async {
     final (box, _) = await mount(
       tester,
       setup: addLaptop,
       leadMachines: rankLeadMachines([laptop, rig], null),
+      lead: null,
     );
-    expect(box.machineId, 'laptop');
+    expect(box.machineId, 'm');
+    expect(box.leadMachine, isNull);
     expect(
       find.descendant(
         of: leadLine,
-        matching: find.textContaining('Product Manager on Ken MacBook'),
+        matching: find.text('Choose the machine the Product Manager runs on.'),
       ),
       findsOneWidget,
     );
@@ -549,41 +558,64 @@ void main() {
 
   for (final brightness in Brightness.values) {
     testWidgets(
-      'With no machine free New Project queues the PM in ${brightness.name}',
+      'New Project chooses no machine for the PM in ${brightness.name}',
       (tester) async {
         final (box, boundary) = await mount(
           tester,
           brightness: brightness,
-          leadMachines: [studioFull, rig],
+          leadMachines: [studio, rig],
           setup: agentIn,
+          lead: null,
         );
-        expect(box.leadQueued, isTrue);
-        expect(box.leadThroughSwarm, isTrue);
+        expect(box.leadPicked, isFalse);
         expect(
-          find.text(
-            'All Swarm machines are busy. The project starts on the first one that frees up.',
-          ),
+          find.text('Choose the machine the Product Manager runs on.'),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: change, matching: find.text('Choose')),
           findsOneWidget,
         );
         box.setTask('Plan the launch');
         await tester.pump();
-        expect(tester.widget<FilledButton>(_start).onPressed, isNotNull);
+        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
         await shot(
           tester,
           boundary,
-          'new-project-lead-${brightness.name}-waiting',
+          'new-project-lead-${brightness.name}-unchosen',
         );
+        await tester.tap(change);
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-lead-machine-m')),
+        );
+        await tester.pumpAndSettle();
+        expect(box.leadPicked, isTrue);
+        expect(tester.widget<FilledButton>(_start).onPressed, isNotNull);
         await unmount(tester);
       },
     );
   }
 
-  testWidgets('A queued PM needs a repo the Swarm can clone', (tester) async {
-    final (box, _) = await mount(tester, leadMachines: [studioFull, rig]);
-    expect(
-      box.leadBlocked,
-      'Choose a repo with a remote, so the Swarm can clone it for the Product Manager.',
+  testWidgets('A full machine cannot be chosen for the PM', (tester) async {
+    final (box, _) = await mount(
+      tester,
+      setup: addLaptop,
+      leadMachines: [studioFull, laptop, rig],
+      lead: null,
     );
+    expect(box.leadPicked, isFalse);
+    expect(box.leadBlocked, 'Choose the machine the Product Manager runs on.');
+    box.chooseLeadMachine('m');
+    expect(box.leadPicked, isFalse);
+    expect(box.leadBlocked, 'Choose the machine the Product Manager runs on.');
+    await tester.pump();
+    expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+    // With every machine full or ruled out, it says none can run it now.
+    await unmount(tester);
+    final (none, _) = await mount(tester, leadMachines: [studioFull, rig]);
+    expect(none.leadNone, isTrue);
+    expect(none.leadBlocked, 'No machine can run the Product Manager now.');
     expect(tester.widget<FilledButton>(_start).onPressed, isNull);
     await unmount(tester);
   });
@@ -597,9 +629,9 @@ void main() {
           brightness: brightness,
           leadMachines: [studioFull, diegoTeam],
           setup: agentIn,
+          lead: 'diego-mac',
         );
         expect(box.leadThroughSwarm, isTrue);
-        expect(box.leadQueued, isFalse);
         expect(box.leadSwarmMachine, 'diego-mac');
         // The repo stays the one chosen on your machine; Diego's Mac clones it.
         expect(box.machineId, 'm');
@@ -945,8 +977,7 @@ void main() {
           freeAgents: 20,
           own: false,
           unavailable:
-              'ken15’s personal account: runs only ken15’s projects. Yours '
-              'need your own computer or a Team account machine',
+              'Update Harness on Mac Studio to run a Product Manager there.',
         );
         final (box, boundary) = await mount(
           tester,
@@ -1037,6 +1068,7 @@ void main() {
       textScale: 2,
       leadMachines: [studioFull, diegoTeam],
       setup: agentIn,
+      lead: 'diego-mac',
     );
     expect(find.text('Clones lamp-os there first'), findsOneWidget);
     expect(tester.takeException(), isNull);
