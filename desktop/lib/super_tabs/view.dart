@@ -20,12 +20,12 @@ import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
-import 'identity.dart' show superTabPersonName;
 import 'profile_actions.dart';
 import 'pull_requests.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
+import 'identity.dart';
 import 'model.dart';
 import 'pm_chat.dart';
 import 'workgroup_name.dart';
@@ -44,7 +44,15 @@ import 'project_options.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
 
-typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
+/// A completion row: a workgroup, or someone to tag with their face and
+/// whether they are a person or an agent ([kind]).
+typedef _ComposerChoice = ({
+  String label,
+  String? detail,
+  VoidCallback choose,
+  Widget? leading,
+  String? kind,
+});
 
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
 /// [terminal] is the existing native pane, with its own controls and input.
@@ -664,18 +672,12 @@ class _SuperTabViewState extends State<SuperTabView>
           label: group.label,
           detail: context.isEmpty ? null : context.join(' — '),
           choose: () => _chooseWorkgroup(group),
+          leading: null,
+          kind: null,
         );
       }).toList();
     }
-    return _mentionChoices
-        .map(
-          (agent) => (
-            label: _agentName(agent),
-            detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
-            choose: () => _chooseMention(agent),
-          ),
-        )
-        .toList();
+    return _mentionChoices;
   }
 
   void _chooseWorkgroup(SuperTabConversation group) {
@@ -742,29 +744,64 @@ class _SuperTabViewState extends State<SuperTabView>
     return (start: start, end: end, query: query.toLowerCase());
   }
 
-  List<SuperTabAgent> get _mentionChoices {
+  /// Who `@` offers: the people who read this conversation, then its agents,
+  /// filtered by what follows the `@`. Never the reader; nobody is tagged in
+  /// the Leads conversation, so it offers agents alone.
+  List<_ComposerChoice> get _mentionChoices {
     final mention = _mentionAtCursor;
-    if (mention == null) return const [];
-    return c.snapshot?.agents
-            .where(
-              (agent) =>
-                  c.selected?.agentIds.contains(agent.id) == true &&
-                  '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
-                    mention.query,
-                  ),
-            )
-            .take(6)
-            .toList() ??
-        const [];
+    final snapshot = c.snapshot, group = c.selected;
+    if (mention == null || snapshot == null || group == null) return const [];
+    final project = snapshot.projectFor(group.id);
+    bool reads(SuperTabPerson person) => switch (group) {
+      _ when group.kind == 'leads' => false,
+      SuperTabConversation(:final audience?) => audience.contains(person.id),
+      _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
+      _ =>
+        project == null ||
+            !project.isPrivate ||
+            project.ownerId == person.id ||
+            project.memberIds.contains(person.id),
+    };
+    final people = snapshot.people.where(
+      (person) =>
+          person.id != c.accountId &&
+          reads(person) &&
+          person.username.contains(mention.query),
+    );
+    final agents = snapshot.agents.where(
+      (agent) =>
+          group.agentIds.contains(agent.id) &&
+          '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
+            mention.query,
+          ),
+    );
+    return [
+      for (final person in people)
+        (
+          label: person.username,
+          detail: null,
+          choose: () => _chooseMention(person.id, person.username),
+          leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
+          kind: 'person',
+        ),
+      for (final agent in agents)
+        (
+          label: _agentName(agent),
+          detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
+          choose: () => _chooseMention(agent.id, _agentName(agent)),
+          leading: SuperTabAvatar.agent(agent, size: SuperTabAvatar.rowSize),
+          kind: 'agent',
+        ),
+    ].take(_completionKeys.length).toList();
   }
 
-  void _chooseMention(SuperTabAgent agent) {
+  void _chooseMention(String id, String name) {
     final at = _mentionAtCursor;
     if (at == null) return;
-    final token = '@${_agentName(agent)}';
+    final token = '@$name';
     final text = _composer.text.replaceRange(at.start, at.end, '$token ');
     c.setDraft(c.selectedId, text);
-    c.mention(c.selectedId, agent.id, token);
+    c.mention(c.selectedId, id, token);
     _composer.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: at.start + token.length + 1),
@@ -1945,10 +1982,10 @@ class _SuperTabViewState extends State<SuperTabView>
       message: message,
       author: _shownAuthor(c, message),
       proposalOwner: _proposalOwner(message),
-      // A person is named by their address's first part, as people say it.
+      // A person is named by their username, as they are tagged.
       mentions: [
         for (final id in message.mentions)
-          if (_people[id] case final person?) person.email.split('@').first,
+          if (_people[id] case final person?) person.username,
       ],
       references: _references,
       onOpenGroup: (id) {
@@ -1976,7 +2013,7 @@ class _SuperTabViewState extends State<SuperTabView>
       reactorName: (kind, id) => kind == 'agent'
           ? c.snapshot?.agentName(id) ?? 'Agent'
           : switch (_people[id]) {
-              final person? => superTabPersonName(person.email),
+              final person? => person.username,
               null => 'Someone',
             },
       onReact: c.canWrite && c.selected?.archived == false
@@ -2697,6 +2734,13 @@ class _SuperTabViewState extends State<SuperTabView>
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16,
                           ),
+                          leading: choices[i].leading,
+                          trailing: choices[i].kind == null
+                              ? null
+                              : Text(
+                                  choices[i].kind!,
+                                  style: DesktopChrome.metadata(),
+                                ),
                           title: Text(
                             choices[i].label,
                             maxLines: 1,

@@ -306,6 +306,11 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
         : c.buddiesOn
         ? '#${c.snapshot?.projects.where((p) => p.id == mention.projectId).firstOrNull?.name ?? mention.projectName}'
         : kChatWithPm;
+    // A person who tagged the reader is named as they are now.
+    final person = c.snapshot?.people
+        .where((p) => p.id == mention.leadId)
+        .firstOrNull;
+    final author = person?.username ?? mention.leadName;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -322,9 +327,12 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (widget.mentions.controller.snapshot?.agent(
-                      mention.leadId ?? '',
-                    )
+                if (person != null)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10, top: 2),
+                    child: SuperTabAvatar.person(person, size: 24),
+                  )
+                else if (c.snapshot?.agent(mention.leadId ?? '')
                     case final lead?)
                   Padding(
                     padding: const EdgeInsets.only(right: 10, top: 2),
@@ -342,7 +350,7 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
                         children: [
                           Flexible(
                             child: Text(
-                              mention.leadName,
+                              author,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: DesktopChrome.control(medium: waiting),

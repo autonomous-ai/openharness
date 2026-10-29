@@ -526,6 +526,38 @@ void main() {
       );
     });
 
+    testWidgets('a person’s tag shows their avatar and username', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..append('Ship it?')
+        ..tag('message-1', text: 'Ship it?', leadId: 'dee');
+      server.mentions.last['leadName'] = 'dee';
+      server.state['people'] = [
+        {'id': 'owner', 'email': 'owner@example.com', 'role': 'owner'},
+        {
+          'id': 'dee',
+          'email': 'dee@example.com',
+          'role': 'collaborator',
+          'username': 'deedee',
+          'avatar': {'kind': 'preset', 'key': 'fox'},
+        },
+      ];
+      await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('super-mention-mention-1'));
+      expect(
+        find.descendant(of: row, matching: find.text('🦊')),
+        findsOneWidget,
+      );
+      // The name they go by now, though they were tagged under another.
+      expect(
+        find.descendant(of: row, matching: find.text('deedee')),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('mark done moves the tag to Earlier and clears the count', (
       tester,
     ) async {

@@ -39,10 +39,10 @@ TextStyle _trendStyle(Color color) =>
     DesktopChrome.metadata(color: color)
         .copyWith(fontFeatures: grid.AppFont.tabularFigures);
 
-/// A person as the leaderboard names them: the board's display name, else the
-/// email's first part, as before the board had names.
+/// A person as the leaderboard names them: their username, as everywhere in
+/// the Swarm (the board's account display name was a long one).
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
-    score?.displayName ?? superTabPersonName(person.email);
+    person.username;
 
 /// "Up 6 from last week", "down 7 …"; null when level, or from a server
 /// without last week.

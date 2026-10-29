@@ -101,7 +101,7 @@ class SuperTabAgentInfo {
     final person = controller.snapshot?.people
         .where((p) => p.id == personId)
         .firstOrNull;
-    return _known(person == null ? null : superTabPersonName(person.email));
+    return _known(person?.username);
   }
 
   String? get questionOwner {

@@ -34,8 +34,27 @@ class SuperTabPerson {
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']);
+      status = SuperTabPersonStatus.fromJson(row['status']),
+      chosenUsername = row['username'] as String?,
+      username =
+          row['username'] as String? ??
+          superTabDefaultUsername(_text(row, 'email'));
+  SuperTabPerson._named(SuperTabPerson person, this.username)
+    : id = person.id,
+      email = person.email,
+      role = person.role,
+      generation = person.generation,
+      avatar = person.avatar,
+      status = person.status,
+      chosenUsername = person.chosenUsername;
   final String id, email, role;
+
+  /// How the Swarm shows and tags them: the name they chose, else their
+  /// default ([superTabUsernames]). Their email is never shown in its place.
+  final String username;
+
+  /// The name they chose; null while they use their default.
+  final String? chosenUsername;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
 
@@ -47,6 +66,43 @@ class SuperTabPerson {
   /// from a backend that does not send it.
   final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
+}
+
+/// The name an email's prefix makes: lowercased, only the characters a
+/// username takes, never too short. Unnumbered; [superTabUsernames] numbers it.
+String superTabDefaultUsername(String email) {
+  var prefix = email
+      .split('@')
+      .first
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9._-]'), '')
+      .replaceFirst(RegExp(r'^[._-]+'), '');
+  if (prefix.length > 30) prefix = prefix.substring(0, 30);
+  if (prefix.isEmpty) return 'user';
+  return prefix.length < 2 ? '${prefix}1' : prefix;
+}
+
+/// [people] in join order, each with their username: the one they chose, else
+/// their email prefix numbered (`ken2`) after everyone who joined before them
+/// and every chosen name. The server works out the same names
+/// (backend/src/superTabs/usernames.ts); only chosen ones are stored.
+List<SuperTabPerson> superTabUsernames(List<SuperTabPerson> people) {
+  final taken = {for (final p in people) ?p.chosenUsername};
+  return [
+    for (final person in people)
+      if (person.chosenUsername != null)
+        person
+      else
+        SuperTabPerson._named(person, () {
+          final root = superTabDefaultUsername(person.email);
+          var name = root;
+          for (var n = 2; taken.contains(name); n++) {
+            name = '$root$n';
+          }
+          taken.add(name);
+          return name;
+        }()),
+  ];
 }
 
 class SuperTabAgent {
@@ -251,7 +307,7 @@ class SuperTabSnapshot {
       project = row['project'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['project'])),
-      people = _list(row['people'], SuperTabPerson.fromJson),
+      people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
       machines = _list(
         row['machines'] ?? const [],
@@ -471,7 +527,8 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : superTabPersonName(message.authorName);
+      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+            superTabPersonName(message.authorName);
 }
 
 /// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the

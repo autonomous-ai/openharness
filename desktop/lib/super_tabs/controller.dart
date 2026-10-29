@@ -10,7 +10,6 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
-import 'identity.dart';
 import 'model.dart';
 import 'pm_chat.dart';
 import 'project_github.dart';
@@ -1447,13 +1446,10 @@ class SuperTabController extends ChangeNotifier {
     }
     if (pmChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
-    final email = me?.email;
     final result = await command({
       'type': 'conversation.create',
       'projectId': projectId,
-      'title': email == null || email.isEmpty
-          ? kChatWithPm
-          : superTabPersonName(email),
+      'title': me?.username ?? kChatWithPm,
       'brief': '',
       'checks': <dynamic>[],
       'audience': {
@@ -2411,11 +2407,14 @@ class SuperTabController extends ChangeNotifier {
         _pending != null) {
       return null;
     }
+    // A tag the text still says: an agent's is a recipient, a person's a tag.
+    final said = mentions(selectedId).entries
+        .where((entry) => containsMention(text, entry.value))
+        .map((entry) => entry.key);
+    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
+    final tagged = said.where(isPerson).toList();
     final addressed = recipients.isEmpty
-        ? mentions(selectedId).entries
-              .where((entry) => containsMention(text, entry.value))
-              .map((entry) => entry.key)
-              .toList()
+        ? said.where((id) => !isPerson(id)).toList()
         : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
       operationError = 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.';
@@ -2433,6 +2432,7 @@ class SuperTabController extends ChangeNotifier {
       'text': text,
       'replyTo': replyTo,
       'recipientIds': addressed,
+      if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     // On its way: the message shows in the chat, and the draft is free for
