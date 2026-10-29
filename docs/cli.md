@@ -120,6 +120,14 @@ A cloud agent starts the same way: `harness new devin-cloud --machine office --r
 state, what it said after the last thing it was told, and its links (`links` in JSON). `harness reply <name> --
 <words>` says the person's answer, or what to do next, to a cloud harness; an agent does not.
 
+`harness reply` also gives more work to a harness in a pane, for a program acting for the person (a lamp that checked
+the answer and found it wrong), when the person has turned on `programs-reply` (`harness settings`, off by default).
+Only an idle harness takes it: one that is working is refused until it finishes (exit 1), and one that may be waiting
+on a question or a permission is the person's to answer. The machine it runs on checks both again and types the words
+in once its composer is free, never over a draft, with `tell`'s limits. Then `harness wait` and `harness show`, as
+after a start: `wait` does not return on the answer to the work before. An agent uses `harness tell` instead, for a
+harness it started.
+
 `harness watch <name>` follows one harness for a program that acts on it: a line each time it changes, one JSON
 object a line with `--json`, until it stops or is gone (exit 4) or `--timeout` passes (exit 124; `0`, the default,
 follows it as long as it lives). It decides as `wait` does: the maker's state for a cloud harness; the daemon's

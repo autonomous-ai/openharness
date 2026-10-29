@@ -213,8 +213,13 @@ describe('a conversation\'s page of messages', () => {
     maker = await signedIn('pager')
     tabId = (await store.create(maker, randomUUID(), 'Pages')).id
     conversationId = (await db.swarmGroup.findFirstOrThrow({ where: { tabId, deleted: false } })).key
+    // One a route row with a file, as commands.ts and attachments.ts write them: its numbers come back as Prisma reads them.
+    const route = { source: { kind: 'route', decisionId: 'd1', via: 'policy', p: 0.75, belowFloor: false, why: 'Small change', pick: { id: 'c0', title: 'Builder' },
+      alternatives: [{ id: 'c1', title: 'New agent' }] }, attachments: [{ id: 'a1', name: 'plan.txt', mime: 'text/plain', size: 2048, url: 'https://files.example/a1' }],
+      replyTo: `${tabId}-m04`, mentions: [maker.sub], alsoInChat: true }
     await db.superTabMessage.createMany({ data: ids.map(id => ({ id: `${tabId}-${id}`, tabId, conversationId, sequence: sequenceOf(id), text: id,
-      author: { kind: 'person', id: maker.sub, name: maker.email, membershipGeneration: tabId }, recipientIds: [], mentions: [], createdAt: new Date(NOW) })) })
+      author: { kind: 'person', id: maker.sub, name: maker.email, membershipGeneration: tabId }, recipientIds: [], mentions: [], createdAt: new Date(NOW),
+      ...id === 'm05' ? route : {} })) })
   })
 
   const pageReads = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SuperTabMessage', ['conversationId', 'sequence'])
@@ -246,6 +251,7 @@ describe('a conversation\'s page of messages', () => {
     const page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` })
     const prisma = await db.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: page.messages.map(m => m.id) } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }] })
     expect(page.messages.map(({ reactions: _r, deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
+    expect(page.messages.find(m => m.text === 'm05')).toMatchObject({ source: { kind: 'route', p: 0.75 }, attachments: [{ size: 2048 }], alsoInChat: true })
   })
 })
 
