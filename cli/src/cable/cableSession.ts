@@ -398,7 +398,7 @@ export interface CableHost {
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. Not `said`: not a Lead, send the turn as before;
    *  `refused`: the backend refused the post, whose words are never typed anywhere instead. `chatId`: the chat they were
    *  spoken to, the only one they may be posted in. */
-  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string): Promise<SaidOnCard>
+  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean): Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
@@ -598,6 +598,9 @@ export interface DialStatus {
   devices?: DialStatus[]
 }
 
+/** The chat on a dial's face as the person began to speak, and the project it belongs to (a review names both). */
+type SwarmFace = SwarmChat & { project: string }
+
 interface Message {
   t: string
   [key: string]: unknown
@@ -725,6 +728,9 @@ export class CableSession {
    *  (`supertab.side`), each Lead carries `buddies` and the reader's Buddy, and the Buddy's word is a quiet notice. A
    *  swarmChat dial without it gets today's frames byte for byte. */
   private swarmBuddy = false
+  /** `swarmReview: 'v1'` beside swarmChat (docs/device-voice-swarm-chat.md): the dial reviews every word for a Swarm chat
+   *  before it is posted, so one that comes unreviewed is refused before it is transcribed. */
+  private swarmReview = false
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -738,14 +744,14 @@ export class CableSession {
 
   /** For the greeting's log line: which capabilities this hello named, or nothing. */
   private capabilitiesNamed(): string {
-    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard', this.swarmChat && 'swarmChat', this.swarmBuddy && 'swarmBuddy']
+    const named = [this.swarmMembers && 'swarms', this.longRecap && 'recap', this.stepsActivity && 'activity', this.statsTurn && 'stats', this.playerCapable && 'player', this.superTabWaits && 'superTab', this.swarmCard && 'swarmCard', this.swarmChat && 'swarmChat', this.swarmBuddy && 'swarmBuddy', this.swarmReview && 'swarmReview']
       .filter(Boolean)
     return named.length ? ` caps ${named.join(',')}` : ''
   }
 
   private resetCapabilities(): void {
     this.swarmMembers = this.longRecap = this.stepsActivity = this.statsTurn = this.playerCapable = this.superTabWaits = false
-    this.swarmCard = this.swarmChat = this.swarmBuddy = false
+    this.swarmCard = this.swarmChat = this.swarmBuddy = this.swarmReview = false
     this.dropCards()
     this.seqOn = false
     this.seq = 0
@@ -868,7 +874,7 @@ export class CableSession {
     form?: { command?: FormCommand; pin: Promise<FormResult> };
     /** The chat on this dial's face for that agent's Swarm project as the person began to speak: the words go there or
      *  nowhere, and a Buddy chat's never reach a terminal (review of #2146). */
-    swarmFace?: SwarmChat } | null = null
+    swarmFace?: SwarmFace } | null = null
   private voiceSearch?: SelectionCommand
   private voiceForm?: FormCommand
   private voiceCarryId?: string
@@ -1312,6 +1318,7 @@ export class CableSession {
         this.swarmCard = str('swarmCard') === 'v1'
         this.swarmChat = this.swarmCard && str('swarmChat') === 'v1'
         this.swarmBuddy = this.swarmChat && str('swarmBuddy') === 'v1'
+        this.swarmReview = this.swarmChat && str('swarmReview') === 'v1'
         this.wantCards(this.swarmCard)
         this.seqOn = str('board') === 'pro'
         this.seq = 0
@@ -1340,6 +1347,9 @@ export class CableSession {
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
             ...(this.host.answerReviewed ? ['question.review'] : []),
+            // Words reviewed on a Swarm face are posted in its chat by Send. A dial asks for review there only when it sees
+            // this: an older daemon would type the reviewed words into the Lead's terminal.
+            ...(this.host.swarmSay ? ['swarm.review'] : []),
             // The desktop will carry this device's preferences. A device that does not see this keeps
             // its own settings screens and never reports.
             'settings',
@@ -1713,10 +1723,12 @@ export class CableSession {
         // The dial can still name the previous pane while a focus frame is in flight, or after the
         // devices process restarted. Ordinary dictation belongs to the window's selection at capture
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
-        const focused = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice &&
-          !carryVoice && !('selectionId' in msg) ? this.host.appFocus?.() : undefined
+        // Except words for a Swarm face's chat: the dial shows that chat, so a pane focused in the window never takes them.
+        const plain = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice && !carryVoice && !('selectionId' in msg)
+        const dialFace = plain ? this.swarmFaceOf(str('agentId')!) : undefined
+        const focused = plain && !dialFace ? this.host.appFocus?.() : undefined
         const agentId = focused?.agentId ?? str('agentId')
-        const swarmFace = agentId ? this.swarmFaceOf(agentId) : undefined
+        const swarmFace = dialFace ?? (agentId ? this.swarmFaceOf(agentId) : undefined)
         this.voice = {
           agentId,
           ...(swarmFace ? { swarmFace } : {}),
@@ -2190,6 +2202,10 @@ export class CableSession {
       return
     }
 
+    if (this.swarmReview && turn.swarmFace && !review) {
+      await reply({ t: 'voice.error', message: 'Review the words before they are posted.' }); return
+    }
+
     const seconds = turn.bytes / (turn.rate * 2)
     this.log(`cable: voice ${seconds.toFixed(1)}s (${Math.round(turn.bytes / 1024)} KB) → stt`)
 
@@ -2322,6 +2338,23 @@ export class CableSession {
     if (carried && !agents.some(a => a.id === agentId)) {
       await reply({ t: 'voice.error', message: 'That recipient is no longer available. Choose it again.' })
       return
+    }
+    // Reviewed on a Swarm face: Send posts the words in the chat that was on the face, as the person, and never in a terminal.
+    if (review && turn.swarmFace && !carried && !selection?.ok) {
+      if (!this.host.swarmSay) { await reply({ t: 'voice.error', message: 'Could not reach the Swarm. Try again.' }); return }
+      const face = turn.swarmFace, say = this.host.swarmSay.bind(this.host), recipient = agentId
+      const state = this.voiceDraft.create({ agentId: recipient, name: `${face.project} · ${face.name}`, text: transcript,
+        context: 'Swarm chat',
+        submit: async words => {
+          const [chat] = this.sayArgs(face)
+          const said = await say(recipient, turn.cmd ? `/${turn.cmd} ${words}` : words, chat, face.id, true)
+            .catch((): SaidOnCard => ({ said: false }))
+          if (said.said) return { ok: true }
+          return { ok: false, error: said.refused?.message ?? (face.kind === 'buddy' ? 'Could not reach your Buddy. Try again.' : 'Could not reach the Swarm. Try again.') }
+        } })
+      if (!state.ok) { await reply({ t: 'voice.error', message: state.error }); return }
+      this.voiceDraftCreation = { uploadId, id: state.id }
+      await reply({ t: 'voice.draft', ...state }); return
     }
     if (review) {
       const recipient = agentId
@@ -2708,17 +2741,18 @@ export class CableSession {
   private noticesReplay = true
 
   /** The chat on this dial's face for the Lead that runs as `harnessId` here; none for a device without chats. */
-  private swarmFaceOf(harnessId: string): SwarmChat | undefined {
+  private swarmFaceOf(harnessId: string): SwarmFace | undefined {
     if (!this.swarmChat) return undefined
     for (const card of this.host.swarmCards?.() ?? []) {
       const lead = card.leads.find((l) => l.local === harnessId)
-      if (lead) return this.swarmBuddy ? lead.sideChat ?? lead.chat : lead.chat
+      const face = lead && (this.swarmBuddy ? lead.sideChat ?? lead.chat : lead.chat)
+      if (lead) return face && { ...face, project: lead.project }
     }
     return undefined
   }
 
   /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
-  private sayArgs(face: SwarmChat | undefined): [chat?: CardChat, chatId?: string] {
+  private sayArgs(face: SwarmFace | undefined): [chat?: CardChat, chatId?: string] {
     const [chat] = this.chatFlag()
     if (chat === undefined) return []
     return face ? [chat, face.id] : [chat]

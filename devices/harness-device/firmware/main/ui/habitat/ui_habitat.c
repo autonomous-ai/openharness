@@ -231,7 +231,7 @@ static EXT_RAM_BSS_ATTR struct {
     int brightness;
     uint32_t voice_started;
     bool voice_open, voice_start_pending, voice_waiting, voice_carry;
-    bool voice_review, voice_review_preview, voice_draft_append, voice_search;
+    bool voice_review, voice_review_preview, voice_draft_append, voice_search, voice_swarm;
     uint32_t voice_draft_revision;
     int draft_drag;
     uint32_t voice_generation, voice_question_revision;
@@ -1191,6 +1191,7 @@ static void surface_tick(uint32_t now)
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
         !s.voice_waiting && !s.voice_start_pending && audio_client_recording() &&
         (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION) &&
+        (!s.voice_swarm || cable_client_supports(CABLE_FEATURE_SWARM_REVIEW)) &&
         s.touch_down && !s.touch_cancelled && gesture.live && !gesture.moved && !gesture.guarded &&
         pressed_action.kind == A_PET && held >= 650 && held <= 1800;
     if (review_preview != s.voice_review_preview) { s.voice_review_preview = review_preview; change(); }
@@ -2927,6 +2928,7 @@ static void dispatch(action_t a)
             s.voice_return = s.view;
             int target = find(a.id);
             const ht_lead_t *lead = voice_lead(a.id, a.value);
+            s.voice_swarm = lead != NULL;
             if (lead) target = -1;
             if (a.value == 2) snprintf(s.voice_target, sizeof s.voice_target, "Find %.48s",
                 !strcmp(form.page.title, "Find Harness") ? "Harness" :
@@ -2943,7 +2945,10 @@ static void dispatch(action_t a)
         break;
     case A_VOICE_STOP:
         if (s.voice_open && !s.voice_start_pending && !s.voice_waiting && audio_client_recording()) {
-            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
+            // Words for a Swarm chat are always reviewed, by a daemon that posts the draft there; an older one would type
+            // it into the Lead's terminal, so a Swarm face is never held to review with it.
+            bool swarm_review = cable_client_supports(CABLE_FEATURE_DRAFT | CABLE_FEATURE_SWARM_REVIEW);
+            if (s.voice_swarm ? swarm_review : a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
                 s.voice_review = true; audio_client_request_review();
             }
             audio_client_stop();
