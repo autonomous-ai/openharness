@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -8,6 +10,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
+import 'swarm_approve.dart';
 import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';
@@ -451,15 +454,30 @@ class SwarmWaitingRow extends StatelessWidget {
         decision.recommended >= decision.options.length) {
       return (null, reply);
     }
+    final option = swarmOption(decision.options, decision.recommended);
     return (
       session.dropped(need) ? 'Not sent, choose again.' : null,
       SwarmButton(
         key: ValueKey('swarm-approve-${decision.id}'),
-        label: swarmOption(decision.options, decision.recommended),
+        label: option,
         style: SwarmButtonStyle.fill,
-        onPressed: () => session.hold(need, decision.recommended),
+        onPressed: () => unawaited(_approve(context, need, option)),
       ),
     );
+  }
+
+  /// Approve asks first ([confirmSwarmApprove]); confirmed, the recommended
+  /// answer is held for Undo and then sent — unless meanwhile its row went:
+  /// the decision left the person's list (answered elsewhere, or access
+  /// taken away).
+  Future<void> _approve(
+    BuildContext context,
+    SwarmDecisionNeed need,
+    String option,
+  ) async {
+    if (!await confirmSwarmApprove(context, need, option)) return;
+    if (!context.mounted) return;
+    session.hold(need, need.decision.recommended);
   }
 }
 

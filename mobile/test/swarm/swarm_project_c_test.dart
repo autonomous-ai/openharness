@@ -245,6 +245,94 @@ void main() {
       expect(find.text('Done today'), findsNothing, reason: 'open tasks only');
     });
 
+    /// [backend] with River asking the person, in g2, whether to merge.
+    FakeSwarm asked() {
+      final fake = backend();
+      const derived = {'decisionsWaiting': 1};
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+        ...(await load(body))! as Map<String, dynamic>,
+        'derived': derived,
+      };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          changes(cursor: 'c2', derived: derived);
+      fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
+        'decisions': [
+          {
+            'id': 'd1',
+            'projectName': 'Mobile',
+            'conversationId': 'g2',
+            'conversationTitle': 'Saved views cache',
+            'askerName': 'River',
+            'question': 'Merge #2160?',
+            'options': ['Merge', 'Wait'],
+          },
+        ],
+      };
+      return fake;
+    }
+
+    testWidgets('Approve asks first, naming the answer, who asked, where and '
+        'the question; confirmed, it is held for Undo and sent once', (
+      tester,
+    ) async {
+      final fake = asked();
+      await team(tester, fake);
+
+      await tester.tap(key('swarm-approve-d1'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Sends “Merge” to River in #Mobile: Merge #2160?\n\n'
+          'You can undo it for a few seconds.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-activity-approve-cancel'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty, reason: 'Cancel sends nothing');
+
+      await tester.tap(key('swarm-approve-d1'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-activity-approve-confirm'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: key('swarm-waiting-decision:d1'),
+          matching: find.text('Sending “Merge”'),
+        ),
+        findsOneWidget,
+      );
+      expect(fake.commands, isEmpty, reason: 'Undo still can');
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single, {
+        'type': 'decision.answer',
+        'decisionId': 'd1',
+        'choice': 0,
+      });
+    });
+
+    testWidgets('access taken away while Approve asks: confirming it then '
+        'holds and sends nothing', (tester) async {
+      final fake = asked();
+      await team(tester, fake);
+
+      await tester.tap(key('swarm-approve-d1'));
+      await tester.pumpAndSettle();
+      host(tester).session!.inbox.reader(tab)!.revoke();
+      await tester.pump();
+      await tester.tap(key('swarm-activity-approve-confirm'));
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, isEmpty);
+      expect(find.byType(SwarmWaitingRow), findsNothing);
+    });
+
     testWidgets('a task opens its chat', (tester) async {
       await team(tester, backend());
 

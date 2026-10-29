@@ -1675,14 +1675,51 @@ void main() {
       );
     });
 
-    testWidgets('Approve holds the recommended answer with Undo, then sends '
-        'it once', (tester) async {
+    testWidgets('Approve asks first, naming the answer, who asked, where and '
+        'the question; Cancel sends nothing', (tester) async {
       final fake = backend();
       await pump(tester, fake);
       await openTasks(tester);
 
       await tester.tap(key('swarm-approve-d1'));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.text('Approve?'), findsOneWidget);
+      expect(
+        find.text(
+          'Sends “Yes” to River in #Mobile: Ship it behind a flag?\n\n'
+          'You can undo it for a few seconds.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        inside('swarm-waiting-decision:d1', find.text('Sending “Yes”')),
+        findsNothing,
+        reason: 'nothing is held until the person confirms',
+      );
+
+      await tester.tap(key('swarm-activity-approve-cancel'));
+      await tester.pumpAndSettle();
+      expect(find.text('Approve?'), findsNothing);
+      expect(key('swarm-approve-d1'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('Approve, confirmed, holds the recommended answer with Undo, '
+        'then sends it once', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      await openTasks(tester);
+
+      Future<void> approve() async {
+        await tester.tap(key('swarm-approve-d1'));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-activity-approve-confirm'));
+        await tester.pumpAndSettle();
+      }
+
+      await approve();
       expect(
         inside('swarm-waiting-decision:d1', find.text('Sending “Yes”')),
         findsOneWidget,
@@ -1693,7 +1730,7 @@ void main() {
       await tester.pump(const Duration(seconds: 4));
       expect(fake.commands, isEmpty);
 
-      await tester.tap(key('swarm-approve-d1'));
+      await approve();
       await tester.pump(const Duration(seconds: 2));
       expect(fake.commands, isEmpty, reason: 'Undo still can');
       await tester.pump(const Duration(seconds: 2));
