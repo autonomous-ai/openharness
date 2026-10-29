@@ -4841,11 +4841,21 @@ static void swarms_apply(void)
     if (changed && (workspace.touching || s.view == TABS)) input_cancel();
     s.tab_count=bounded;
     if (bounded) memcpy(s.tabs,rows,(size_t)bounded*sizeof *rows);
+    char was[ID_MAX];
+    COPY(was,s.selected_tab);
     COPY(s.selected_tab,selected);
     // The desktop closed the desk tab of the Swarm on the face: the dial leaves it too, for TABS on the app's tab.
     if (swarm_mode() && sw.desk[0] && workspace_index(sw.desk) < 0) {
         swarm_leave();
         if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
+    } else if (swarm_mode() && sw.desk[0] && selected_changed && !strcmp(was, sw.desk) && s.selected_tab[0] &&
+               !s.voice_open && (s.view == HOME || s.view == AGENT || s.view == AGENTS)) {
+        // The desktop went from the Swarm's desk tab to another (Diego's dial, 2026-10-29): the dial follows it onto
+        // that tab's panes, as it follows the desktop in. It stayed on the Swarm face until that desk tab was closed;
+        // the daemon's focus for the new tab only moves `s.active`, which a Swarm face never shows. Only FROM the desk
+        // tab: right after the dial's own pick the desktop has not moved yet, and a frame naming its old tab is no move.
+        swarm_leave();
+        view(HOME);
     } else {
         swarm_desk_note();
     }
@@ -5025,8 +5035,9 @@ void ui_supertab_focus(const char *tab, const char *lead)
     if (t && (i >= 0 || !lead[0]) && free) {
         if (swarm_mode() && !strcmp(sw.tab, tab)) {
             if (i >= 0 && strcmp(sw.lead, lead)) swarm_show(t, i, false);
-        } else if (!swarm_mode() && t->tab[0] && swarm_may_follow()) {
-            // The desktop opened this Swarm's tab: the dial goes in with it, or as soon as the `swarms` frame says so.
+        } else if (t->tab[0] && swarm_may_follow()) {
+            // The desktop opened this Swarm's tab: the dial goes in with it, or as soon as the `swarms` frame says so. From
+            // another Swarm too: that frame takes the dial out of the one it is in first (swarms_apply).
             if (!strcmp(s.selected_tab, t->tab)) swarm_enter(t, lead, false);
             else COPY(sw.pending, tab);
         }

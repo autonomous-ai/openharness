@@ -12,7 +12,6 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
-import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
 import 'controller.dart';
@@ -20,6 +19,7 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
+import 'leaderboard/member_row.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
@@ -332,17 +332,21 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         },
       );
 
-  /// An agent's row: today's identity and status line, and on a board its
-  /// [rank] at the start and [points] at the end, in the people's columns.
-  /// An agent the board does not score keeps both columns empty.
-  Widget _agent(
-    SuperTabAgent agent, {
-    LeaderboardColumns? columns,
-    int? rank,
-    int? points,
-  }) {
+  /// The mark an agent's row shows, which also orders the list: its activity,
+  /// except that lost work shows the tabs' Offline, since nothing runs it
+  /// (Dee, 2026-10-29).
+  HarnessActivity _shownActivity(SuperTabAgentInfo info) =>
+      info.taskGroup?.assignment?['status'] == 'lost'
+      ? HarnessActivity.offline
+      : info.activity ?? HarnessActivity.unknown;
+
+  /// An agent's row, in the shape the people's rows share (Dee, 2026-10-29):
+  /// avatar, name and role chip, today's one status line beneath, and the
+  /// tabs' status mark at the right. No rank and no points.
+  Widget _agent(SuperTabAgent agent) {
     final name = c.snapshot!.agentName(agent.id), activity = _activity(agent);
     final info = SuperTabAgentInfo(c, widget.app, agent, activity: activity);
+    final shown = _shownActivity(info);
     // One line, readable in a second (Dee, 2026-10-27): state, machine, model and effort. The task is in the tooltip.
     final glance = superTabAgentGlance(info);
     final project = c.snapshot!.projects
@@ -412,102 +416,35 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             }
           }
         },
-        child: ListTile(
-          key: ValueKey('super-member-${agent.id}'),
-          dense: true,
-          minTileHeight: 48,
-          minVerticalPadding: 6,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          title: Row(
-            children: [
-              if (columns != null) ...[
-                SizedBox(
-                  width: columns.rank,
-                  child: rank == null
-                      ? null
-                      : Text(
-                          '$rank',
-                          key: ValueKey('super-member-rank-${agent.id}'),
-                          maxLines: 1,
-                          textAlign: TextAlign.right,
-                          style: leaderboardRankStyle(),
-                        ),
-                ),
-                const SizedBox(width: DesktopChrome.controlGap),
-              ],
-              SuperTabAvatar.agent(
-                agent,
-                name: name,
-                size: SuperTabAvatar.rowSize,
-                engineBadge: false,
-              ),
-              const SizedBox(width: 8),
-              Expanded(child: _agentIdentity(name, role, badge)),
-              const SizedBox(width: 8),
-              EngineMark(engine: agent.engine, size: 14),
-              if (columns != null)
-                Padding(
-                  padding: const EdgeInsets.only(
-                    left: DesktopChrome.controlGap,
-                  ),
-                  child: SizedBox(
-                    width: columns.points,
-                    child: points == null
-                        ? null
-                        : Align(
-                            alignment: Alignment.centerRight,
-                            child: Semantics(
-                              label: plural(points, 'point'),
-                              excludeSemantics: true,
-                              child: Text(
-                                '$points',
-                                key: ValueKey(
-                                  'super-member-points-${agent.id}',
-                                ),
-                                maxLines: 1,
-                                style: leaderboardPointsStyle(),
-                              ),
-                            ),
-                          ),
-                  ),
-                ),
-            ],
-          ),
-          subtitle: Padding(
-            padding: EdgeInsets.only(
-              left:
-                  32 +
-                  (columns == null
-                      ? 0
-                      : columns.rank + DesktopChrome.controlGap),
-            ),
-            child: Row(
-              children: [
-                ActivityMark(
-                  activity: activity,
-                  tooltip: false,
-                  showIdle: true,
-                  color: activityColor(
-                    activity,
-                    theme,
-                    color: appearancePrefsStore.value.prompt.color,
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    glance.line,
-                    key: ValueKey('super-member-line-${agent.id}'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-              ],
-            ),
-          ),
+        child: SuperTabMemberRow(
+          rowKey: ValueKey('super-member-${agent.id}'),
           onTap: () => unawaited(_details(agent)),
           onLongPress: () => unawaited(_details(agent)),
+          avatar: SuperTabAvatar.agent(
+            agent,
+            name: name,
+            size: SuperTabAvatar.rowSize,
+            engineBadge: false,
+          ),
+          name: _agentIdentity(name, role, badge),
+          detail: Text(
+            glance.line,
+            key: ValueKey('super-member-line-${agent.id}'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: DesktopChrome.metadata(),
+          ),
+          trailing: ActivityMark(
+            key: ValueKey('super-member-mark-${agent.id}'),
+            activity: shown,
+            tooltip: false,
+            showIdle: true,
+            color: activityColor(
+              shown,
+              theme,
+              color: appearancePrefsStore.value.prompt.color,
+            ),
+          ),
         ),
       ),
     );
@@ -551,53 +488,39 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     final scores = {
       for (final score in board?.people ?? const []) score.personId: score,
     };
-    // Most points first, as the board ranks them; anyone it has no score for after.
-    final ranked = [
-      ...?board?.people
-          .map(
-            (score) => people.where((p) => p.id == score.personId).firstOrNull,
-          )
-          .nonNulls,
-      ...people.where((p) => !scores.containsKey(p.id)),
-    ];
-    // The agents the board scores (the PM; Buddies are not listed here) by
-    // their points, ranked among themselves, then the rest in today's order
-    // with no rank and no number: a column of zeros means nothing (Lead,
-    // 2026-10-29). Matched by id, never by name.
-    final agentPoints = {
-      for (final score in board?.agents ?? const <SuperTabAgentScore>[])
-        score.agentId: score.points,
+    // By name, letter case aside (Dee, 2026-10-29): the points say who leads.
+    String sortName(SuperTabPerson p) =>
+        leaderboardName(p, scores[p.id]).toLowerCase();
+    final sorted = [...people]
+      ..sort((a, b) {
+        final byName = sortName(a).compareTo(sortName(b));
+        return byName != 0 ? byName : a.id.compareTo(b.id);
+      });
+    // Most urgent first, as the tabs order their marks: needs input, working,
+    // idle, offline. Equals keep today's order, the Lead first.
+    final shown = {
+      for (final agent in [...leads, ...agents])
+        agent.id: _shownActivity(
+          SuperTabAgentInfo(c, widget.app, agent, activity: _activity(agent)),
+        ),
     };
     final listed = [...leads, ...agents];
-    final scored = listed.where((a) => agentPoints.containsKey(a.id)).toList();
     mergeSort(
-      scored,
-      compare: (a, b) => agentPoints[b.id]! - agentPoints[a.id]!,
+      listed,
+      compare: (a, b) => shown[a.id]!.index - shown[b.id]!.index,
     );
-    final agentRanks = <String, int>{};
-    for (var i = 0; i < scored.length; i++) {
-      final points = agentPoints[scored[i].id]!;
-      agentRanks[scored[i].id] =
-          i > 0 && points == agentPoints[scored[i - 1].id]
-          ? agentRanks[scored[i - 1].id]!
-          : i + 1;
-    }
     final current = leaderboardWeekOf(widget.now());
-    // One set of numeric columns for every row, people's and agents'.
-    final columns = board == null || (board.people.isEmpty && scored.isEmpty)
+    // One points column for every person's row.
+    final columns = board == null || board.people.isEmpty
         ? null
         : LeaderboardColumns.measure(
             context,
-            ranks: [...board.people.map((s) => s.rank), ...agentRanks.values],
-            points: [
-              ...board.people.map((s) => s.points),
-              for (final agent in scored) agentPoints[agent.id]!,
-            ],
+            points: board.people.map((s) => s.points),
           );
     final week = weekName(_board.week, current);
     return [
       SuperTabSectionHeading(
-        'Humans',
+        'People',
         actions: [
           if (board != null || _board.week != null)
             AppSelectField<int>(
@@ -632,7 +555,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
           ),
           child: Text(error, style: DesktopChrome.metadata()),
         ),
-      for (final person in ranked)
+      for (final person in sorted)
         LeaderboardPersonRow(
           person: person,
           score: scores[person.id],
@@ -667,16 +590,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             : null,
         addTooltip: 'Add agent',
       ),
-      for (final agent in [
-        ...scored,
-        ...listed.where((a) => !agentPoints.containsKey(a.id)),
-      ])
-        _agent(
-          agent,
-          columns: columns,
-          rank: agentRanks[agent.id],
-          points: agentPoints[agent.id],
-        ),
+      for (final agent in listed) _agent(agent),
     ];
   }
 

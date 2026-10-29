@@ -19,7 +19,7 @@ Future<String> legacyLaunch(
 }) async {
   if (newProject) f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
   final box = await f.box(task: task, newProject: newProject);
-  await box.integration!.prepare('m', task);
+  await box.integration!.prepare('m', task, box.engine);
   final key = f.store.values.keys.singleWhere(
     (key) => key.startsWith('super_tab.launch.'),
   );
