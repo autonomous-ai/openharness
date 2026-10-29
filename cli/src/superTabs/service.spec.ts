@@ -757,7 +757,7 @@ it('documents finished worker decisions and explains an older backend without re
   const t = setup()
   const help = (await t.ask({ action: 'help' }, owner)).help as { commands: unknown[]; release: string }
   expect(help.commands).toContainEqual({ type: 'agent.release', agentId: 'AGENT', decision: 'keep|stop' })
-  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'work.cancel', assignmentId: 'ATTEMPT' }))
+  expect(help.commands).toContainEqual(expect.objectContaining({ type: 'work.cancel', assignmentId: 'current' }))
   expect(help.release).toContain('prefer stop')
   t.call.mockImplementation(async (...args: unknown[]) => args[0] === 'POST'
     ? { status: 400, body: { success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid request' } } } as never
@@ -1250,6 +1250,42 @@ describe('a Buddy\'s status', () => {
     const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
     expect(value.state).toBeDefined()
     expect(value.summary).toBeUndefined()
+  })
+})
+
+// Swarm group #13, 2026-10-29: a Codex Builder on gpt-6-luna sent its start id, then a made-up one, as assignmentId; both were
+// refused as stale without the right id, and its finished task stayed open until the Lead cancelled it.
+describe('the assignment a command names', () => {
+  const live = '58c2d5f2bdc100771bc57de7'
+  const withTask = (t: ReturnType<typeof setup>, holder: string) => {
+    const state = { agents: [t.agent], conversations: [{ id: 'g1', agentIds: [t.agentId], assignment: { id: live, agentId: holder, status: 'working' } }] }
+    const answer = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (method, path, body) => method === 'GET' && !path.includes('/hosts/')
+      ? { status: 200, body: { success: true, data: swarmData(t.agent, path, state) } } : answer(method, path, body))
+  }
+  const posted = (t: ReturnType<typeof setup>) => t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: Record<string, unknown> }).command)
+  const status = (assignmentId?: string) => ({ type: 'work.status', conversationId: 'g1', ...(assignmentId === undefined ? {} : { assignmentId }), status: 'review', result: 'PR #1' })
+
+  it('sends "current", or no id, as the task the agent holds', async () => {
+    const t = setup(); withTask(t, t.agentId)
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'a', command: status('current') }, owner)).toMatchObject({ ok: true })
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'b', command: status() }, owner)).toMatchObject({ ok: true })
+    expect(posted(t)).toEqual([{ ...status(), assignmentId: live }, { ...status(), assignmentId: live }])
+  })
+
+  it('answers a stale id with the one to use', async () => {
+    const t = setup(); withTask(t, t.agentId)
+    const answer = t.call.getMockImplementation()!
+    t.call.mockImplementation(async (method, path, body) => method === 'POST'
+      ? { status: 409, body: { success: false, error: { code: 'STALE_ASSIGNMENT', message: 'This is no longer the active assignment.' } } } : answer(method, path, body))
+    expect(await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'c', command: status('9887f5667a24ace0b589b7ff') }, owner)).toMatchObject({
+      error: 'STALE_ASSIGNMENT', detail: `This is no longer the active assignment. This group's active assignment is ${live}: send it again with "assignmentId": "${live}" (or "current").` })
+  })
+
+  it('never fills in another agent\'s task for a status', async () => {
+    const t = setup(); withTask(t, 'someone-else')
+    await t.ask({ action: 'command', tabId: 'tab', agentId: t.agentId, operationId: 'd', command: status('current') }, owner)
+    expect(posted(t)).toEqual([status('current')])
   })
 })
 
