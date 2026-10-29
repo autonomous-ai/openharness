@@ -51,7 +51,7 @@ const HELP = {
   leads: 'The Leads conversation (leadsConversationId in a Lead\'s status) is one conversation for the whole Swarm, outside every project. Only Leads and people post there, and only Leads among agents receive it. Before assigning, look at otherProjectsWork; if your task touches the same code, say so there and agree an order first, then tell your own project. The Swarm posts there by itself when two projects\' active tasks own the same code.',
   // Help without --tab cannot tell who asks, so it does not list a Lead's own options; this tells a Lead where they are.
   leadOptions: 'Leads: run help with --tab ID for options only a Lead has.',
-  messages: 'messages GROUP: read recent messages in a conversation.',
+  messages: 'messages GROUP: read recent messages in a conversation, thread replies included: each names its thread, the root message it answers there. A post with --reply-to lands in that message\'s thread.',
   message: 'message GROUP MESSAGE_ID: read one exact message, including an earlier question or result referenced by a reply.',
   decisions: 'decisions [--answered]: the decisions you asked of people, still open, or with --answered those answered (each with its choice and note). A Lead also sees those asked in its project. When your work needs a person to decide, ask through work.status needs_human with ask: the question as its result, 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until a notice in that conversation says it was answered; then read the answer here with --answered. The notice carries none of the answer. A decision is not a private channel: to tell one person something directly, a Lead sends person.tell; it lands in their Buddy chat, which the Lead cannot read. Project members watching the Lead\'s terminal see what it sends: put nothing there you would not say in the project chat.',
   costs: 'costs [--days N]: what the attempts routed in the last N days (7 unless set, at most 90) cost and how they went, per engine, model, effort and kind of job: attempts, first-review pass rate, shipped, median minutes to ship, tokens, API-equivalent cost and actual per-token spend in US dollars, and cost per shipped change, with the prices and their sources. Only attempts routed since cost records began, in the groups you may read.',
@@ -181,9 +181,12 @@ function markAnswered(page: unknown, later: unknown[], agentId: string): unknown
   const body = object(page)
   if (!Array.isArray(body.messages)) return page
   const mine = new Set([...body.messages, ...later].map(object).filter(m => object(m.author).id === agentId && typeof m.replyTo === 'string').map(m => m.replyTo))
-  return { ...body, messages: body.messages.map(object).map(m => {
+  return { ...body, messages: body.messages.map(object).map(row => {
+    // `thread` is named on a thread reply only: a top-level message is its own thread's root, and an older row has none.
+    const { thread, ...m } = row
+    const reply = typeof thread === 'string' && thread !== m.id ? { ...m, thread } : m
     const asked = Array.isArray(m.recipientIds) && m.recipientIds.includes(agentId) && object(m.author).id !== agentId
-    return asked ? { ...m, answered: mine.has(m.id) } : m
+    return asked ? { ...reply, answered: mine.has(m.id) } : reply
   }) }
 }
 
@@ -563,7 +566,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // this agent. If that read fails the message is still returned, just without a verdict.
           const sent = object(list(object(page).messages)[0])
           const asked = Array.isArray(sent.recipientIds) && sent.recipientIds.includes(agentId) && object(sent.author).id !== agentId
-          if (!asked || !Number.isInteger(Number(sent.sequence))) return { ok: true, value: page }
+          if (!asked || !Number.isInteger(Number(sent.sequence))) return { ok: true, value: markAnswered(page, [], agentId) }
           try {
             const later = object(await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&after=${sent.sequence}`)).messages
             return { ok: true, value: markAnswered(page, list(later), agentId) }
