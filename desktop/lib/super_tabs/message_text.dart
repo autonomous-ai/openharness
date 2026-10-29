@@ -6,6 +6,7 @@ import '../core/open_in_browser.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
 import '../widgets/markdown_style.dart';
+import 'code_block.dart';
 
 /// Shared content is selectable, never executable. Markdown images are labels,
 /// not automatic network requests or reads from a collaborator's local disk.
@@ -51,7 +52,7 @@ class SuperTabMessageText extends StatelessWidget {
         _WorkgroupReference(references),
         if (mentions.isNotEmpty) _Mention(mentions),
       ],
-      builders: {'pre': _WrappedCode(), 'mention': _MentionName()},
+      builders: {'pre': _CodeBlock(), 'mention': _MentionName()},
       paddingBuilders: {'a': _CompactLinkLabel()},
       styleSheet: desktopMarkdownStyleSheet(context),
       onTapLink: (_, href, _) {
@@ -191,14 +192,20 @@ class _MentionName extends MarkdownElementBuilder {
   );
 }
 
-class _WrappedCode extends MarkdownElementBuilder {
+/// A fenced block as [SuperTabCodeBlock], named by its info string.
+class _CodeBlock extends MarkdownElementBuilder {
   @override
-  Widget? visitText(md.Text text, TextStyle? preferredStyle) => Padding(
-    padding: const EdgeInsets.all(12),
-    child: Text(
-      text.text,
-      softWrap: true,
-      style: grid.AppType.mono(color: DesktopChrome.foreground, height: 1.5),
-    ),
-  );
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final code = element.children?.firstOrNull;
+    final info = code is md.Element ? code.attributes['class'] : null;
+    return SuperTabCodeBlock(
+      code: element.textContent.replaceFirst(RegExp(r'\n$'), ''),
+      language: info?.replaceFirst('language-', ''),
+    );
+  }
 }

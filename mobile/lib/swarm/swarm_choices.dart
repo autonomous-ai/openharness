@@ -8,17 +8,17 @@ library;
 /// things wait on the person (`swarm_mark.dart`). False: Find only.
 const swarmHomeMark = true;
 
-/// 2. The first screen. True: what needs the person across every Swarm comes
-/// first, the Swarms under it. False: the Swarms first, needs after them
-/// (`swarm_page.dart`).
-const swarmNeedsFirst = true;
+// 2. The first screen: Swarm Home, direction B (Tony, 2026-10-29) — what
+// needs the person first, then the projects pinned, then the others by
+// latest activity (`swarm_page.dart`). Tony's answer, so no choice is left
+// here.
 
-// 3. A project opens on its project chat: prototype B (Tony, 2026-10-28),
-// with nothing under the header and a ⋮ menu at its end (Tony, 2026-10-29):
-// Buddy chat (Chat with PM until #2090), and the team's status in words,
-// which opens its work (by latest activity, quiet and archived work behind
-// "Older") and its team in a sheet (`swarm_project_page.dart`). Tony's answer,
-// so no choice is left here.
+// 3. A project: prototype B2 (Tony, 2026-10-29) — its name over its team in
+// coloured dots, its team at the header's end (its work, by latest activity,
+// quiet and archived work behind "Older", and its team in a sheet), and four
+// tabs: Chat, Buddy, Tasks (what waits on the person, what is being worked
+// on, what was done today) and Leaderboard (`swarm_project_page.dart`).
+// Tony's answer, so no choice is left here.
 
 /// 4. Posting: text, @mentions and files — from the photo library, the camera
 /// or Files, by Desktop's limits (Tony, 2026-10-28). False: files are opened,

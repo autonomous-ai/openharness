@@ -70,7 +70,7 @@ void main() {
     );
     expect(find.text('Leads'), findsNothing);
     expect(find.text('Projects'), findsOneWidget);
-    expect(find.text('Humans'), findsOneWidget);
+    expect(find.text('People'), findsOneWidget);
     // The roster's heading; the leaderboard's Agents pill is the other one.
     expect(
       find.descendant(
