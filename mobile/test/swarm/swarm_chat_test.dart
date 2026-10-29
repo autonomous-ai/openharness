@@ -174,6 +174,7 @@ void main() {
     String? messageId,
     String? decisionId,
     bool settle = true,
+    bool homeC = false,
   }) async {
     await tester.pumpWidget(
       // The app's own theme, as the shell sets it: its field defaults are
@@ -186,6 +187,7 @@ void main() {
           conversationId: conversation,
           messageId: messageId,
           decisionId: decisionId,
+          homeC: homeC,
         ),
       ),
     );
@@ -204,6 +206,7 @@ void main() {
     String? messageId,
     String? decisionId,
     bool settle = true,
+    bool homeC = false,
     SwarmUpload upload = refuseSwarmUpload,
   }) async {
     features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
@@ -227,6 +230,7 @@ void main() {
       settle: settle,
       messageId: messageId,
       decisionId: decisionId,
+      homeC: homeC,
     );
     return host;
   }
@@ -1709,6 +1713,39 @@ void main() {
       expect(key('swarm-copy-link'), findsNothing, reason: 'sheet closed');
       expect(find.text('Link copied'), findsOneWidget);
       expect(fake.commands, isEmpty);
+    });
+
+    testWidgets('the Add reaction chip opens the reactions alone: Copy link '
+        'is the long-press sheet\'s', (tester) async {
+      final fake = backend([
+        message(
+          'm1',
+          1,
+          text: 'Plan',
+          reactions: {
+            'eyes': [('agent', 'agent-lead')],
+          },
+        ),
+      ]);
+      await pump(tester, fake, homeC: true);
+
+      await tester.tap(key('swarm-add-reaction-m1'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-react-tada'), findsOneWidget);
+      expect(key('swarm-copy-link'), findsNothing);
+      await tester.tap(key('swarm-react-tada'));
+      await tester.pumpAndSettle();
+
+      expect(copied, isEmpty);
+      expect(fake.commands.where((c) => c['type'] == 'message.react'), [
+        {
+          'type': 'message.react',
+          'conversationId': 'g1',
+          'messageId': 'm1',
+          'emoji': 'tada',
+          'on': true,
+        },
+      ]);
     });
 
     testWidgets('a person who cannot post still copies the link; the sheet '

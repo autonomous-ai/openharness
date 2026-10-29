@@ -1135,8 +1135,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   }
 
   /// The reaction picker over message [id]: the pick reacts to the message
-  /// as it is by then.
-  Future<void> _pickReaction(SwarmConversation c, String id) async {
+  /// as it is by then. The long-press sheet also copies the message's link;
+  /// the Add reaction chip's ([link] false) offers reactions alone.
+  Future<void> _pickReaction(
+    SwarmConversation c,
+    String id, {
+    bool link = true,
+  }) async {
     SuperTabMessage? shown() => c.messages.where((m) => m.id == id).firstOrNull;
     final message = shown();
     if (message == null) return;
@@ -1145,7 +1150,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       reactions: c.reactionsOf(message),
       readerId: c.reader.accountId,
       react: c.canPost,
-      link: _linkTo(c, id),
+      link: link ? _linkTo(c, id) : null,
     );
     if (emoji == null || !mounted) return;
     if (shown() case final now?) await c.react(now, emoji);
@@ -1379,7 +1384,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                     ? (emoji) => unawaited(c.react(m, emoji))
                     : null,
                 onAdd: widget.homeC && view.canPost
-                    ? () => unawaited(_pickReaction(c, m.id))
+                    ? () => unawaited(_pickReaction(c, m.id, link: false))
                     : null,
               ),
               onLongPress: () => unawaited(_pickReaction(c, m.id)),
