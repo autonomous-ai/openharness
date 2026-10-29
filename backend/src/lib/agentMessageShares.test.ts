@@ -241,6 +241,20 @@ describe('agent message shares', () => {
     expect((await pendingWith('text'))[0].tabName).toBe('')
   })
 
+  it('asks for no share and no account when the person has no invitation', async () => {
+    p.agentMessageInvite.findMany.mockResolvedValue([])
+    expect(await pendingInvites('bob@x.io', 'prod')).toEqual([])
+    expect(p.agentMessageShare.findMany).not.toHaveBeenCalled()
+    expect(p.user.findMany).not.toHaveBeenCalled()
+  })
+
+  it('asks for no account when every invitation is of a stopped share', async () => {
+    p.agentMessageInvite.findMany.mockResolvedValue([{ id: 'i1', shareId: S, ownerUserId: 'alice', ownerMachineId: 'm1', expiresAt: new Date('2030-01-01T00:00:00Z') }])
+    p.agentMessageShare.findMany.mockResolvedValue([])
+    expect(await pendingInvites('bob@x.io', 'prod')).toEqual([])
+    expect(p.user.findMany).not.toHaveBeenCalled()
+  })
+
   it('hides the invitations of a stopped share', async () => {
     const expiresAt = new Date('2030-01-01T00:00:00Z')
     p.agentMessageInvite.findMany.mockResolvedValue([{ id: 'i1', shareId: S, ownerUserId: 'alice', ownerMachineId: 'm1', expiresAt }])
@@ -443,6 +457,14 @@ describe('agent message shares', () => {
     expect(p.agentMessageMember.findMany).toHaveBeenNthCalledWith(2, { where: { shareId: S, removedAt: null }, select: { userId: true, email: true, acceptedAt: true } })
     expect(p.agentMessageInvite.findMany).toHaveBeenCalledWith({ where: { shareId: S, acceptedAt: null, revokedAt: null, expiresAt: { gt: expect.any(Date) } },
       select: { id: true, email: true, expiresAt: true } })
+  })
+
+  it('lists nothing for a person with no share, asking for no account and sending no empty id list', async () => {
+    p.agentMessageMember.findMany.mockResolvedValue([])
+    p.agentMessageShare.findMany.mockResolvedValue([])
+    expect(await listShares('bob', 'prod')).toEqual([])
+    expect(p.agentMessageShare.findMany).toHaveBeenCalledWith({ where: { autonomousEnv: 'prod', stoppedAt: null, OR: [{ ownerUserId: 'bob' }] } })
+    expect(p.user.findMany).not.toHaveBeenCalled()
   })
 
   it('falls back to an empty owner email in a listing', async () => {

@@ -1,11 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/open_in_browser.dart';
+import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/file_type_icon.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../widgets/desktop_chrome.dart';
 import '../widgets/finger_target.dart';
 import '../widgets/update_notice.dart' show formatDownloadSize;
+import 'attachment_image.dart';
 import 'attachment_upload.dart';
 // A browser leaves the text viewer, and the Finder editor under it, out of main.dart.js.
 import 'attachment_text_viewer.dart'
@@ -13,20 +16,40 @@ import 'attachment_text_viewer.dart'
 import 'attachment_viewer.dart';
 import 'model.dart';
 
-/// The files a message carries, one chip each. The chat never loads a file by
-/// itself: a chip only names it, and a click opens it — an image or a text
-/// file in a viewer that fetches it then, anything else in the browser.
-class SuperTabAttachmentChips extends StatelessWidget {
-  const SuperTabAttachmentChips(this.attachments, {super.key});
+/// The files a message carries, as Slack shows them: each picture on the
+/// attachments host in place (`attachment_image.dart`, on a computer), every
+/// other file one chip. A chip only names its file, and a click opens it — a text file in a
+/// viewer that fetches it then, anything else in the browser.
+class SuperTabAttachments extends StatelessWidget {
+  const SuperTabAttachments(this.attachments, {super.key});
 
   final List<SuperTabAttachment> attachments;
 
   @override
-  Widget build(BuildContext context) => Wrap(
-    spacing: 6,
-    runSpacing: 6,
-    children: [for (final file in attachments) _AttachmentChip(file: file)],
-  );
+  Widget build(BuildContext context) {
+    final pictures = <(SuperTabAttachment, Uri)>[];
+    final chips = <SuperTabAttachment>[];
+    for (final file in attachments) {
+      // A browser's fetch follows a redirect off the attachments host, so
+      // there a picture stays a chip that opens in a new tab.
+      final url = file.isImage && !kIsWeb ? attachmentLink(file.url) : null;
+      url == null ? chips.add(file) : pictures.add((file, url));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: grid.AppDesktop.controlGap,
+      children: [
+        for (final (file, url) in pictures)
+          SuperTabInlineImage(file: file, url: url),
+        if (chips.isNotEmpty)
+          Wrap(
+            spacing: grid.AppDesktop.menuInset,
+            runSpacing: grid.AppDesktop.menuInset,
+            children: [for (final file in chips) _AttachmentChip(file: file)],
+          ),
+      ],
+    );
+  }
 }
 
 class _AttachmentChip extends StatelessWidget {
@@ -46,12 +69,7 @@ class _AttachmentChip extends StatelessWidget {
       );
       return;
     }
-    if (file.isImage) {
-      await showAppDialog<void>(
-        context: context,
-        builder: (_) => _ImageViewer(file: file, url: url),
-      );
-    } else if (opensAsText(file)) {
+    if (opensAsText(file)) {
       await showAppDialog<void>(
         context: context,
         builder: (_) => AttachmentTextViewer(file: file, url: url),
@@ -97,7 +115,9 @@ class _AttachmentChip extends StatelessWidget {
                 ),
               ),
               if (size.isNotEmpty) ...[
-                const SizedBox(width: 6),
+                const SizedBox(width: grid.AppDesktop.menuInset),
+                Text('·', style: DesktopChrome.metadata()),
+                const SizedBox(width: grid.AppDesktop.menuInset),
                 Text(size, style: DesktopChrome.metadata()),
               ],
             ],
@@ -106,52 +126,4 @@ class _AttachmentChip extends StatelessWidget {
       ),
     );
   }
-}
-
-/// The picture, fetched when this opens.
-class _ImageViewer extends StatelessWidget {
-  const _ImageViewer({required this.file, required this.url});
-
-  final SuperTabAttachment file;
-  final Uri url;
-
-  @override
-  Widget build(BuildContext context) => Dialog(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            file.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.control(medium: true),
-          ),
-          const SizedBox(height: 12),
-          Flexible(
-            child: InteractiveViewer(
-              child: Image.network(
-                url.toString(),
-                key: ValueKey('super-attachment-image:${file.id}'),
-                fit: BoxFit.contain,
-                loadingBuilder: (_, child, progress) => progress == null
-                    ? child
-                    : const Center(child: CircularProgressIndicator()),
-                errorBuilder: (_, _, _) => Center(
-                  child: Text(
-                    'This image can’t be shown here.',
-                    style: DesktopChrome.metadata(),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          AttachmentViewerActions(file: file, url: url),
-        ],
-      ),
-    ),
-  );
 }

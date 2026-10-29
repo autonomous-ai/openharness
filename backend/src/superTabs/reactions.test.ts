@@ -5,6 +5,8 @@ import { reactionCounts } from './reactions.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
+const configuration = { engine: 'claude', model: null, effort: null, contextWindow: null, engineVersion: null }
+const asAgent = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'owner' })
 
 function fixture() {
   let state = createSuperTab('tab', 'Pilot', { id: 'owner', email: owner.email }, 'prod')
@@ -19,7 +21,9 @@ function fixture() {
     run({ type: 'invite.accept', inviteId: invited.result.inviteId as string }, peer)
   }
   const lead = () => state.conversations.find(c => c.id === 'lead')!
-  return { run, invite, lead, get state() { return state } }
+  const agent = (conversationId: string, name: string) => run({ type: 'agent.add', conversationId, machineId: 'machine', harnessId: name,
+    name, configuration, lead: false }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } }).result.agentId as string
+  return { run, invite, lead, agent, get state() { return state } }
 }
 const react = (on: boolean, emoji = 'tada'): Command => ({ type: 'message.react', conversationId: 'lead', messageId: 'm1', emoji, on } as Command)
 const target = (reacted: boolean) => ({ reaction: { messageId: 'm1', reacted } })
@@ -64,5 +68,29 @@ describe('reactions', () => {
       { emoji: 'tada', count: 2, by: [{ kind: 'person', id: 'peer' }, { kind: 'person', id: 'owner' }] },
     ])
     expect(reactionCounts(f.state, rows).get('m2')).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'person', id: 'owner' }] }])
+  })
+
+  it('lets an agent react in a conversation it is in, as a person does, with ✅ for done', () => {
+    const f = fixture()
+    const builder = f.agent('lead', 'Builder')
+    for (const emoji of ['eyes', 'check', 'rocket']) {
+      expect(f.run(react(true, emoji), asAgent(builder), target(false)).result, emoji).toMatchObject({ changed: true })
+    }
+    expect(f.lead().reactionSeq).toBe(3)
+  })
+
+  it('refuses an agent outside the conversation, so it cannot mark a message it does not take part in', () => {
+    const f = fixture()
+    const group = f.run({ type: 'conversation.create', title: 'Side', brief: 'Side work.', checks: [] }).result.conversationId as string
+    const outsider = f.agent(group, 'Outsider')
+    expect(() => f.run(react(true, 'eyes'), asAgent(outsider), target(false))).toThrow(expect.objectContaining({ code: 'FORBIDDEN' }))
+    expect(f.lead().reactionSeq).toBeUndefined()
+  })
+
+  it('shows an agent\'s progress in its order: 👀 started, ✅ done, 🚀 merged', () => {
+    const f = fixture()
+    const builder = f.agent('lead', 'Builder')
+    const rows = ['rocket', 'check', 'eyes'].map(emoji => ({ messageId: 'm1', emoji, actorKind: 'agent', actorId: builder }))
+    expect(reactionCounts(f.state, rows).get('m1')!.map(r => r.emoji)).toEqual(['eyes', 'check', 'rocket'])
   })
 })

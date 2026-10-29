@@ -231,6 +231,8 @@ dots remain solid at their intended size; color is accompanied by status text.
 | Dialog outer radius | 20 |
 | Popover outer radius | 16 |
 | Field / inset row / pane radius | 10 |
+| Sidebar row gap (`listRowGap`) | 2 |
+| Count badge: capsule, text inset from its ends (`badgeInset`) | 5 |
 | Tab upper corner / outward lower shoulder | 10 / 8 |
 | Tab top inset | 6 |
 | Tab close target (square) | 28 |
@@ -284,6 +286,10 @@ sized for the widest expected value; names take the remaining width and
 truncate first. Row anatomy is the list rule above: rank, identity, name with
 its metadata, then trend and the emphasized number at the right.
 
+The left pane's People and Agents have no rank number (Dee, 2026-10-29):
+people sort by name with their points at the right, and the crown sits after
+the week's top person's name.
+
 A place is its numeral; a celebration mark sits beside it and never replaces
 it, as [Team and celebration](#team-and-celebration) describes. Color never
 carries a trend, a rank or a threshold on its own: the arrow's direction, the
@@ -316,7 +322,8 @@ Never "Great job!", "Awesome!" or praise that would fit anyone. The words
 follow the [Naming System](../../docs/naming-system.md) like any other copy.
 
 **Ranks still line up.** The #1 crown sits beside #1's name, after the rank
-numeral; it never replaces the numeral and never moves the columns. Rank,
+numeral where a list has one (the left pane's People has none); it never
+replaces the numeral and never moves the columns. Rank,
 points and counts keep [Numbers and rankings](#numbers-and-rankings): tabular
 figures, fixed columns, one emphasized number. A row with a crown is exactly
 as tall as a row without one.

@@ -11,9 +11,11 @@ import '../state/harness_attachments.dart';
 import 'desktop_chrome.dart';
 import 'new_harness_attachment_chip.dart';
 
-/// Reads picked or dropped files into attachments, and says what was left out.
-Future<void> _attach(
-  BuildContext context,
+/// Reads picked or dropped files into attachments, and returns what to tell the
+/// person about any left out. The files are added even when the box that asked
+/// is gone by now: they were picked for [attachments], and only the message about
+/// them needs a place to show.
+Future<String?> _attach(
   HarnessAttachments attachments,
   Iterable<XFile> files,
 ) async {
@@ -21,13 +23,12 @@ Future<void> _attach(
     for (final file in files)
       HarnessAttachment(file.name, await file.readAsBytes()),
   ];
-  if (context.mounted) reportAttachProblem(context, attachments.add(read));
+  return attachments.add(read);
 }
 
 /// Attaches the dropped files and hands [onFolders] the dropped folders'
 /// paths, which hold nothing to read.
-Future<void> _attachOrPaste(
-  BuildContext context,
+Future<String?> _attachOrPaste(
   HarnessAttachments attachments,
   Iterable<DropItem> items,
   ValueChanged<List<String>> onFolders,
@@ -41,9 +42,7 @@ Future<void> _attachOrPaste(
     folder ? folders.add(item.path) : files.add(item);
   }
   if (folders.isNotEmpty) onFolders(folders);
-  if (files.isNotEmpty && context.mounted) {
-    await _attach(context, attachments, files);
-  }
+  return files.isEmpty ? null : _attach(attachments, files);
 }
 
 /// Says what an attach left out, when it left anything.
@@ -72,11 +71,12 @@ class NewHarnessAttachButton extends StatelessWidget {
     size: 16,
     onPressed: !enabled
         ? null
-        : () async {
+        : () => attachments.reading(() async {
             final files = await openFiles();
-            if (files.isEmpty || !context.mounted) return;
-            await _attach(context, attachments, files);
-          },
+            if (files.isEmpty) return;
+            final problem = await _attach(attachments, files);
+            if (context.mounted) reportAttachProblem(context, problem);
+          }),
   );
 }
 
@@ -157,15 +157,15 @@ class _NewHarnessDropZoneState extends State<NewHarnessDropZone> {
     onDragDone: (details) {
       _hover(false);
       final onFolders = widget.onFolders;
+      // The box the files were dropped on, held until they are read.
+      final attachments = widget.attachments;
       unawaited(
-        onFolders == null
-            ? _attach(context, widget.attachments, details.files)
-            : _attachOrPaste(
-                context,
-                widget.attachments,
-                details.files,
-                onFolders,
-              ),
+        attachments.reading(() async {
+          final problem = onFolders == null
+              ? await _attach(attachments, details.files)
+              : await _attachOrPaste(attachments, details.files, onFolders);
+          if (context.mounted) reportAttachProblem(context, problem);
+        }),
       );
     },
     child: Stack(

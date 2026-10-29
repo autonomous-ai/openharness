@@ -1,16 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_activity.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
+import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show createApp;
 
-/// Buddies (Ken's spec, 10-28): with the Swarm's setting on, a person's
-/// private agent per project takes Chat with PM's place in the sidebar.
+/// Buddies (Ken's spec, 10-28): a person's private agent per project. Since
+/// 10-29 they are on in every Swarm and replace Chat with PM: each person's
+/// Buddy chat is where the PM's private lines to them land.
 void main() {
   List<Map<String, dynamic>> commands(ConversationServer server, String type) =>
       [
@@ -20,27 +27,14 @@ void main() {
       ];
 
   group('the controller', () {
-    test('Buddies are off unless the Swarm turns them on', () async {
+    test("the reader's Buddy chat and Buddy are theirs, whatever an older server says of Buddies", () async {
       final server = buddySwarm(enabled: false);
-      final c = server.controller(account: 'peer');
-      addTearDown(c.dispose);
-      await c.refresh();
-      expect(c.buddiesOn, isFalse);
-
-      server.state['buddies'] = true;
-      await c.refresh();
-      expect(c.buddiesOn, isTrue);
-    });
-
-    test('a Buddy chat is never taken for Chat with PM, though only the reader reads both', () async {
-      final server = buddySwarm();
       giveBuddy(server);
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
       await c.refresh();
 
       expect(c.buddyChat('lead')?.id, 'buddy-peer-lead');
-      expect(c.pmChat('lead'), isNull);
       expect(c.buddy('lead')?.id, 'wren');
     });
 
@@ -161,82 +155,88 @@ void main() {
       expect(c.buddyChat('lead'), isNotNull);
     });
 
-    test('with Buddies on, the Chat with PM shortcut opens the Buddy chat and never creates a Chat with PM', () async {
+    test('the shortcut opens the Buddy chat and never creates a private conversation', () async {
       final server = buddySwarm();
       giveBuddy(server);
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
       await c.refresh();
 
-      expect(await c.openCurrentPmChat(), isTrue);
+      expect(await c.openCurrentBuddyChat(), isTrue);
 
       expect(c.selectedId, 'buddy-peer-lead');
       expect(commands(server, 'conversation.create'), isEmpty);
     });
 
-    test(
-      'with Buddies on and no Buddy, the shortcut creates nothing',
-      () async {
-        final server = buddySwarm();
-        final c = server.controller(account: 'peer');
-        addTearDown(c.dispose);
-        await c.refresh();
-
-        expect(await c.openCurrentPmChat(), isFalse);
-        expect(commands(server, 'conversation.create'), isEmpty);
-      },
-    );
-
-    /// Ken has a Chat with PM from before Buddies, with an unread PM reply,
-    /// and has it open; then the Swarm turns Buddies on.
-    Future<(ConversationServer, SuperTabController, String)>
-    pmChatThenBuddies() async {
-      final server = buddySwarm(enabled: false);
+    test('with no Buddy chat yet, the shortcut opens one on the server, with no Buddy in it', () async {
+      final server = buddySwarm();
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
       await c.refresh();
-      await c.openPmChat('lead');
-      final id = c.pmChat('lead')!.id;
-      await c.select('lead');
-      pmReply(server, id, 'Earlier answer from the PM');
-      await c.refresh();
-      expect(c.pmUnread, 1);
-      server.state['buddies'] = true;
-      giveBuddy(server);
-      await c.refresh();
-      return (server, c, id);
-    }
 
-    test('with Buddies on, opening the old Chat with PM by id opens the project chat instead', () async {
-      final (_, c, id) = await pmChatThenBuddies();
+      expect(await c.openCurrentBuddyChat(), isTrue);
 
-      expect(await c.select(id), isTrue);
-
-      expect(c.selectedId, 'lead');
+      expect(commands(server, 'buddy.chat'), [
+        {'type': 'buddy.chat', 'projectId': 'lead'},
+      ]);
+      expect(c.selectedId, 'buddy-peer-lead');
+      expect(c.buddy('lead'), isNull);
+      expect(commands(server, 'conversation.create'), isEmpty);
+      expect(commands(server, 'buddy.create'), isEmpty);
     });
 
-    test(
-      'with Buddies on, a Chat with PM left open moves to the project chat',
-      () async {
-        final server = buddySwarm(enabled: false);
-        final c = server.controller(account: 'peer');
-        addTearDown(c.dispose);
-        await c.refresh();
-        await c.openPmChat('lead');
-        expect(c.selectedId, c.pmChat('lead')!.id);
+    /// Ken's Chat with PM from before Buddies replaced it, with an unread PM
+    /// reply, as a server from before 10-29 still sends it.
+    Future<(ConversationServer, SuperTabController, String)> oldPmChat() async {
+      final server = buddySwarm(enabled: false);
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('old-pm-chat', 'ken.tran'),
+        'projectId': 'lead',
+        'leadId': 'lead-agent',
+        'agentIds': ['lead-agent'],
+        'audience': {
+          'people': [
+            {'id': 'peer', 'generation': 'fixture'},
+          ],
+        },
+      });
+      pmReply(server, 'old-pm-chat', 'Earlier answer from the PM');
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      return (server, c, 'old-pm-chat');
+    }
 
-        server.state['buddies'] = true;
-        await c.refresh();
+    test(
+      'an old Chat with PM opened by id opens the project chat instead',
+      () async {
+        final (_, c, id) = await oldPmChat();
+
+        expect(await c.select(id), isTrue);
 
         expect(c.selectedId, 'lead');
       },
     );
 
+    test('an old Chat with PM counts nothing on the Swarm tab', () async {
+      final (_, c, _) = await oldPmChat();
+      expect(c.buddyUnread, 0);
+    });
+
     test(
-      'with Buddies on, the old Chat with PM counts nothing on the Swarm tab',
+      "the PM's unread lines in the reader's Buddy chat count on the Swarm tab",
       () async {
-        final (_, c, _) = await pmChatThenBuddies();
-        expect(c.pmUnread, 0);
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = server.controller(account: 'peer');
+        addTearDown(c.dispose);
+        await c.refresh();
+        await c.select('lead');
+        pmReply(server, 'buddy-peer-lead', 'Your fix is merged.');
+        pmReply(server, 'buddy-peer-lead', 'And released.');
+        await c.refresh();
+
+        expect(c.buddyUnread, 2);
       },
     );
   });
@@ -247,6 +247,7 @@ void main() {
       ConversationServer server, {
       String account = 'peer',
       Brightness brightness = Brightness.light,
+      AppNotifier? app,
     }) async {
       await tester.binding.setSurfaceSize(const Size(1280, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -258,6 +259,7 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
+              app: app,
               onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
@@ -280,29 +282,47 @@ void main() {
     final buddyEntry = find.byKey(const ValueKey('super-buddy-lead'));
     final addBuddy = find.byTooltip('Add a Buddy');
 
-    testWidgets('with Buddies off, Direct messages and Chat with PM stay', (
-      tester,
-    ) async {
-      final c = await show(tester, buddySwarm(enabled: false));
-      expect(find.text('Direct messages'), findsOneWidget);
-      expect(pmEntry, findsOneWidget);
-      expect(find.text('Buddies'), findsNothing);
-      expect(addBuddy, findsNothing);
-      await close(tester, c);
-    });
-
     testWidgets(
-      'with Buddies on, a Buddies section with + replaces Chat with PM',
+      'a Buddies section with + and a row for each project from the start, and no Chat with PM, whatever the server says of Buddies',
       (tester) async {
-        final c = await show(tester, buddySwarm());
-        expect(find.text('Buddies'), findsOneWidget);
-        expect(addBuddy, findsOneWidget);
-        expect(find.text('Direct messages'), findsNothing);
-        expect(pmEntry, findsNothing);
-        expect(buddyEntry, findsNothing);
-        await close(tester, c);
+        for (final enabled in [true, false]) {
+          final c = await show(tester, buddySwarm(enabled: enabled));
+          expect(find.text('Buddies'), findsOneWidget);
+          expect(addBuddy, findsOneWidget);
+          expect(find.text('Direct messages'), findsNothing);
+          expect(pmEntry, findsNothing);
+          expect(
+            find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: buddyEntry, matching: find.text('not started')),
+            findsOneWidget,
+          );
+          await close(tester, c);
+        }
       },
     );
+
+    testWidgets('a row with new lines shows its name in bold, with no count', (
+      tester,
+    ) async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      pmReply(server, 'buddy-peer-lead', 'Your fix is merged.');
+      pmReply(server, 'buddy-peer-lead', 'And released.');
+      final c = await show(tester, server);
+      // Bold as an unread project row is (design system: Unread).
+      final name = tester.widget<Text>(
+        find.descendant(of: buddyEntry, matching: find.text('Wren')),
+      );
+      expect(name.style?.fontWeight, grid.AppFont.semibold);
+      expect(
+        find.descendant(of: buddyEntry, matching: find.text('2')),
+        findsNothing,
+      );
+      await close(tester, c);
+    });
 
     testWidgets(
       'the reader\'s Buddy is listed by name, without its project while it is their only one',
@@ -326,6 +346,74 @@ void main() {
         expect(
           find.byKey(const ValueKey('super-group-buddy-peer-lead')),
           findsNothing,
+        );
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'the reader\'s Buddy row says where it runs; other people\'s Buddies appear nowhere',
+      (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        giveBuddy(
+          server,
+          person: 'owner',
+          id: 'moss',
+          name: 'Moss',
+          machineId: 'studio',
+          machineOwnerId: 'owner',
+        );
+        final c = await show(tester, server);
+        expect(
+          find.descendant(
+            of: buddyEntry,
+            matching: find.text('Pilot · Claude on Kens-MacBook'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Moss'), findsNothing);
+        expect(find.textContaining('Claude on Studio'), findsNothing);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'the reader\'s Buddy row marks what it is doing, and offline once it is down',
+      (tester) async {
+        final app = createApp(connected: true);
+        addTearDown(app.dispose);
+        final server = buddySwarm();
+        giveBuddy(server, machineId: 'm');
+        app.stateOf('m')!
+          ..agents = [
+            const Agent(
+              id: 'h-wren',
+              name: 'Wren',
+              engine: 'claude',
+              terminalAvailable: true,
+            ),
+          ]
+          ..processingAgentIds.add('h-wren');
+        final c = await show(tester, server, app: app);
+        HarnessActivity mark() => tester
+            .widget<ActivityMark>(
+              find.descendant(
+                of: buddyEntry,
+                matching: find.byType(ActivityMark),
+              ),
+            )
+            .activity;
+        expect(mark(), HarnessActivity.working);
+
+        ((server.state['agents'] as List).last as Map)['downSince'] =
+            '2026-10-28T09:00:00Z';
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(mark(), HarnessActivity.offline);
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('offline')),
+          findsOneWidget,
         );
         await close(tester, c);
       },
@@ -359,29 +447,30 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('a removed Buddy keeps its chat, plainly named', (
-      tester,
-    ) async {
-      final server = buddySwarm();
-      giveBuddy(server);
-      (server.state['agents'] as List).removeWhere(
-        (a) => (a as Map)['id'] == 'wren',
-      );
-      final c = await show(tester, server);
-      expect(
-        find.descendant(of: buddyEntry, matching: find.text('Buddy')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: buddyEntry, matching: find.text('removed')),
-        findsOneWidget,
-      );
-      await tester.tap(buddyEntry);
-      await tester.pumpAndSettle();
-      expect(find.text('Your Buddy'), findsOneWidget);
-      expect(find.textContaining("peer's Buddy"), findsNothing);
-      await close(tester, c);
-    });
+    testWidgets(
+      'a removed Buddy keeps its chat, plainly named, and can be started again',
+      (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        (server.state['agents'] as List).removeWhere(
+          (a) => (a as Map)['id'] == 'wren',
+        );
+        final c = await show(tester, server);
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('not started')),
+          findsOneWidget,
+        );
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+        expect(find.text('Your Buddy'), findsOneWidget);
+        expect(find.textContaining("peer's Buddy"), findsNothing);
+        await close(tester, c);
+      },
+    );
 
     testWidgets('a Buddy whose session is down says offline', (tester) async {
       final server = buddySwarm();
@@ -396,19 +485,23 @@ void main() {
       await close(tester, c);
     });
 
-    testWidgets('the shortcut with no Buddy in the project opens Add a Buddy', (
-      tester,
-    ) async {
-      final server = buddySwarm();
-      final c = await show(tester, server);
-      expect(await c.pmChatOpener!('lead'), isFalse);
-      await tester.pumpAndSettle();
-      expect(find.text('Add a Buddy'), findsWidgets);
-      expect(commands(server, 'conversation.create'), isEmpty);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
-      await close(tester, c);
-    });
+    testWidgets(
+      'the shortcut with no Buddy in the project opens its chat, which offers to start one',
+      (tester) async {
+        final server = buddySwarm();
+        final c = await show(tester, server);
+        expect(await c.buddyChatOpener!('lead'), isTrue);
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'buddy-peer-lead');
+        expect(
+          find.text('Start your Buddy to brainstorm here'),
+          findsOneWidget,
+        );
+        expect(find.text('Add a Buddy'), findsNothing);
+        expect(commands(server, 'conversation.create'), isEmpty);
+        await close(tester, c);
+      },
+    );
 
     group('Add a Buddy', () {
       final machine = find.byKey(const ValueKey('super-buddy-machine'));
@@ -458,6 +551,9 @@ void main() {
               'name': 'Kens-Mini.local',
               'contributorId': 'peer',
               'scope': 'swarm',
+              'observation': {
+                'receivedAt': DateTime.now().millisecondsSinceEpoch,
+              },
             },
             {
               'machineId': 'ken-team',
@@ -504,18 +600,13 @@ void main() {
         final c = await show(tester, server);
         await open(tester);
 
-        expect(
-          find.text(
-            'A Buddy runs on one of your own machines. Add one of yours to this Swarm first.',
-          ),
-          findsOneWidget,
-        );
+        expect(find.text(kBuddyNoMachine), findsOneWidget);
         expect(tester.widget<FilledButton>(submit).onPressed, isNull);
         await close(tester, c);
       });
 
       testWidgets(
-        'if the chosen machine leaves the Swarm while the dialog is open, Add Buddy turns off',
+        'if their only machine goes while the dialog is open, Add Buddy turns off',
         (tester) async {
           final server = buddySwarm();
           final c = await show(tester, server);
@@ -528,12 +619,7 @@ void main() {
           await c.refresh();
           await tester.pumpAndSettle();
 
-          expect(
-            find.text(
-              'A Buddy runs on one of your own machines. Add one of yours to this Swarm first.',
-            ),
-            findsOneWidget,
-          );
+          expect(find.text(kBuddyNoMachine), findsOneWidget);
           expect(tester.widget<FilledButton>(submit).onPressed, isNull);
           await close(tester, c);
         },
@@ -633,6 +719,87 @@ void main() {
     });
 
     group('the Buddy chat', () {
+      testWidgets(
+        "before a Buddy runs, it offers Start on the reader's own machine with Claude, and Start adds one in this chat",
+        (tester) async {
+          final server = buddySwarm();
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+          expect(c.selectedId, 'buddy-peer-lead');
+
+          expect(
+            find.text('Start your Buddy to brainstorm here'),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: find.byKey(const ValueKey('super-buddy-start-machine')),
+              matching: find.text('Kens-MacBook'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: find.byKey(const ValueKey('super-buddy-start-engine')),
+              matching: find.text('Claude'),
+            ),
+            findsOneWidget,
+          );
+          await tester.tap(find.widgetWithText(FilledButton, 'Start'));
+          await tester.pumpAndSettle();
+
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
+            'projectId': 'lead',
+            'machineId': 'ken-mac',
+            'engine': 'claude',
+          });
+          expect(c.selectedId, 'buddy-peer-lead');
+          expect(
+            find.text('Start your Buddy to brainstorm here'),
+            findsNothing,
+          );
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'the Start bar offers no Codex while the server refuses it, saying why, as Add a Buddy does (#2087)',
+        (tester) async {
+          final c = await show(tester, buddySwarm());
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          final engine = find.byKey(const ValueKey('super-buddy-start-engine'));
+          await tester.tap(engine);
+          await tester.pumpAndSettle();
+          expect(find.text('Codex'), findsNothing);
+          await tester.tapAt(Offset.zero);
+          await tester.pumpAndSettle();
+          expect(find.text(kBuddyEngineRefusals['codex']!), findsOneWidget);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        "the PM's lines read as lines to the reader, which the PM writes but cannot read",
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          pmReply(server, 'buddy-peer-lead', 'Your fix is merged.');
+          buddyReply(server, 'buddy-peer-lead', 'Shall we plan the next one?');
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          expect(find.text('Lead (PM) → you'), findsOneWidget);
+          expect(find.text('Wren'), findsWidgets);
+          expect(find.textContaining('Wren (PM)'), findsNothing);
+          await close(tester, c);
+        },
+      );
+
       testWidgets('its header names the Buddy and where it runs', (
         tester,
       ) async {
@@ -953,16 +1120,24 @@ void main() {
       Future<(ConversationServer, SuperTabController)> withHistory(
         WidgetTester tester,
       ) async {
+        // Ken's Chat with PM from before Buddies replaced it, as a server
+        // from before 10-29 still sends it.
         final server = buddySwarm(enabled: false);
-        final c = server.controller(account: 'peer');
-        await c.refresh();
-        await c.openPmChat('lead');
-        final id = c.pmChat('lead')!.id;
+        const id = 'old-pm-chat';
+        (server.state['conversations'] as List).add({
+          ...conversationFixture(id, 'ken.tran'),
+          'projectId': 'lead',
+          'leadId': 'lead-agent',
+          'agentIds': ['lead-agent'],
+          'audience': {
+            'people': [
+              {'id': 'peer', 'generation': 'fixture'},
+            ],
+          },
+        });
         pmReply(server, id, 'Earlier answer from the PM');
         server.tag('message-${server.revision}', conversationId: id);
         server.ask(['Ship it?'], conversationId: id);
-        c.dispose();
-        server.state['buddies'] = true;
         giveBuddy(server);
         return (server, await show(tester, server));
       }

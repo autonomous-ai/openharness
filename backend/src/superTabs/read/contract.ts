@@ -58,7 +58,13 @@ export interface Derived {
   /** Every agent the reader can see. `workDecision` is null when the stored value stands; `roleId` null outside Custom. */
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
   /** Every contributed machine the reader can see. */
-  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown } }>
+  /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
+  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
+    /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
+    suspendedEngines?: Record<string, string>
+    /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
+     *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
+    lead?: Record<string, { machineId: string } | { refused: string }> }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */
@@ -72,6 +78,10 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
+   *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
+   *  higher of the two. Never another person's. */
+  readMarks?: Record<string, number>
   /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
    *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
   teamAccounts?: false
@@ -136,10 +146,13 @@ export interface CommandReply {
   legacyRevision?: number
 }
 
-/** GET /api/super-tabs/list[?after=] */
+/** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
   /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null }>
+  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+    /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
+     *  Swarm whose count cannot be told here has neither). */
+    mentionsWaiting?: number; mentionsDigest?: string }>
   next: string | null
 }
 
@@ -229,11 +242,15 @@ export interface HostPool {
   starts: AgentStart[]
   /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
   buddyStarts?: AgentStart[]
+  /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
+  leadStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   githubApp?: true
+  /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
+  capabilitiesWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

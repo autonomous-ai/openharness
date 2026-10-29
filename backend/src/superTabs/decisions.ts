@@ -1,15 +1,15 @@
 /** A person's decisions (design: decisions in one place). The Lead, or a worker on its own task through needs_human, asks
  *  one person a batch of questions, each with options, a recommendation and what it unblocks; the person answers each
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
- *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: anything private goes
- *  through Chat with PM. Called inside SuperTabStore's transactions. */
-import { isBuddyChat } from './buddies.js'
+ *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
+ *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
+import { isBuddy, openBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { agentDisplayName } from './agentNames.js'
 import { AGENT_ONLY, fail, isLeads, person, stableId, type Actor, type Author, type Conversation, type SuperTabState } from './model.js'
-import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
+import { agentProjectId, canReadGroup, groupProject, isClosedPmChat, ledProject, projectOf, readsRecordsIn } from './projects.js'
 import { LEDGER_WEEKS } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { groupsBy } from './parts/indexed.js'
@@ -64,12 +64,13 @@ export function checkAsker(state: SuperTabState, actor: Actor, group: Conversati
   return (actor as Extract<Actor, { kind: 'agent' }>).agentId
 }
 
-/** The conversation a decision was asked in, while the person asked is still in the Swarm and still reads it: checked on
- *  every answer and on every retry of one (review of #1753). Anyone else is told it does not exist. */
+/** The conversation a decision was asked in, while the person asked is still in the Swarm and still reads it, or read it
+ *  before it closed as a Chat with PM: checked on every answer and on every retry of one (review of #1753). Anyone else is
+ *  told it does not exist. */
 export function answerable(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined): Conversation {
   const asked = actor.kind === 'person' && decision?.personId === actor.userId && state.people.some(p => p.id === actor.userId)
   const group = asked ? state.conversations.find(c => c.id === decision.conversationId) : undefined
-  if (!group || !canReadGroup(state, actor, group)) fail('NOT_FOUND', 'This decision is unavailable.', 404)
+  if (!group || !readsRecordsIn(state, actor, group)) fail('NOT_FOUND', 'This decision is unavailable.', 404)
   return group
 }
 
@@ -79,12 +80,17 @@ export const ANSWERED_NOTICE = 'A decision asked in this conversation was answer
 /** The same notice for a decision the person left to the PM, with none of the answer either. */
 export const DELEGATED_NOTICE = 'A decision asked in this conversation was left to the Product Manager, who took its recommended option. '
   + 'Read it with: harness super-tab decisions --answered'
+/** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
+export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered. Read the answer with: harness super-tab decisions --answered'
+export const CLOSED_CHAT_DELEGATED_NOTICE = 'A decision you asked in a closed Chat with PM was left to the Product Manager, who took its recommended option. '
+  + 'Read it with: harness super-tab decisions --answered'
 
 /** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
 const answerText = (option: string, delegated: boolean) => delegated ? `PM decided: ${option}` : option
 
 /** The asked person's one answer, or their leaving it to the PM (`delegate`), which takes the recommended option; the notice
- *  for the asking agent and the Lead; and for a delegated one, the Lead's line in the person's own Chat with PM. */
+ *  for the asking agent and the Lead, in the conversation it was asked in or, for a closed Chat with PM nobody reads, in
+ *  the project chat (`noticeIn`); and for a delegated one, the Lead's line in the person's Buddy chat. */
 export function answerDecision(state: SuperTabState, actor: Actor, decision: DecisionTarget | undefined,
   given: { choice?: number; note: string | null; delegate: boolean }) {
   if ((given.choice === undefined) === !given.delegate) fail('INVALID_DECISION', 'Choose one of its options, or leave it to the PM.', 400)
@@ -98,21 +104,22 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   if (choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
   const project = groupProject(state, group)
   const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-  const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => group.agentIds.includes(id))
+  const closed = isClosedPmChat(group)
+  const noticeIn = closed ? state.conversations.find(c => c.id === project.leadConversationId)! : group
+  const notice = given.delegate ? closed ? CLOSED_CHAT_DELEGATED_NOTICE : DELEGATED_NOTICE : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
+  const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
   const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
-  const line = given.delegate && lead ? delegatedLine(state, actor, project.id, lead, asked, choice) : null
-  return { answer, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
+  const line = given.delegate && lead ? delegatedLine(state, project.id, lead, asked, choice) : null
+  return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
-/** The Lead's one line saying what it chose, in the person's own Chat with PM of that project: only they read it, and they
- *  were asked the question. None when they have no open one with the Lead in it. While Buddies are on, Chat with PM is
- *  read-only and decisions live with the Buddy (Ken's spec, 10-28): the line goes to their Buddy chat instead, or nowhere. */
-function delegatedLine(state: SuperTabState, actor: Actor, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
+/** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
+ *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
+ *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
+function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
   const lead = state.agents.find(a => a.id === leadId)
-  const theirs = (c: Conversation) => !c.archived && c.audience?.people.length === 1 && c.audience.people[0]!.id === asked.personId
-    && groupProject(state, c).id === projectId && canReadGroup(state, actor, c)
-  const chat = state.conversations.find(c => theirs(c) && (state.buddies ? isBuddyChat(c) : !isBuddyChat(c) && c.agentIds.includes(leadId)))
-  if (!lead || !chat) return null
+  if (!lead) return null
+  const chat = openBuddyChat(state, projectId, person(state, asked.personId))
   const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
   const question = asked.question.replace(/\s+/g, ' ')
   return { conversationId: chat.id, author, text: `${answerText(asked.options[choice]!, true)} — ${question}`,
@@ -125,6 +132,11 @@ const waiting: Prisma.SuperTabDecisionWhereInput = { OR: [{ answeredAt: null }, 
 /** Whether a person's decision asked in this conversation still waits: a group that has one is never archived by itself. */
 export async function waitingIn(tx: Tx, tabId: string, conversationId: string): Promise<boolean> {
   return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
+}
+
+/** How many decisions asked of `personId` in this conversation still wait for them (catchUp.ts). */
+export async function waitingFor(tx: Tx, tabId: string, conversationId: string, personId: string): Promise<number> {
+  return tx.superTabDecision.count({ where: { tabId, conversationId, personId, ...waiting } })
 }
 
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
@@ -189,6 +201,10 @@ export async function recordAnswer(tx: Tx, tabId: string, answer: DecisionAnswer
  *  and a Lead also those asked in its project. Nobody else, owners included. */
 function readerWhere(state: SuperTabState, actor: Actor): Prisma.SuperTabDecisionWhereInput {
   if (actor.kind === 'person') return { personId: person(state, actor.userId).id }
+  // A Buddy reads its person's own decisions in its project, by the person's index; each one's conversation is still
+  // checked as the Buddy reads it (readableIn), so none in a private chat or after its person left (buddies.ts).
+  const buddy = state.agents.find(a => a.id === actor.agentId && isBuddy(a))
+  if (buddy) return { personId: buddy.buddyOf!.personId, projectId: agentProjectId(state, buddy) }
   const led = ledProject(state, actor.agentId)
   return { OR: [{ askerAgentId: actor.agentId }, ...led ? [{ projectId: led.id }] : []] }
 }
@@ -211,10 +227,11 @@ async function conversationsOf(tx: Tx, tabId: string, state: SuperTabState, ids:
   return found
 }
 
-/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions. */
+/** Checked at every read, for agents too: a reader who can no longer read the conversation no longer reads its decisions.
+ *  One asked in a closed Chat with PM stays its person's and the PM's (projects.ts readsRecordsIn). */
 const readableIn = (state: SuperTabState, actor: Actor, groups: Map<string, Conversation>, conversationId: string) => {
   const group = groups.get(conversationId)
-  return group && canReadGroup(state, actor, group) ? group : undefined
+  return group && readsRecordsIn(state, actor, group) ? group : undefined
 }
 
 /** Answered by the person themself: as `waiting`, a row written before `delegated` has no such field. */

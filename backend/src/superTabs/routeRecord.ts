@@ -1,6 +1,7 @@
 /** What `harness super-tab route` records (docs/superpowers/specs/2026-10-19-super-tab-routing-v1-design.md). */
 import { z } from 'zod'
 import type { RouteRun } from './costs/attempts.js'
+import { JOB_KINDS } from './evidence/jobKind.js'
 
 const level = z.enum(['low', 'medium', 'high'])
 const candidateId = z.string().regex(/^c\d{1,2}$/)
@@ -55,6 +56,12 @@ export const routeRecordSchema = z.object({
   why: z.string().trim().min(1).max(300),
   /** How much context Jev was given and which sources could not be read, so pick quality can later be compared with completeness. */
   context: z.object({ chars: z.number().int().min(0).max(30_000), missing: z.array(z.string().min(1).max(40)).max(10) }).strict().optional(),
+  /** The step up this attempt is (stepUp.ts), written by the server from its group, never taken from the route. */
+  stepUp: z.object({ attempt: z.number().int().min(2).max(3), reason: z.string().min(1).max(200) }).strict().optional(),
+  /** Why a review runs on its Builder's own engine (rules.ts sameEngineReview), written by the server, never taken from the route. */
+  sameEngine: z.string().min(1).max(300).optional(),
+  /** The job's kind from the fixed list (evidence/jobKind.ts), written by the server from its group, never taken from the route. */
+  jobKind: z.enum(JOB_KINDS).optional(),
 }).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 

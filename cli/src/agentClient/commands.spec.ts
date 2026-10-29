@@ -1732,7 +1732,8 @@ describe('a cloud harness (#1444)', () => {
     expect(await replyCommand(['devin', '--', 'the', 'release', 'branch'], h.deps)).toBe(EXIT.ok)
     expect(sent).toEqual([{ agentId: 'devin', text: 'the release branch' }])
     expect(h.out.join('\n')).toMatch(/^Sent to devin\.\nNext: harness wait devin/)
-    expect(await replyCommand(['kid', '--', 'x'], harness(d).deps)).toBe(EXIT.usage)
+    // A harness in a pane takes a program's words only while the person allows it (below, `harness reply` to a pane).
+    expect(await replyCommand(['kid', '--', 'x'], harness(d).deps)).toBe(EXIT.refused)
     expect(await replyCommand(['devin'], harness(d).deps)).toBe(EXIT.usage)
     d.extra.cloud_send = () => ({ error: 'CLOUD_FAILED', detail: 'Devin Cloud is still working.' })
     const busy = harness(d)
@@ -2118,5 +2119,94 @@ describe('harness watch', () => {
       expect(await watchCommand(argv, h.deps)).toBe(EXIT.usage)
       expect(h.err[0]).toBe(said)
     }
+  })
+})
+
+describe('harness reply to a harness in a pane (a program acting for the person)', () => {
+  const replied = (over: { state?: string; error?: [string, string] } = {}) => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => {
+      calls.push([target.machineId, payload])
+      if (over.error) throw new RefusedError(over.error[0], over.error[1])
+      return { id: 'm0000001', state: over.state ?? 'queued' }
+    }
+    return { calls, record }
+  }
+  const answeredWith = (d: FakeDaemon, id: string, ask: string, answer: string) =>
+    d.pages.set(`s-${id}`, [{ events: [ev('user_message', { content: ask }), ev('text_delta', { content: answer }), ev('done')], hasMore: false }])
+  // The lamp's lamp-tasks: no pane, no agent in its shell.
+  const program = (d: FakeDaemon, over: Partial<ClientDeps> & { others?: Record<string, FakeDaemon> } = {}) => harness(d, { pane: undefined, ...over })
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { programsReply: true }) })
+
+  it('gives an idle harness the person\'s words through its machine, and records them for wait', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('lamp-skill', { engine: 'claude' })]
+    const r = replied()
+    const h = program(d, { record: r.record, others: { m2: office } })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    expect(await replyCommand(['--machine', 'office', 'lamp-skill', '--json', '--', 'The lamp\'s check refused skill.toml: name is missing.'], h.deps)).toBe(EXIT.ok)
+    expect(r.calls).toEqual([['m2', { action: 'reply_local', machine: 'studio', agentId: 'lamp-skill', text: 'The lamp\'s check refused skill.toml: name is missing.' }]])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ ok: true, name: 'lamp-skill', state: 'queued', next: [{ run: 'harness wait --machine office lamp-skill' }] })
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'person' }, { machineId: 'm2', agentId: 'lamp-skill' })).toMatchObject({ probe: 'The lamp\'s check refused skill.toml: name is missing.' })
+  })
+
+  it('is refused, never asked of a machine, while the switch is off, and for one that works, waits or is gone', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid'), frame('busy', { activity: { state: 'working' } }), frame('asks', { activity: undefined }), frame('done', { status: 'stopped' })]
+    const r = replied()
+    setAgentSettingsForTest(dir, { programsReply: false })
+    let h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('harness settings programs-reply on')
+    setAgentSettingsForTest(dir, { programsReply: true })
+    h = program(d, { record: r.record })
+    expect(await replyCommand(['busy', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toMatch(/busy is working\. Wait for it to finish \(harness wait busy\)/)
+    h = program(d, { record: r.record })
+    expect(await replyCommand(['asks', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(h.err.join('\n')).toMatch(/waiting for the person.*Only they answer that/)
+    h = program(d, { record: r.record })
+    expect(await replyCommand(['done', '--', 'x'], h.deps)).not.toBe(EXIT.ok)
+    expect(r.calls).toEqual([])
+  })
+
+  it('refuses an agent: it tells the harnesses it started (harness tell), and only those', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('lead', { engine: 'claude' }), frame('kid')]
+    const r = replied()
+    const inPane = harness(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], inPane.deps)).toBe(EXIT.refused)
+    expect(inPane.err.join('\n')).toMatch(/harness tell/)
+    const outside = program(d, { record: r.record, env: { CLAUDECODE: '1' } })
+    expect(await replyCommand(['kid', '--', 'x'], outside.deps)).toBe(EXIT.refused)
+    expect(r.calls).toEqual([])
+  })
+
+  it('says the machine\'s refusal as it said it, and records nothing', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid')]
+    // Its machine reads the switch as off: the account's experiment had not reached it yet.
+    const r = replied({ error: ['REPLY_OFF', 'Programs may not give more work to your harnesses yet.'] })
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('Programs may not give more work')
+    expect(h.ledger.toldBy({ machineId: 'm', agentId: 'person' }, { machineId: 'm', agentId: 'kid' })).toBeNull()
+  })
+
+  it('wait holds the answer to the work before until the harness takes the words', async () => {
+    const d = new FakeDaemon()
+    d.frames = [frame('kid', { engine: 'claude' })]
+    answeredWith(d, 'kid', 'Make a timer skill.', 'Done: skill.toml written.')
+    const r = replied()
+    const h = program(d, { record: r.record })
+    expect(await replyCommand(['kid', '--', 'The lamp\'s check refused it: name is missing.'], h.deps)).toBe(EXIT.ok)
+    expect(await waitCommand(['kid', '--timeout', '10s'], program(d).deps)).toBe(EXIT.timeout)
+    // Typed as the person's words, no header: a turn asked with them.
+    answeredWith(d, 'kid', 'The lamp\'s check refused it: name is missing.', 'Fixed: name added.')
+    expect(await waitCommand(['kid', '--timeout', '10s'], program(d).deps)).toBe(EXIT.ok)
+    const shown = program(d)
+    expect(await showCommand(['kid', '--json'], shown.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(shown.out.join('\n'))).toMatchObject({ answer: 'Fixed: name added.' })
   })
 })

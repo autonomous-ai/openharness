@@ -560,6 +560,10 @@ model ProductUsageTotal {
 model ProductUsageReceipt {
   id        String   @id @map("_id")
   expiresAt DateTime
+  /// Days the receipt lives past its report day (types/productUsageReceipt.ts). Required by the collection's rule once the
+  /// receipt sweep installs it (lib/productUsageReceiptSweep.ts): a server that writes receipts without it cannot count.
+  /// Absent on receipts written before 2026-10-29.
+  life      Int?
 
   @@map("product_usage_receipts")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
@@ -583,6 +587,8 @@ model ProductUsageActivity {
   @@map("product_usage_activity")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
   @@index([expiresAt], map: "product_usage_expiry")
+  /// The hourly people rollup reads the marks of its last days (services/ProductUsagePeopleRollupService.ts).
+  @@index([dayUtc])
 }
 
 /// Legacy individual counters. New ingestion is disabled; dayUtc TTL removes these after 35 days.
@@ -1042,11 +1048,16 @@ model SuperTab {
   updatedAt      DateTime @updatedAt
 
   @@index([autonomousEnv, workspaceId])
-  @@index([autonomousEnv, memberIds])
+  /// An owner's Swarms in id order: the grid poll names it (superTabs/parts/indexed.ts NAMED_INDEX.SuperTab.owner).
+  @@index([autonomousEnv, ownerId, id])
+  /// By id within a member: Swarm lists read 100 at a time in id order, and a Workspace removal finds the person's Swarms
+  /// (superTabs/swarmRows.ts).
+  @@index([autonomousEnv, memberIds, id])
   /// By id within an address: the invitation list reads the first 100 in id order (superTabs/invitedSwarms.ts).
   @@index([autonomousEnv, invitedEmails, id])
-  @@index([autonomousEnv, machineIds])
-  @@index([autonomousEnv, cleanupMachineIds])
+  /// A machine's Swarms, newest first: the host poll's lookup, once a second per host (superTabs/swarmRows.ts machineSwarms).
+  @@index([autonomousEnv, machineIds, updatedAt])
+  @@index([autonomousEnv, cleanupMachineIds, updatedAt])
 }
 
 // A terminal retains its history when removed from a roster. These bindings
@@ -1084,10 +1095,17 @@ model SuperTabMessage {
   recipientIds    String[]
   /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
   mentions        String[]
+  /// The thread's root (superTabs/threads.ts): a top-level message's own id, a reply's root. Absent on rows written before
+  /// threads, whose replies stay inline quotes.
+  thread          String?
+  /// A thread reply also shown in the conversation's main stream.
+  alsoInChat      Boolean?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
   @@index([tabId, conversationId, sequence, id])
+  /// One thread's page, and a page's thread summaries (superTabs/pageReads.ts pageThreads).
+  @@index([tabId, conversationId, thread, sequence])
 }
 
 /// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
@@ -1125,6 +1143,22 @@ model SuperTabReaction {
   createdAt      DateTime @default(now())
 
   @@index([tabId, messageId])
+}
+
+/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
+/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
+/// derived from all three, so one row per person and conversation; it only ever moves forward.
+model SuperTabReadMark {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  sequence       Int
+  updatedAt      DateTime
+
+  @@index([tabId, personId, updatedAt])
+  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  @@index([updatedAt], map: "read_mark_expiry")
 }
 
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab
@@ -1169,6 +1203,9 @@ model SuperTabAttachment {
   size           Int
   objectKey      String
   usedBy         String?
+  /// The Buddy proposal that carried this file, when its owner sent it in their Buddy chat (superTabs/store.ts proposable):
+  /// each file goes with one proposal at most. Their own message keeps it as `usedBy`.
+  proposedBy     String?
   /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
   purpose        String?
   createdAt      DateTime @default(now())
@@ -1293,11 +1330,68 @@ model SuperTabRouteDecision {
   outcomeAt      DateTime?
   /// Its attempt's run: what it ran on, how it was paid, its session's token totals at start and end (superTabs/costs/attempts.ts).
   run            Json?
+  /// What its attempt added to its model's evidence, so a later change adds only the difference (superTabs/evidence/store.ts).
+  evidence       Json?
   createdAt      DateTime  @default(now())
 
   @@index([tabId, createdAt])
   @@index([tabId, conversationId, outcome])
   @@index([tabId, assignmentId])
+}
+
+/// How one model did on one kind of job in one week of one project of a Swarm (superTabs/evidence/store.ts): counts and sums
+/// only, never a person, an agent or task text. `id` is the hash of the Swarm, project, engine, model, kind and week. Kept 180 days.
+model SuperTabModelEvidence {
+  id                 String   @id @map("_id")
+  tabId              String
+  /// The project of the groups its attempts ran in: the report shows a reader only projects they see.
+  projectId          String
+  engine             String
+  model              String
+  kind               String
+  /// Monday 00:00 UTC of the week its attempts started.
+  week               DateTime
+  attempts           Float    @default(0)
+  firstReviews       Float    @default(0)
+  firstReviewPassed  Float    @default(0)
+  reworkRounds       Float    @default(0)
+  shipped            Float    @default(0)
+  minutesToShipSum   Float    @default(0)
+  minutesToShipCount Float    @default(0)
+  fixesAfterMerge    Float    @default(0)
+  tokensInput        Float    @default(0)
+  tokensOutput       Float    @default(0)
+  tokensCacheRead    Float    @default(0)
+  tokensCacheWrite   Float    @default(0)
+  tokensKnown        Float    @default(0)
+  apiCost            Float    @default(0)
+  costKnown          Float    @default(0)
+  costUnknown        Float    @default(0)
+  spend              Float    @default(0)
+  spendKnown         Float    @default(0)
+  updatedAt          DateTime
+
+  @@index([tabId, week])
+  /// The hourly sweep's prune across every Swarm (superTabs/sweeps.ts).
+  @@index([week])
+}
+
+/// One model's last ten first-review results on one kind of job in one project of a Swarm, oldest first: [{ a: assignment id, at: its start,
+/// passed }] (superTabs/evidence/store.ts). Routing reads it for a model under 50% and its recovery. Kept 180 days after its
+/// last change.
+model SuperTabModelRecent {
+  id        String   @id @map("_id")
+  tabId     String
+  projectId String
+  engine    String
+  model     String
+  kind      String
+  results   Json
+  updatedAt DateTime
+
+  @@index([tabId, updatedAt])
+  /// The hourly sweep's prune across every Swarm (superTabs/sweeps.ts).
+  @@index([updatedAt])
 }
 
 model SuperTabStopReceipt {
@@ -1488,6 +1582,8 @@ model SwarmMember {
 
   @@unique([tabId, key])
   @@index([tabId, changedAt])
+  /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
+  @@index([purgeAt])
 }
 
 /// One conversation: its work, checks, assignment, members and message counter.
@@ -1559,6 +1655,8 @@ model SwarmAgent {
   @@index([tabId, contributorId])
   /// One agent's registrations in every Swarm (confidential.ts, sessionScope.ts): host rows read them on every changed tab.
   @@index([key, deleted])
+  /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
+  @@index([purgeAt])
 }
 
 /// One machine the Swarm references, contributed or not: its contribution and observation, and its slot ledger.
@@ -1587,6 +1685,8 @@ model SwarmMachine {
   @@index([machineId, deleted])
   /// Machines whose settings changed since a host's cursor (read/host.ts woken).
   @@index([tabId, hostChangedAt])
+  /// Tombstones past their purge time, compacted by the hourly sweep (superTabs/sweeps.ts compactTombstones). Not a TTL: the tombstone stays.
+  @@index([purgeAt])
 }
 
 model SwarmStart {
@@ -1613,6 +1713,8 @@ model SwarmStart {
   @@index([tabId, agentId])
   /// Removed parts go at purgeAt (superTabs/sweeps.ts ensurePartExpiry). Declared so db push keeps the index; the worker sets its expiry.
   @@index([purgeAt], map: "part_purge")
+  /// Live starts by finish time: the hourly sweep expires those finished 7 days ago (superTabs/sweeps.ts expireStarts).
+  @@index([deleted, finishedAt])
 }
 
 /// One project's report watermark, and the fence a Lead's worker decisions serialize on.
@@ -1648,6 +1750,9 @@ model ExperimentalSettings {
   agentMessagesHideSummary Boolean @default(false)
   /// An agent may give more work to a harness it started (`harness tell`, cli/src/messages/tell.ts). Off by default.
   agentsTellAgents     Boolean @default(false)
+  /// A program acting for the person (a lamp's lamp-tasks, not an agent) may give more work to an idle harness of
+  /// theirs in a pane (`harness reply`, cli/src/messages/replyLocal.ts, #1628). Off by default.
+  programsReply        Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

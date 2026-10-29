@@ -112,7 +112,7 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
         evidence_dir = output / "ci"
         evidence_dir.mkdir()
         if automatic:
-            evidence = phase("collection", lambda: queue.gate_evidence(client, observed, evidence_dir))
+            evidence = phase("collection", lambda: queue.gate_evidence(client, observed, evidence_dir, root, base))
             record["pr_evidence"] = evidence
             if (evidence["source_sha"] != head
                     or evidence["source_tree"] != record["reviewed_source"]["tree"]):
@@ -165,6 +165,8 @@ def finish(client, root, number, run_id, scope, head, base, output, *, merge=Fal
     if evidence is not None:
         if automatic:
             lines += ["", f"Verified [automatic PR CI]({evidence['url']}) for `{evidence['source_sha']}`."]
+            lines += [f"- reused {suite} from {record['run_url']} (attempt {record['run_attempt']}, `{record['origin_sha']}`), "
+                      f"re-derived with main's planner: {record['reason']}" for suite, record in sorted(evidence.get("reused", {}).items())]
         else:
             lines += ["", ci.markdown(evidence)]
     (output / "merge.md").write_text("\n".join(lines) + "\n")

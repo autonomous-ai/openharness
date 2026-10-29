@@ -11,6 +11,8 @@ LeadMachine _machine(
   bool maySleep = false,
   String? unavailable,
   bool inSwarm = true,
+  bool own = true,
+  Map<String, String> engineRefusals = const {},
 }) => LeadMachine(
   id: id,
   name: id,
@@ -20,7 +22,11 @@ LeadMachine _machine(
   maySleep: maySleep,
   unavailable: unavailable,
   inSwarm: inSwarm,
+  own: own,
+  engineRefusals: engineRefusals,
 );
+
+const _claudeOff = {'claude': 'Claude Code isn’t offered here'};
 
 void main() {
   group('leadRepositoryKey', () {
@@ -73,7 +79,6 @@ void main() {
         'teammate',
         'offline',
       ]);
-      expect(bestLeadMachine(ranked, _repo)?.id, 'studio');
     });
 
     test('more free agents wins among otherwise equal machines', () {
@@ -99,19 +104,7 @@ void main() {
       ], _repo);
       expect(ranked.map((m) => m.id), ['laptop', 'mine']);
       expect(outside.startable, isTrue);
-      expect(bestLeadMachine([outside], _repo)?.id, 'mine');
       expect(leadMachineDetail(outside, _repo), 'Online · Not in this Swarm');
-    });
-
-    test('no machine is best when none is online, free and allowed', () {
-      expect(
-        bestLeadMachine([
-          _machine('offline', online: false),
-          _machine('full', free: 0),
-          _machine('teammate', unavailable: 'Not yours'),
-        ], _repo),
-        isNull,
-      );
     });
   });
 
@@ -141,6 +134,54 @@ void main() {
         leadMachineDetail(_machine('t', unavailable: 'Diego’s machine'), _repo),
         'Diego’s machine',
       );
+    });
+  });
+
+  group('capacity is what starts can use', () {
+    test("another person's machine shows why, never its free count", () {
+      final theirs = _machine(
+        'rig',
+        free: 3,
+        unavailable: 'Another person’s machine',
+      );
+      expect(leadMachineDetail(theirs, null), 'Another person’s machine');
+    });
+
+    test(
+      'your own machine shows the free count that starts are admitted by',
+      () {
+        expect(
+          leadMachineDetail(_machine('mac', free: 3), null),
+          'Online · 3 agents free',
+        );
+        expect(
+          leadMachineDetail(_machine('mac', free: 0), null),
+          'Online · No agents free',
+        );
+        expect(_machine('mac', free: 0).startable, isFalse);
+      },
+    );
+  });
+
+  group('engines', () {
+    test('a machine offering only Codex still starts a Product Manager', () {
+      final rig = _machine('rig', engineRefusals: _claudeOff);
+      expect(rig.runs('claude'), isFalse);
+      expect(rig.leadEngines, ['codex']);
+      expect(rig.startable, isTrue);
+    });
+
+    test('a machine that runs no Product Manager engine is not startable', () {
+      final rig = _machine(
+        'rig',
+        engineRefusals: const {
+          'claude': 'Claude Code isn’t offered here',
+          'codex': 'Codex isn’t signed in',
+        },
+      );
+      expect(rig.startable, isFalse);
+      expect(rig.runs('codex'), isFalse);
+      expect(rig.leadEngines, isEmpty);
     });
   });
 }

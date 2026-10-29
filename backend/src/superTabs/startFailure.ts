@@ -10,13 +10,19 @@ export const TIMED_OUT_SUFFIX = ' did not start it within 3 minutes'
 /** liveness.ts writes these after a machine named the start as preparing: past its limit, or with its reports stopped. */
 export const STILL_PREPARING_SUFFIX = ' was still preparing it after 15 minutes'
 export const STOPPED_REPORTING_SUFFIX = ' stopped reporting while preparing it'
+/** liveness.ts writes this after a machine named a Product Manager's start that it never took (leadStart.ts). */
+export const LEAD_PICKUP_SUFFIX = ' did not start this Product Manager. Update Harness on it, then start it again.'
 /** Each suffix the server writes after a machine name, with what a group member reads instead. */
 const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
   [STILL_PREPARING_SUFFIX, 'Its machine was still preparing it after 15 minutes.'],
-  [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.']]
+  [STOPPED_REPORTING_SUFFIX, 'Its machine stopped reporting while preparing it.'],
+  [LEAD_PICKUP_SUFFIX, 'Its machine did not start it. Harness there may need an update.']]
 /** Reasons the server writes itself, which name nothing (commands.ts removeMachine and machine.contribute). */
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 export const ABANDONED = 'Abandoned before it started.'
+/** A Team account's host refusing a Codex Product Manager it cannot sign in (cli superTabs/start.ts): it names nothing of the
+ *  machine but its lack of the owner's relay, which its project reads (security re-check 3 of #2089). */
+export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
 
 /** A host's refusal for memory (cli superTabs/capacity.ts memoryShort): its numbers alone, which members already see in the
  *  Machines view. Read only at the start of the reason, so nothing else a host wrote is ever told (Ken's MacBook Pro,
@@ -24,7 +30,7 @@ export const ABANDONED = 'Abandoned before it started.'
 const MEMORY_SHORT = /^Not enough free memory: (\d+(?:\.\d)? GiB) free, (\d+(?:\.\d)? GiB) needed\./
 
 export function publicReason(error: string): string {
-  if (error === MACHINE_REMOVED || error === ABANDONED) return error
+  if (error === MACHINE_REMOVED || error === ABANDONED || error === NO_PM_RELAY) return error
   const memory = MEMORY_SHORT.exec(error)
   if (memory) return `Its machine has only ${memory[1]} of memory free, and it needs ${memory[2]}.`
   return TIMEOUTS.find(([suffix]) => error.endsWith(suffix))?.[1] ?? MACHINE_FAILED

@@ -25,10 +25,10 @@ import { extractKey } from '../utils/crypto.js'
 import { machineIdFromKey } from '../utils/crypto.js'
 import { prisma, machineAlive } from './prisma.js'
 import { touchDeviceKey } from './deviceKeyLog.js'
-import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeMachineShareChanged } from './bus.js'
+import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeMachineShareChanged, type DeviceStatusMsg } from './bus.js'
 import { sharedMachineAccess } from './machineAccess.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
-import { DAEMONS, env } from '../config/env.js'
+import { DAEMONS } from '../config/env.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
 import { authenticateAccessToken, SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { Frame } from './tunnel.js'
@@ -77,13 +77,17 @@ const WEB_FRAME_TYPES: ReadonlySet<string> = new Set([...TERMINAL_DOWN_TYPES, ..
 // Device-status re-seed: covers the silent-offline case (worker crash → presence TTL 45s ages out
 // with no transition published) — the watcher re-reads presence keys on this cadence.
 const DEVICE_RESEED_MS = 30_000
+/** How old the socket's own copy of the account's device bindings may get before a re-seed reads them again. A pair or a
+ *  revoke is pushed and re-reads at once; this only bounds how long a push lost on the way leaves the copy wrong. Every
+ *  socket used to read them every DEVICE_RESEED_MS (DB optimization roadmap, Phase 2 item 7). */
+export const DEVICE_BINDINGS_REREAD_MS = 10 * 60_000
 // Trailing debounce for list re-derivations poked by machines_watch (see scheduleWatchAgents).
 const WATCH_DEBOUNCE_MS = 250
 /** How long a relay refused for an offline machine waits before it selects that machine again: a daemon's relay
  *  re-dialled offline machines every few seconds, 68% of 1,884 selects in 10 minutes (prod, 2026-10-27, #314). The
  *  Desktop's own longest reconnect backoff, so a machine coming back is seen no later than it was. */
 export const OFFLINE_RETRY_AFTER_MS = 30_000
-/** Sockets that never read the account's feeds unless they ask, with WEB_WS_LAZY_FEEDS on: a daemon's relay, `harness
+/** Sockets that never read the account's feeds unless they ask: a daemon's relay, `harness
  *  link`'s one-shot socket and the apps' trust-group sync (`?client=`). Prod, 2026-10-29: about 121 connects a minute
  *  living a median 0.4 s, nearly all relays, each reading the account's machines and devices and subscribing five
  *  channels it never read (WebSocket roadmap Phase 1 item 4). A socket that declares nothing may be an older app. */
@@ -144,7 +148,7 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       // A Mac's team account (lib/teamSession.ts) never selects or attaches to a machine here: refused for good,
       // not an expired sign-in to refresh and retry.
       const team = err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED'
-      if (invalid && env.WEB_WS_AUTH_HTTP_401 && query.get('auth') === 'http') {
+      if (invalid && query.get('auth') === 'http') {
         try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()
         return
@@ -206,7 +210,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // sweeps couldn't race; the hub now tracks the socket itself, which is one sweep for both states.
   const releaseLiveness = trackSocketLiveness(ws, 'web')
   // A relay, a link or a group sync starts the feeds below only when it asks (ON_DEMAND_FEED_CLIENTS).
-  const feedsOnDemand = env.WEB_WS_LAZY_FEEDS === 'on' && ON_DEMAND_FEED_CLIENTS.has(declared.client)
+  const feedsOnDemand = ON_DEMAND_FEED_CLIENTS.has(declared.client)
 
   // ── Live Machines-list feed ──────────────────────────────────────────────────────────────────
   // Subscribe node_status for EVERY agent the user owns and forward it tagged with the machineId (the
@@ -273,28 +277,66 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
 
   // ── Live device-status feed (mirror of watchAgents; per-DEVICE statuses over one per-user sub) ──
   // Transitions ride the user-scoped `devstatus:{userId}` channel (deviceWs publishes on connect/
-  // disconnect), so a device paired AFTER the watch armed still reports without re-deriving the set.
-  // The 30s re-seed poll covers the silent case: a worker holding a device socket crashes → nobody
-  // publishes offline, the presence key just ages out (TTL 45s) — the poll notices within ~30s.
+  // disconnect, deviceRevoke on a revoke). The socket keeps its own copy of the account's device bindings:
+  // a revoke drops a device from it, and a report from a device it does not know (one paired after the copy
+  // was read) reads the bindings again. The 30s re-seed covers the silent case — a worker holding a device
+  // socket crashes, nobody publishes offline, the presence key just ages out (TTL 45s) — and reads only
+  // presence; the bindings themselves are read again only after DEVICE_BINDINGS_REREAD_MS.
   const sendDeviceStatuses = (statuses: Array<{ deviceId: string; online: boolean; lastSeenAt?: string | null }>): void => {
     if (ws.readyState !== WebSocket.OPEN || statuses.length === 0) return
     send({ type: 'devices_status', payload: { statuses } })
   }
   let deviceStatusUnsub: (() => void) | null = null
   let deviceSeedTimer: NodeJS.Timeout | null = null
+  // deviceId → its last seen time; null until the bindings were first read.
+  let knownDevices: Map<string, string | null> | null = null
+  let knownDevicesReadAt = 0
+  let deviceBindingsRead: Promise<void> | null = null
+  // Set by a change that lands while a read is in flight: that read may predate it, so another follows.
+  let deviceBindingsStale = false
+  const readDeviceBindings = (): Promise<void> => {
+    deviceBindingsStale = true
+    if (deviceBindingsRead) return deviceBindingsRead
+    deviceBindingsRead = (async () => {
+      try {
+        while (deviceBindingsStale && !closed) {
+          deviceBindingsStale = false
+          const rows = await prisma.deviceBinding.findMany({ where: { userId: user.sub }, select: { deviceId: true, lastSeenAt: true } })
+          if (deviceBindingsStale) continue
+          knownDevices = new Map(rows.map((d) => [d.deviceId, d.lastSeenAt?.toISOString() ?? null]))
+          knownDevicesReadAt = Date.now()
+        }
+      } finally {
+        deviceBindingsRead = null
+      }
+    })()
+    return deviceBindingsRead
+  }
   const seedDeviceStatuses = async (): Promise<void> => {
-    const rows = await prisma.deviceBinding.findMany({ where: { userId: user.sub }, select: { deviceId: true, lastSeenAt: true } })
-    if (closed) return
+    if (!knownDevices || Date.now() - knownDevicesReadAt >= DEVICE_BINDINGS_REREAD_MS) await readDeviceBindings()
+    if (closed || !knownDevices) return
     const statuses = await Promise.all(
-      rows.map(async (d) => ({ deviceId: d.deviceId, online: await getDevicePresence(d.deviceId), lastSeenAt: d.lastSeenAt?.toISOString() ?? null })),
+      [...knownDevices].map(async ([deviceId, lastSeenAt]) => ({ deviceId, online: await getDevicePresence(deviceId), lastSeenAt })),
     )
     if (!closed) sendDeviceStatuses(statuses)
   }
+  const onDeviceStatus = (msg: DeviceStatusMsg): void => {
+    if (msg.removed) {
+      knownDevices?.delete(msg.deviceId)
+      if (deviceBindingsRead) deviceBindingsStale = true
+      return
+    }
+    if (knownDevices?.has(msg.deviceId)) {
+      if (msg.lastSeenAt) knownDevices.set(msg.deviceId, msg.lastSeenAt)
+    } else if (knownDevices || deviceBindingsRead) {
+      // A device the copy does not hold, or a read under way that may predate it: read the bindings (again).
+      void readDeviceBindings().catch((err) => logger.warn('web-ws device bindings read failed', { userId: user.sub, error: String(err) }))
+    }
+    sendDeviceStatuses([{ deviceId: msg.deviceId, online: msg.online === true, ...(msg.lastSeenAt ? { lastSeenAt: msg.lastSeenAt } : {}) }])
+  }
   const watchDevices = async (): Promise<void> => {
     if (!deviceStatusUnsub) {
-      deviceStatusUnsub = await subscribeDeviceStatus(user.sub, (msg) => {
-        sendDeviceStatuses([{ deviceId: msg.deviceId, online: msg.online === true, ...(msg.lastSeenAt ? { lastSeenAt: msg.lastSeenAt } : {}) }])
-      })
+      deviceStatusUnsub = await subscribeDeviceStatus(user.sub, onDeviceStatus)
       if (closed) { deviceStatusUnsub(); deviceStatusUnsub = null; return }
     }
     if (!deviceSeedTimer) {
@@ -302,6 +344,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
         void seedDeviceStatuses().catch(() => { /* ignore */ })
       }, DEVICE_RESEED_MS)
     }
+    // Asked to watch (the first time, or again after the client paired or revoked one): read the bindings now.
+    await readDeviceBindings()
     await seedDeviceStatuses()
   }
   if (!feedsOnDemand) void watchDevices().catch((err) => logger.warn('web-ws watchDevices failed', { userId: user.sub, error: String(err) }))

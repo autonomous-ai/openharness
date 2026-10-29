@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -43,19 +44,17 @@ void main() {
   String composerText(WidgetTester tester) =>
       tester.widget<TextField>(composer).controller!.text;
 
-  for (final chat in ['a workgroup', 'the chat with the PM']) {
+  for (final chat in ['a workgroup', 'the Buddy chat']) {
     testWidgets(
       'Reply in $chat puts the cursor in the composer, reply attached',
       (tester) async {
         final server = ConversationServer();
-        if (chat == 'the chat with the PM') {
-          // The reader's own chat: its audience is the reader alone.
+        if (chat == 'the Buddy chat') {
+          // The reader's own Buddy chat, where the PM's private lines land.
           final pm = (server.state['conversations'] as List)[1] as Map;
-          pm['audience'] = {
-            'people': [
-              {'id': 'owner', 'generation': 'fixture'},
-            ],
-          };
+          pm
+            ..['kind'] = 'buddy'
+            ..['buddyOwnerId'] = 'owner';
           server.append(
             'Which build should I test?',
             conversationId: pm['id'] as String,
@@ -64,10 +63,10 @@ void main() {
           server.append('Which build should I test?');
         }
         final c = await show(tester, server);
-        if (chat == 'the chat with the PM') {
+        if (chat == 'the Buddy chat') {
           c.select('offline');
           await tester.pumpAndSettle();
-          expect(c.pmChat(c.selected!.projectId)?.id, 'offline');
+          expect(c.selectedId, 'offline');
         }
         // Reading the transcript first: the composer has given up focus.
         FocusManager.instance.primaryFocus?.unfocus();
@@ -270,6 +269,34 @@ void main() {
       containsPair('replyTo', 'message-1'),
     ]);
     composerKeepsKeyboard(tester);
+    await tester.pump(const Duration(seconds: 1));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('another conversation\'s refusal never hides this one\'s '
+      'upload error, even with the same words in a row here', (tester) async {
+    final server = ConversationServer();
+    final c = await show(tester, server);
+    // This conversation: a refused message, then its own refused file.
+    await c.select('offline');
+    server.reject = true;
+    c.setDraft('offline', 'First');
+    await c.send();
+    server.reject = false;
+    server.failUpload = 'a.png';
+    c.attachments('offline').add([
+      HarnessAttachment('a.png', Uint8List.fromList([1, 2, 3])),
+    ]);
+    await c.send();
+    // Another conversation is refused with the same words.
+    await c.select('lead');
+    server.failUpload = null;
+    server.reject = true;
+    c.setDraft('lead', 'Second');
+    await c.send();
+
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    expect(find.text('The file is too large.'), findsOneWidget);
     await tester.pump(const Duration(seconds: 1));
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 

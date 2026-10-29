@@ -1,4 +1,5 @@
 import { subscribeConnectorsChanged, subscribeDeskChanged, subscribeDeviceKeysChanged, subscribeDeviceMachineListChanged, subscribeZooChanged } from './bus.js'
+import { relaySwarmChanges } from './swarmClientPushes.js'
 
 /**
  * The pushes a daemon socket carries for its ACCOUNT rather than for its machine: something the
@@ -18,6 +19,8 @@ import { subscribeConnectorsChanged, subscribeDeskChanged, subscribeDeviceKeysCh
  *    is for the DAEMON itself, which trusts the keys the log holds: it re-reads from its own head.
  *  - `connectors_changed` — the account's sealed connections changed (routes/connectorVault.ts). Also
  *    for the daemon: it re-reads the envelope and merges it into this computer's connections.
+ *  - `swarm_changed`    — a Swarm the account is in changed (lib/swarmClientPushes.ts): the
+ *    windows read it again instead of every 3 s.
  *
  * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, the zoo channel is not even listened
  * on, since nothing publishes it.
@@ -53,6 +56,7 @@ export async function relayAccountPushes(userId: string, send: (frame: unknown) 
     unsubs.push(await subscribeConnectorsChanged(userId, (msg) => {
       send({ t: 'down', connId: '', frame: { type: 'connectors_changed', payload: { revision: msg.revision } } })
     }))
+    unsubs.push(await relaySwarmChanges(userId, (frame) => send({ t: 'down', connId: '', frame })))
   } catch (err) {
     stop()
     throw err

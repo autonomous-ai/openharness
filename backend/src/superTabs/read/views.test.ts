@@ -14,7 +14,7 @@ function scene() {
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const peerGeneration = state.people.find(p => p.id === peer.userId)!.generation
-    state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peer.userId, generation: peerGeneration }] }
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peer.userId, generation: peerGeneration }] } })
     const worker = state.agents.find(a => a.id === s.worker)!
     worker.downNamed = 'named'
     worker.limitedUntil = new Date(NOW - MINUTE).toISOString()
@@ -52,15 +52,15 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(keys(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups)).not.toContain(s.secretGroup)
   })
 
-  it('keeps a private conversation from every reader outside its audience, the Swarm owner included', () => {
+  it('keeps a Buddy chat from every reader but its owner, the Lead and the Swarm owner included, and a closed Chat with PM from all', () => {
     const { s, parts, privateId } = scene()
-    const groups = (actor: Actor) => keys(readerView(parts, actor, NOW, { teamMachines: [] }).parts.groups)
+    const groups = (actor: Actor, from = parts) => keys(readerView(from, actor, NOW, { teamMachines: [] }).parts.groups)
     expect(groups(peer)).toContain(privateId)
-    expect(groups(agentActor(s.lead))).toContain(privateId)
-    expect(groups(owner)).not.toContain(privateId)
-    expect(groups(outsider)).not.toContain(privateId)
-    expect(groups(agentActor(s.worker))).not.toContain(privateId)
-    expect(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups.find(g => g.key === privateId)!.data.audience).toBeDefined()
+    for (const reader of [agentActor(s.lead), owner, outsider, agentActor(s.worker)]) expect(groups(reader)).not.toContain(privateId)
+    expect(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups.find(g => g.key === privateId)!.data).toMatchObject({ buddyOwnerId: peer.userId })
+    s.edit(state => { delete state.conversations.find(c => c.id === privateId)!.kind })
+    const closed = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    for (const reader of [peer, agentActor(s.lead), owner]) expect(groups(reader, closed)).not.toContain(privateId)
   })
 
   it('never names a private conversation to the Swarm owner through an invitation', () => {
@@ -101,7 +101,25 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const view = readerView(parts, peer, NOW, { teamMachines: [] })
     expect(view.parts.machines.map(m => m.key)).toEqual(['mac'])
     expect(view.parts.machines[0]!.data.observation!.runningHarnessIds).toEqual(['lead-harness'])
-    expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true } } })
+    // A teammate's machine says where New Project's Product Manager would run there, by engine (leadStart.ts leadChoices).
+    expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true }, lead: {
+      claude: { refused: 'Claude Code isn’t offered on mac.' }, codex: { refused: 'Update Harness on mac to run a Product Manager there.' } } } })
+  })
+
+  it('tells only a person where New Project\'s Product Manager would run, and only on a teammate\'s machine', () => {
+    const { parts, s } = scene()
+    expect(readerView(parts, owner, NOW, { teamMachines: [] }).derived.machines.mac).not.toHaveProperty('lead')
+    expect(readerView(parts, agentActor(s.worker), NOW, { teamMachines: [] }).derived.machines.mac).not.toHaveProperty('lead')
+    expect(readerView(parts, peer, NOW, { teamMachines: [] }).derived.machines.mac).toHaveProperty('lead')
+  })
+
+  // The route leaves a suspended engine out and Desktop strikes it through (engineHealth.ts); 6 hours on it no longer shows.
+  it('derives the engines suspended on a machine now, with why, and none once the suspension has run out', () => {
+    const s = richSwarm()
+    s.contribute('mac', 'swarm')
+    s.edit(state => { state.machines![0]!.engineSuspensions = { codex: { at: NOW - MINUTE, fine: true }, claude: { at: NOW - 7 * 60 * MINUTE, fine: false } } })
+    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, { teamMachines: [] })
+    expect(view.derived.machines.mac!.suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
   })
 
   it('gives a Lead the other projects\' work and a person the mentions waiting', () => {
