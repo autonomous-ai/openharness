@@ -3,6 +3,7 @@ import { delegate, extracted, partId, type PartRow } from './write.js'
 import type { GroupData, HeadData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
 import { noteChange } from '../cache.js'
+import { stableId } from '../model.js'
 import { ms } from './light.js'
 import { groupsBy, type GroupIndex } from './indexed.js'
 
@@ -73,7 +74,8 @@ export async function loadObserved(tx: Transaction, tabId: string, machineId: st
   const live = { deleted: false }
   const loaded = await assemble(tx, tabId, { member: live, agent: live, machine: live, progress: live, start: { ...live, finishedAt: null }, group: [] })
   const { projects, leadsConversationId } = loaded.head.data!
-  const leads = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], ...leadsConversationId ? [leadsConversationId] : []]
+  // A head that never stored the Leads conversation's id finds it where model.ts syncLeads would make it.
+  const leads = [...projects ? projects.map(p => p.leadConversationId) : ['lead'], leadsConversationId ?? stableId(tabId, 'leads')]
   // One read per index (parts/indexed.ts); none of them reads a quiet conversation.
   const groups = await liveGroups(tx, tabId, [['running', { executionMachineId: { $ne: null }, dormant: false }],
     ['key', { key: { $in: [...new Set([...leads, ...loaded.starts.map(s => s.data!.request.conversationId)])] }, dormant: false }]])

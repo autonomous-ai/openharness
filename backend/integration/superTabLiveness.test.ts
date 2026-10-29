@@ -506,6 +506,16 @@ describe('a machine\'s report', () => {
     expect(await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: finished } }, orderBy: { key: 'asc' } })).toEqual(before)
   })
 
+  it('finds the Leads conversation of a Swarm whose head never stored its id, as a full load does', async () => {
+    const f = await swarm()
+    const head = (await db.swarmHead.findFirst({ where: { tabId: f.tab } }))!
+    const { leadsConversationId, ...rest } = head.data as { leadsConversationId?: string }
+    expect(leadsConversationId).toBe(stableId(f.tab, 'leads'))
+    await db.swarmHead.update({ where: { id: head.id }, data: { data: rest as Prisma.InputJsonValue } })
+    await f.beat(f.clock.now)
+    expect((await f.timed.read(owner, f.tab)).state.machines!.map(m => m.observation?.receivedAt)).toEqual([f.clock.now, f.clock.now])
+  })
+
   // Ruling (#876): whether a worker leads a conversation is judged from the conversations the report loads, so a former Lead
   // named only on an old finished one is a worker like any other. Before, any open conversation it led kept its task forever.
   it('judges a former Lead still named on an old open conversation like any worker, and loses its task', async () => {
