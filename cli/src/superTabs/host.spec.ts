@@ -2450,3 +2450,69 @@ describe('deliveries the server pushes', () => {
     expect(reads(t)).toBe(1)
   })
 })
+
+// WS roadmap Phase 2a: every host read its Swarm changes each second. A server that pushes (backend lib/swarmHostPushes.ts)
+// tells it when a commit changed what it reads; the full read each minute stays as the safety net, and the read each
+// second comes back whenever the server has not said it pushes for 5 minutes, or on a new host after a reconnect.
+describe('Swarm changes the server pushes', () => {
+  const feedReads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/')).length
+  const pushes: BackendNotice = { type: 'swarm_host_changed' }
+  const changed: BackendNotice = { type: 'swarm_host_changed', tabId: 'tab', lastChangedAt: 1 }
+  async function seconds(t: ReturnType<typeof setup>, host: SuperTabHost, count: number) {
+    for (let i = 0; i < count; i++) { t.wait(1_000); await host.tick() }
+  }
+
+  it('reads its Swarm changes each second while the server has not said it pushes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push({ type: 'super_tab_deliveries' })
+    await host.tick()
+    await seconds(t, host, 10)
+    expect(feedReads(t)).toBe(11)
+  })
+
+  it('reads them only when told once the server pushes, and in full each minute', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(pushes)
+    await host.tick()
+    await seconds(t, host, 10)
+    expect(feedReads(t)).toBe(1)
+    t.push(changed)
+    await vi.waitFor(() => expect(feedReads(t)).toBe(2))
+    // This fixture's server answers every read in full, so the minute's full read is due a minute after the told one.
+    t.wait(59_000)
+    await host.tick()
+    expect(feedReads(t)).toBe(2)
+    t.wait(1_000)
+    await host.tick()
+    expect(feedReads(t)).toBe(3)
+  })
+
+  // The Lead's rule (2026-10-29): pushes can be missed, so a reconnect reads at once, and the old reading each second
+  // comes back until the new socket's server says it pushes.
+  it('reads at once and each second again on the new host a reconnect starts', async () => {
+    const t = setup(), first = t.open()
+    t.push(pushes)
+    await first.tick()
+    first.stop()
+    const before = feedReads(t)
+    const second = t.open()
+    await second.tick()
+    expect(feedReads(t)).toBe(before + 1)
+    await seconds(t, second, 2)
+    expect(feedReads(t)).toBe(before + 3)
+  })
+
+  it('goes back to reading each second once the server has not said it pushes for 5 minutes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(pushes)
+    await host.tick()
+    t.wait(5 * 60_000 - 1_000)
+    await host.tick()
+    const quiet = feedReads(t)
+    await seconds(t, host, 3)
+    expect(feedReads(t)).toBe(quiet + 3)
+  })
+})

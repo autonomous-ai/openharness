@@ -180,6 +180,26 @@ it('lets a shared host be woken without exposing its account proxy or agent iden
   expect(t.call).not.toHaveBeenCalled()
   t.port.disconnected(); expect(t.stop).toHaveBeenCalledOnce()
 })
+// WS roadmap Phase 2a, the Lead's rule (2026-10-29): pushes can be missed, so a reconnect's host never trusts the old socket's
+// word that the server pushes; it reads at once and each second until the new socket says so.
+it('gives the host a new feed after a reconnect, one that has not heard the server push', async () => {
+  const feeds: HostFeed[] = []
+  const host = vi.fn((_core: CoreApi, machineId: string, given?: SuperTabHostOptions) => {
+    feeds.push(given!.sources!.feed)
+    return { machineId, start: vi.fn(), stop: vi.fn() } as unknown as SuperTabHost
+  })
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host })
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  feeds[0]!.heard({ type: 'swarm_host_changed' })
+  expect(feeds[0]!.pushing).toBe(true)
+  service.port.disconnected()
+  service.port.connected()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(feeds).toHaveLength(2)
+  expect(feeds[1]).not.toBe(feeds[0])
+  expect(feeds[1]!.pushing).toBe(false)
+  service.port.stop()
+})
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
   for (const path of ['/api/auth/me', '/api/super-tabs/../auth/me', '/api/super-tabs%2F..', 'https://elsewhere.invalid', '/api/super-tabs#other']) {
