@@ -6,12 +6,15 @@
  */
 import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
-import { canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow, type Unblock } from './record.js'
+import { isBuddy } from '../buddies.js'
+import { agentProjectId, canReadProject, projectOf } from '../projects.js'
+import { waitedOn, waitsNow, type RanOn, type Run, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
-import type { Leaderboard, Medal, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
+import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
+/** A reviewer model's point for each review verdict it gave (Lead, 2026-10-29). */
+export const REVIEW_POINTS = 1
 export const UNBLOCK_POINTS = 1
 const HOUR_MS = 3_600_000
 /** One more point per this many hours an item waited, up to UNBLOCK_MAX_WAIT_POINTS more: an answer is worth a ship at most
@@ -92,7 +95,63 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     people,
     waiting: waitingNow(state, shared),
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
+    agents: agentScores(state, projectId, landed.filter(g => inWeek(g.ledger!.shippedAt!))),
+    byModel: modelScores(requests, landed.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
   }
+}
+
+/** The project's PM and Buddies with the requests each shipped this week: the PM by the groups it led, a Buddy by the groups
+ *  opened from its proposals. Builders and Reviewers are counted by model instead (modelScores). */
+function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: Conversation[]): AgentScore[] {
+  const pmId = state.conversations.find(c => c.id === projectOf(state, projectId).leadConversationId)?.leadId
+  const scored = state.agents
+    .filter(a => a.id === pmId || (isBuddy(a) && agentProjectId(state, a) === projectId))
+    .map(a => {
+      const buddy = isBuddy(a)
+      const shipped = shippedThisWeek.filter(g => buddy ? g.ledger?.proposal?.buddyId === a.id : g.leadId === a.id).length
+      return { agentId: a.id, displayName: a.displayName ?? a.name, kind: buddy ? 'buddy' as const : 'pm' as const,
+        personId: a.buddyOf?.personId ?? null, machineId: a.machineId, points: shipped * SHIPPED_POINTS, shipped }
+    })
+    .sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
+  return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
+}
+
+/** Every model that worked this week: the requests its attempts shipped, the first reviews of its attempts, and the review
+ *  verdicts it gave. A request ships on its last attempt before it shipped. */
+function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], inWeek: (at: number) => boolean): ModelScore[] {
+  const rows = new Map<string, ModelScore & { attemptMs: number[]; requestMs: number[] }>()
+  const row = (on: RanOn) => {
+    const key = JSON.stringify([on.engine, on.model, on.effort ?? null])
+    let entry = rows.get(key)
+    if (!entry) rows.set(key, entry = { engine: on.engine, model: on.model, effort: on.effort ?? null, grid: !!on.grid, points: 0, rank: 0,
+      shipped: { count: 0, medianAttemptMs: null, medianRequestMs: null }, firstReview: { reviewed: 0, passed: 0 }, reviews: 0,
+      attemptMs: [], requestMs: [] })
+    return entry
+  }
+  for (const group of shippedThisWeek) {
+    const shippedAt = group.ledger!.shippedAt!, runs = (group.ledger!.runs ?? []).filter(r => r.at <= shippedAt)
+    const last: Run | undefined = runs.at(-1)
+    if (!last) continue
+    const entry = row(last)
+    entry.shipped.count++
+    entry.attemptMs.push(shippedAt - last.at)
+    entry.requestMs.push(shippedAt - runs[0]!.at)
+  }
+  for (const group of requests) {
+    for (const run of group.ledger?.runs ?? []) {
+      if (!inWeek(run.at)) continue
+      const entry = row(run)
+      if (run.firstReview === undefined) continue
+      entry.firstReview.reviewed++
+      if (run.firstReview) entry.firstReview.passed++
+    }
+    for (const verdict of group.ledger?.verdicts ?? []) if (inWeek(verdict.at)) row(verdict).reviews++
+  }
+  const scored = [...rows.values()].map(({ attemptMs, requestMs, ...entry }) => ({ ...entry,
+    points: entry.shipped.count * SHIPPED_POINTS + entry.reviews * REVIEW_POINTS,
+    shipped: { ...entry.shipped, medianAttemptMs: median(attemptMs), medianRequestMs: median(requestMs) } }))
+    .sort((a, b) => b.points - a.points || (a.model ?? '').localeCompare(b.model ?? '') || (a.effort ?? '').localeCompare(b.effort ?? ''))
+  return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
 }
 
 /** One point per answer, and more the longer its item waited, capped. */

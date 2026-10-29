@@ -527,7 +527,18 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     f.at(5_000)
     const id = f.create(owner, { checks: independent })
     const { assignmentId } = f.assign(id)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', at: 5_000 }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'opus', effort: 'high', at: 5_000 }])
+  })
+
+  it('records no effort that names none: what Claude Code reports as auto, or a start that left the engine its own', () => {
+    for (const effort of ['auto', 'default', null]) {
+      const f = fixture()
+      const id = f.create(owner, { checks: independent })
+      const worker = f.add(`w-${effort}`, id)
+      f.state.agents.find(a => a.id === worker)!.configuration.effort = effort
+      f.assign(id, worker)
+      expect(f.group(id).ledger!.runs![0], String(effort)).not.toHaveProperty('effort')
+    }
   })
 
   it('names the grid model from the start of an agent from before agents kept it, while that start is loaded', () => {
@@ -540,7 +551,7 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
         gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-0123456789ab',
         requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 80, tools: [], devices: [], quotaRequired: false } } }]
     const { assignmentId } = f.assign(id, worker)
-    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', grid: true, at: 1_000 }])
+    expect(f.group(id).ledger!.runs).toEqual([{ assignmentId, engine: 'claude', model: 'moonshotai/kimi-k3', effort: 'high', grid: true, at: 1_000 }])
   })
 
   it('keeps the first verdict on an independent check as the assignment\'s first review, and ignores later and other checks', () => {
@@ -583,6 +594,24 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(g.group(both).ledger!.runs![0]).toMatchObject({ firstReview: true })
   })
 
+  it('records each finished review verdict an agent gives, with the model it ran on, for the reviewer models\' points', () => {
+    const f = fixture()
+    f.at(7_000)
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    f.state.agents.find(a => a.id === reviewer)!.configuration = { ...config, engine: 'codex', model: 'gpt-5.5', effort: 'medium' }
+    verdict(f, id, assignmentId, false, true, f.asAgent(reviewer))
+    verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+    // A person's verdict, and one on a check that is not a review, are no model's review.
+    verdict(f, id, assignmentId, true)
+    verdict(f, id, assignmentId, true, false, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.verdicts).toEqual([
+      { at: 7_000, engine: 'codex', model: 'gpt-5.5', effort: 'medium' },
+      { at: 7_000, engine: 'codex', model: 'gpt-5.5', effort: 'medium' },
+    ])
+  })
+
   it('keeps the last 20 assignments of a group', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })
@@ -595,5 +624,37 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
     expect(f.group(id).ledger!.runs).toHaveLength(20)
     expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
+  })
+})
+
+describe('a group opened from a Buddy\'s proposal (Lead, 2026-10-29: the Buddy earns when it ships)', () => {
+  /** A Buddy of the owner in the project, and its proposal posted in the project chat. */
+  function proposed(f: ReturnType<typeof fixture>) {
+    const buddy = f.add('buddy')
+    f.state.agents.find(a => a.id === buddy)!.buddyOf = { personId: 'owner', generation: 'g' }
+    const proposal: NonNullable<CommandContext['proposal']> = { id: 'm-proposal', conversationId: 'lead',
+      author: { kind: 'agent', id: buddy, name: 'buddy', membershipGeneration: 'g' }, source: { kind: 'buddy-proposal', personId: 'owner', ownerMessageId: 'm-ask' } }
+    return { buddy, proposal }
+  }
+  const createFrom = (f: ReturnType<typeof fixture>, proposal: CommandContext['proposal']) =>
+    f.run(commandSchema.parse({ type: 'conversation.create', title: 'Dark mode', brief: 'Add it.', checks, proposalMessageId: 'm-proposal' }), owner,
+      { proposal }).result.conversationId as string
+
+  it('records the Buddy whose proposal the group comes from', () => {
+    const f = fixture()
+    f.at(5_000)
+    const { buddy, proposal } = proposed(f)
+    const id = createFrom(f, proposal)
+    expect(f.group(id).ledger).toEqual({ askedAt: 5_000, proposal: { buddyId: buddy, messageId: 'm-proposal' } })
+  })
+
+  it('refuses a link to a message that is not a Buddy\'s proposal in this project\'s chat', () => {
+    const f = fixture()
+    const { proposal } = proposed(f)
+    const lead = f.add('not-buddy')
+    for (const wrong of [undefined, { ...proposal, source: null }, { ...proposal, conversationId: 'elsewhere' },
+      { ...proposal, author: { ...proposal.author, id: lead } }, { ...proposal, author: { ...proposal.author, kind: 'person' as const, id: 'owner' } }]) {
+      expect(() => createFrom(f, wrong), JSON.stringify(wrong)).toThrow(/proposal/i)
+    }
   })
 })
