@@ -268,12 +268,27 @@ class _AddComputersState extends State<_AddComputers> {
         _errors[id] = failure.toString();
       }
     }
+    // One fresh read of the Swarm after a failure: an add whose reply was
+    // lost may be there all the same.
+    if (_errors.keys.any(ids.contains) && _alive()) {
+      try {
+        await c.refresh();
+      } catch (_) {
+        // The rows keep their reasons; the next try checks again.
+      }
+    }
     if (!mounted) return;
     setState(() {
       _busy = false;
       _adding = null;
     });
-    if (_alive() && ids.every(_added.contains)) Navigator.pop(context);
+    // Done once every one is in the Swarm: an add whose reply was lost may
+    // show up there all the same.
+    final inSwarm = {
+      for (final row in _rows)
+        if (row.status == AddComputerStatus.added) row.id,
+    };
+    if (_alive() && ids.every(inSwarm.contains)) Navigator.pop(context);
   }
 
   void _close() {
@@ -306,7 +321,10 @@ class _AddComputersState extends State<_AddComputers> {
     final ready = row.status == AddComputerStatus.ready;
     final canTick = ready && !_busy;
     void toggle() => setState(() => _ticks[row.id] = !_ticked(row));
-    final error = _errors[row.id];
+    // A computer in the Swarm has nothing left to fail.
+    final error = row.status == AddComputerStatus.added
+        ? null
+        : _errors[row.id];
     final note = error != null ? 'Couldn’t add: $error' : row.note;
     return KeyedSubtree(
       key: ValueKey('add-computer-${row.id}'),

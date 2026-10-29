@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:harness/core/machine_resources.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/models/model_search_catalog.dart' show thisComputerName;
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -76,12 +78,17 @@ void main() {
     SuperTabController c,
     AppNotifier app, {
     void Function(Uri url)? openDownload,
+    Future<MachineResources?> Function(String id)? readResources,
+    Brightness brightness = Brightness.dark,
+    Size size = const Size(900, 1000),
   }) async {
-    await tester.binding.setSurfaceSize(const Size(900, 1000));
+    await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    grid.AppTheme.brightness.value = brightness;
+    addTearDown(() => grid.AppTheme.brightness.value = Brightness.dark);
     await tester.pumpWidget(
       MaterialApp(
-        theme: grid.buildAppTheme(brightness: Brightness.dark),
+        theme: grid.buildAppTheme(brightness: brightness),
         home: Scaffold(
           body: Builder(
             builder: (context) => TextButton(
@@ -89,7 +96,7 @@ void main() {
                 context,
                 c,
                 app,
-                readResources: (_) async => null,
+                readResources: readResources ?? (_) async => null,
                 openDownload: openDownload,
               ),
               child: const Text('open'),
@@ -543,4 +550,202 @@ void main() {
     expect(find.byKey(const ValueKey('add-computer-m')), findsOneWidget);
     await close(tester, f, c);
   });
+
+  testWidgets(
+    'a Mac\'s Harness Team account in the Swarm is part of its Mac\'s row, never one of its own',
+    (tester) async {
+      final (:f, :c) = await swarm((f) {
+        computer(f, 'm-team', 'This Mac · Team');
+        f.connection.server.state['machines'] = [
+          {'machineId': 'm', 'contributorId': 'owner'},
+          {
+            'machineId': 'm-team',
+            'contributorId': 'owner',
+            'hostMachineId': 'm',
+          },
+        ];
+      });
+      await openBox(tester, c, f.app);
+      expect(row('m'), findsOneWidget);
+      expect(inRow('m', 'added'), findsOneWidget);
+      expect(row('m-team'), findsNothing);
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'a Lead running on this Mac does not make it added: only the Swarm\'s Machines list does',
+    (tester) async {
+      final (:f, :c) = await swarm((f) {
+        f.connection.server.state['agents'] = [
+          {
+            'id': 'lead-agent',
+            'name': 'Lead',
+            'machineId': 'm',
+            'harnessId': 'native-lead',
+            'contributorId': 'owner',
+            'configuration': {'engine': 'codex'},
+          },
+        ];
+      });
+      await openBox(tester, c, f.app);
+      expect(box(tester, 'm').value, isTrue);
+      expect(inRow('m', 'online'), findsOneWidget);
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'a computer that goes offline while the box is open is unticked and not added',
+    (tester) async {
+      final (:f, :c) = await swarm((f) {
+        computer(f, 'studio', 'Studio · dee');
+      });
+      await openBox(tester, c, f.app);
+      expect(find.text('Add 2'), findsOneWidget);
+      f.app.machineStates['studio']!.nodeOnline = false;
+      // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+      f.app.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(box(tester, 'studio').value, isFalse);
+      expect(box(tester, 'studio').onChanged, isNull);
+      await tester.tap(find.text('Add 1'));
+      await settle(tester);
+      expect(added(f), ['m']);
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'each computer is added with the agent count its own memory suggests',
+    (tester) async {
+      final (:f, :c) = await swarm((_) {});
+      // 16 GiB total suggests four agents, whatever is free.
+      await openBox(
+        tester,
+        c,
+        f.app,
+        readResources: (_) async => const MachineResources(
+          memoryTotalBytes: 16 * 1024 * 1024 * 1024,
+          memoryUsedBytes: 8 * 1024 * 1024 * 1024,
+        ),
+      );
+      await tester.tap(find.text('Add 1'));
+      await settle(tester);
+      expect(
+        (f.connection.server.posts.single['command'] as Map)['maxAgents'],
+        4,
+      );
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'a reply lost after the server added the computer: the box finds it in the Swarm, with no error and no second add',
+    (tester) async {
+      final (:f, :c) = await swarm((_) {});
+      await openBox(tester, c, f.app);
+      f.connection.server.loseReply = true;
+      await tester.tap(find.text('Add 1'));
+      await settle(tester);
+      expect(find.textContaining('Couldn’t add'), findsNothing);
+      expect(find.text('Add your computers'), findsNothing);
+      expect(f.connection.server.posts, hasLength(1));
+      expect(
+        (f.connection.server.state['machines'] as List).where(
+          (m) => (m as Map)['machineId'] == 'm',
+        ),
+        hasLength(1),
+      );
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets('a tick moves with Tab and Space, and each row says its name', (
+    tester,
+  ) async {
+    final (:f, :c) = await swarm((f) {
+      computer(f, 'studio', 'Studio · dee');
+    });
+    await openBox(tester, c, f.app);
+    final handle = tester.ensureSemantics();
+    expect(
+      tester.getSemantics(
+        find.descendant(of: row('studio'), matching: find.byType(Checkbox)),
+      ),
+      matchesSemantics(
+        label: 'Studio · dee',
+        isChecked: true,
+        hasCheckedState: true,
+        isEnabled: true,
+        hasEnabledState: true,
+        isFocusable: true,
+        hasTapAction: true,
+        hasFocusAction: true,
+      ),
+    );
+    handle.dispose();
+    for (var i = 0; i < 6; i++) {
+      final focused = FocusManager.instance.primaryFocus?.context?.widget;
+      final inStudio =
+          FocusManager.instance.primaryFocus?.context != null &&
+          find
+              .descendant(of: row('studio'), matching: find.byType(Checkbox))
+              .evaluate()
+              .any(
+                (e) =>
+                    FocusManager.instance.primaryFocus!.context!
+                        .findAncestorWidgetOfExactType<Checkbox>() ==
+                    e.widget,
+              );
+      if (inStudio || focused == null) break;
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pumpAndSettle();
+    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(box(tester, 'studio').value, isFalse);
+    expect(find.text('Add 1'), findsOneWidget);
+    await close(tester, f, c);
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('long names and notes fit at 2x text in ${brightness.name}', (
+      tester,
+    ) async {
+      final (:f, :c) = await swarm((f) {
+        computer(
+          f,
+          'studio',
+          'Design Studio’s MacBook Pro with a long custom machine name',
+        );
+        computer(
+          f,
+          'air',
+          'autonomous-code-vm-01.c.autonomous-code.internal',
+          online: false,
+        );
+        computer(f, 'rig', '2x 4090 Rig');
+        f.connection.server.state['machines'] = [
+          {
+            'machineId': 'rig',
+            'contributorId': 'owner',
+            'teamWork': {'allowed': false, 'code': 'PRIVACY_CHECK_STALE'},
+          },
+        ];
+      });
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await openBox(
+        tester,
+        c,
+        f.app,
+        brightness: brightness,
+        size: const Size(700, 900),
+      );
+      expect(find.text('Add your computers'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await close(tester, f, c);
+    });
+  }
 }
