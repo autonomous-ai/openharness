@@ -116,9 +116,14 @@ describe('what a Buddy reads', () => {
     f.state.starts = [{ id: 'start', creationId: 'c', actorKey: 'k', contributorId: 'owner', membershipGeneration: 'g', machineOwnerId: 'owner',
       hostGrant: null, harnessId: null, dispatched: false, error: null,
       request: { conversationId: f.group, machineId: 'peer-mac', engine: 'claude', name: 'Builder', cwd: '/Users/owner/app', worktree: true } as never }]
+    // The project's repository names the folder on its machine: a Buddy keeps the address alone (security review 2 of #2115).
+    f.state.projects!.find(p => p.id === f.app.projectId)!.repository = { machineId: 'owner-mac', cwd: '/Users/owner/app', repositoryUrl: 'https://github.com/acme/app' }
     const seen = visibleState(f.state, agentActor('buddy'))
     expect(seen.conversations.map(c => c.id)).toContain(f.group)
     expect(seen.starts ?? []).toEqual([])
+    expect(seen.projects!.find(p => p.id === f.app.projectId)!.repository).toEqual({ repositoryUrl: 'https://github.com/acme/app' })
+    expect(visibleState(f.state, agentActor(f.pm)).projects!.find(p => p.id === f.app.projectId)!.repository).toMatchObject({ cwd: '/Users/owner/app' })
+    expect(JSON.stringify(seen)).not.toContain('/Users/owner/app')
     expect(visibleState(f.state, agentActor(f.pm)).starts).toHaveLength(1)
     expect(seen.machines ?? []).toEqual([])
     expect(seen.rules ?? []).toEqual([])

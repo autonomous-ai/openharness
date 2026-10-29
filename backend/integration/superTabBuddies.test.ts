@@ -158,4 +158,43 @@ describe('a Buddy through the store', () => {
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     for (const id of [owners, web.conversationId, landing, leads]) expect(read.groups.map(g => g.key)).not.toContain(id)
   })
+  it('reads no routing: no route rows in its task\'s messages, no routing decisions, no routing policy (security review 2 of #2115)', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Keep edits.',
+      checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'fixture-model', effort: 'high',
+        quality: 2, cost: 2, title: 'New agent on Kens-MacBook-Pro.local', label: 'New agent' }],
+      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
+    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, owner, f.lead)).result.routeDecisionId)
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder, routeDecisionId, overrideReason: 'It has the context.' } as Command, owner, f.lead)
+    await f.execute({ type: 'message.send', conversationId: group, text: 'Starting now.', replyTo: null, recipientIds: [] }, owner, builder)
+
+    const pm = (await f.store.messages(owner, f.tab, group, {}, f.lead)).messages
+    const routed = pm.filter(m => ['route', 'route-override'].includes(String((m.source as { kind?: unknown } | null)?.kind)))
+    expect(routed.length).toBeGreaterThanOrEqual(2)
+    const seen = (await f.store.messages(peer, f.tab, group, {}, agentId)).messages
+    expect(seen.map(m => m.text)).toContain('Starting now.')
+    expect(JSON.stringify(seen)).not.toContain('Kens-MacBook-Pro.local')
+    expect(seen.map(m => m.id)).not.toEqual(expect.arrayContaining([routed[0]!.id]))
+    for (const row of routed) await expect(f.store.messages(peer, f.tab, group, { messageId: row.id }, agentId)).resolves.toMatchObject({ messages: [] })
+    expect((await f.store.routeDecisions(owner, f.tab, f.lead)).map(d => d.id)).toContain(routeDecisionId)
+    await expect(f.store.routeDecisions(peer, f.tab, agentId)).rejects.toThrow('A Buddy reads no routing')
+    await expect(f.store.routeDecision(peer, f.tab, routeDecisionId, agentId)).rejects.toThrow('A Buddy reads no routing')
+    await expect(f.store.tabPolicy(peer, f.tab, agentId)).rejects.toThrow('A Buddy reads no routing')
+  })
+
+  it('still reads a task archived before the PM reported on it, until it leaves the active set (security review 1 of #2115)', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Old task', brief: '', checks: [] })).result.conversationId)
+    await f.execute({ type: 'message.send', conversationId: group, text: 'Done here.', replyTo: null, recipientIds: [] })
+    await f.execute({ type: 'conversation.archive', conversationId: group, archived: true } as Command)
+    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    expect(read.groups.find(g => g.key === group)?.data).toMatchObject({ archived: true })
+    expect(read.groups.find(g => g.key === group)?.data.dormant).toBeUndefined()
+  })
 })

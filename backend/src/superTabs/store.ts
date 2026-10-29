@@ -20,6 +20,7 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
+import { readsNoRouting, refuseBuddyRouting, routingRow } from './buddies.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
@@ -478,7 +479,9 @@ export class SuperTabStore {
   async tabPolicy(user: AuthUser, tabId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
-      author(state, await this.actor(tx, user, state, asAgentId))
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      refuseBuddyRouting(state, actor)
       const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
       // The owner's account policy alone, so a field reset to "use account default" can show its value.
       return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
@@ -1754,6 +1757,9 @@ export class SuperTabStore {
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
+    // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
+    // and why others could not (security review 2 of #2115). Left out like an agent-only notice, so no page is shorter.
+    const buddy = readsNoRouting(state, actor)
     const forward = cursor.after !== undefined
     const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
       : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1768,7 +1774,8 @@ export class SuperTabStore {
     for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
       const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
         orderBy: [{ sequence: order }, { id: order }], take: 101 })
-      rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
+      rows.push(...batch.filter(m => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
+        && !(buddy && routingRow(m.source))))
       if (batch.length < 101) break
       edge = batch.at(-1)
     }
@@ -1826,6 +1833,7 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId, { allGroups: true })
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
+      refuseBuddyRouting(state, actor)
       // Dormant conversations count too: their decisions stay readable (the list loads every group for this).
       const groups = state.conversations.filter(c => canReadGroup(state, actor, c)).map(c => c.id)
       return (await recentDecisions(tx, tabId, groups)).map(timedDecisionOf)
@@ -1838,6 +1846,7 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId, { groupIds: row ? [row.conversationId] : [] })
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
+      refuseBuddyRouting(state, actor)
       const decision = await tx.superTabRouteDecision.findFirst({ where: { id: decisionId, tabId } })
       if (decision) readConversation(state, actor, decision.conversationId)
       return decision ? timedDecisionOf(decision) : fail('NOT_FOUND', 'This routing decision is unavailable.', 404)

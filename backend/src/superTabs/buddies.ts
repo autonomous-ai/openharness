@@ -2,7 +2,7 @@
  *  read. When they ask, it posts one proposal in the project chat on their behalf; the PM assigns the work as usual. A Buddy
  *  reads what its person reads of its project but no private conversation (Ken, 10-29), and does nothing but post in its
  *  chat and propose. Behind the Swarm's `buddies` setting, off by default. */
-import { fail, stableId, type Agent, type AgentStartRequest, type Conversation, type Person } from './model.js'
+import { fail, stableId, type Actor, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
 export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy'
@@ -15,6 +15,18 @@ export function buddyReads(buddy: Agent, group: Conversation, leadConversationId
   if (!person) return false
   if (isBuddyChat(group)) return group.agentIds.includes(buddy.id) && group.audience?.people.some(p => p.id === person.id) === true
   return group.id === leadConversationId || !group.audience
+}
+
+/** The rows that tell how work is routed: a route and its override name the machines that could run a task and why others
+ *  could not, and a rule row the routing rules. A Buddy reads none of them, as its Swarm read has no machines or rules. */
+const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule'])
+export const routingRow = (source: unknown): boolean => ROUTING_ROWS.has(String((source as { kind?: unknown } | null | undefined)?.kind))
+
+/** Whether [actor] is a Buddy, which reads no routing: no route rows, routing decisions or routing policy. */
+export const readsNoRouting = (state: SuperTabState, actor: Actor): boolean =>
+  actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && isBuddy(a))
+export function refuseBuddyRouting(state: SuperTabState, actor: Actor): void {
+  if (readsNoRouting(state, actor)) fail('BUDDY_FORBIDDEN', 'A Buddy reads no routing.', 403)
 }
 
 /** A person's Buddy chat in a project, the same each time they add a Buddy there; a new membership opens a new one, as a
