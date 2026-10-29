@@ -81,7 +81,7 @@ class _Folder implements FileSystem {
 
 /// A store over [root] and [storage], as the app's is over its temporary
 /// folder and the network.
-SwarmAttachmentStore storeIn(io.Directory root, FakeFileStorage storage) =>
+SwarmAttachmentStore storeIn(io.Directory root, FileService storage) =>
     SwarmAttachmentStore(
       root: () async => root,
       fileService: storage,
