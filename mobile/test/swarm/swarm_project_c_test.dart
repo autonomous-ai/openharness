@@ -61,8 +61,18 @@ void main() {
       ),
       'members': [
         part(me, 1, person(me)),
-        part('diego', 1, person('diego', role: 'collaborator')),
-        part('ken', 1, person('ken', role: 'collaborator')),
+        part('diego', 1, {
+          ...person('diego', role: 'collaborator'),
+          'status': {'text': 'Reviewing PRs', 'emoji': '🎯'},
+        }),
+        part('ken', 1, {
+          ...person('ken', role: 'collaborator'),
+          'status': {
+            'text': 'At lunch',
+            'emoji': '🍽️',
+            'until': '2026-10-01T05:00:00.000Z',
+          },
+        }),
       ],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
@@ -194,14 +204,21 @@ void main() {
     return [for (final row in rows) (row.key! as ValueKey<String>).value];
   }
 
+  /// The texts of the row keyed [k] with a digit in them, its face aside.
+  Finder figures(String k) => find.descendant(
+    of: key(k),
+    matching: find.textContaining(RegExp(r'\d'), findRichText: true),
+  );
+
   group('Team, its humans', () {
-    testWidgets("by this week's points, most first, with no ranks, the "
-        "viewer's own row saying so", (tester) async {
+    testWidgets("ordered by this week's points, most first, though no row "
+        'shows a number: the name and what they are on now', (tester) async {
       await team(tester, backend());
 
       expect(
         said(tester, 'swarm-team-humans-caption'),
-        'Humans | Points this week',
+        'Humans',
+        reason: 'no points column to name (Dee: bare points mean nothing)',
       );
       expect(
         rowsAfter(
@@ -215,15 +232,21 @@ void main() {
           'swarm-member-person-ken',
         ],
       );
+      expect(heard(tester, 'swarm-member-person-person-me'), 'person-me, you');
       expect(
-        heard(tester, 'swarm-member-person-person-me'),
-        'person-me, you, 1,320 points',
+        heard(tester, 'swarm-member-person-diego'),
+        'diego, 🎯 Reviewing PRs',
       );
-      expect(heard(tester, 'swarm-member-person-diego'), 'diego, 1,050 points');
-      expect(find.text('1,320'), findsOneWidget);
-      for (final rank in ['1', '2', '3']) {
-        expect(find.text(rank), findsNothing, reason: 'no rank $rank');
+      expect(
+        heard(tester, 'swarm-member-person-ken'),
+        'ken',
+        reason: 'a status whose time has passed is not shown',
+      );
+      for (final id in ['person-me', 'diego', 'ken']) {
+        expect(figures('swarm-member-person-$id'), findsNothing, reason: id);
       }
+      expect(find.text('1,320'), findsNothing);
+      expect(find.text('1320'), findsNothing);
     });
 
     testWidgets('in the one row shape the agents share', (tester) async {
@@ -261,10 +284,6 @@ void main() {
           'swarm-member-person-person-me',
         ],
       );
-      expect(
-        heard(tester, 'swarm-member-person-person-me'),
-        'person-me, you, 0 points',
-      );
     });
 
     testWidgets('a row opens their week', (tester) async {
@@ -277,7 +296,6 @@ void main() {
         find.byKey(const ValueKey('swarm-leaderboard-sheet')),
         findsOneWidget,
       );
-      expect(find.text('1050 this week'), findsOneWidget);
     });
 
     testWidgets('a private project lists only the people who read it', (
@@ -301,18 +319,33 @@ void main() {
       expect(key('swarm-member-person-diego'), findsOneWidget);
     });
 
-    testWidgets('while the board is read, the people show without points, '
-        'never a Loading that stays', (tester) async {
+    testWidgets('while the board is read, the people show at once by name, '
+        'never a Loading that stays, and take its order when it answers', (
+      tester,
+    ) async {
       final fake = backend();
       final gate = hold(fake, board);
       await team(tester, fake);
 
-      expect(heard(tester, 'swarm-member-person-diego'), 'diego');
+      List<String> humans() => rowsAfter(
+        tester,
+        'swarm-team-humans-caption',
+        'swarm-team-agents-caption',
+      );
+      expect(humans(), [
+        'swarm-member-person-diego',
+        'swarm-member-person-ken',
+        'swarm-member-person-person-me',
+      ]);
       expect(find.textContaining('Loading'), findsNothing);
 
       gate.complete();
       await tester.pumpAndSettle();
-      expect(heard(tester, 'swarm-member-person-diego'), 'diego, 1,050 points');
+      expect(humans(), [
+        'swarm-member-person-person-me',
+        'swarm-member-person-diego',
+        'swarm-member-person-ken',
+      ]);
     });
 
     testWidgets('a board that cannot be read says so, and Try again reads it '
@@ -324,7 +357,7 @@ void main() {
       await team(tester, fake);
 
       expect(find.text('Board is down.'), findsOneWidget);
-      expect(heard(tester, 'swarm-member-person-diego'), 'diego');
+      expect(key('swarm-member-person-diego'), findsOneWidget);
       final reads = fake.paths.where((p) => p == board).length;
 
       fake.routes[board] = answer;
@@ -333,7 +366,14 @@ void main() {
 
       expect(fake.paths.where((p) => p == board).length, reads + 1);
       expect(find.text('Board is down.'), findsNothing);
-      expect(heard(tester, 'swarm-member-person-diego'), 'diego, 1,050 points');
+      expect(
+        rowsAfter(
+          tester,
+          'swarm-team-humans-caption',
+          'swarm-team-agents-caption',
+        ).first,
+        'swarm-member-person-person-me',
+      );
     });
 
     testWidgets('access taken away while it is open leaves nothing of the '
@@ -349,7 +389,6 @@ void main() {
 
       expect(find.byType(SwarmMemberRow), findsNothing);
       expect(find.byType(SwarmProjectTeam), findsNothing);
-      expect(find.text('1,050'), findsNothing);
       expect(
         find.text('This project is no longer in the Swarm.'),
         findsOneWidget,

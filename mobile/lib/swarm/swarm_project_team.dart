@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -140,26 +139,30 @@ String swarmTeamAgentsLine(List<SwarmTeamAgent> team) => [
       '$n ${state.counted}',
 ].join(' · ');
 
-/// One person on a project's Team: their week's [score] from its board, if
-/// the board has answered, and whether they are the viewer.
+/// One person on a project's Team: what they are on [now] (the status they
+/// set, while it lasts), their week's [score] from its board, if the board
+/// has answered, and whether they are the viewer.
 typedef SwarmTeamHuman = ({
   SuperTabPerson person,
   String name,
+  String? now,
   SwarmScore? score,
-  int? points,
   bool own,
 });
 
 /// [project]'s people ([swarmProjectPeople]) as its Team lists them: by this
-/// week's points on [board], most first, then by name, letter case aside; no
-/// ranks. Each has the points the board gives them, 0 when it gives none —
-/// or none at all while there is no board. Matched by id, never by name.
+/// week's points on [board], most first, then by name, letter case aside —
+/// all by name while there is no board. The points only order them: no row
+/// shows one, and there are no ranks (Dee, 2026-10-29: bare points mean
+/// nothing to people). Matched by id, never by name.
 List<SwarmTeamHuman> swarmProjectHumans(
   SuperTabSnapshot snapshot,
   SuperTabProject project,
   SwarmLeaderboard? board, {
   required String viewer,
+  DateTime? now,
 }) {
+  final at = now ?? DateTime.now();
   final scores = {
     for (final score in board?.people ?? const <SwarmScore>[])
       score.personId: score,
@@ -170,29 +173,22 @@ List<SwarmTeamHuman> swarmProjectHumans(
         person: person,
         name:
             scores[person.id]?.displayName ?? superTabPersonName(person.email),
+        now: switch (person.status) {
+          final status? when status.shownAt(at) => status.label,
+          _ => null,
+        },
         score: scores[person.id],
-        points: board == null ? null : scores[person.id]?.points ?? 0,
         own: person.id == viewer,
       ),
   ];
   String sortName(SwarmTeamHuman h) => h.name.toLowerCase();
+  int points(SwarmTeamHuman h) => h.score?.points ?? 0;
   return humans..sort((a, b) {
-    final byPoints = (b.points ?? 0).compareTo(a.points ?? 0);
+    final byPoints = points(b).compareTo(points(a));
     if (byPoints != 0) return byPoints;
     final byName = sortName(a).compareTo(sortName(b));
     return byName != 0 ? byName : a.person.id.compareTo(b.person.id);
   });
-}
-
-/// Points with their thousands apart, as the prototype writes them: "1,320".
-String swarmPoints(int points) {
-  final digits = '${points.abs()}';
-  final grouped = StringBuffer(points < 0 ? '-' : '');
-  for (var i = 0; i < digits.length; i++) {
-    if (i > 0 && (digits.length - i) % 3 == 0) grouped.write(',');
-    grouped.write(digits[i]);
-  }
-  return grouped.toString();
 }
 
 /// The colour of [state]'s dot on an agent's face. Never the only signal: the
@@ -301,7 +297,6 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
               SwarmCaption(
                 'Humans',
                 key: const ValueKey('swarm-team-humans-caption'),
-                note: _board.unavailable ? null : 'Points this week',
                 first: true,
               ),
               if (_board.error case final error? when board == null)
@@ -318,22 +313,7 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                       ),
                       name: h.name,
                       tag: h.own ? 'you' : null,
-                      detail: switch (h.score) {
-                        final score? => swarmNumbers(score).join(' · '),
-                        null => null,
-                      },
-                      trailing: switch (h.points) {
-                        final points? => Text(
-                          swarmPoints(points),
-                          style: _pointsStyle(context),
-                        ),
-                        null => null,
-                      },
-                      trailingLabel: switch (h.points) {
-                        1 => '1 point',
-                        final points? => '${swarmPoints(points)} points',
-                        null => null,
-                      },
+                      detail: h.now,
                       onTap: switch (h.score) {
                         final score? => () => unawaited(
                           showSwarmPersonWeek(
@@ -388,12 +368,6 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
       },
     );
   }
-
-  /// Numbers and rankings: the points the one emphasized number, in figures
-  /// of one width.
-  static TextStyle _pointsStyle(BuildContext context) => Tty.of(context)
-      .style(size: 15, weight: FontWeight.w700, color: AppPalette.textPrimary)
-      .copyWith(fontFeatures: const [FontFeature.tabularFigures()]);
 }
 
 /// Why the board was not read, and Try again: one read per tap.
@@ -427,9 +401,9 @@ class _BoardError extends StatelessWidget {
 
 /// One person or agent on a project's Team, in the one shape both share
 /// (Dee, 2026-10-29): the face in one column — an agent's with its state's
-/// [dot] — the name with [trailing] at the end of its line (a person's
-/// points), and a quiet [detail] line beneath. A finger's height at least;
-/// a tap does [onTap], when there is one.
+/// [dot] — the name, and a quiet [detail] line beneath: what they are on.
+/// The same height with or without the line; a tap does [onTap], when there
+/// is one.
 class SwarmMemberRow extends StatelessWidget {
   const SwarmMemberRow({
     super.key,
@@ -438,8 +412,6 @@ class SwarmMemberRow extends StatelessWidget {
     this.dot,
     this.tag,
     this.detail,
-    this.trailing,
-    this.trailingLabel,
     this.onTap,
   });
 
@@ -452,10 +424,6 @@ class SwarmMemberRow extends StatelessWidget {
   /// Quiet words after the name: "you" on the viewer's own row.
   final String? tag;
   final String? detail;
-  final Widget? trailing;
-
-  /// [trailing] in words, for a screen reader: "1,320 points".
-  final String? trailingLabel;
   final VoidCallback? onTap;
 
   static const double _face = 36, _dot = 11;
@@ -464,7 +432,6 @@ class SwarmMemberRow extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final dot = this.dot, tag = this.tag, detail = this.detail;
-    final trailing = this.trailing;
     return Semantics(
       // Its own node, a tap or not: one row, said as one.
       container: true,
@@ -473,7 +440,6 @@ class SwarmMemberRow extends StatelessWidget {
         name,
         ?tag,
         if (detail != null && detail.isNotEmpty) detail,
-        ?trailingLabel,
       ].join(', '),
       excludeSemantics: true,
       child: InkWell(
@@ -522,34 +488,22 @@ class SwarmMemberRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text.rich(
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            TextSpan(text: name),
+                            if (tag != null)
                               TextSpan(
-                                children: [
-                                  TextSpan(text: name),
-                                  if (tag != null)
-                                    TextSpan(
-                                      text: '  $tag',
-                                      style: AppType.caption(
-                                        color: AppPalette.textSecondary,
-                                      ),
-                                    ),
-                                ],
+                                text: '  $tag',
+                                style: AppType.caption(
+                                  color: AppPalette.textSecondary,
+                                ),
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppType.label(
-                                color: AppPalette.textPrimary,
-                              ),
-                            ),
-                          ),
-                          if (trailing != null) ...[
-                            const SizedBox(width: AppSpace.s),
-                            trailing,
                           ],
-                        ],
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppType.label(color: AppPalette.textPrimary),
                       ),
                       if (detail != null && detail.isNotEmpty)
                         Padding(
