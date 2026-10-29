@@ -28,6 +28,7 @@ import 'swarm_face.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_inbox.dart';
+import 'swarm_live_card.dart';
 import 'swarm_message_row.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_profile_sheet.dart';
@@ -1153,10 +1154,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
           final reactions = c.reactionsOf(m);
+          // A card's facts are its group's: only a reader of the group has
+          // them, and a change to them draws the row again.
+          final group = c.conversation;
+          final card = snapshot == null || group == null
+              ? null
+              : SwarmCardFacts.of(snapshot, group, m.id, c.messages);
           return _row(
             key,
             (
               m,
+              card,
               name,
               swarmLookKey(look),
               role,
@@ -1211,6 +1219,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   ? () => _openThread(c, root)
                   : () => _reply(c, m),
               inThread: root != null,
+              card: card == null
+                  ? null
+                  : SwarmLiveCard(
+                      key: ValueKey('swarm-card-${m.id}'),
+                      facts: card,
+                    ),
               thread: line == null || line.replies == 0
                   ? null
                   : SwarmThreadLine(
@@ -1594,6 +1608,7 @@ class _ChatView {
     required this.decisions,
     required this.buddyProject,
     required this.hint,
+    required this.cards,
   });
 
   /// [c] as its Swarm's read and asks have it now. The decisions of [before]
@@ -1655,6 +1670,15 @@ class _ChatView {
       hint: buddyProject != null && swarmBuddy(reader, buddyProject) != null
           ? 'Message $buddy'
           : 'Message',
+      cards: snapshot == null || group == null
+          ? const {}
+          : {
+              for (final id in {
+                ?group.cards.task,
+                for (final pull in group.cards.pullRequests) pull.messageId,
+              })
+                id: ?SwarmCardFacts.of(snapshot, group, id, c.messages),
+            },
     );
   }
 
@@ -1682,6 +1706,11 @@ class _ChatView {
 
   /// What the empty composer says.
   final String hint;
+
+  /// Each live card's facts by its message's id: a change to the group that
+  /// changes a card draws the chat again (its rows make their own from the
+  /// messages too).
+  final Map<String, SwarmCardFacts> cards;
 
   /// Whether [a] and [b] draw the same decisions, in the same order.
   static bool _sameAsks(List<SwarmDecisionNeed> a, List<SwarmDecisionNeed> b) {
@@ -1714,7 +1743,8 @@ class _ChatView {
       listEquals(other.mentionable, mentionable) &&
       identical(other.decisions, decisions) &&
       other.buddyProject == buddyProject &&
-      other.hint == hint;
+      other.hint == hint &&
+      mapEquals(other.cards, cards);
 
   @override
   int get hashCode => Object.hash(
@@ -1728,6 +1758,7 @@ class _ChatView {
     decisions,
     buddyProject,
     hint,
+    Object.hashAll(cards.values),
   );
 }
 
