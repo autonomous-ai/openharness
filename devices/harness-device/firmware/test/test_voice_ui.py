@@ -58,7 +58,7 @@ static void select_companion(void) {}
 static ht_tab_carousel_t tab_carousel;
 #define PANE_PITCH 60
 static struct {
-    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, touch_down, touch_cancelled;
+    bool quick_open, coasting, ready, connected, loading, nap, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_review_preview, voice_draft_append, voice_search, voice_swarm, touch_down, touch_cancelled;
     int pet_pose, view, voice_return, offset, pressed, active, pane_pos;
     uint32_t error_until;
     uint32_t pet_until, nap_until, voice_retry_until, voice_started, voice_wait_until, voice_generation, voice_question_revision, voice_draft_revision;
@@ -165,6 +165,16 @@ int main(void) {
         assert(!strcmp(s.voice_engine, "codex") && !strcmp(s.voice_target, "mobile"));
         done(); finish_audio(); ui_voice_routed(true, false, "", "h1", "mobile", 1);
         assert(s.view == AGENT && !s.voice_open && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L1"));
+        // Words for the Swarm chat are always reviewed, a plain tap included, by a daemon that posts a reviewed draft there.
+        reset(); host_features = 31 | CABLE_FEATURE_SWARM_REVIEW; strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); done();
+        assert(reviews == 1 && s.voice_review && s.voice_waiting);
+        discard(); finish_audio();
+        // An older daemon would type a reviewed draft into the Lead's terminal: no review on the face, even when held.
+        reset(); strcpy(sw.tab, "s1"); strcpy(sw.lead, "L1");
+        dispatch((action_t){.kind = A_VOICE, .id = "h1"}); work(queued); dispatch((action_t){.kind = A_VOICE_STOP, .value = 1});
+        assert(!reviews && !s.voice_review && s.voice_waiting);
+        discard(); finish_audio();
         // A desk pane's id while a Lead is on the face is no Lead's harness: the pane's own engine.
         strcpy(s.agents[0].engine, "claude"); begin();
         assert(!strcmp(started_for, "agent") && !strcmp(s.voice_engine, "claude"));

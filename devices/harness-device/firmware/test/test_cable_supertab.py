@@ -115,6 +115,8 @@ int main(void) {
     assert(!strcmp(field(wire[0],"product"),"harness"));
     // hello says swarmChat v1: the daemon sends the chat on each face and the Lead/PM notices.
     assert(!strcmp(field(wire[0],"swarmChat"),"v1"));
+    // hello says swarmReview v1: words for a Swarm chat are always reviewed here, so the daemon refuses any that are not.
+    assert(!strcmp(field(wire[0],"swarmReview"),"v1"));
 
     // supertabs: ids in order, the bad and the repeated skipped, at most 16.
     feed(handle_supertabs,"{\"ids\":[\"s1\",\"\",7,\"s2\",\"s1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}");

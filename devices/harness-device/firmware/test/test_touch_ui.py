@@ -56,7 +56,7 @@ code += source[source.index('typedef enum {'):source.index('static EXT_RAM_BSS_A
 code += typedef('cable_swarm_t') + typedef('cable_notif_t')
 code += r'''
 static struct {
-    bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search;
+    bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search, voice_swarm;
     bool coasting, touch_brake, touch_down, touch_cancelled, quiet, nap, focus_face, straight_title, muted;
     ht_rect_t pressed_rect;
     int brightness;
@@ -3097,6 +3097,9 @@ int main(int argc, char **argv) {
     reset(); tap(1000,233,220); scene_take();
     habitat_touch(true,233,220,2000); surface_tick(4000); habitat_touch(false,233,220,4100);
     assert(!stops && !reviews); // Resting a hand is not review.
+    // On a Swarm face an older daemon takes no review: the hold does not promise one.
+    reset(); tap(1000,233,220); scene_take(); s.voice_swarm=true;
+    habitat_touch(true,233,220,2000); surface_tick(2675); assert(!s.voice_review_preview);
     reset(); s.view=DRAFT;
     ht_draft_page_t draft_page={.active=true,.revision=1,.can_send=true,.id="draft-one",.agent="a",.name="Parser helper",
         .text="Keep the public API.\n\nOnly change the parser.\nPreserve existing tests.\nAdd Unicode coverage.\nDo not rename exports.\nKeep async behavior.\nKeep all exported types.",.position=1,.total=2};
