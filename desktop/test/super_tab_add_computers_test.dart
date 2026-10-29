@@ -310,7 +310,7 @@ void main() {
       await settle(tester);
 
       expect(find.text('Add your computers'), findsOneWidget);
-      expect(inRow('m', 'couldn’t add'), findsOneWidget);
+      expect(inRow('m', 'failed'), findsOneWidget);
       expect(
         find.byTooltip('This machine is no longer linked to this Swarm.'),
         findsOneWidget,
@@ -645,7 +645,7 @@ void main() {
       f.connection.server.loseReply = true;
       await tester.tap(find.text('Add 1'));
       await settle(tester);
-      expect(find.text('couldn’t add'), findsNothing);
+      expect(find.text('failed'), findsNothing);
       expect(find.text('Add your computers'), findsNothing);
       // The lost add is settled through the controller, under its own
       // receipt: nothing is left pending to block what comes next.
@@ -668,6 +668,58 @@ void main() {
         ),
         hasLength(1),
       );
+      await close(tester, f, c);
+    },
+  );
+
+  testWidgets(
+    'two lost replies, then a good read: the row says failed and Retry settles the same add, never a second one',
+    (tester) async {
+      final (:f, :c) = await swarm((f) {
+        computer(f, 'studio', 'Studio');
+      });
+      await openBox(tester, c, f.app);
+      await tester.tap(row('studio'));
+      await tester.pumpAndSettle();
+      // The add lands but its reply is lost, and so is the re-send's.
+      f.connection.server.loseReply = true;
+      f.connection.server.loseResentReplies = 1;
+      await tester.tap(find.text('Add 1'));
+      await settle(tester);
+
+      expect(c.hasPendingAction, isTrue);
+      expect(find.text('Add your computers'), findsOneWidget);
+      expect(inRow('m', 'failed'), findsOneWidget);
+      expect(inRow('m', 'added'), findsNothing);
+      // One way on, whatever is ticked: the same add again.
+      expect(find.text('Retry'), findsOneWidget);
+      expect(find.textContaining(RegExp(r'^Add \d')), findsNothing);
+      await tester.tap(row('studio'));
+      await tester.pumpAndSettle();
+      expect(find.text('Retry'), findsOneWidget);
+      expect(addButton(tester).onPressed, isNotNull);
+
+      await tester.tap(find.text('Retry'));
+      await settle(tester);
+      expect(c.hasPendingAction, isFalse);
+      expect(find.text('Add your computers'), findsNothing);
+      expect(
+        f.connection.server.posts.map((p) => p['operationId']).toSet(),
+        hasLength(1),
+      );
+      expect(added(f).toSet(), {'m'});
+      expect(
+        (f.connection.server.state['machines'] as List).where(
+          (m) => (m as Map)['machineId'] == 'm',
+        ),
+        hasLength(1),
+      );
+      final later = await c.command({
+        'type': 'message.send',
+        'conversationId': c.snapshot!.conversations.first.id,
+        'text': 'Added my Mac.',
+      });
+      expect(later, isNotNull);
       await close(tester, f, c);
     },
   );
@@ -863,6 +915,36 @@ void main() {
         debugDefaultTargetPlatformOverride = null;
       }, skip: shots == null);
     }
+    testWidgets('picture 8-an-add-left-unconfirmed (${brightness.name})', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final (:f, :c) = await swarm((f) {
+        f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
+            .copyWith(name: 'tropic');
+        computer(f, 'studio', 'Studio');
+      });
+      await openBox(
+        tester,
+        c,
+        f.app,
+        brightness: brightness,
+        size: const Size(720, 760),
+      );
+      await tester.tap(row('studio'));
+      await tester.pumpAndSettle();
+      f.connection.server.loseReply = true;
+      f.connection.server.loseResentReplies = 1;
+      await tester.tap(find.text('Add 1'));
+      await settle(tester);
+      await captureWindow(
+        tester,
+        shots,
+        '8-an-add-left-unconfirmed-${brightness.name}',
+      );
+      await close(tester, f, c);
+      debugDefaultTargetPlatformOverride = null;
+    }, skip: shots == null);
     testWidgets('picture 7-a-row-could-not-be-added (${brightness.name})', (
       tester,
     ) async {

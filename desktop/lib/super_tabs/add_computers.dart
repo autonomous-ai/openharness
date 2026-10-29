@@ -212,6 +212,9 @@ class _AddComputersState extends State<_AddComputers> {
   /// joined rather than started again.
   final _setups = <String, String>{};
   String? _adding;
+
+  /// The computers the last Add asked for.
+  var _requested = <String>{};
   bool _busy = false, _closing = false;
   ({String state, String? detail})? _teamSetup;
 
@@ -246,7 +249,8 @@ class _AddComputersState extends State<_AddComputers> {
       for (final row in _rows)
         if (_ticked(row)) row.id,
     ];
-    if (_busy || ids.isEmpty || !_alive()) return;
+    if (_busy || ids.isEmpty || !_alive() || _pendingAdd != null) return;
+    _requested = ids.toSet();
     setState(() {
       _busy = true;
       for (final id in ids) {
@@ -281,43 +285,71 @@ class _AddComputersState extends State<_AddComputers> {
         _errors[id] = failure.toString();
       }
     }
-    // After a failure, an add whose reply was lost is settled through the
-    // controller under its own receipt: one re-send the server answers from
-    // that receipt, never a second add. Left pending, it would hold back every
-    // later command of this Swarm (review of #2235). Then one fresh read.
-    if (_errors.keys.any(ids.contains) && _alive()) {
-      final pending = _pendingAdd;
-      if (pending != null) {
-        Map<String, dynamic>? settled;
-        try {
-          settled = await c.retry();
-        } catch (_) {
-          // Still pending: the row keeps its reason, and the next add checks
-          // this one first.
-        }
-        if (settled != null && mounted) {
-          _added.add(pending);
-          _errors.remove(pending);
-        }
-      }
-      try {
-        await c.refresh();
-      } catch (_) {
-        // The rows keep their reasons; the next try checks again.
-      }
-    }
+    if (_errors.keys.any(ids.contains) && _alive()) await _settle();
     if (!mounted) return;
     setState(() {
       _busy = false;
       _adding = null;
     });
-    // Done once every one is in the Swarm: an add whose reply was lost may
-    // show up there all the same.
+    _closeIfDone();
+  }
+
+  /// Re-sends an add the controller still holds unconfirmed, under its own
+  /// receipt: the server answers it from that receipt, never a second add.
+  /// Left pending, it would hold back every later command of this Swarm
+  /// (review of #2235). Then one fresh read of the Swarm, which may show an
+  /// add whose reply was lost.
+  Future<void> _settle() async {
+    final pending = _pendingAdd;
+    if (pending != null) {
+      setState(() => _adding = pending);
+      Map<String, dynamic>? settled;
+      try {
+        settled = await c.retry();
+      } catch (_) {
+        // Still unconfirmed: its row says so, with Retry.
+      }
+      if (!mounted) return;
+      if (settled != null) {
+        _added.add(pending);
+        _errors.remove(pending);
+      } else {
+        _errors[pending] =
+            c.operationError ?? _errors[pending] ?? 'Not confirmed.';
+      }
+    }
+    try {
+      await c.refresh();
+    } catch (_) {
+      // The rows keep their reasons; the next try checks again.
+    }
+  }
+
+  /// Retry on an add still unconfirmed: the same add again, whatever is
+  /// ticked.
+  Future<void> _retry() async {
+    if (_busy || _pendingAdd == null || !_alive()) return;
+    setState(() => _busy = true);
+    await _settle();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _adding = null;
+    });
+    _closeIfDone();
+  }
+
+  /// Done once every computer asked for is in the Swarm and nothing is left
+  /// unconfirmed.
+  void _closeIfDone() {
     final inSwarm = {
       for (final row in _rows)
         if (row.status == AddComputerStatus.added) row.id,
     };
-    if (_alive() && _pendingAdd == null && ids.every(inSwarm.contains)) {
+    if (_alive() &&
+        _pendingAdd == null &&
+        _requested.isNotEmpty &&
+        _requested.every(inSwarm.contains)) {
       Navigator.pop(context);
     }
   }
@@ -353,7 +385,7 @@ class _AddComputersState extends State<_AddComputers> {
     String? error,
   ) {
     if (row.id == _adding) return (words: 'adding…', reason: null);
-    if (error != null) return (words: 'couldn’t add', reason: error);
+    if (error != null) return (words: 'failed', reason: error);
     String also(String word) => row.tag == null ? word : '$word · ${row.tag}';
     return switch (row.status) {
       // Ready needs no word of its own: a status only when needed (Dee).
@@ -374,8 +406,12 @@ class _AddComputersState extends State<_AddComputers> {
     final ready = row.status == AddComputerStatus.ready;
     final canTick = ready && !_busy;
     void toggle() => setState(() => _ticks[row.id] = !_ticked(row));
-    // A computer in the Swarm has nothing left to fail.
-    final error = row.status == AddComputerStatus.added
+    // An add still unconfirmed has failed, even where the Swarm already
+    // lists it; otherwise a computer in the Swarm has nothing left to fail.
+    final unconfirmed = row.id == _pendingAdd;
+    final error = unconfirmed
+        ? _errors[row.id] ?? c.operationError ?? 'Not confirmed.'
+        : row.status == AddComputerStatus.added
         ? null
         : _errors[row.id];
     final status = _statusOf(row, error);
@@ -398,7 +434,14 @@ class _AddComputersState extends State<_AddComputers> {
             children: [
               SizedBox.square(
                 dimension: grid.AppControl.height,
-                child: row.status == AddComputerStatus.added
+                child: unconfirmed
+                    ? Icon(
+                        AppIcons.circleAlert,
+                        size: grid.AppControl.iconSize,
+                        color: grid.AppPalette.warn,
+                        semanticLabel: 'Failed',
+                      )
+                    : row.status == AddComputerStatus.added
                     ? Icon(
                         AppIcons.circleCheck,
                         size: grid.AppControl.iconSize,
@@ -499,19 +542,29 @@ class _AddComputersState extends State<_AddComputers> {
         ],
         actions: [
           TextButton(onPressed: _close, child: const Text('Cancel')),
-          FilledButton(
-            key: const ValueKey('add-computers'),
-            onPressed: _busy || count == 0 || !c.canWrite
-                ? null
-                : () => unawaited(_add()),
-            child: Text(
-              _busy
-                  ? 'Adding…'
-                  : count == 0
-                  ? 'Add'
-                  : 'Add $count',
+          // While an add is unconfirmed, the one way on is that add again.
+          if (_pendingAdd != null)
+            FilledButton(
+              key: const ValueKey('add-computers'),
+              onPressed: _busy || !c.canWrite
+                  ? null
+                  : () => unawaited(_retry()),
+              child: Text(_busy ? 'Adding…' : 'Retry'),
+            )
+          else
+            FilledButton(
+              key: const ValueKey('add-computers'),
+              onPressed: _busy || count == 0 || !c.canWrite
+                  ? null
+                  : () => unawaited(_add()),
+              child: Text(
+                _busy
+                    ? 'Adding…'
+                    : count == 0
+                    ? 'Add'
+                    : 'Add $count',
+              ),
             ),
-          ),
         ],
       );
     },
