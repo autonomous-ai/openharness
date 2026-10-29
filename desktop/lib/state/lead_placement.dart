@@ -14,6 +14,7 @@ class LeadMachine {
     this.own = true,
     this.native = true,
     this.team = false,
+    this.engineRefusals = const {},
   });
   final String id, name;
   final bool online;
@@ -50,12 +51,76 @@ class LeadMachine {
   /// Why the Product Manager cannot start here whatever its state, or null.
   final String? unavailable;
 
+  /// Why an engine cannot run a Product Manager here (not offered to the
+  /// Swarm, not installed or signed in, no quota left, suspended), by engine.
+  /// An engine not in it runs.
+  final Map<String, String> engineRefusals;
+
+  bool runs(String engine) => !engineRefusals.containsKey(engine);
+
+  /// The Product Manager engines it runs, in [kLeadEngines] order.
+  List<String> get leadEngines => [
+    for (final engine in kLeadEngines)
+      if (runs(engine)) engine,
+  ];
+
   bool has(String? repository) {
     final key = leadRepositoryKey(repository);
     return key != null && repositories.contains(key);
   }
 
-  bool get startable => unavailable == null && online && (freeAgents ?? 1) > 0;
+  /// It can start a Product Manager now, with one of [leadEngines].
+  bool get startable =>
+      unavailable == null &&
+      online &&
+      (freeAgents ?? 1) > 0 &&
+      leadEngines.isNotEmpty;
+}
+
+/// The engines a Product Manager runs on: routing reads quota for these two.
+const kLeadEngines = ['claude', 'codex'];
+
+/// A Product Manager engine's name as people read it.
+String leadEngineLabel(String engine) =>
+    const {'claude': 'Claude Code', 'codex': 'Codex'}[engine] ?? engine;
+
+/// Why each of [kLeadEngines] cannot run a Product Manager on a machine, from
+/// what the Swarm reads of it: the engines it offers the Swarm ([offered],
+/// null when not reported), each engine's install and sign-in as its host
+/// reported them ([readiness], null for not known), its subscription windows'
+/// use ([usedPercents], absent when unread) and the engines the server
+/// suspended there after failed starts ([suspended], with why). What is not
+/// known does not rule an engine out, as the route does not.
+Map<String, String> leadEngineRefusals({
+  Set<String>? offered,
+  Map<String, ({bool? installed, bool? signedIn})> readiness = const {},
+  Map<String, List<num>> usedPercents = const {},
+  Map<String, String> suspended = const {},
+}) => {
+  for (final engine in kLeadEngines)
+    engine: ?_engineRefusal(
+      leadEngineLabel(engine),
+      offered: offered == null || offered.contains(engine),
+      readiness: readiness[engine],
+      used: usedPercents[engine] ?? const [],
+      suspended: suspended[engine],
+    ),
+};
+
+String? _engineRefusal(
+  String label, {
+  required bool offered,
+  required ({bool? installed, bool? signedIn})? readiness,
+  required List<num> used,
+  required String? suspended,
+}) {
+  if (!offered) return '$label isn’t offered here';
+  if (readiness?.installed == false) return '$label isn’t installed';
+  if (readiness?.signedIn == false) return '$label isn’t signed in';
+  if (used.any((percent) => percent >= 100)) {
+    return '$label has no quota left until it resets';
+  }
+  return suspended;
 }
 
 /// One repository however its remote is spelled: `host/owner/name`, lower
@@ -86,7 +151,7 @@ List<LeadMachine> rankLeadMachines(
 ) {
   int tier(LeadMachine m) => m.startable
       ? 0
-      : m.unavailable == null && m.online
+      : m.unavailable == null && m.online && m.leadEngines.isNotEmpty
       ? 1
       : m.online
       ? 2
@@ -119,10 +184,42 @@ LeadMachine? bestLeadMachine(
   repository,
 ).where((m) => m.startable).firstOrNull;
 
+/// Where the Product Manager starts and with which engine, or null when no
+/// machine can start it now. Never a machine that cannot run the engine it
+/// proposes. Your own machines come first: among them the best that runs
+/// [engine], else the best with another engine, unless the person chose
+/// [engine] ([engineChosen]); then a teammate's the same way.
+({LeadMachine machine, String engine})? bestLeadPlacement(
+  Iterable<LeadMachine> machines,
+  String? repository, {
+  required String engine,
+  bool engineChosen = false,
+}) {
+  final ready = rankLeadMachines(
+    machines,
+    repository,
+  ).where((m) => m.startable).toList();
+  for (final own in [true, false]) {
+    final group = ready.where((m) => m.own == own);
+    if (group.where((m) => m.runs(engine)).firstOrNull case final machine?) {
+      return (machine: machine, engine: engine);
+    }
+    final other = engineChosen ? null : group.firstOrNull;
+    if (other != null) {
+      return (machine: other, engine: other.leadEngines.first);
+    }
+  }
+  return null;
+}
+
 /// A machine's row detail, in words, so colour is never the only signal.
 String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;
   if (!machine.online) return 'Offline';
+  if (machine.leadEngines.isEmpty) {
+    return 'Can’t run a Product Manager: '
+        '${[for (final engine in kLeadEngines) ?machine.engineRefusals[engine]].join(', ')}';
+  }
   final free = machine.freeAgents;
   if (free == null) return 'Online · Not in this Swarm';
   return [

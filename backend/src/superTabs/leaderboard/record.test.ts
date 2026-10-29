@@ -247,6 +247,8 @@ describe('when the Lead records a merge', () => {
       expect(f.group(fix).ledger).toMatchObject({ shippedAt: NOW + 3 * DAY_MS, fixOf: id })
       expect(f.group(fix).pullRequestUrls).toEqual([FIX])
       expect(effects.messages.map(m => m.text)).toEqual([`Merged ${FIX}, a fix of ${PR}`])
+      // The line is the fix's card (cards.ts: a main-chat line's links become cards, the original's too).
+      expect(f.group(fix).cards?.pullRequests?.[0]).toMatchObject({ url: FIX, messageId: effects.messages[0]!.id, mergedAt: NOW + 3 * DAY_MS })
       // Recorded again, or by a second fix later: the first fix stays the one counted.
       f.at(NOW + 5 * DAY_MS)
       f.run(fixes(fix), lead)

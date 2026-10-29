@@ -119,7 +119,7 @@ void main() {
   double y(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
 
   group('the drawer', () {
-    testWidgets('lists Your models and Your devices under the projects', (
+    testWidgets('lists Your models and Your devices under the Swarms', (
       tester,
     ) async {
       await pump(
@@ -139,7 +139,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        y(tester, 'swarm-drawer-project-$tab-$project'),
+        y(tester, 'swarm-drawer-swarm-$tab'),
         lessThan(y(tester, 'swarm-drawer-models')),
       );
       expect(
@@ -153,15 +153,18 @@ void main() {
       );
     });
 
-    testWidgets('Your devices shows only where the computers are known', (
-      tester,
-    ) async {
+    testWidgets('Your devices shows where the computers are not known: it '
+        "has the Swarm's machines too", (tester) async {
       await pump(tester, backend());
       await tester.tap(key('swarm-menu'));
       await tester.pumpAndSettle();
 
       expect(key('swarm-drawer-models'), findsOneWidget);
-      expect(key('swarm-drawer-devices'), findsNothing);
+      expect(key('swarm-drawer-devices'), findsOneWidget);
+      await tester.tap(key('swarm-drawer-devices'));
+      await tester.pumpAndSettle();
+      expect(find.text('Your computers'), findsNothing);
+      expect(key('swarm-machine-section-$tab'), findsOneWidget);
     });
 
     testWidgets('Your models closes the drawer and opens its page', (

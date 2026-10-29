@@ -104,6 +104,15 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(view.derived.machines).toEqual({ mac: { availableSlots: 1, teamWork: { allowed: true } } })
   })
 
+  // The route leaves a suspended engine out and Desktop strikes it through (engineHealth.ts); 6 hours on it no longer shows.
+  it('derives the engines suspended on a machine now, with why, and none once the suspension has run out', () => {
+    const s = richSwarm()
+    s.contribute('mac', 'swarm')
+    s.edit(state => { state.machines![0]!.engineSuspensions = { codex: { at: NOW - MINUTE, fine: true }, claude: { at: NOW - 7 * 60 * MINUTE, fine: false } } })
+    const view = readerView(store.split(s.state, { tabId: 'tab', version: R, now: NOW }), peer, NOW, { teamMachines: [] })
+    expect(view.derived.machines.mac!.suspendedEngines).toEqual({ codex: expect.stringContaining('Codex is suspended on this machine for new work') })
+  })
+
   it('gives a Lead the other projects\' work and a person the mentions waiting', () => {
     const { s, parts } = scene()
     expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).derived).toHaveProperty('otherProjectsWork', [])

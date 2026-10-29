@@ -242,6 +242,60 @@ describe('keeping gh\'s token fresh', () => {
     expect(hosts()).toContain('ghs_fixtureToken0000009')
   })
 
+  // Mac Auto, 2026-10-29: the gh login stayed empty until the minute's pass, so a Builder's first `gh auth status` said
+  // "You are not logged into any GitHub hosts" and it stopped.
+  it('gives a task its token as soon as the host reads it, once per task, and only while it runs', async () => {
+    let work: Array<Record<string, unknown>> = []
+    let refuseToken = false
+    const { core, backend, hosts } = setup(method => method === 'GET' ? ok(hostForm([row('tab-1', 'agent-1')], { assignments: work }))
+      : refuseToken ? refuse(503, 'GITHUB_UNAVAILABLE') : issued('ghs_fixtureToken0000001', '2099-01-01T00:00:00.000Z'))
+    const sources = sourcesOf(core)
+    const refresher = new GitHubTokenRefresher(core, sources, { intervalMs: 3600_000 })
+    const stopWatching = sources().feed.watch(read => refresher.assigned(read))
+    const asked = () => backend.mock.calls.filter(c => c[0] === 'POST').length
+    // Not running: a read changes nothing.
+    work = [{ tabId: 'tab-1', assignmentId: 'attempt-1', harnessId: 'harness-1' }]
+    await sources().feed.refresh()
+    expect(asked()).toBe(0)
+    refresher.start()
+    await refresher.tick()
+    expect(asked()).toBe(1)
+    work = [{ tabId: 'tab-1', assignmentId: 'attempt-2', harnessId: 'harness-1' }]
+    await sources().feed.refresh()
+    await refresher.tick()
+    expect(asked()).toBe(2)
+    expect(hosts()).toContain('ghs_fixtureToken0000001')
+    // The same task read again asks nothing more; nor does a task whose token could not be had, until the minute's pass.
+    await sources().feed.refresh()
+    await refresher.tick()
+    expect(asked()).toBe(2)
+    refuseToken = true
+    work = [{ tabId: 'tab-1', assignmentId: 'attempt-3', harnessId: 'harness-1' }]
+    await sources().feed.refresh()
+    await refresher.tick()
+    expect(asked()).toBe(3)
+    await sources().feed.refresh()
+    await new Promise(resolve => setImmediate(resolve))
+    expect(asked()).toBe(3)
+    // A session that does not use the app is never looked at for it.
+    refresher.stop()
+    stopWatching()
+  })
+
+  it('reads on when a watcher of the host form throws, and stops telling one that stopped watching', async () => {
+    const { core } = setup(() => ok(hostForm([])))
+    const feed = sourcesOf(core)().feed
+    const thrower = vi.fn(() => { throw new Error('watcher broke') }), told = vi.fn()
+    feed.watch(thrower)
+    const stop = feed.watch(told)
+    await expect(feed.refresh()).resolves.toMatchObject({ roster: [] })
+    expect(told).toHaveBeenCalledOnce()
+    stop()
+    await feed.refresh()
+    expect(told).toHaveBeenCalledOnce()
+    expect(thrower).toHaveBeenCalledTimes(2)
+  })
+
   it('starts once, looks again on its interval, and stops', async () => {
     vi.useFakeTimers()
     try {

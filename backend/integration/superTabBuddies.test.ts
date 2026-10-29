@@ -22,6 +22,13 @@ let replica: MongoMemoryReplSet
 let db: PrismaClient
 const owner: AuthUser = { sub: '300000000000000000000001', email: 'owner@example.com', autonomousEnv: 'prod', role: 'user' }
 const peer: AuthUser = { sub: '300000000000000000000002', email: 'peer@example.com', autonomousEnv: 'prod', role: 'user' }
+const watcher: AuthUser = { sub: '300000000000000000000003', email: 'watcher@example.com', autonomousEnv: 'prod', role: 'user' }
+// peer's sign-ins (lib/teamSession.ts): their own Mac's daemon, which relays their web app's Swarm requests, and the daemon
+// of the Harness Team account on that Mac, a second macOS user signed in to peer's account with a team session.
+const PEER_COMPUTER = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', PEER_TEAM_COMPUTER = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+const peerMac: AuthUser = { ...peer, harnessSessionId: 'peer-mac-session', harnessSessionKind: 'computer', harnessComputerId: PEER_COMPUTER }
+const peerTeam: AuthUser = { ...peer, harnessSessionId: 'peer-team-session', harnessSessionKind: 'team', harnessComputerId: PEER_TEAM_COMPUTER }
+const LIMITED = { code: 'TEAM_SESSION_LIMITED', status: 403 }
 const config = { engine: 'claude', model: 'fixture-model', effort: 'high', contextWindow: 200000, engineVersion: 'fixture' }
 
 beforeAll(async () => {
@@ -32,10 +39,13 @@ beforeAll(async () => {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
   db = new PrismaClient({ datasources: { db: { url: uri } } })
-  for (const user of [owner, peer]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: user.autonomousEnv } })
+  for (const user of [owner, peer, watcher]) await db.user.create({ data: { id: user.sub, externalId: `fixture-${user.sub}`, email: user.email, autonomousEnv: user.autonomousEnv } })
   for (const [machineId, user] of [['owner-mac', owner], ['peer-mac', peer]] as const) {
-    await db.machine.create({ data: { machineId, userId: user.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    await db.machine.create({ data: { machineId, userId: user.sub, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote',
+      ...(machineId === 'peer-mac' ? { computerId: PEER_COMPUTER, sessionKind: 'computer' } : {}) } })
   }
+  await db.machine.create({ data: { machineId: 'peer-team', userId: peer.sub, computerId: PEER_TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'peer-mac',
+    apiKey: 'fixture-peer-team', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -275,9 +285,11 @@ describe('a Buddy through the store', () => {
     const pmRead = await new SwarmReads(f.store).firstLoad(owner, f.tab, f.lead)
     expect(pmRead.groups.find(g => g.key === group)!.data.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its session on Kens-MacBook-Pro.local stopped' } })
 
+    // The lost task's notices are the PM's and its agent's alone (Ken, 2026-10-29): a Buddy reads none of them, and reads the
+    // loss on the task and its agent, without the machine.
     const seen = (await f.store.messages(peer, f.tab, group, {}, agentId)).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
-    expect(seen.map(m => m.id).sort()).toEqual(lost.map(m => m.id).sort())
-    expect(seen.every(m => m.text.includes('its session stopped'))).toBe(true)
+    expect(seen).toEqual([])
+    for (const m of lost) expect((await f.store.messages(peer, f.tab, group, { messageId: m.id }, agentId)).messages).toEqual([])
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     expect(read.groups.find(g => g.key === group)!.data.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its session stopped' } })
     expect(read.agents.find(a => a.key === builder)!.data.lostTask).toMatchObject({ reason: 'its session stopped' })
@@ -403,5 +415,54 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId).toBe(chat)
     expect(await chats()).toEqual([chat])
     expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
+  })
+})
+
+describe('a person\'s post in their Buddy chat from the web (phone bug, 10-29)', () => {
+  // The web app relays a person's Swarm requests through one of their online machines. Through their own Mac it is theirs;
+  // through their Team account it was refused ("A team sign-in can only run Swarm agents on its own machine"), so the app
+  // never relays through one now (desktop sharedTabsTarget), and the gate stays as it is.
+  const post = (chat: string, text: string) => ({ type: 'message.send' as const, conversationId: chat, text, replyTo: null, recipientIds: [] })
+  const stored = (f: Awaited<ReturnType<typeof swarm>>, chat: string) => db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: chat } })
+  const delivered = async (f: Awaited<ReturnType<typeof swarm>>, chat: string) =>
+    (await db.superTabDelivery.findMany({ where: { tabId: f.tab, conversationId: chat } })).map(d => d.agentId)
+
+  it('is accepted through their own Mac\'s sign-in and delivered to their Buddy alone', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    await f.execute(post(chat, 'From my phone'), peerMac)
+    expect(await delivered(f, chat)).toEqual([agentId])
+    expect((await f.store.messages(peer, f.tab, chat, {}, agentId)).messages.at(-1)).toMatchObject({ text: 'From my phone',
+      author: expect.objectContaining({ kind: 'person', id: peer.sub }) })
+  })
+
+  it('is refused to their Team account\'s sign-in, as them or as their Buddy on their Mac, and nothing is stored or delivered', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    const before = (await stored(f, chat)).length
+    await expect(f.execute(post(chat, 'As the person'), peerTeam)).rejects.toMatchObject(LIMITED)
+    await expect(f.execute(post(chat, 'As the Buddy'), peerTeam, agentId)).rejects.toMatchObject(LIMITED)
+    await expect(f.store.messages(peerTeam, f.tab, chat, {})).rejects.toMatchObject(LIMITED)
+    expect((await stored(f, chat)).length).toBe(before)
+    expect(await delivered(f, chat)).toEqual([])
+  })
+
+  it('is nobody else\'s: the Swarm owner, the PM and a viewer are refused alike, told nothing about the chat', async () => {
+    const f = await swarm()
+    const invitation = await f.execute({ type: 'invite.create', email: watcher.email, role: 'viewer', conversationId: 'lead' })
+    await f.execute({ type: 'invite.accept', inviteId: invitation.result.inviteId as string }, watcher)
+    const { chat } = await buddy(f)
+    const before = (await stored(f, chat)).length
+    const refusal = (conversation: string, user: AuthUser, asAgentId?: string) => f.execute(post(conversation, 'Not mine'), user, asAgentId)
+      .then(() => null, (error: Error & { code?: string; status?: number }) => ({ code: error.code, status: error.status, message: error.message }))
+    for (const [user, asAgentId] of [[owner, undefined], [owner, f.lead], [watcher, undefined]] as const) {
+      // Refused exactly as for a chat that does not exist (a viewer, for being one), naming neither peer nor the chat.
+      const answer = await refusal(chat, user, asAgentId)
+      expect(answer).not.toBeNull()
+      expect(answer).toEqual(await refusal('ffffffffffffffffffffffff', user, asAgentId))
+      expect(answer!.message).not.toMatch(/peer|Buddy/i)
+    }
+    expect((await stored(f, chat)).length).toBe(before)
+    expect(await delivered(f, chat)).toEqual([])
   })
 })
