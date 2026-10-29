@@ -37,6 +37,8 @@ export class HostFeed {
   private pushUntil = -Infinity
   /** Told of a change since the last read began. */
   private told = false
+  /** Told of every read the feed makes ([watch]). */
+  private readonly watchers = new Set<(read: HostRead) => void>()
 
   constructor(private readonly core: CoreApi, readonly machineId: string, options: { now?: () => number; backend?: typeof backend } = {}) {
     this.now = options.now ?? Date.now
@@ -53,6 +55,13 @@ export class HostFeed {
   async fresh(): Promise<HostRead> {
     await this.running?.catch(() => {})
     return this.refresh()
+  }
+
+  /** [watcher] is told of each read this feed makes, once it is held; returns what stops it. A watcher that throws is
+   *  passed over: it never fails the read. */
+  watch(watcher: (read: HostRead) => void): () => void {
+    this.watchers.add(watcher)
+    return () => { this.watchers.delete(watcher) }
   }
 
   /** Whether the server pushes: its last word that it does is under HOST_PUSH_LEASE_MS old. */
@@ -120,7 +129,11 @@ export class HostFeed {
     this.cursor = answer.cursor
     if (full) this.fullAt = startedAt
     this.readAt = this.now()
-    return this.snapshot()
+    const read = this.snapshot()
+    for (const watcher of this.watchers) {
+      try { watcher(read) } catch { /* A watcher's failure is its own. */ }
+    }
+    return read
   }
 
   /** Every Swarm's rows in one list each; a Swarm whose lists are not lists gives none, and never stops the others'. */

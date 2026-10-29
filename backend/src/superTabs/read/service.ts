@@ -37,7 +37,7 @@ type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<Swa
 interface Read { parts: SwarmParts; actor: Actor; view: ReaderView; lastChangedAt: number | null }
 /** How long one Swarm's machine lookups below are reused: machines report every 15 s anyway (Diego's review, item 5, 2026-10-28). */
 const MACHINE_READS_MS = 15_000
-type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[]]
+type MachineReads = [teamMachines: string[], otherWorkspaceMachines: string[], machineVersions: Record<string, string>]
 
 /** The reader's marks of the conversations they can read now, a dormant one read by id included: a mark never names a
  *  conversation the reader has lost. Only in a person's read; nothing for an agent. */
@@ -188,11 +188,12 @@ export class SwarmReads {
     const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
     // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
     const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
-    const current = new Set((await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
-      select: { workspaceId: true } })).map(m => m.workspaceId))
+    const current = new Set((workspaceIds.length ? await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
+      select: { workspaceId: true } }) : []).map(m => m.workspaceId))
     const page = rows.slice(0, 100).filter(r => r.workspaceId ? current.has(r.workspaceId) : !workspacesRequired())
     // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
-    const legacy = await this.db.superTab.findMany({ where: { id: { in: page.filter(r => r.format !== 2).map(r => r.id) } }, select: { id: true, state: true } })
+    const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
+    const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
     const ids = page.filter(r => r.format === 2).map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
     const [heads, newest] = await transaction(this.db, tx => Promise.all([parts.loadChanged(tx, ids, new Date(0), ['head']), parts.lastChangedAt(tx, ids)]))
@@ -218,13 +219,13 @@ export class SwarmReads {
     const loaded = await loader(cached, tabId, opts)
     const state = parts.reassemble(loaded, { share: true })
     const actor = await this.store.actor(tx, user, state, asAgentId)
-    const [[teamMachines, otherWorkspaceMachines], counts, newest] = await Promise.all([
+    const [[teamMachines, otherWorkspaceMachines, machineVersions], counts, newest] = await Promise.all([
       this.machineLookups(state),
       actor.kind === 'person' ? Promise.all([waitingMentions(tx, tabId, state, actor, t0), decisionsWaiting(tx, tabId, state, actor)]) : undefined,
       readLastChangedAt(tx, cached, tabId),
     ])
     return { parts: loaded, actor, lastChangedAt: newest,
-      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines,
+      view: readerView(loaded, actor, t0, { teamMachines, otherWorkspaceMachines, machineVersions,
         ...(counts ? { mentionsWaiting: counts[0].count, mentionsDigest: counts[0].digest, decisionsWaiting: counts[1].count,
           decisionsDigest: counts[1].digest } : {}) }, state) }
   }
@@ -233,7 +234,7 @@ export class SwarmReads {
    *  same answer for every reader, whose view hides what it may not see, so one lookup serves every read of the Swarm for
    *  MACHINE_READS_MS. Commands that admit work still look up afresh (store.ts executeOnce). Outside any transaction, as every read is. */
   private machineLookups(state: SuperTabState): Promise<MachineReads> {
-    if (!state.machines?.length) return Promise.resolve([[], []])
+    if (!state.machines?.length) return Promise.resolve([[], [], {}])
     const now = this.now()
     const key = JSON.stringify([state.id, state.environment, state.workspaceId ?? null, state.machines.map(m => m.machineId).sort()])
     const kept = this.machineReads.get(key)
@@ -242,7 +243,8 @@ export class SwarmReads {
       if (now >= entry.at && now - entry.at < MACHINE_READS_MS) break
       this.machineReads.delete(old)
     }
-    const entry = { at: now, read: Promise.all([this.store.teamMachines(this.db, state), this.store.otherWorkspaceMachines(this.db, state)]) }
+    const entry = { at: now, read: Promise.all([this.store.machineFacts(this.db, state), this.store.otherWorkspaceMachines(this.db, state)])
+      .then(([facts, other]): MachineReads => [facts.team, other, facts.versions]) }
     this.machineReads.delete(key)
     this.machineReads.set(key, entry)
     // A failed lookup is never reused.

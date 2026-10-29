@@ -34,6 +34,7 @@ import 'machine_details.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'team_account_setup.dart';
 import 'section_heading.dart';
 
@@ -44,10 +45,9 @@ const _agentSlotsMin = 1;
 const _agentSlotsMax = 1024;
 
 /// Every machine may offer this many, whatever its RAM, and the suggestion
-/// never starts above [_suggestedSlotsMax]: the CLI's own figures
+/// never starts above 16 (superTabSuggestedAgentSlots): the CLI's own figures
 /// (`prepareContribution`, `cli/src/superTabs/contribution.ts`).
 const _agentSlotsFloor = 4;
-const _suggestedSlotsMax = 16;
 
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
@@ -69,14 +69,8 @@ int? _maxAgentSlots(MachineResources? resources) {
   );
 }
 
-int? _suggestedAgentSlots(MachineResources? resources) {
-  final total = resources?.memoryTotalBytes;
-  if (total == null) return null;
-  return (total / (2 * _agentMemoryBytes)).floor().clamp(
-    _agentSlotsMin,
-    _suggestedSlotsMax,
-  );
-}
+int? _suggestedAgentSlots(MachineResources? resources) =>
+    superTabSuggestedAgentSlots(resources);
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -1192,6 +1186,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Timer? _timer;
   bool _reading = false;
   int _revision = 0;
+
+  /// What this Mac's daemon remembers of its Harness Team account setup
+  /// ([AppNotifier.teamSetupStatus]), for its own row's line; null until read
+  /// or when it cannot say.
+  ({String state, String? detail})? _teamSetup;
+  bool _teamSetupReading = false;
   SuperTabController get c => widget.controller;
   Set<String> get _ids => {
     for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
@@ -1209,6 +1209,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     if (!kUnderTest) {
       _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
     }
+    unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
       widget.app!.foreground.addListener(_foreground);
@@ -1218,6 +1219,32 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   void _changed() {
     if (mounted) setState(() {});
+  }
+
+  /// Reads why this Mac has no Harness Team account, only while its person's
+  /// own row offers Set up: asked of this Mac's daemon, never of another's.
+  Future<void> _readTeamSetup() async {
+    final app = widget.app;
+    if (app == null || _teamSetupReading || !app.canSetUpTeamAccount) return;
+    final own = c.snapshot?.machines.any(
+      (m) =>
+          m['contributorId'] == c.accountId &&
+          app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
+          (m['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED',
+    );
+    if (own != true) {
+      _teamSetup = null;
+      return;
+    }
+    _teamSetupReading = true;
+    try {
+      final read = await app.teamSetupStatus();
+      if (!mounted) return;
+      _teamSetup = read;
+      _changed();
+    } finally {
+      _teamSetupReading = false;
+    }
   }
 
   void _updateUsage() {
@@ -1275,6 +1302,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
       _samples.removeWhere((id, _) => !_ids.contains(id));
       _awaiting.removeWhere((id) => !_samples.containsKey(id));
+      await _readTeamSetup();
     } finally {
       _reading = false;
       if (mounted && widget.app?.foreground.value == true) {
@@ -1453,7 +1481,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app?.stateOf(id)?.machine.displayName ??
         // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
         (agentsOnly && person != null
-            ? "${superTabPersonName(person.email)}'s computer"
+            ? "${person.username}'s computer"
             : 'Unavailable machine');
     final configured = (reading?['engines'] as List?)
         ?.whereType<String>()
@@ -1513,8 +1541,17 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           );
     String available(double used) =>
         resourcePercent((100 - used).clamp(0, 100));
-    // Each engine with a known, unexpired allowance, Claude first. Offline or out of reach, an allowance is an
-    // old reading and no chip shows it as now.
+    // Engines the server suspended here after failed starts, with why (backend superTabs/engineHealth.ts), on the Mac
+    // or its Harness Team account.
+    final suspended = <String, String>{
+      for (final pool in [shared, team])
+        if (pool?['suspendedEngines'] case final Map raw)
+          for (final entry in raw.entries)
+            if (entry.key is String && entry.value is String)
+              entry.key as String: entry.value as String,
+    };
+    // Each engine with a known, unexpired allowance, Claude first; a suspended one also with its allowance unknown.
+    // Offline or out of reach, an allowance is an old reading and no chip shows it as now.
     final allowances = dim
         ? const <_Allowance>[]
         : [
@@ -1538,6 +1575,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       0,
                       100,
                     ),
+                    struck:
+                        suspended[engine] ??
+                        ((row['remainingPercent'] as num) <= 0
+                            ? _noQuotaLeft
+                            : null),
                     note: superMachineAllowanceNote(switch (row['details']) {
                       final List lines => lines.whereType<String>(),
                       _ => const <String>[],
@@ -1550,6 +1592,19 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         _ => ['${account.figure} remaining'],
                       },
                     ].join('\n'),
+                  )
+              else if (suspended[engine] case final reason?)
+                // Named and figured as a card with a reading is ("Claude Code", "—" when unknown).
+                for (final account in WorkspaceSubscriptionUsage.fromRows([
+                  {'engine': engine, 'accountKey': 'machine:$id:$engine'},
+                ]).accounts.take(1))
+                  _Allowance(
+                    engine: engine,
+                    name: account.name,
+                    figure: account.figure,
+                    left: null,
+                    detail: '',
+                    struck: reason,
                   ),
           ];
     // The models this machine offers the Swarm, from the same reading: an API's by its model, without the
@@ -1598,21 +1653,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         }
       }
     }
-    final problem = _teammatesLine(shared, team, contributor);
+    final line = _teammatesLine(shared, team, contributor);
+    final setUpTeam =
+        line != null &&
+        team == null &&
+        (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
+        contributor == c.accountId &&
+        app != null &&
+        app.canSetUpTeamAccount &&
+        app.stateOf(id)?.isLocalMachine == true;
+    // Its own person reads why: they cancelled, or setup failed and why.
+    final problem = setUpTeam
+        ? superTabTeamSetupLine(_teamSetup) ?? line
+        : line;
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
       id: id,
       name: name,
       problem: problem,
-      setUpTeam:
-          problem != null &&
-          team == null &&
-          (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
-          contributor == c.accountId &&
-          app != null &&
-          app.canSetUpTeamAccount &&
-          app.stateOf(id)?.isLocalMachine == true,
+      setUpTeam: setUpTeam,
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -1632,7 +1692,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
         if (cleaning) 'Cleaning up' else ?superTabMachineTip(status),
-        if (person != null) 'Owned by ${superTabPersonName(person.email)}',
+        if (person != null) 'Owned by ${person.username}',
         if (paused) 'New work paused',
         if (!dim && value?.cpuPercent != null)
           'CPU ${available(value!.cpuPercent!)} free',
@@ -1949,7 +2009,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               ],
               body: SuperTabMachineDetails(
                 name: name,
-                owner: person?.email,
+                owner: person?.username,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
@@ -2043,7 +2103,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           child: _MachineLine(
             view: view,
             onSetUpTeam: view.setUpTeam
-                ? () => showTeamAccountSetup(context, widget.app!)
+                ? () async {
+                    await showTeamAccountSetup(context, widget.app!);
+                    await _readTeamSetup();
+                  }
                 : null,
           ),
         ),
@@ -2594,6 +2657,21 @@ String? superTabTeammatesPaused(Object? code) {
   return why == null ? null : "Teammates' agents paused: $why";
 }
 
+/// This Mac's own row, for its person, when its daemon remembers why it has no Harness Team account
+/// (cli/src/team/autoSetup.ts `status`); null when it does not, and the Swarm's own line stands.
+String? superTabTeamSetupLine(({String state, String? detail})? setup) {
+  final detail = setup?.detail?.trim().replaceFirst(RegExp(r'[.]+$'), '');
+  final why = switch (setup?.state) {
+    'declined' => 'setup was cancelled',
+    'failed' when detail != null && detail.isNotEmpty =>
+      'setup failed: $detail',
+    'failed' => 'setup failed',
+    'running' => 'setting up',
+    _ => null,
+  };
+  return why == null ? null : "Teammates' agents paused: $why";
+}
+
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
 class _Allowance {
   const _Allowance({
@@ -2603,6 +2681,7 @@ class _Allowance {
     required this.left,
     required this.detail,
     this.note,
+    this.struck,
   });
 
   final String engine, name, figure, detail;
@@ -2610,19 +2689,29 @@ class _Allowance {
   /// The window that stops work first and when it resets (`5-hour limit · resets in 2h 10m`), under the figure.
   final String? note;
 
-  /// The share left, 0–100.
-  final double left;
+  /// The share left, 0–100; null when unknown (a suspended engine whose allowance could not be read).
+  final double? left;
+
+  /// Why new work does not go to this engine here (out of quota, or suspended after failed starts), shown on hover
+  /// with its name struck through; null when it takes work.
+  final String? struck;
 
   /// Amber below 20%, red below 10%, otherwise the reading's own ink.
   Color get ink => statusLineInkOnSurface(
-    left < 10
+    left == null
+        ? DesktopChrome.foreground
+        : left! < 10
         ? grid.AppPalette.usageCritical
-        : left < 20
+        : left! < 20
         ? grid.AppPalette.usageLow
         : DesktopChrome.foreground,
     DesktopChrome.surface,
   );
 }
+
+/// What hovering an engine with no quota left on a machine says (the route leaves it out the same way).
+const _noQuotaLeft =
+    'Not used for new work here: no quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
@@ -2727,7 +2816,7 @@ class _MachineLine extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
-                message: 'Owned by ${superTabPersonName(owner.email)}',
+                message: 'Owned by ${owner.username}',
                 child: SuperTabAvatar.person(owner, size: 20),
               ),
             ),
@@ -3003,15 +3092,23 @@ class _MachineReadings extends StatelessWidget {
   }
 
   Widget _allowance(_Allowance allowance) {
-    final tone = allowance.left < 10
+    final left = allowance.left;
+    final tone = left == null
+        ? null
+        : left < 10
         ? grid.AppPalette.usageCritical
-        : allowance.left < 20
+        : left < 20
         ? grid.AppPalette.usageLow
         : null;
+    final struck = allowance.struck;
     return Tooltip(
-      message: allowance.detail,
+      message: [
+        ?struck,
+        if (allowance.detail.isNotEmpty) allowance.detail,
+      ].join('\n\n'),
       child: Semantics(
-        label: '${allowance.name} ${allowance.figure} remaining',
+        label:
+            '${allowance.name} ${allowance.figure} remaining${struck == null ? '' : '. $struck'}',
         excludeSemantics: true,
         child: Container(
           key: ValueKey(
@@ -3034,7 +3131,11 @@ class _MachineReadings extends StatelessWidget {
                       allowance.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.text(size: 12, height: 1.3),
+                      style: DesktopChrome.text(size: 12, height: 1.3).copyWith(
+                        decoration: struck == null
+                            ? null
+                            : TextDecoration.lineThrough,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -3058,7 +3159,7 @@ class _MachineReadings extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               // The bar is what is left, as the figure is.
-              _Meter(share: allowance.left / 100, tone: tone),
+              _Meter(share: (left ?? 0) / 100, tone: tone),
               if (allowance.note case final note?) ...[
                 const SizedBox(height: 5),
                 Text(

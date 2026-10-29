@@ -328,7 +328,7 @@ export interface TeamRelayLaunchDeps {
   onboarded(engine: 'claude' | 'codex'): void
   /** Codex's home made ready for the relay before each launch ([prepareCodexHome]): [home], the launch's own, when it has one.
    *  Never throws. */
-  codexHome(grant: TeamRelayGrant, home?: string): Promise<void>
+  codexHome(grant: TeamRelayGrant, home?: string): Promise<unknown>
 }
 
 /** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. [codexHome]: the
@@ -374,8 +374,10 @@ export interface CodexHomeDeps {
  * CLI 0.5.1 instead signed Codex in to ChatGPT through the relay, which `codex exec` takes but Codex's own screen does not:
  * it checks the workspace with ChatGPT before it opens and exited ("account/read failed during TUI bootstrap"). Its
  * sign-in is removed here, so a team account it reached starts Codex again.
+ *
+ * Returns the list it fetched and kept, null when it kept none.
  */
-export async function prepareCodexHome(dir: string, grant: TeamRelayGrant, deps: CodexHomeDeps): Promise<void> {
+export async function prepareCodexHome(dir: string, grant: TeamRelayGrant, deps: CodexHomeDeps): Promise<unknown[] | null> {
   const auth = join(dir, 'auth.json')
   try { if (isCodexRelayAuth(JSON.parse(readFileSync(auth, 'utf8')))) rmSync(auth, { force: true }) } catch { /* none, or the account's own */ }
   const version = deps.version() ?? CODEX_CLIENT_VERSION_FALLBACK
@@ -383,16 +385,53 @@ export async function prepareCodexHome(dir: string, grant: TeamRelayGrant, deps:
     const answer = await deps.fetch(`${grant.url.replace(/\/$/, '')}/codex/models?client_version=${encodeURIComponent(version)}`, {
       headers: { authorization: `Bearer ${grant.token}`, accept: 'application/json' }, signal: AbortSignal.timeout(10_000),
     })
-    if (!answer.ok) return
+    if (!answer.ok) return null
     const models = ((await answer.json()) as { models?: unknown }).models
-    if (!Array.isArray(models) || !models.length) return
+    if (!Array.isArray(models) || !models.length) return null
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const file = join(dir, 'models_cache.json'), next = `${file}.harness-${process.pid}`
     writeFileSync(next, JSON.stringify({ fetched_at: new Date(deps.now()).toISOString(), client_version: version, models }), { mode: 0o600 })
     renameSync(next, file)
     dropUnofferedModel(join(dir, 'config.toml'), new Set(models.flatMap(m => typeof (m as { slug?: unknown })?.slug === 'string' ? [(m as { slug: string }).slug] : [])))
+    return models
   } catch { /* The relay or ChatGPT did not answer: Codex keeps the list it had. */ }
+  return null
 }
+
+/** The Codex models the owner's ChatGPT account offers: every slug, and those its /model picker lists, in its order. */
+export interface OfferedCodexModels { slugs: string[]; listed: string[] }
+
+export interface OfferedCodexModelsDeps {
+  team(): boolean
+  config(): TeamConfig | null
+  read(config: TeamConfig): TeamRelayGrant | null
+  /** [prepareCodexHome] for this account's Codex home: the list it fetched, or null. */
+  prepare(grant: TeamRelayGrant): Promise<unknown[] | null>
+}
+
+/**
+ * In a Harness Team account on its owner's relay: the Codex models the owner's ChatGPT account offers, read fresh through
+ * the relay (and kept for the launch that follows, [prepareCodexHome]). Null anywhere else, or when the list cannot be read.
+ * A start for a model the owner is not offered launched, then failed every request ("The 'gpt-6.1-sol' model is not
+ * supported when using Codex with a ChatGPT account": Mac Auto, whose owner is offered GPT-6-Luna and the GPT-5.6 models,
+ * 2026-10-29); with this, the start is refused before it launches, naming what the owner is offered.
+ */
+export async function offeredCodexModels(deps: OfferedCodexModelsDeps = realOfferedDeps): Promise<OfferedCodexModels | null> {
+  if (!deps.team()) return null
+  const config = deps.config()
+  const grant = config ? deps.read(config) : null
+  if (!grant) return null
+  const models = await deps.prepare(grant).catch(() => null)
+  if (!models) return null
+  const rows = models.flatMap(m => m && typeof m === 'object' && typeof (m as { slug?: unknown }).slug === 'string' ? [m as { slug: string; visibility?: unknown }] : [])
+  if (!rows.length) return null
+  return { slugs: rows.map(m => m.slug), listed: rows.filter(m => m.visibility === 'list').map(m => m.slug) }
+}
+
+/** Why a start for [model] is refused: the owner's account does not offer it, and what it does offer. */
+export const codexModelNotOffered = (model: string, offered: OfferedCodexModels) =>
+  `This machine's ChatGPT account (its owner's subscription, used through the owner's relay) does not offer ${model}; `
+  + (offered.listed.length ? `it offers ${offered.listed.join(', ')}.` : 'it lists no model to choose.')
 
 /**
  * A default model saved in the team account's Codex config that the owner's account does not offer is taken out, so Codex
@@ -426,6 +465,14 @@ export function installedCodexVersion(home: string): string | null {
     const version = (JSON.parse(readFileSync(join(home, '.local', 'lib', 'node_modules', '@openai', 'codex', 'package.json'), 'utf8')) as { version?: unknown }).version
     return typeof version === 'string' && /^\d+\.\d+\.\d+/.test(version) ? version : null
   } catch { return null }
+}
+
+const realOfferedDeps: OfferedCodexModelsDeps = {
+  team: () => readAuthSession()?.kind === 'team',
+  config: () => readTeamConfig(),
+  read: (config) => readTeamRelay(config),
+  prepare: (grant) => prepareCodexHome(process.env.CODEX_HOME || join(homedir(), '.codex'), grant,
+    { fetch, version: () => installedCodexVersion(homedir()), now: Date.now }),
 }
 
 /** The team daemon's own: its sign-in, the root-owned config, its engines' sign-ins in its own home. */

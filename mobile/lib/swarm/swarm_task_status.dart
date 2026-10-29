@@ -204,11 +204,20 @@ DateTime _nextChange(DateTime from, DateTime now) {
 /// gives way with it, as a project's work row names its agent. Nothing when
 /// the task has no status ([swarmTaskStatus]).
 class SwarmTaskLine extends StatefulWidget {
-  const SwarmTaskLine(this.group, {super.key, this.personName, this.lead});
+  const SwarmTaskLine(
+    this.group, {
+    super.key,
+    this.personName,
+    this.lead,
+    this.mark = true,
+  });
 
   final SuperTabConversation group;
   final String? Function(String personId)? personName;
   final String? lead;
+
+  /// Its dot; none on a row whose own dot says it waits on the person.
+  final bool mark;
 
   @override
   State<SwarmTaskLine> createState() => _SwarmTaskLineState();
@@ -259,7 +268,7 @@ class _SwarmTaskLineState extends State<SwarmTaskLine> {
           context,
           style,
           room: constraints.maxWidth,
-          whole: [dot, status.age],
+          whole: [if (widget.mark) dot, status.age],
           reason: reason,
           pm: pm,
         );
@@ -276,13 +285,14 @@ class _SwarmTaskLineState extends State<SwarmTaskLine> {
           children: [
             // The words say what the dot shows: colour is never the only
             // signal.
-            ExcludeSemantics(
-              child: Text(
-                dot,
-                key: ValueKey('swarm-task-mark-$id'),
-                style: style.copyWith(color: swarmTaskMarkColor(status.mark)),
+            if (widget.mark)
+              ExcludeSemantics(
+                child: Text(
+                  dot,
+                  key: ValueKey('swarm-task-mark-$id'),
+                  style: style.copyWith(color: swarmTaskMarkColor(status.mark)),
+                ),
               ),
-            ),
             part(reason, reasonWidth),
             Text(status.age, maxLines: 1, softWrap: false, style: style),
             if (pm != null) part(pm, pmWidth),
