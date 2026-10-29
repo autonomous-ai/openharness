@@ -12,9 +12,10 @@ import { resolveSsoAuth } from '../middlewares/authMiddleware.js'
 //
 // WHY A SEPARATE GROUP rather than widening /api/devices + /api/machines:
 //
-//  1. `/api/machines` returns OwnerMachine, which carries `apiKey` — the DATA-PLANE credential,
-//     where possession *is* authentication for that machine. The web is a first-party client that
-//     needs it. An app-store binary must never receive it. Here the mapper builds an allow-listed
+//  1. `/api/machines` returns OwnerMachine. It no longer carries `apiKey` — the DATA-PLANE credential,
+//     where possession *is* authentication for that machine — and the list does not even read it
+//     (MachineService OWNER_VIEW_SELECT). An app-store binary must never receive one, whatever
+//     OwnerMachine gains later. Here the mapper builds an allow-listed
 //     object field by field and NEVER spreads OwnerMachine, so a future field on that interface
 //     cannot silently leak. That is the whole reason this file exists; do not "simplify" it into a
 //     spread plus a delete.

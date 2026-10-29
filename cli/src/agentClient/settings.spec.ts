@@ -32,6 +32,7 @@ describe('harness settings', () => {
       'pull-request-line           off  a harness another agent starts says so in the pull requests it opens',
       'agent-messages              off  agents in the same tab may message each other',
       'agent-messages-hide-summary off  the one-line summary of what a harness does is kept from a shared tab\'s other accounts',
+      'programs-reply              off  a program acting for you may give more work to an idle harness of yours',
     ].join('\n')])
     expect(d.asked).toEqual([{ url: 'http://127.0.0.1:4321/api/agent-settings', method: 'GET', headers: { 'x-adapter-local': '1' }, body: undefined }])
     expect(SETTINGS_USAGE).toContain('experiments of your account, the same on each of its\ncomputers, and each off until you turn it on')

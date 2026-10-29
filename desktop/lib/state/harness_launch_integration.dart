@@ -1,6 +1,22 @@
 import 'harness_attachments.dart';
 import 'lead_placement.dart';
 
+/// A new project's Product Manager the Swarm starts rather than this
+/// Desktop: on [machineId], or with none the first free machine.
+class LeadSwarmStart {
+  const LeadSwarmStart({
+    required this.machineId,
+    required this.engine,
+    required this.repositoryUrl,
+    required this.title,
+    required this.task,
+    this.files = const [],
+  });
+  final String? machineId, repositoryUrl, title;
+  final String engine, task;
+  final List<HarnessAttachment> files;
+}
+
 class HarnessLaunchRole {
   const HarnessLaunchRole({
     required this.id,
@@ -34,6 +50,7 @@ class HarnessLaunchIntegration {
     this.swarmSkillMode,
     this.roles,
     this.roleId,
+    this.startInSwarm,
   });
   final String creationId, actionLabel;
   String? swarmRole;
@@ -62,6 +79,10 @@ class HarnessLaunchIntegration {
   /// visibility, with the machine on a "Product Manager:" line. Null keeps
   /// the ordinary machine, agent and folder controls.
   List<LeadMachine>? leadMachines;
+
+  /// With [leadMachines]: creates the project and has the Swarm start its
+  /// Product Manager, when this Desktop does not start it itself.
+  final Future<void> Function(LeadSwarmStart start)? startInSwarm;
 
   /// With [leadMachines]: the Swarm's model list for its engine and model.
   LeadModelList? leadModels;
