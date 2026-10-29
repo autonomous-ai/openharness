@@ -112,7 +112,11 @@ class SuperTabLaunch {
                       // its answer decides, not a fresh check.
                       if (start.machineId case final machine?
                           when saved['leadStartRequest'] == null) {
-                        await launch.recheckLeadMachine(integration, machine);
+                        await launch.recheckLeadMachine(
+                          integration,
+                          machine,
+                          engine: start.engine,
+                        );
                       }
                       await launch.startInSwarm(start);
                     } on SuperTabFailure catch (failure) {
@@ -489,8 +493,9 @@ class SuperTabLaunch {
   /// With no fresh read nothing is created, since the machine is unchecked.
   Future<void> recheckLeadMachine(
     HarnessLaunchIntegration integration,
-    String machine,
-  ) async {
+    String machine, {
+    String? engine,
+  }) async {
     final name =
         integration.leadMachines
             ?.where((m) => m.id == machine)
@@ -516,7 +521,7 @@ class SuperTabLaunch {
     }
     checkAccount();
     integration.leadMachines = leadMachinesOf(fresh);
-    checkLeadMachine(integration.leadMachines!, machine);
+    checkLeadMachine(integration.leadMachines!, machine, engine: engine);
   }
 
   /// The upload a Swarm-started Product Manager's files take, in tests.
@@ -640,7 +645,13 @@ class SuperTabLaunch {
       failure.statusCode != 429;
 
   /// Refuses a machine the list cannot start the Product Manager on now.
-  void checkLeadMachine(List<LeadMachine> machines, String machine) {
+  /// Refuses [machine] when it cannot start the Product Manager now, with
+  /// [engine] when it is known.
+  void checkLeadMachine(
+    List<LeadMachine> machines,
+    String machine, {
+    String? engine,
+  }) {
     final chosen = machines.where((m) => m.id == machine).firstOrNull;
     if (chosen == null) {
       throw const SuperTabFailure(
@@ -648,14 +659,21 @@ class SuperTabLaunch {
         'Choose one of this Swarm’s machines.',
       );
     }
-    if (chosen.startable) return;
+    final refusal = engine == null ? null : chosen.engineRefusals[engine];
+    if (chosen.startable && refusal == null) return;
     throw SuperTabFailure(
       'MACHINE_UNAVAILABLE',
       chosen.unavailable != null
           ? '${chosen.name}: ${chosen.unavailable}. Choose another machine.'
           : !chosen.online
           ? '${chosen.name} is offline. Choose another machine.'
-          : '${chosen.name} has no free agents. Choose another machine.',
+          : chosen.leadEngines.isEmpty
+          ? '${chosen.name}: ${leadMachineDetail(chosen, null)}. '
+                'Choose another machine.'
+          : !chosen.startable
+          ? '${chosen.name} has no free agents. Choose another machine.'
+          : '${chosen.name} can’t run ${leadEngineLabel(engine!)}: $refusal. '
+                'Choose another engine under Advanced.',
     );
   }
 

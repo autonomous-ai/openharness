@@ -1087,6 +1087,53 @@ void main() {
     );
   });
 
+  for (final (what, engines, readiness, error) in [
+    (
+      'its engine signed out',
+      ['codex'],
+      [
+        {'engine': 'codex', 'installed': true, 'signedIn': false},
+      ],
+      '2x 4090 Rig: Can’t run a Product Manager: Claude Code isn’t offered '
+          'here, Codex isn’t signed in. Choose another machine.',
+    ),
+    (
+      'stopped offering its engine',
+      ['claude'],
+      <Map<String, dynamic>>[],
+      '2x 4090 Rig can’t run Codex: Codex isn’t offered here. Choose another '
+          'engine under Advanced.',
+    ),
+  ]) {
+    test(
+      'New Project refuses a machine that has $what since the box opened',
+      () async {
+        final f = SuperTabLaunchFixture();
+        noLocalEngines(f);
+        knownRepo(f);
+        Map<String, dynamic> rig(
+          List<String> engines,
+          List<Map<String, dynamic>> readiness,
+        ) => offering(
+          machineRow('rig', '2x 4090 Rig', contributor: 'owner', lead: true),
+          engines,
+          readiness: readiness,
+        );
+        f.connection.server.state['machines'] = [
+          rig(['codex'], const []),
+        ];
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true, engine: 'codex');
+        box.placeLead();
+        expect((box.leadMachine?.id, box.leadBlocked), ('rig', null));
+        f.connection.server.state['machines'] = [rig(engines, readiness)];
+        expect(await box.create(), NewHarnessOutcome.failed);
+        expect(box.error, error);
+        expect(commandsOf(f, 'project.create'), isEmpty);
+      },
+    );
+  }
+
   test(
     'New Project asks the Swarm to start the PM in a teammate’s Team account',
     () async {
