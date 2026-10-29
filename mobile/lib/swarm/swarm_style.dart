@@ -119,6 +119,47 @@ class SwarmTopBar extends StatelessWidget {
   }
 }
 
+/// A tab's title at the top of its screen, in the terminal's face, with
+/// maybe one button at its end ([trailing], a [SwarmIconButton]).
+class SwarmTabHeader extends StatelessWidget {
+  const SwarmTabHeader(this.title, {super.key, this.trailing});
+
+  final String title;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: 52),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.screenInset,
+          AppSpace.xs,
+          AppSpace.xs,
+          AppSpace.xs,
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                key: const ValueKey('swarm-title'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Tty.of(context)
+                    .style(size: 20, weight: FontWeight.w600)
+                    .copyWith(height: 1.2),
+              ),
+            ),
+            ?trailing,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// A caption over a card, in sentence case, with maybe a count at its right.
 class SwarmCaption extends StatelessWidget {
   const SwarmCaption(

@@ -294,7 +294,7 @@ void main() {
     );
 
     testWidgets(
-      'offline: a direct row with a hollow ring, muted name, and no stale readings',
+      'offline: a direct row with a hollow ring, muted name, and only its last allowances, said to be old',
       (tester) async {
         final server = ConversationServer();
         server.state['machines'] = [
@@ -307,9 +307,25 @@ void main() {
         expect(rowOf('m'), findsOneWidget);
         await tester.tap(find.byKey(const ValueKey('super-machine-m')));
         await tester.pump();
+        // Opened offline, only Subscriptions shows: the last figures, said to be old; no Hardware.
+        final readings = find.byKey(const ValueKey('super-machine-readings-m'));
         expect(
-          find.byKey(const ValueKey('super-machine-readings-m')),
+          find.descendant(of: readings, matching: find.text('Hardware')),
           findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: readings,
+            matching: find.textContaining('offline, read 3 min ago'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
+            matching: find.text('90%'),
+          ),
+          findsOneWidget,
         );
 
         expect(statusOf(tester, 'm'), SuperTabMachineStatus.offline);

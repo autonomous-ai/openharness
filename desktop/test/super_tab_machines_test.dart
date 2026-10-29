@@ -2107,77 +2107,87 @@ void main() {
     expect(superTabRepositoryUrl('/Users/me/project.git'), isNull);
     expect(superTabRepositoryUrl('github.com'), isNull);
   });
-  testWidgets('Machine details omit unknown subscription allowances', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    f.connection.server.state['machines'] = [
-      {
-        'machineId': 'm',
-        'contributorId': 'owner',
-        'engines': ['opencode'],
-        'observation': {
-          'receivedAt': DateTime.now().millisecondsSinceEpoch,
-          'quotas': [
-            for (final engine in ['claude', 'codex', 'opencode', 'cursor'])
-              {
-                'engine': engine,
-                'known': engine == 'claude',
-                'windows': [
-                  {'name': '5-hour', 'usedPercent': 40},
-                ],
-              },
-          ],
+  testWidgets(
+    'Machine details omit unknown subscription allowances; the row says why instead',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'contributorId': 'owner',
+          'engines': ['opencode'],
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'quotas': [
+              for (final engine in ['claude', 'codex', 'opencode', 'cursor'])
+                {
+                  'engine': engine,
+                  'known': engine == 'claude',
+                  'windows': [
+                    {'name': '5-hour', 'usedPercent': 40},
+                  ],
+                },
+            ],
+          },
         },
-      },
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 300,
-            height: 400,
-            child: SuperTabMachines(
-              controller: c,
-              app: f.app,
-              onAddAgent: (_) {},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 300,
+              height: 400,
+              child: SuperTabMachines(
+                controller: c,
+                app: f.app,
+                onAddAgent: (_) {},
+              ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('super-machine-m')));
-    await tester.pumpAndSettle();
-    // Only the known allowance of the two the list shows, Claude's, has a chip; so do the details.
-    expect(
-      tester
-          .widgetList<EngineMark>(find.byType(EngineMark))
-          .map((mark) => mark.engine),
-      ['claude'],
-    );
-    await openMachineDetails(
-      tester,
-      find.byKey(const ValueKey('super-machine-m')),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('OpenCode'), findsNothing);
-    expect(
-      tester
-          .widgetList<EngineMark>(find.byType(EngineMark))
-          .map((mark) => mark.engine)
-          .toSet(),
-      {'claude'},
-    );
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+      await tester.pumpAndSettle();
+      // Both engines the list shows have a card: Claude's figure, and why Codex has none.
+      expect(
+        tester
+            .widgetList<EngineMark>(find.byType(EngineMark))
+            .map((mark) => mark.engine),
+        ['claude', 'codex'],
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-machine-allowance-m-codex')),
+          matching: find.text('Update Harness on this machine to see it'),
+        ),
+        findsOneWidget,
+      );
+      await openMachineDetails(
+        tester,
+        find.byKey(const ValueKey('super-machine-m')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('OpenCode'), findsNothing);
+      // The details add Claude's alone, over the row's two cards.
+      expect(
+        tester
+            .widgetList<EngineMark>(find.byType(EngineMark))
+            .map((mark) => mark.engine)
+            .toList()
+          ..sort(),
+        ['claude', 'claude', 'codex'],
+      );
 
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 
   testWidgets(
     'machine settings show its name, Agents as memory allows, and Remove from this Swarm',

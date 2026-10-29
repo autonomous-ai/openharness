@@ -4,6 +4,7 @@ import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/demo/sample_mode.dart';
 import 'package:harness_mobile/measurement/product_measurement.dart';
 import 'package:harness_mobile/phone/machines_tab.dart';
+import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/privacy_policy.dart';
 import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/phone/welcome/how_it_works.dart';
@@ -113,6 +114,50 @@ void main() {
       scrollable: find.byType(Scrollable).last,
     );
     expect(find.text('1.2.3'), findsOneWidget);
+    await close(tester, app);
+  });
+
+  testWidgets('as the You tab under another, it follows the app no more, and '
+      'catches up once shown', (tester) async {
+    setPhone(tester, largePhone);
+    final app = edgeApp()
+      ..currentUser = const CurrentUserProfile(
+        id: 'u',
+        name: 'Ada Lovelace',
+        email: 'ada@example.com',
+      );
+    final hidden = ValueNotifier(false);
+    addTearDown(hidden.dispose);
+    await tester.pumpWidget(
+      phoneApp(
+        ValueListenableBuilder(
+          valueListenable: hidden,
+          builder: (_, isHidden, child) =>
+              OutOfSight(hidden: isHidden, child: child!),
+          child: SettingsPage(notifier: app),
+        ),
+      ),
+    );
+    await frames(tester);
+    expect(find.text('Ada Lovelace'), findsOneWidget);
+
+    hidden.value = true;
+    await tester.pump();
+    app
+      ..currentUser = const CurrentUserProfile(
+        id: 'u',
+        name: 'Grace Hopper',
+        email: 'grace@example.com',
+      )
+      ..notifyListeners();
+    await tester.pump();
+
+    expect(find.text('Ada Lovelace'), findsOneWidget, reason: 'as left');
+
+    hidden.value = false;
+    await tester.pump();
+
+    expect(find.text('Grace Hopper'), findsOneWidget);
     await close(tester, app);
   });
 
