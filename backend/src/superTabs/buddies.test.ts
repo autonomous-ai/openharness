@@ -466,6 +466,19 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
   })
 
+  it('is refused as closed before anything checks what a private chat may carry: work, a review, a requester or a proposal (merge review of #2090)', () => {
+    const f = setup()
+    const before = f.state.conversations.length
+    const carrying = [{ brief: 'Work', checks: [{ description: 'Done', independent: false }] }, { reviewOf: f.group }, { requesterId: 'peer' },
+      { proposalMessageId: 'proposal' }]
+    for (const extra of carrying) {
+      for (const actor of [peer, agentActor(f.pm)]) {
+        expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId, ...extra } as Command, actor)).toThrow('Chat with PM is closed')
+      }
+    }
+    expect(f.state.conversations.length).toBe(before)
+  })
+
   it('is hidden from everyone, its person and the PM included, and stays stored', () => {
     const f = setup(), pmChat = group(f, f.pmChat)
     for (const reader of [peer, owner, agentActor(f.pm), agentActor('buddy')]) {

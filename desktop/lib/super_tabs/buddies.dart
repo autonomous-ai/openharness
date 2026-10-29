@@ -120,7 +120,6 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
   bool _busy = false;
 
   /// This computer's Add machine form is open over the dialog.
-  bool _addingMachine = false;
   String? _error;
 
   @override
@@ -155,23 +154,6 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
         : machines.firstOrNull?.id;
   }
 
-  /// Runs the Add machine form for this computer, then selects what it added.
-  Future<void> _addThisComputer(AppNotifier app) async {
-    if (_busy || _addingMachine) return;
-    setState(() => _addingMachine = true);
-    String? added;
-    try {
-      added = await showAddMachine(context, c, app);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _addingMachine = false;
-          if (added != null) _machine = added;
-        });
-      }
-    }
-  }
-
   Future<void> _submit() async {
     final project = _project, machine = _listedMachine;
     if (_busy || project == null || machine == null) return;
@@ -197,40 +179,12 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
 
   /// The Machine field when none of the reader's machines is in the Swarm:
   /// this computer can be added from here.
-  Widget _noMachine() {
-    final app = widget.app;
-    if (app == null) {
-      return Text(
-        'A Buddy runs on one of your own machines. Add one of yours to this '
-        'Swarm first.',
-        style: DesktopChrome.metadata(),
-      );
-    }
-    return ListenableBuilder(
-      listenable: app,
-      builder: (context, _) {
-        final refusal = thisComputerRefusal(app, c);
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'None of your machines is in this Swarm yet.',
-              style: DesktopChrome.metadata(),
-            ),
-            const SizedBox(height: 4),
-            TextButton(
-              onPressed:
-                  _busy || _addingMachine || !c.canWrite || refusal != null
-                  ? null
-                  : () => unawaited(_addThisComputer(app)),
-              child: Text('Add ${thisComputerName()}'),
-            ),
-            if (refusal != null) Text(refusal, style: DesktopChrome.metadata()),
-          ],
-        );
-      },
-    );
-  }
+  Widget _noMachine() => BuddyNoMachine(
+    controller: c,
+    app: widget.app,
+    enabled: !_busy,
+    onAdded: (id) => setState(() => _machine = id),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -419,9 +373,13 @@ class SuperTabBuddyBar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.chat,
+    this.app,
   });
   final SuperTabController controller;
   final SuperTabConversation chat;
+
+  /// For the Start bar's Add this Mac, as Add a Buddy has it (#2105).
+  final AppNotifier? app;
 
   EdgeInsets get _padding => const EdgeInsets.fromLTRB(
     grid.AppDesktop.panelPadding,
@@ -440,6 +398,7 @@ class SuperTabBuddyBar extends StatelessWidget {
         controller: c,
         projectId: chat.projectId,
         padding: _padding,
+        app: app,
       );
     }
     final request = superTabMap(start['request']);
@@ -542,10 +501,12 @@ class _BuddyStart extends StatefulWidget {
     required this.controller,
     required this.projectId,
     required this.padding,
+    required this.app,
   });
   final SuperTabController controller;
   final String projectId;
   final EdgeInsets padding;
+  final AppNotifier? app;
 
   @override
   State<_BuddyStart> createState() => _BuddyStartState();
@@ -577,10 +538,11 @@ class _BuddyStartState extends State<_BuddyStart> {
           ),
           const SizedBox(height: 8),
           if (machine == null)
-            Text(
-              'A Buddy runs on one of your own machines. Add one of yours to '
-              'this Swarm first.',
-              style: DesktopChrome.metadata(),
+            BuddyNoMachine(
+              controller: c,
+              app: widget.app,
+              enabled: !busy,
+              onAdded: (id) => setState(() => _machine = id),
             )
           else
             Row(
@@ -646,6 +608,81 @@ class _BuddyStartState extends State<_BuddyStart> {
             ],
         ],
       ),
+    );
+  }
+}
+
+/// What Add a Buddy and the Buddy chat's Start bar show when none of the
+/// reader's machines is in the Swarm: with [app], this computer can be added
+/// through the Add machine flow (#2105), and [onAdded] gets the machine it
+/// added; without, where to add one.
+class BuddyNoMachine extends StatefulWidget {
+  const BuddyNoMachine({
+    super.key,
+    required this.controller,
+    required this.app,
+    required this.enabled,
+    required this.onAdded,
+  });
+  final SuperTabController controller;
+  final AppNotifier? app;
+  final bool enabled;
+  final ValueChanged<String> onAdded;
+
+  @override
+  State<BuddyNoMachine> createState() => _BuddyNoMachineState();
+}
+
+class _BuddyNoMachineState extends State<BuddyNoMachine> {
+  SuperTabController get c => widget.controller;
+  bool _adding = false;
+
+  /// Runs the Add machine form for this computer, then passes on what it added.
+  Future<void> _addThisComputer(AppNotifier app) async {
+    if (!widget.enabled || _adding) return;
+    setState(() => _adding = true);
+    String? added;
+    try {
+      added = await showAddMachine(context, c, app);
+    } finally {
+      if (mounted) setState(() => _adding = false);
+    }
+    if (added != null && mounted) widget.onAdded(added);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    if (app == null) {
+      return Text(
+        'A Buddy runs on one of your own machines. Add one of yours to this '
+        'Swarm first.',
+        style: DesktopChrome.metadata(),
+      );
+    }
+    return ListenableBuilder(
+      listenable: app,
+      builder: (context, _) {
+        final refusal = thisComputerRefusal(app, c);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'None of your machines is in this Swarm yet.',
+              style: DesktopChrome.metadata(),
+            ),
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed:
+                  !widget.enabled || _adding || !c.canWrite || refusal != null
+                  ? null
+                  : () => unawaited(_addThisComputer(app)),
+              child: Text('Add ${thisComputerName()}'),
+            ),
+            if (refusal != null) Text(refusal, style: DesktopChrome.metadata()),
+          ],
+        );
+      },
     );
   }
 }

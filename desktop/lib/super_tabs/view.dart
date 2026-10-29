@@ -2353,7 +2353,7 @@ class _SuperTabViewState extends State<SuperTabView>
             ),
           ),
         if (group != null && _isBuddyChat(group))
-          SuperTabBuddyBar(controller: c, chat: group),
+          SuperTabBuddyBar(controller: c, chat: group, app: widget.app),
         // The reader's own Buddy chat shows what the PM asked them.
         if (group != null && _isBuddyChat(group))
           SuperTabDecisionsPanel(
