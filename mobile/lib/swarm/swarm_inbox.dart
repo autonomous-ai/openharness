@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_asks.dart';
+import 'swarm_buddy.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_reader.dart';
@@ -113,7 +114,8 @@ class SwarmInbox extends ChangeNotifier {
       }
       _readers.putIfAbsent(swarm.id, () => _open(swarm.id))
         ..snapshot = snapshot
-        ..partners = swarm.view.partners;
+        ..partners = swarm.view.partners
+        ..buddies = SwarmBuddies.read(swarm.view.state, accountId);
       shown.add((id: swarm.id, name: swarm.name));
     }
     swarms = List.unmodifiable(shown);

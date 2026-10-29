@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_buddy.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_pm_chat.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
@@ -88,6 +89,52 @@ void main() {
       expect(back.decisionsWaiting, 0);
       expect(back.mentionsWaiting, 0);
       expect(back.conversation('g1')!.lastMessageSequence, 0);
+    });
+  });
+
+  group('Buddies kept', () {
+    test("keep which chats are Buddy chats and whose Buddy an agent is, so a "
+        'cold start lists no Buddy chat as work', () {
+      final state = SuperTabParts.firstLoad(
+        firstLoad(
+          groups: [
+            buddyChatData('buddy-me', agentIds: ['agent-wren']),
+            groupData('g1', title: 'Fix login'),
+          ],
+          agents: [
+            agent('agent-lead', name: 'Lead', displayName: 'River'),
+            buddyData('agent-wren', displayName: 'Wren'),
+          ],
+        ),
+      ).state;
+      final buddies = SwarmBuddies.read(state, me);
+
+      final kept = swarmHomeSwarm(
+        SuperTabSnapshot.fromJson(state),
+        swarmPartners(state),
+        buddies: buddies,
+      ).state;
+      final back = SwarmBuddies.read(kept, me);
+
+      expect(back.ownChats, {project: 'buddy-me'});
+      expect(back.ownBuddies, {project: 'agent-wren'});
+      expect(back.chatOwners, {'buddy-me': me});
+      expect(
+        SuperTabSnapshot.fromJson(kept).agent('agent-wren')!.displayName,
+        'Wren',
+      );
+    });
+
+    test('keep none where there are none', () {
+      final state = SuperTabParts.firstLoad(firstLoad()).state;
+
+      final kept = swarmHomeSwarm(
+        SuperTabSnapshot.fromJson(state),
+        swarmPartners(state),
+      ).state;
+
+      expect(SwarmBuddies.read(kept, me).chatOwners, isEmpty);
+      expect(SwarmBuddies.read(kept, me).ownBuddies, isEmpty);
     });
   });
 

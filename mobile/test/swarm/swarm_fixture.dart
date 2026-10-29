@@ -108,6 +108,64 @@ Map<String, dynamic> groupData(
   'pullRequestUrls': <String>[],
 };
 
+/// [owner]'s Buddy chat in [project] as the backend sends it (backend read/views.ts `groupView`): its owner named
+/// instead of an audience.
+Map<String, dynamic> buddyChatData(
+  String id, {
+  String owner = me,
+  List<String> agentIds = const [],
+  int lastMessageSequence = 0,
+}) => {
+  ...groupData(
+    id,
+    title: "$owner's Buddy",
+    agentIds: agentIds,
+    lastMessageSequence: lastMessageSequence,
+  ),
+  'kind': 'buddy',
+  'buddyOwnerId': owner,
+};
+
+/// [owner]'s Buddy in [project]: an agent with no role, only its person.
+Map<String, dynamic> buddyData(
+  String id, {
+  String owner = me,
+  String? displayName,
+  String machineId = 'mac-1',
+  String engine = 'claude',
+}) => {
+  ...agent(
+    id,
+    name: "$owner's Buddy",
+    displayName: displayName,
+    machineId: machineId,
+  ),
+  'configuration': {'engine': engine, 'model': 'opus', 'effort': 'high'},
+  'buddyOf': {'personId': owner, 'generation': 'gen-$owner'},
+};
+
+/// A Buddy's start for [chatId] as the backend keeps it: under way with neither a harness nor an [error].
+Map<String, dynamic> buddyStartData(
+  String id, {
+  required String chatId,
+  String owner = me,
+  String machineId = 'mac-1',
+  String engine = 'claude',
+  String? harnessId,
+  String? error,
+}) => {
+  'id': id,
+  'request': {
+    'conversationId': chatId,
+    'machineId': machineId,
+    'engine': engine,
+    'name': "$owner's Buddy",
+    'buddyOf': {'personId': owner, 'generation': 'gen-$owner'},
+  },
+  'harnessId': harnessId,
+  'error': error,
+};
+
 /// A first load of a Swarm with one project, its Lead's conversation and [groups] besides.
 Map<String, dynamic> firstLoad({
   String tabId = tab,
@@ -115,6 +173,8 @@ Map<String, dynamic> firstLoad({
   Map<String, dynamic>? head,
   List<Map<String, dynamic>> groups = const [],
   List<Map<String, dynamic>>? agents,
+  List<Map<String, dynamic>> machines = const [],
+  List<Map<String, dynamic>> starts = const [],
   Map<String, dynamic> derived = const {},
   int lastChangedAt = 100,
 }) => {
@@ -148,8 +208,8 @@ Map<String, dynamic> firstLoad({
     ),
     for (final (i, g) in groups.indexed) part(g['id'] as String, 2 + i, g),
   ],
-  'machines': <Object>[],
-  'starts': <Object>[],
+  'machines': [for (final m in machines) part(m['machineId'] as String, 1, m)],
+  'starts': [for (final s in starts) part(s['id'] as String, 1, s)],
   'progress': <Object>[],
   'derived': derived,
 };

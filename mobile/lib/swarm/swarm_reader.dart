@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'parts.dart';
+import 'swarm_buddy.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
 
@@ -18,15 +19,19 @@ const swarmParseOffThreadParts = 100;
 typedef _View = ({
   SuperTabSnapshot snapshot,
   Map<String, String> partners,
-  bool buddies,
+  bool buddiesOn,
+  SwarmBuddies buddies,
 });
 
-_View _viewOf(SuperTabParts parts) {
+/// [parts] as [accountId] reads them: whose Buddies are whose depends on who
+/// reads.
+_View _viewOf(SuperTabParts parts, String accountId) {
   final state = parts.state;
   return (
     snapshot: SuperTabSnapshot.fromJson(state),
     partners: swarmPartners(state),
-    buddies: state['buddies'] == true,
+    buddiesOn: state['buddies'] == true,
+    buddies: SwarmBuddies.read(state, accountId),
   );
 }
 
@@ -42,14 +47,18 @@ bool _big(Map<String, dynamic> answer) =>
 Future<T> _offThread<T>(bool big, T Function() work) =>
     big ? Isolate.run(work) : Future.sync(work);
 
-Future<_View> _view(SuperTabParts parts, {required bool big}) =>
-    _offThread(big, () => _viewOf(parts));
+Future<_View> _view(
+  SuperTabParts parts,
+  String accountId, {
+  required bool big,
+}) => _offThread(big, () => _viewOf(parts, accountId));
 
 Future<({SuperTabParts parts, _View view})> _load(
   Map<String, dynamic> answer,
+  String accountId,
 ) => _offThread(_big(answer), () {
   final parts = SuperTabParts.firstLoad(answer);
-  return (parts: parts, view: _viewOf(parts));
+  return (parts: parts, view: _viewOf(parts, accountId));
 });
 
 /// One Swarm as this phone keeps it current: a first load, then only the parts
@@ -87,6 +96,10 @@ class SwarmReader extends ChangeNotifier {
   /// state: the model the phone shares with the desktop does not carry it yet.
   /// Off from a backend before Buddies.
   bool buddiesOn = false;
+
+  /// The Buddy chats and Buddies held, the reader's own by project
+  /// ([swarmBuddyChat], [swarmBuddy]).
+  SwarmBuddies buddies = SwarmBuddies.none;
 
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;
@@ -178,7 +191,7 @@ class SwarmReader extends ChangeNotifier {
       final parts = _parts!;
       if (read.changed || snapshot == null) {
         final views = _views;
-        final view = read.view ?? await _view(parts, big: _bigParts);
+        final view = read.view ?? await _view(parts, accountId, big: _bigParts);
         if (_disposed || accessRevoked) return;
         if (view.snapshot.id != tabId) {
           _parts = null;
@@ -253,7 +266,7 @@ class SwarmReader extends ChangeNotifier {
     final asked = _get('$_path/parts');
     final number = ++_firstLoads.value;
     final answer = await asked;
-    final load = await _load(answer);
+    final load = await _load(answer, accountId);
     // Revoked meanwhile: what was read is not kept.
     if (_disposed || accessRevoked) return (changed: false, view: null);
     _parts = load.parts;
@@ -269,7 +282,8 @@ class SwarmReader extends ChangeNotifier {
   void _show(_View view) {
     snapshot = view.snapshot;
     partners = view.partners;
-    buddiesOn = view.buddies;
+    buddiesOn = view.buddiesOn;
+    buddies = view.buddies;
     _views++;
   }
 
@@ -288,6 +302,7 @@ class SwarmReader extends ChangeNotifier {
     snapshot = null;
     partners = const {};
     buddiesOn = false;
+    buddies = SwarmBuddies.none;
     _parts = null;
     _heldLoad = 0;
     generation++;
@@ -360,7 +375,7 @@ class SwarmReader extends ChangeNotifier {
     // Read again from nothing meanwhile: that read is the one to ask.
     if (!identical(parts, _parts)) return loadConversation(id);
     if (!readable) return false;
-    _show(_viewOf(parts));
+    _show(_viewOf(parts, accountId));
     notifyListeners();
     return snapshot?.conversation(id) != null;
   }
@@ -413,7 +428,7 @@ class SwarmReader extends ChangeNotifier {
     if (_disposed || accessRevoked || !identical(parts, _parts)) return;
     final change = parts.addDormant(answer['groups'] as List);
     _dormantPages[projectId] = answer['next'] as String?;
-    if (change.changed) _show(_viewOf(parts));
+    if (change.changed) _show(_viewOf(parts, accountId));
   }
 
   @override

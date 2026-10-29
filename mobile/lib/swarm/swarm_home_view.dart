@@ -1,8 +1,10 @@
 import 'model.dart';
+import 'swarm_buddy.dart';
 
 /// One Swarm as Home last drew it: a state [SuperTabSnapshot.fromJson] reads,
 /// thinned to what Home, its drawer and a project's rows draw, and each
-/// conversation's partner ([swarmPartners]).
+/// conversation's partner ([swarmPartners]). Its Buddy chats and Buddies say
+/// whose they are, as a read does, for [SwarmBuddies.read].
 typedef SwarmHomeSwarm = ({
   Map<String, dynamic> state,
   Map<String, String> partners,
@@ -13,11 +15,13 @@ typedef SwarmHomeSwarm = ({
 /// status, and the built-in pictures people and agents wear. Nothing a chat
 /// holds — no message, brief, check, task, question or email, no photo or
 /// status — nor machines, starts or what waits on the person, which come
-/// with the next read.
+/// with the next read. [buddies] marks the Buddy chats and Buddies, so none
+/// is drawn as work before that read.
 SwarmHomeSwarm swarmHomeSwarm(
   SuperTabSnapshot snapshot,
-  Map<String, String> partners,
-) => (
+  Map<String, String> partners, {
+  SwarmBuddies buddies = SwarmBuddies.none,
+}) => (
   state: {
     'version': 1,
     'id': snapshot.id,
@@ -30,8 +34,24 @@ SwarmHomeSwarm swarmHomeSwarm(
       for (final p in snapshot.people)
         {'id': p.id, 'email': '', 'role': p.role, 'avatar': ?_preset(p.avatar)},
     ],
-    'agents': [for (final a in snapshot.agents) _agent(a)],
-    'conversations': [for (final c in snapshot.conversations) _conversation(c)],
+    'agents': [
+      for (final a in snapshot.agents)
+        {
+          ..._agent(a),
+          if (buddies.buddyOwners[a.id] case final owner?)
+            'buddyOf': {'personId': owner},
+        },
+    ],
+    'conversations': [
+      for (final c in snapshot.conversations)
+        {
+          ..._conversation(c),
+          if (buddies.chatOwners[c.id] case final owner?) ...{
+            'kind': 'buddy',
+            'buddyOwnerId': owner,
+          },
+        },
+    ],
     'machines': const <Object>[],
     'starts': const <Object>[],
     'invitations': const <Object>[],

@@ -72,7 +72,11 @@ class SwarmHomeKeeper {
             (
               id: swarm.id,
               name: swarm.name,
-              view: swarmHomeSwarm(reader.snapshot!, reader.partners),
+              view: swarmHomeSwarm(
+                reader.snapshot!,
+                reader.partners,
+                buddies: reader.buddies,
+              ),
             ),
       ]),
     );

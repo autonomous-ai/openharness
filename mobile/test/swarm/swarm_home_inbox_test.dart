@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_buddy.dart';
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -111,6 +112,39 @@ void main() {
       );
       expect(i.loaded, isFalse);
       expect(i.asks('a')!.loading, isTrue, reason: 'its asks are not kept');
+    },
+  );
+
+  test(
+    "a cold start draws the person's Buddy chat from the Home kept",
+    () async {
+      final state = SuperTabParts.firstLoad(
+        firstLoad(
+          tabId: 'a',
+          head: headData(id: 'a'),
+          groups: [buddyChatData('buddy-me')],
+          agents: [buddyData('agent-wren', displayName: 'Wren')],
+        ),
+      ).state;
+      final cache = memoryHomeCache();
+      await cache.write(me, [
+        (
+          id: 'a',
+          name: 'Swarm a',
+          view: swarmHomeSwarm(
+            SuperTabSnapshot.fromJson(state),
+            swarmPartners(state),
+            buddies: SwarmBuddies.read(state, me),
+          ),
+        ),
+      ]);
+      final i = inbox(backend(listed: Completer()), cache)..shown = true;
+
+      await until(() => i.swarms.isNotEmpty);
+
+      final reader = i.reader('a')!;
+      expect(swarmBuddyChat(reader, project)?.id, 'buddy-me');
+      expect(swarmBuddy(reader, project)?.id, 'agent-wren');
     },
   );
 
