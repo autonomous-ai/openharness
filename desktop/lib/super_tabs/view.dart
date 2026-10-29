@@ -1468,9 +1468,19 @@ class _SuperTabViewState extends State<SuperTabView>
   /// list stays.
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
-    if (c.snapshot?.conversation(id) == null) return;
+    final request = ++_jumpRequest;
+    // A closed or quiet conversation is asked for by id, as a message link does: the tag of a task with no worker is in one,
+    // and a row that did nothing left the reader not knowing why it was there.
+    final readable =
+        c.snapshot?.conversation(id) != null || await c.loadGroup(id);
+    if (!mounted || request != _jumpRequest || c.accessRevoked) return;
+    if (!readable || c.snapshot?.conversation(id) == null) {
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
+      return;
+    }
     final message = await _findMessage(id, mention.messageId);
-    if (!mounted) return;
+    if (!mounted || request != _jumpRequest) return;
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(

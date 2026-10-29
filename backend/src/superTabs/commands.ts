@@ -171,7 +171,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('agent.avatar'), agentId: id, avatar: avatarChoice }).strict(),
   // Text may be empty when the message carries files; applyCommand checks that one of them is there.
   z.object({ type: z.literal('message.send'), conversationId: id, text: z.string().trim().max(32_000), replyTo: id.nullable(), recipientIds: z.array(id).max(16),
-    alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(), agentOnly: z.literal(true).optional() }).strict(),
+    alsoSend: z.literal(true).optional(), attachmentIds: z.array(id).max(MAX_ATTACHMENTS).optional(), mentions: z.array(id).max(MAX_MENTIONS).optional(),
+    mentionsIfNoWorker: z.literal(true).optional(), agentOnly: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('mention.done'), mentionId: id }).strict(),
   z.object({ type: z.literal('message.react'), conversationId: id, messageId: id, emoji: reactionSchema, on: z.boolean() }).strict(),
   z.object({ type: z.literal('decision.ask'), conversationId: id, personId: id, questions: z.array(decisionQuestion).min(1).max(MAX_QUESTIONS) }).strict(),
@@ -586,9 +587,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       brief: group.brief, checks: group.checks, assignment: group.assignment }))
   }
   const message = (conversationId: string, body: string, recipients: string[] = [], replyTo: string | null = null, source?: Record<string, unknown>,
-    attachments?: Attachment[], mentions?: string[]) => {
+    attachments?: Attachment[], mentions?: string[], holdMentions?: true) => {
     effects.messages.push({ id: operationId, conversationId, author: sender, text: body, replyTo, recipients, ...(source ? { source } : {}),
-      ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}) })
+      ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}), ...(holdMentions ? { holdMentions } : {}) })
     result.messageId = operationId
   }
   /** The project Lead's own route, start, assignment or post on a task, with its time (liveness.ts reads it). It rides on the
@@ -1811,6 +1812,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
       const mentions = checkMentions(state, actor, group, command.mentions ?? [])
+      if (command.mentionsIfNoWorker && !mentions.length) fail('INVALID_MENTION', 'Hold a tag only for a message that tags someone.', 400)
       if (command.replyTo && (!context.reply || context.reply.id !== command.replyTo || context.reply.conversationId !== group.id)) {
         fail('INVALID_REPLY', 'Reply to a message in this conversation.', 400)
       }
@@ -1842,7 +1844,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('INVALID_RECIPIENT', 'An agent sends an agent-only notice to itself alone.', 400)
       }
       // The transcript still accepts a human message while the lead is unavailable. The UI can say why no delivery was created.
-      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
+      message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions, command.mentionsIfNoWorker)
       // A reply joins its message's thread, always at the root, so threads never nest.
       const thread = command.replyTo ? context.reply?.thread : null
       if (thread) Object.assign(effects.messages.at(-1)!, { thread, ...(command.alsoSend ? { alsoInChat: true } : {}) })

@@ -363,6 +363,8 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
+  /** Its tags wait until the group has had no worker and no Lead action for a while (mentions.ts NO_WORKER_GRACE_MS). */
+  holdMentions?: true
   /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
   thread?: string
   /** A thread reply also shown in the conversation's main stream. */

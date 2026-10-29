@@ -1171,13 +1171,13 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.commands.slice(before).map(c => c.operationId)).toEqual(b.commands.slice(before - 2, before).map(c => c.operationId))
   })
 
-  it('with no other machine, tells the group and its requester that the task has no worker, without the raw error', async () => {
+  it('with no other machine, tells the group, and its requester only if the task still has no worker, without the raw error', async () => {
     const b = backend({ candidates: [candidate('c0', 'mac-one'), candidate('c1', 'mac-one', 'member')] })
     const result = await b.lead(b.first)
     expect(b.of('agent.start')).toHaveLength(1)
     const [notice] = b.of('message.send')
-    expect(notice).toMatchObject({ conversationId: 'group', mentions: ['person-1'], recipientIds: [],
-      text: 'Builder could not start on Mac One, and no other machine allowed for this task could take it. This task has no worker until that machine is fixed or another one is added.' })
+    expect(notice).toMatchObject({ conversationId: 'group', mentions: ['person-1'], mentionsIfNoWorker: true, recipientIds: [],
+      text: 'Builder could not start on Mac One, and no other machine allowed for this task could take it. This task has no worker. Fix that machine or add another one, then ask the Lead to start it again.' })
     expect(String(notice!.text)).not.toContain('token')
     expect(result).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
   })
@@ -1188,7 +1188,7 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     const b = backend({ candidates: [candidate('c0', 'mac-one')], error: reason })
     expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', detail: expect.stringContaining(reason) })
     expect(b.of('message.send')).toMatchObject([{ text: 'Builder could not start on Mac One: not enough free memory (1.8 GiB free, 2 GiB needed), '
-      + 'and no other machine allowed for this task could take it. This task has no worker until memory frees up on that machine or another one is added.' }])
+      + 'and no other machine allowed for this task could take it. This task has no worker. Free up memory on that machine or add another one, then ask the Lead to start it again.' }])
   })
 
   it('reports instead of trying a third machine when the retry fails as well', async () => {
@@ -1213,15 +1213,15 @@ describe('a Lead\'s start that fails before its agent exists', () => {
     expect(b.of('agent.start')).toHaveLength(1)
   })
 
-  const STAYS = 'Builder could not start. This task needs a particular machine or device, so it was not moved to another machine. It has no worker until a machine that has what it needs can start it.'
-  it('keeps a task that requires its machine or device where it is, and tells the group and its requester', async () => {
+  const STAYS = 'Builder could not start. This task needs a particular machine or device, so it was not moved to another machine. It has no worker. Make a machine that has what it needs available, then ask the Lead to start it again.'
+  it('keeps a task that requires its machine or device where it is, and tells the group, and its requester only if it still has no worker', async () => {
     // As each Lead reads it: a machine it sees, one it does not (only counted), a device.
     for (const requires of [{ machines: ['mac-one'] }, { machines: [], unseenMachines: 1 }, { devices: ['/dev/cu.round'] }]) {
       const b = backend({ requires })
       expect(await b.lead(b.first)).toMatchObject({ error: 'START_BLOCKED', startId: 'first-start', detail: expect.stringContaining(TOKEN) })
       expect(b.of('route.record')).toEqual([])
       expect(b.of('agent.start')).toHaveLength(1)
-      expect(b.of('message.send')).toMatchObject([{ conversationId: 'group', mentions: ['person-1'], recipientIds: [], text: STAYS }])
+      expect(b.of('message.send')).toMatchObject([{ conversationId: 'group', mentions: ['person-1'], mentionsIfNoWorker: true, recipientIds: [], text: STAYS }])
       // A group reader may not see the machine (backend model.ts withSeenRequirement): the post names none, nor the raw error.
       for (const hidden of ['mac-one', 'Mac One', TOKEN, 'token']) expect(String(b.of('message.send')[0]!.text)).not.toContain(hidden)
     }

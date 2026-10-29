@@ -2904,6 +2904,15 @@ describe('Lead mentions', () => {
     expect(f.run(send(secret.conversationId, ['owner']), as(secret.lead)).messages[0]!.mentions).toEqual(['owner'])
   })
 
+  it('holds a tag for a notice that says a task has no worker, and only a tag can be held', () => {
+    const { f, lead } = swarm(), group = f.group()
+    const held = (mentions: string[]): Command => ({ ...send(group, mentions), mentionsIfNoWorker: true } as Command)
+    expect(f.run(held(['peer']), as(lead)).messages[0]).toMatchObject({ mentions: ['peer'], holdMentions: true })
+    expect(f.run(send(group, ['peer']), as(lead)).messages[0]).not.toHaveProperty('holdMentions')
+    expect(() => f.run(held([]), as(lead))).toThrow('Hold a tag only for a message that tags someone.')
+    expect(commandSchema.safeParse({ ...send(group, ['peer']), mentionsIfNoWorker: false }).success).toBe(false)
+  })
+
   it('tags at most five people', () => {
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e'])).success).toBe(true)
     expect(commandSchema.safeParse(send('lead', ['a', 'b', 'c', 'd', 'e', 'f'])).success).toBe(false)

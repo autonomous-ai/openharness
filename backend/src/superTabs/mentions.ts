@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
-import { fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 import { groupsBy } from './parts/indexed.js'
 
@@ -12,6 +12,10 @@ type Tx = Prisma.TransactionClient
 export const MAX_MENTIONS = 5
 /** A tag drops off the list this long after it was made: refused on read, and removed by a TTL index. */
 export const MENTION_EXPIRY_MS = 30 * 24 * 60 * 60_000
+/** A Lead's tag about a task with no worker (message.send mentionsIfNoWorker) is listed only after this long, and only if the
+ *  group still has no worker and the Lead has done nothing for it since: the Lead sees a failed start first and usually
+ *  restarts the task within minutes, so a person tagged at once got a notice they could do nothing about (Dee, 2026-10-29). */
+export const NO_WORKER_GRACE_MS = 20 * 60_000
 /** The mention `mention.done` names, read from this tab by the store. */
 export interface MentionTarget { id: string; personId: string; conversationId: string }
 /** Mongo omits unset fields, so `resolvedAt: null` alone would miss a row written without it. */
@@ -42,7 +46,7 @@ export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState,
   const data = messages.flatMap(message => (message.mentions ?? []).map(personId => ({
     id: stableId(tabId, message.id, personId), tabId, personId, projectId: state.conversations.find(c => c.id === message.conversationId)!.projectId ?? 'lead',
     conversationId: message.conversationId, messageId: message.id, authorAgentId: message.author.id,
-    createdAt: new Date(now), resolvedAt: null, resolvedBy: null,
+    createdAt: new Date(now), resolvedAt: null, resolvedBy: null, ...(message.holdMentions ? { holdUntil: new Date(now + NO_WORKER_GRACE_MS) } : {}),
   })))
   if (data.length) await tx.superTabMention.createMany({ data })
 }
@@ -51,6 +55,21 @@ export async function writeMentions(tx: Tx, tabId: string, state: SuperTabState,
 export async function resolveByReply(tx: Tx, tabId: string, conversationId: string, personId: string, now: number): Promise<void> {
   await tx.superTabMention.updateMany({ where: { tabId, conversationId, personId, createdAt: { lte: new Date(now) }, ...waiting },
     data: { resolvedAt: new Date(now), resolvedBy: 'reply' } })
+}
+
+/** A worker took the group: its held tags are over. One not yet listed is dropped, as if never made; a listed one moves to Earlier. */
+export async function resolveWhenWorked(tx: Tx, tabId: string, conversationId: string, now: number): Promise<void> {
+  const held = { tabId, conversationId, holdUntil: { isSet: true as const }, ...waiting }
+  await tx.superTabMention.deleteMany({ where: { ...held, holdUntil: { gt: new Date(now) } } })
+  await tx.superTabMention.updateMany({ where: held, data: { resolvedAt: new Date(now), resolvedBy: 'worker' } })
+}
+
+/** Whether a tag is listed: a held one only once its time has come, while its group still has no worker and the Lead has not
+ *  acted on it since the notice; one answered before it came up was never listed. */
+function listed(row: { createdAt: Date; resolvedAt: Date | null; holdUntil?: Date | null }, group: Conversation, now: number): boolean {
+  if (!row.holdUntil) return true
+  if (row.resolvedAt) return row.resolvedAt >= row.holdUntil
+  return now >= row.holdUntil.getTime() && !group.archived && !activeWork(group) && !(group.leadAction && group.leadAction.at > row.createdAt.getTime())
 }
 
 /** The tags a person's post in this conversation is about to answer (resolveByReply), for the leaderboard's credit
@@ -88,7 +107,7 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extr
   }
   return rows.flatMap(row => {
     const group = groups.get(row.conversationId)
-    return group && !isLeads(group) && canReadGroup(state, actor, group) ? [{ row, group }] : []
+    return group && !isLeads(group) && canReadGroup(state, actor, group) && listed(row, group, now) ? [{ row, group }] : []
   })
 }
 

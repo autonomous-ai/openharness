@@ -556,6 +556,48 @@ void main() {
       );
     });
 
+    // A task with no worker is a quiet conversation: the state does not hold it until it is asked for (Dee, 2026-10-29).
+    testWidgets(
+      'a tag in a closed conversation loads it and opens at its message',
+      (tester) async {
+        final server = ConversationServer();
+        server.state['conversations'] = [
+          ...server.state['conversations'] as List,
+          {...conversationFixture('group', 'Release'), 'archived': true},
+        ];
+        server.append('Builder could not start.', conversationId: 'group');
+        server.tag(
+          'message-1',
+          conversationId: 'group',
+          text: 'Builder could not start.',
+        );
+        final c = await showView(tester, server);
+        expect(c.snapshot?.conversation('group'), isNull);
+        await tester.tap(notificationsEntry());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+        await tester.pumpAndSettle();
+        expect(c.selectedId, 'group');
+        expect(find.text('Builder could not start.'), findsWidgets);
+        // The read mark of the opened conversation saves a moment later.
+        await tester.pump(const Duration(seconds: 1));
+      },
+    );
+
+    testWidgets('a tag in a conversation the reader cannot read says so', (
+      tester,
+    ) async {
+      final server = ConversationServer()
+        ..tag('message-9', conversationId: 'private-chat', text: 'Hidden');
+      final c = await showView(tester, server);
+      await tester.tap(notificationsEntry());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('super-mention-mention-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Message unavailable'), findsOneWidget);
+      expect(c.selectedId, isNot('private-chat'));
+    });
+
     testWidgets('a tag too far back says so and stays on the list', (
       tester,
     ) async {

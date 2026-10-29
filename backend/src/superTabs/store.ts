@@ -53,7 +53,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, summarizeCosts } from './costs/read.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
-import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
+import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingPolicySchema, type RoutingPolicy } from './routingPolicy.js'
 import { invitedSwarms } from './invitedSwarms.js'
@@ -1367,6 +1367,7 @@ export class SuperTabStore {
       await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
+      if (command.type === 'work.assign') await resolveWhenWorked(tx, tabId, command.conversationId, context.now)
       if (command.type === 'mention.done') await markDone(tx, tabId, command.mentionId, context.mention!.personId, context.now)
       if (command.type === 'message.react') await this.writeReaction(tx, tabId, actor, command)
       if (context.avatarUpload) {
