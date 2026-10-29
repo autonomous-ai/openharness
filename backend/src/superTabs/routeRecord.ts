@@ -57,6 +57,8 @@ export const routeRecordSchema = z.object({
   context: z.object({ chars: z.number().int().min(0).max(30_000), missing: z.array(z.string().min(1).max(40)).max(10) }).strict().optional(),
   /** The step up this attempt is (stepUp.ts), written by the server from its group, never taken from the route. */
   stepUp: z.object({ attempt: z.number().int().min(2).max(3), reason: z.string().min(1).max(200) }).strict().optional(),
+  /** Why a review runs on its Builder's own engine (rules.ts sameEngineReview), written by the server, never taken from the route. */
+  sameEngine: z.string().min(1).max(300).optional(),
 }).strict().refine(d => d.candidates.some(c => c.id === d.pick), 'The pick must be one of the candidates.')
   .refine(d => new Set(d.candidates.map(c => c.id)).size === d.candidates.length, 'Candidate ids must be unique.')
 

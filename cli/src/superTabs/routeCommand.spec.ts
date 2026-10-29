@@ -243,14 +243,22 @@ describe('routeTask', () => {
     expect(fresh.next).toContain('"name":"Reviewer","role":"reviewer"')
     expect((await offered(false, false)).next).not.toContain('"role"')
   })
-  it('leaves out of a review the reviewed Builder\'s engine, whatever runs it, and says why', async () => {
+  it('leaves out of a review the reviewed Builder\'s engine while another engine can review, and says why', async () => {
     const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
     t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
       assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
     Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
+    // Codex is on in the policy, so a Codex Reviewer can run.
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const context = { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [{ machineId: 'm1', name: 'remote-1' }] } }
+    const twoEngines = await routeTask(input, scoped({ context }), where as never, opener(id => daemon(id, { agents: ['h1'],
+      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] })), () => 'op')
+    expect(twoEngines).toMatchObject({ ok: true, pick: { engine: 'codex' } })
+    // A Claude-only Swarm reviews a Claude Builder's work on its top tier alone.
     const s = scoped({ tab: t })
-    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ error: 'NO_CANDIDATE',
-      excluded: expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1', reason: 'A review runs on another engine than the reviewed Builder\'s, Claude.' }]) })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+      reason: 'A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.' }]))
     // A Builder still in the Swarm is read from its agent: on a grid model, Claude may review it.
     t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'claude', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
     Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })

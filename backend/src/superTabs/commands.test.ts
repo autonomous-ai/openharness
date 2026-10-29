@@ -1195,6 +1195,24 @@ describe('Reviewer role', () => {
     expect(byHand.result.warnings).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
   })
 
+  it('lets a Claude-only Swarm review a Claude Builder\'s work on Opus, never below the top tier, and records why on the decision', () => {
+    const { f, leadActor, group, builder } = reviewed()
+    // Every agent runs Claude and no machine offers Codex: no Reviewer of another engine can run here.
+    for (const a of f.state.agents) a.configuration = { ...a.configuration, engine: 'claude' }
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
+      leadActor).result.conversationId as string
+    const route = (pick: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: review, decision: record({ candidates: [candidate('c0', pick)], pick: 'c0' }) } as Command, leadActor)
+    expect(route({}).routeDecisions[0]).toMatchObject({ record: { sameEngine: 'No Reviewer on another engine than the Builder\'s (Claude) can run in this Swarm, so the review runs on it at the top tier.' } })
+    expect(() => route({ model: 'sonnet', effort: 'medium', quality: 2 }))
+      .toThrow('A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm. Route again.')
+    expect(() => route({ model: 'default', effort: 'default' })).toThrow('needs its top tier')
+    expect(() => route({ model: 'default', effort: 'default', gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' })).toThrow('never runs on a model served on the Swarm\'s grid')
+    // A machine that offers Codex makes the other engine available, and the same engine is refused again.
+    f.state.machines = [{ machineId: 'codex-box', engines: ['codex'] } as never]
+    expect(() => route({})).toThrow('A review runs on another engine than the reviewed Builder\'s, Claude. Route again.')
+  })
+
   it('stores the role chosen at start and reads agents without one as Builders', () => {
     const { f, reviewer, builder } = reviewed()
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('role', 'reviewer')
@@ -1442,6 +1460,15 @@ describe('Reviewer role', () => {
       Object.assign(f.state.agents.find(a => a.id === fresh)!, patch)
       markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment).toBeNull()
+    })
+
+    it('gives a Claude-only Swarm\'s review to its free Opus Reviewer, and to no weaker one of the same engine', () => {
+      const { f, reviewer, fresh, markReady, reviews } = ready()
+      for (const a of f.state.agents) a.configuration = { ...a.configuration, engine: 'claude' }
+      f.state.agents.find(a => a.id === reviewer)!.configuration.model = 'claude-sonnet-4-5'
+      f.state.agents.find(a => a.id === fresh)!.configuration.model = 'claude-opus-4-7'
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
     })
 
     it('gives the review to a strong Reviewer on another engine, and to an Engineer on the grid even a Reviewer on its relay engine', () => {

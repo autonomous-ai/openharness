@@ -638,13 +638,17 @@ describe('local models on the Swarm\'s grid', () => {
   })
   it('never lets a grid model, a model below quality 2 or the reviewed Builder\'s own family review (Ken, 2026-10-29)', () => {
     const codex = { engine: 'codex' }
-    expect(reviewRefusals(local({ quality: 2 }), codex)).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
-    expect(reviewRefusals(probe({ model: 'haiku', quality: 1 }), codex)).toEqual(['A review needs a model of quality 2 or more, and Claude haiku is 1.'])
-    expect(reviewRefusals(probe({ engine: 'codex', model: 'default', quality: 3 }), codex)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Codex.'])
+    expect(reviewRefusals(local({ quality: 2 }), codex, true)).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
+    expect(reviewRefusals(probe({ model: 'haiku', quality: 1 }), codex, true)).toEqual(['A review needs a model of quality 2 or more, and Claude haiku is 1.'])
+    expect(reviewRefusals(probe({ engine: 'codex', model: 'default', quality: 3 }), codex, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Codex.'])
     // A Builder on a grid model is its own family: Claude reviews it, even though Claude Code drove it.
-    expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' })).toEqual([])
-    expect(reviewRefusals(probe(), { engine: 'claude' })).toEqual(['A review runs on another engine than the reviewed Builder\'s, Claude.'])
-    expect(reviewRefusals(probe(), null)).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' }, true)).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude' }, true)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Claude.'])
+    expect(reviewRefusals(probe(), null, true)).toEqual([])
+    // With no Reviewer of another engine anywhere, the Builder's own engine reviews at its top tier only (Lead, 2026-10-29).
+    expect(reviewRefusals(probe({ model: 'opus', quality: 3 }), { engine: 'claude' }, false)).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude' }, false))
+      .toEqual(['A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.'])
   })
 
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {

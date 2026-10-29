@@ -222,12 +222,20 @@ export interface Reviewed { engine: string; gridModel?: string }
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 /** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
- *  below 2, or the reviewed Builder's own model family. The server refuses the same (backend superTabs/rules.ts reviewRefusal). */
-export function reviewRefusals(p: Probe, builder: Reviewed | null): string[] {
+ *  below 2, or the reviewed Builder's own model family while a strong Reviewer of another family can run here ([otherFamily]).
+ *  With none, the Builder's own engine at its top tier (Lead, 2026-10-29). The server judges the same (backend
+ *  superTabs/rules.ts reviewRefusal). */
+export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: boolean): string[] {
   if (p.gridModel) return ['A review never runs on a model served on the Swarm\'s grid.']
   if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
-  return builder && familyOf(builder) === familyOf(p) ? [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`] : []
+  if (!builder || familyOf(builder) !== familyOf(p)) return []
+  if (otherFamily) return [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`]
+  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.`] : []
 }
+/** Whether a strong Reviewer of another family than [builder]'s can run: a candidate off the grid, rated 2 or more, of
+ *  another family, wherever it is and whatever keeps it out now. */
+export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null) =>
+  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder))
 
 /** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
  *  the same (backend superTabs/stepUp.ts stepUpRefusal). */

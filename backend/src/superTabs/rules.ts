@@ -115,17 +115,39 @@ export function policyQuality(policy: RoutingPolicy, engine: string, model: stri
 /** A model family: a grid model's own, else its engine's. */
 const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `grid:${t.gridModel}` : t.engine
 
-/** Why [target] may not review the work of group [reviewed] (Ken, 2026-10-29: a small model never reviews again): a model
- *  served on the Swarm's grid, one the policy rates below 2, or the reviewed Builder's own model family. Null when nothing
- *  is reviewed. */
-export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
+/** Whether a strong Reviewer of another family than [builder]'s can run in this Swarm: an engine an agent runs or a contributed
+ *  machine offers, other than the Builder's, with an enabled policy row of quality 2 or more. */
+function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy): boolean {
+  const engines = new Set([...state.agents.filter(a => !a.gridModel && !a.buddyOf).map(a => a.configuration.engine), ...(state.machines ?? []).flatMap(m => m.engines)])
+  return [...engines].some(e => familyOf({ engine: e }) !== familyOf(builder) && policy.models.some(m => m.enabled && m.engine === e && m.quality >= 2))
+}
+
+/** How [target] may review the work of group [reviewed] (Ken, 2026-10-29: a small model never reviews again): never on a model
+ *  served on the Swarm's grid or one the policy rates below 2, and on another model family than the reviewed Builder's while
+ *  a strong Reviewer of another family can run here. With none, the Builder's own engine at its top tier, noted (Lead,
+ *  2026-10-29: a Swarm of one engine keeps its automatic reviews). */
+function judgeReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): { refusal: string } | { note: string } | null {
   if (!reviewed) return null
-  if (target.gridModel) return 'A review never runs on a model served on the Swarm\'s grid.'
+  if (target.gridModel) return { refusal: 'A review never runs on a model served on the Swarm\'s grid.' }
   const quality = policyQuality(policy, target.engine, target.model, target.effort)
-  if (quality !== null && quality < 2) return `A review needs a model of quality 2 or more, and ${ENGINE[target.engine] ?? target.engine} ${target.model} is ${quality}.`
+  const engine = ENGINE[target.engine] ?? target.engine
+  if (quality !== null && quality < 2) return { refusal: `A review needs a model of quality 2 or more, and ${engine} ${target.model} is ${quality}.` }
   const assignment = state.conversations.find(c => c.id === reviewed)?.assignment
   const worker = assignment && state.agents.find(a => a.id === assignment.agentId)
   const builder = worker ? agentTarget(state, worker) : assignment ? { engine: assignment.configuration.engine } : null
   // A grid target was refused above, so the same family is the target's engine.
-  return builder && familyOf(builder) === familyOf(target) ? `A review runs on another engine than the reviewed Builder's, ${ENGINE[target.engine] ?? target.engine}.` : null
+  if (!builder || familyOf(builder) !== familyOf(target)) return null
+  if (otherFamilyReviews(state, builder, policy)) return { refusal: `A review runs on another engine than the reviewed Builder's, ${engine}.` }
+  return quality === 3 ? { note: `No Reviewer on another engine than the Builder's (${engine}) can run in this Swarm, so the review runs on it at the top tier.` }
+    : { refusal: `A review on the reviewed Builder's engine, ${engine}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.` }
+}
+/** Why [target] may not review the work of group [reviewed]; null when it may, or nothing is reviewed. */
+export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
+  const judged = judgeReview(state, reviewed, target, policy)
+  return judged && 'refusal' in judged ? judged.refusal : null
+}
+/** Why [target] reviews on the reviewed Builder's own engine, when it may only because no other engine can; null otherwise. */
+export function sameEngineReview(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
+  const judged = judgeReview(state, reviewed, target, policy)
+  return judged && 'note' in judged ? judged.note : null
 }
