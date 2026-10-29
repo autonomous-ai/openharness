@@ -11,6 +11,7 @@ import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
 import 'identity.dart';
+import 'message_link.dart';
 import 'model.dart';
 import 'pm_chat.dart';
 import 'project_github.dart';
@@ -1430,6 +1431,65 @@ class SuperTabController extends ChangeNotifier {
   void openNotice(String kind, String id) {
     noticeRequest = (kind: kind, id: id);
     notifyListeners();
+  }
+
+  /// A message the reader asked to open by its link ([openMessageLink]), until
+  /// the Swarm view on screen takes it.
+  ({String conversationId, String messageId})? messageRequest;
+
+  /// Asks the Swarm view to open [link]'s message, in the view on screen or
+  /// the one shown next. A link to another Swarm is not this one's to open.
+  bool openMessageLink(SwarmMessageLink link) {
+    if (link.tabId != tabId) return false;
+    messageRequest = (
+      conversationId: link.conversationId,
+      messageId: link.messageId,
+    );
+    notifyListeners();
+    return true;
+  }
+
+  /// Conversations a link named that the Swarm did not hold, when each was
+  /// last asked for by id (the backend decides who may read it) and which are
+  /// being asked for now. A refusal is asked again after a minute, in case the
+  /// reader has since been let in.
+  final _linkGroupAsked = <String, DateTime>{};
+  final _linkGroupReading = <String>{};
+  static const _linkGroupRetry = Duration(minutes: 1);
+
+  /// What [link] points at for this reader: null when it is not a message they
+  /// may read (another Swarm, a conversation the backend will not give them, a
+  /// message gone); `message` null while it is being read. A conversation the
+  /// Swarm does not hold (a closed one) is asked for by id, once a minute at
+  /// most, so a link reveals nothing the backend does not already let them read.
+  ({SuperTabMessage? message})? linkTarget(SwarmMessageLink link) {
+    final id = link.conversationId;
+    if (link.tabId != tabId || accessRevoked || snapshot == null) return null;
+    if (snapshot!.conversation(id) == null) {
+      if (_linkGroupReading.contains(id)) return (message: null);
+      final asked = _linkGroupAsked[id];
+      if (asked != null && clock.now().difference(asked) < _linkGroupRetry) {
+        return null;
+      }
+      _linkGroupAsked[id] = clock.now();
+      _linkGroupReading.add(id);
+      unawaited(
+        loadGroup(id).whenComplete(() {
+          _linkGroupReading.remove(id);
+          _changed();
+        }),
+      );
+      return (message: null);
+    }
+    final held = messages(id).where((m) => m.id == link.messageId).firstOrNull;
+    final read = held != null ? (message: held) : quoted(id, link.messageId);
+    // Not asked before: it is being read.
+    if (read == null) return (message: null);
+    final message = read.message;
+    // A waiting notice is never announced, so it is not previewed either.
+    return message == null || message.source['kind'] == 'delivery-hold'
+        ? null
+        : (message: message);
   }
 
   /// Set by the Swarm view on screen: opens a project's PM chat in front of
