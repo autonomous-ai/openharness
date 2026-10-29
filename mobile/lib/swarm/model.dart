@@ -73,6 +73,9 @@ class SuperTabAgent {
         _ => null,
       },
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      alerting = List.unmodifiable(
+        (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       confidential = row['confidential'] == true,
@@ -85,6 +88,10 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
+
+  /// What its machine is alerting about now (backend terminal.ts): `prompt`
+  /// while it waits at a prompt in its terminal, gone once that is answered.
+  final List<String> alerting;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
@@ -221,7 +228,7 @@ class SuperTabConversation {
 
   /// The newest message that makes it unread, as the desktop's
   /// `SuperTabController.unread` counts it: a reply only in its thread does
-  /// not, though the phone, with no thread view yet, shows it in the chat.
+  /// not, as it is not in the chat.
   int get mainSequence => lastMainSequence ?? lastMessageSequence;
 
   /// Moves whenever a reaction here is added or taken back (backend
@@ -815,7 +822,8 @@ class SuperTabDelivery {
 
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for. Read as the desktop's model reads it
-/// (desktop_parity_test); the phone shows none of it yet.
+/// (desktop_parity_test); the phone draws the line, not yet who it is unread
+/// for.
 class SuperTabThread {
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -875,7 +883,6 @@ class SuperTabMessage {
   bool get threadReply => thread != null && thread != id;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
-  /// The phone, with no thread view yet, shows every reply in the chat.
   bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;
   final Map<String, dynamic> author;
@@ -903,6 +910,12 @@ class SuperTabMessage {
   /// on it; null for every other message, whatever its text says.
   String? get proposalOwnerId =>
       source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
+
+  /// The agent a "waiting at a prompt" note is about; null for any other row.
+  String? get promptAlertAgentId =>
+      source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
+      ? source['agentId'] as String?
+      : null;
 
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>

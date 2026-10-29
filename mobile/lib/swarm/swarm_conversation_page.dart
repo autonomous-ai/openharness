@@ -18,6 +18,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'identity.dart';
 import 'model.dart';
+import 'prompt_alerts.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -34,6 +35,9 @@ import 'swarm_project_page.dart';
 import 'swarm_reactions.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_thread.dart';
+import 'swarm_thread_line.dart';
+import 'swarm_thread_page.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
 
@@ -407,11 +411,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       if (!back) {
         c.heldAt = null;
       } else {
-        c.heldAt ??= c.messages.lastOrNull?.id;
+        c.heldAt ??= c.stream.lastOrNull?.id;
       }
     }
     if (back == (_held.value != null)) return;
-    _held.value = back ? _conversation?.messages.lastOrNull?.id : null;
+    _held.value = back ? _conversation?.stream.lastOrNull?.id : null;
   }
 
   /// How close to the oldest message shown the earlier ones start to be
@@ -485,6 +489,106 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _focus.requestFocus();
   }
 
+  /// Opens [root]'s thread of [c] over the chat, full screen.
+  void _openThread(SwarmConversation c, String root) {
+    if (_acting != null) setState(() => _acting = null);
+    _focus.unfocus();
+    unawaited(
+      Navigator.of(context).push(
+        phoneRoute(
+          (_) => SwarmThreadPage(
+            swarmId: widget.swarmId,
+            chat: c,
+            root: root,
+            title: _view.value?.title,
+            row: (t, m, {required grouped, required acting, required onTap}) =>
+                _threadRow(
+                  c,
+                  t,
+                  m,
+                  grouped: grouped,
+                  acting: acting,
+                  onTap: onTap,
+                ),
+            pending: (t, text) => _threadPending(c, t, text),
+          ),
+          listensForItself: true,
+        ),
+      ),
+    );
+  }
+
+  /// One of thread [t]'s messages as the chat draws its own, less what only
+  /// the chat has: no quote, no thread line, no Reply (the box is the reply).
+  Widget _threadRow(
+    SwarmConversation c,
+    SwarmThread t,
+    SuperTabMessage m, {
+    required bool grouped,
+    required bool acting,
+    required VoidCallback onTap,
+  }) {
+    final view = _view.value;
+    if (view == null) return const SizedBox.shrink();
+    final pm = swarmIsPmLine(c.reader, m);
+    return SwarmMessageRow(
+      key: ValueKey('swarm-thread-message-${m.id}'),
+      message: m,
+      name: _nameOf(c, m),
+      look: _lookOf(c, m),
+      role: m.fromAgent && !pm ? view.roles[m.authorId] : null,
+      mentions: view.mentions,
+      grouped: grouped,
+      lit: false,
+      quote: null,
+      actions: acting,
+      onTap: onTap,
+      onReply: null,
+      onAuthor: m.fromAgent
+          ? null
+          : () => unawaited(
+              showSwarmPerson(
+                context,
+                swarmId: widget.swarmId,
+                personId: m.authorId,
+              ),
+            ),
+      reactions: SwarmReactionBar(
+        messageId: m.id,
+        reactions: c.reactionsOf(m),
+        readerId: c.reader.accountId,
+        nameOf: (kind, id) => _reactorName(c, kind, id),
+        onReact: view.canPost ? (emoji) => unawaited(t.react(m, emoji)) : null,
+      ),
+      onLongPress: view.canPost
+          ? () => unawaited(_pickThreadReaction(c, t, m.id))
+          : null,
+    );
+  }
+
+  /// The person's reply on its way in thread [t].
+  Widget _threadPending(SwarmConversation c, SwarmThread t, String text) {
+    final mine = t.messages.reversed
+        .where((m) => !m.fromAgent && m.authorId == c.reader.accountId)
+        .firstOrNull;
+    return KeyedSubtree(
+      key: const ValueKey('swarm-thread-pending'),
+      child: _Pending(
+        name: mine == null ? 'You' : _nameOf(c, mine),
+        look:
+            c.reader.snapshot?.personLook(c.reader.accountId) ??
+            (picture: null, status: null),
+        text: text,
+        files: const [],
+        mentions: _view.value?.mentions ?? SwarmMentions(const []),
+        // Taken by the backend and not read back yet: still on its way.
+        sending: t.sending || t.confirmed,
+        quote: null,
+        onSendAgain: () => unawaited(t.send()),
+      ),
+    );
+  }
+
   /// How many earlier pages a quote's original is looked for in: as many as
   /// a tag opens through on the desktop.
   static const _findPages = 50;
@@ -502,6 +606,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     // once, with the original among the messages.
     final found = await c.readBackTo(messageId, pages: _findPages);
     if (!mounted || _conversation != c) return;
+    // A thread reply opens its thread; one shown only there has no row in
+    // the chat to bring into view (the desktop's tag and notice rule).
+    final target = found
+        ? c.messages.where((m) => m.id == messageId).firstOrNull
+        : null;
+    if (target != null && target.threadReply) {
+      _openThread(c, target.thread!);
+      if (!target.inMainStream) {
+        setState(() => _finding = false);
+        if (!_scroll.hasClients || _scroll.offset <= _readingBack) {
+          c.heldAt = null;
+        }
+        return;
+      }
+    }
     setState(() {
       _finding = false;
       _note = found
@@ -615,7 +734,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               ? _said(_notOpen)
               : error != null
               ? _said(error)
-              : const _ChatSkeleton(),
+              : const SwarmChatSkeleton(),
         ),
       ],
     );
@@ -871,6 +990,25 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return email == null ? 'Someone' : superTabPersonName(email);
   }
 
+  /// The reaction picker over thread [t]'s message [id], as [_pickReaction]
+  /// does in the chat.
+  Future<void> _pickThreadReaction(
+    SwarmConversation c,
+    SwarmThread t,
+    String id,
+  ) async {
+    SuperTabMessage? shown() => t.messages.where((m) => m.id == id).firstOrNull;
+    final message = shown();
+    if (message == null) return;
+    final emoji = await showSwarmReactionPicker(
+      context,
+      reactions: c.reactionsOf(message),
+      readerId: c.reader.accountId,
+    );
+    if (emoji == null || !mounted) return;
+    if (shown() case final now?) await t.react(now, emoji);
+  }
+
   /// The reaction picker over message [id]: the pick reacts to the message
   /// as it is by then.
   Future<void> _pickReaction(SwarmConversation c, String id) async {
@@ -902,14 +1040,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   ) {
     final state = c.state;
     if (state == SwarmChatState.lost) return _said(c.error ?? _notOpen);
-    if (c.messages.isEmpty && c.pending == null) {
+    if (c.stream.isEmpty && c.pending == null) {
       if (state != SwarmChatState.loaded) {
         // A first read that failed: said under the chat once it is known,
         // here until then.
         if (c.error case final error?) {
           return view.known ? const SizedBox.shrink() : _said(error);
         }
-        return const _ChatSkeleton();
+        return const SwarmChatSkeleton();
       }
       if (view.decisions.isEmpty) {
         return _said(
@@ -919,8 +1057,27 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }
     }
     final snapshot = c.reader.snapshot;
-    final messages = c.messages;
-    final from = (messages, view.decisions, c.hasOlder, _held.value);
+    // A reply only in its thread shows there alone.
+    final stream = c.stream;
+    final answered = answeredPromptAlerts(
+      stream,
+      (agentId) => snapshot?.agent(agentId),
+    );
+    final messages = answered.isEmpty
+        ? stream
+        : [
+            for (final m in stream)
+              if (!answered.contains(m.id)) m,
+          ];
+    // The notes hidden are part of what the rows were made from: a warning
+    // goes once its agent's prompt is answered, with no new message.
+    final from = (
+      stream,
+      view.decisions,
+      c.hasOlder,
+      _held.value,
+      answered.join(','),
+    );
     if (from != _madeFrom) {
       // Read back: the messages after the newest shown then wait below, and
       // so do decisions asked after it.
@@ -937,7 +1094,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 if (!(need.decision.createdAt?.isAfter(last) ?? false)) need,
             ];
       _shown = _timeline(shown, asks, hasOlder: c.hasOlder).reversed.toList();
-      _byId = {for (final m in messages) m.id: m};
+      // Every message read, for the quotes.
+      _byId = {for (final m in c.messages) m.id: m};
       _placeOf = {for (final (i, entry) in _shown.indexed) _keyOf(entry): i};
       _rows.removeWhere((key, _) => !_placeOf.containsKey(key));
       _madeFrom = from;
@@ -960,7 +1118,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
           final today = DateUtils.dateOnly(DateTime.now());
           return _row(key, (day, today), () => _Day(day: day, today: today));
         case _MessageEntry(message: final m, :final grouped):
-          final reply = m.replyTo == null ? null : byId[m.replyTo];
+          // A thread reply quotes nothing: it sits under its root, and one
+          // also sent here says so and opens the thread.
+          final reply = m.replyTo == null || m.threadReply
+              ? null
+              : byId[m.replyTo];
+          final root = m.thread;
+          final line = root == m.id ? c.thread(m.id) : null;
+          final faces = line == null
+              ? const <SwarmThreadFace>[]
+              : swarmThreadFaces(snapshot, line);
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
           final pm = swarmIsPmLine(c.reader, m);
@@ -991,6 +1158,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               reactions,
               answerIn,
               view.project,
+              line,
+              [
+                for (final who in faces)
+                  '${who.id}:${who.name}:${swarmLookKey(who.look)}',
+              ].join(','),
             ),
             () => SwarmMessageRow(
               key: followed ? _targetKey : null,
@@ -1002,7 +1174,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               grouped: grouped,
               lit: lit,
               followed: followed,
-              quote: m.replyTo == null
+              quote: m.threadReply
+                  ? SwarmRepliedInThread(
+                      key: ValueKey('swarm-replied-in-thread-${m.id}'),
+                      onOpen: () => _openThread(c, root!),
+                    )
+                  : m.replyTo == null
                   ? null
                   : SwarmQuote(
                       key: ValueKey('swarm-quote-${m.id}'),
@@ -1013,7 +1190,22 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               actions: acting,
               onTap: () =>
                   setState(() => _acting = _acting == m.id ? null : m.id),
-              onReply: view.canPost ? () => _reply(c, m) : null,
+              // A message with a thread is answered there; one from before
+              // threads keeps the inline reply.
+              onReply: !view.canPost
+                  ? null
+                  : root != null
+                  ? () => _openThread(c, root)
+                  : () => _reply(c, m),
+              inThread: root != null,
+              thread: line == null || line.replies == 0
+                  ? null
+                  : SwarmThreadLine(
+                      key: ValueKey('swarm-thread-line-${m.id}'),
+                      thread: line,
+                      faces: faces,
+                      onOpen: () => _openThread(c, m.id),
+                    ),
               onAuthor: m.fromAgent
                   ? null
                   : () => unawaited(
@@ -1164,12 +1356,14 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return row;
   }
 
-  /// How many messages wait below while the person reads back.
+  /// How many messages wait below while the person reads back: those the
+  /// list will show, not replies only in their thread.
   int _waiting(SwarmConversation c) {
     final held = _held.value;
     if (held == null) return 0;
-    final at = c.messages.lastIndexWhere((m) => m.id == held);
-    return at < 0 ? 0 : c.messages.length - at - 1;
+    final stream = c.stream;
+    final at = stream.lastIndexWhere((m) => m.id == held);
+    return at < 0 ? 0 : stream.length - at - 1;
   }
 
   /// Back to the foot, where the messages that waited show.
@@ -1265,7 +1459,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                       ),
                     ),
                   ),
-                  _Round(
+                  SwarmRoundButton(
                     key: const ValueKey('swarm-reply-cancel'),
                     label: 'Cancel reply',
                     onTap: () => c.replyingTo = null,
@@ -1330,7 +1524,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               if (swarmSendsFiles)
-                _Round(
+                SwarmRoundButton(
                   key: const ValueKey('swarm-attach'),
                   label: 'Attach files',
                   onTap: c.uploading || c.files.room <= 0
@@ -1346,7 +1540,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 ),
               const SizedBox(width: 6),
               Expanded(
-                child: _MessageField(
+                child: SwarmMessageField(
                   controller: _text,
                   focus: _focus,
                   hint: hint,
@@ -1356,7 +1550,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 SwarmVoiceMic(voice: voice)
               else
                 const SizedBox(width: 6),
-              _Round(
+              SwarmRoundButton(
                 key: const ValueKey('swarm-send'),
                 label: 'Send',
                 fill: canSend ? AppPalette.accent : ttyRaised(tty),
@@ -1750,9 +1944,9 @@ const _listPadding = EdgeInsets.fromLTRB(
 
 /// The chat's first page on its way: bubbles in the shape of messages, at
 /// the foot where they will show. Each has a fixed number of lines, so none
-/// changes height as it breathes.
-class _ChatSkeleton extends StatelessWidget {
-  const _ChatSkeleton();
+/// changes height as it breathes. A thread's first read shows it too.
+class SwarmChatSkeleton extends StatelessWidget {
+  const SwarmChatSkeleton({super.key});
 
   /// Each bubble's lines and its last line's width, newest last.
   static const _bubbles = [
@@ -2259,17 +2453,22 @@ class _AnswerIn extends StatelessWidget {
 }
 
 /// The composer's field: one rounded line that grows with what is typed, up
-/// to five, in the app's own face.
-class _MessageField extends StatelessWidget {
-  const _MessageField({
+/// to five, in the app's own face. A thread's reply box has it too.
+class SwarmMessageField extends StatelessWidget {
+  const SwarmMessageField({
+    super.key,
     required this.controller,
     required this.focus,
     required this.hint,
+    this.fieldKey = const ValueKey('swarm-field'),
   });
 
   final TextEditingController controller;
   final FocusNode focus;
   final String hint;
+
+  /// The pill's key: the chat's and a thread's box are told apart by it.
+  final Key fieldKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2279,7 +2478,7 @@ class _MessageField extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: focus.requestFocus,
       child: Container(
-        key: const ValueKey('swarm-field'),
+        key: fieldKey,
         constraints: const BoxConstraints(minHeight: 44),
         alignment: Alignment.centerLeft,
         // One line rests at the 44 of the buttons beside it.
@@ -2340,9 +2539,10 @@ class _MessageField extends StatelessWidget {
   }
 }
 
-/// A round 44pt button: @, Send, the reply bar's ✕. [fill] draws it solid.
-class _Round extends StatelessWidget {
-  const _Round({
+/// A round 44pt button: @, Send, the reply bar's ✕, a thread's Send. [fill]
+/// draws it solid.
+class SwarmRoundButton extends StatelessWidget {
+  const SwarmRoundButton({
     super.key,
     required this.label,
     required this.onTap,
