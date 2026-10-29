@@ -1677,7 +1677,8 @@ Set<String> swarmGroupedMessages(List<SuperTabMessage> messages) {
 
 /// An agent's role as its compact badge says it (the Naming System): PM for
 /// a project's Product Manager, Rev for a reviewer, Dev for an engineer;
-/// none for a person, or an agent no longer in the Swarm.
+/// none for a person, a Buddy (no engineer, though it runs as one; Desktop
+/// shows it none either), or an agent no longer in the Swarm.
 String? swarmRole(SuperTabSnapshot snapshot, SuperTabMessage message) {
   if (!message.fromAgent) return null;
   return swarmAgentRole(snapshot, message.authorId);
@@ -1686,7 +1687,7 @@ String? swarmRole(SuperTabSnapshot snapshot, SuperTabMessage message) {
 String? swarmAgentRole(SuperTabSnapshot snapshot, String agentId) {
   if (snapshot.isLead(agentId)) return 'PM';
   final agent = snapshot.agent(agentId);
-  if (agent == null) return null;
+  if (agent == null || agent.isBuddy) return null;
   return agent.isReviewer ? 'Rev' : 'Dev';
 }
 

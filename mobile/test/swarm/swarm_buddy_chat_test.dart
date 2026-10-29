@@ -4,6 +4,7 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
@@ -234,6 +235,28 @@ void main() {
         ),
         findsOneWidget,
       );
+    });
+
+    testWidgets('the Buddy wears no role beside its name: a Buddy is no Dev, '
+        'as on Desktop', (tester) async {
+      await pump(
+        tester,
+        backend(
+          buddy: wren(),
+          page: [message('m1', 1, author: 'agent-wren')],
+        ),
+      );
+
+      final line = key('swarm-message-m1');
+      expect(
+        find.descendant(of: line, matching: find.text('Wren')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: line, matching: find.text('Dev')),
+        findsNothing,
+      );
+      expect(find.byType(SwarmRoleBadge), findsNothing);
     });
 
     testWidgets("the PM's line is answered in the project chat, with the PM "
