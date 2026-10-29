@@ -1,5 +1,10 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
+import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
+import { managedNodePath } from './nodeRuntime.js'
+import { isMessagesCommand } from '../engines/kit/messagesHook.js'
+import { isManagedHook } from '../engines/kit/notifyHooks.js'
+import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -574,7 +579,7 @@ You are one person's Buddy for one project. You help them think a request throug
 
 ## Limits
 - Never assign work, start agents, change code or open pull requests. Your folder is for reading.
-- In the shell, run only harness super-tab commands: anything else waits for an approval nobody at your terminal gives. Read the code with your file tools.
+- Read the code with your file tools (Read, Grep, Glob), inside your folder only. In the shell, run one plain command at a time, with no pipes, redirects, ;, &&, $() or globs, no absolute paths and no "..", and only these: git grep, log, show, diff, blame and status; gh issue view and list; gh pr view, list and diff (this project's only, no -R); ls, cat, rg, head, tail, wc and grep; and harness super-tab status, messages, message, decisions, post, propose and help, without --agent: your terminal says who you are. Anything else is refused, or waits for an approval nobody may give: do not retry it; tell your owner what you could not do.
 - Say "I don't know" rather than guess, and point your owner to the PM in the project chat for anything you cannot answer.
 `
 
@@ -626,9 +631,45 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
   return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
 }
 
-/** What Claude Code may do in a Buddy's folder without asking (it launches in asking mode, superTabs/start.ts): its Super Tab
- *  commands, to read and post in its owner's chat. Editing is denied outright. */
-const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['Bash(harness super-tab:*)'], deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] } }
+/** Claude Code's settings in a Buddy's folder, the only ones it reads (it launches with `--setting-sources local` in dontAsk
+ *  mode, engines/claude/launch.ts `buddy`): its guard answers every tool call, allowing only reads and its Super Tab
+ *  commands (lib/buddyGuard.ts), editing is denied outright, and Harness's own hooks come with them. */
+const buddyClaudeSettings = (guard: string) => ({
+  permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
+  // No memory file at all. The local settings source still loads a CLAUDE.local.md, and a committed one importing files
+  // from outside the folder (@/x, @~/x) stopped an interactive Buddy at "Allow external CLAUDE.md file imports?", which
+  // nobody answers, while a yes would read those files past its guard. CLAUDE_CODE_DISABLE_CLAUDE_MDS did not stop it;
+  // this does (Claude Code 2.1.312, tried; security re-check of #2092). The Buddy can still read instructions with Read.
+  claudeMdExcludes: ['**/*'],
+  disableAllHooks: false,
+  hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }],
+    ...harnessClaudeHooks() },
+})
+
+/**
+ * Harness's own Claude Code hooks, as the launch just wrote them to the person's settings (core/agents/create.ts prepares
+ * hooks before the Swarm's skill): the session, turn and Agent Messages hooks that mark a Buddy's activity, and none of
+ * anybody else's. The Buddy does not read the person's settings, so they are carried here; a relaunch carries them again.
+ * Missing or unreadable settings carry none: the Buddy still runs, guarded, without activity marks.
+ */
+function harnessClaudeHooks(): Record<string, unknown[]> {
+  let settings: { hooks?: Record<string, unknown> }
+  try {
+    settings = JSON.parse(readFileSync(join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json'), 'utf8'))
+  } catch { return {} }
+  const ours = (hook: unknown) => !!hook && typeof hook === 'object' && (isManagedHook(hook as Parameters<typeof isManagedHook>[0])
+    || isMessagesCommand((hook as { command?: unknown }).command))
+  const carried: Record<string, unknown[]> = {}
+  for (const [event, blocks] of Object.entries(settings?.hooks ?? {})) {
+    if (event === 'PreToolUse' || !Array.isArray(blocks)) continue
+    const kept = blocks.flatMap((block: { matcher?: unknown; hooks?: unknown }) => {
+      const hooks = Array.isArray(block?.hooks) ? block.hooks.filter(ours) : []
+      return hooks.length ? [{ ...(typeof block.matcher === 'string' ? { matcher: block.matcher } : {}), hooks }] : []
+    })
+    if (kept.length) carried[event] = kept
+  }
+  return carried
+}
 
 /**
  * A Buddy never changes code (Lead's ruling, privacy review of #1992): its own worktree gets Claude Code's settings above,
@@ -637,10 +678,12 @@ const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['
  * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
  */
 function lockBuddyFolder(root: string): void {
-  const settings = join(root, '.claude', 'settings.local.json')
+  const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
-  if (existsSync(settings)) chmodSync(settings, 0o600)
-  writeFileSync(settings, `${JSON.stringify(BUDDY_CLAUDE_SETTINGS, null, 2)}\n`, { mode: 0o600 })
+  // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
+  for (const file of [settings, guard]) if (existsSync(file)) chmodSync(file, 0o600)
+  writeFileSync(guard, buddyGuardSource(root), { mode: 0o600 })
+  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard), null, 2)}\n`, { mode: 0o600 })
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (dir === root && (entry.name === '.harness' || entry.name === '.git')) continue

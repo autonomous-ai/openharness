@@ -68,6 +68,8 @@ void main() {
   test(
     'native payload carries resolved contexts, unbinding and actual hints',
     () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
       final keymap = MemoryKeymap();
       addTearDown(keymap.dispose);
       final defaults = nativeKeymapSnapshot(keymap);
