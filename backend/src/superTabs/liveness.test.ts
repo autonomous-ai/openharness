@@ -247,13 +247,15 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     expect(wakes(sweepForLead(stale, NOW + MINUTE))).toEqual([])
   })
 
-  it('waits queued, never orphaned and never written again, while a start from before request times is not launched', () => {
+  it('gives a start from before request times its 10 minutes from when it was first seen queued, not rewritten meanwhile', () => {
     const legacy = starting({ requestedAt: undefined })
     sweepForLead(legacy, NOW)
     const recorded = task(legacy).liveness
     expect(recorded).toEqual({ state: 'waiting', why: 'queued', since: NOW })
-    sweepForLead(legacy, NOW + 60 * MINUTE)
+    sweepForLead(legacy, NOW + 9 * MINUTE)
     expect(task(legacy).liveness).toBe(recorded)
+    expect(wakes(sweepForLead(legacy, NOW + 10 * MINUTE))[0]!.text).toContain('orphaned, its agent has not started for 10 minutes.')
+    expect(task(legacy).liveness).toEqual({ state: 'orphaned', why: 'unstarted', since: NOW })
   })
 
   it('stays queued while the Lead keeps acting on it: 10 minutes run from its last action', () => {
@@ -284,6 +286,48 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     expect(rows[0]!.text.startsWith('2 tasks need you:\n')).toBe(true)
     expect(state.conversations.find(c => c.id === 'g3')!.liveness).toBeUndefined()
     expect(state.conversations.find(c => c.id === 'lead')!.liveness).toBeUndefined()
+  })
+
+  it('is no longer orphaned once it is assigned again and working, and its next orphan episode wakes the Lead again', () => {
+    const state = project({ status: 'reconciling' })
+    expect(wakes(sweepForLead(state, NOW))).toHaveLength(1)
+    // Reassigned: a new attempt held by a working agent.
+    task(state).assignment = assignment({ id: 'a2', leaseUntil: NOW + MINUTE + LEASE_MS, progressAt: NOW + MINUTE })
+    expect(wakes(sweepForLead(state, NOW + MINUTE))).toEqual([])
+    expect(task(state).liveness).toBeUndefined()
+    task(state).assignment!.status = 'reconciling'
+    expect(wakes(sweepForLead(state, NOW + 2 * MINUTE))).toHaveLength(1)
+  })
+
+  it('stays orphaned after its failed start is no longer loaded, until it has work again', () => {
+    const failed = starting({ dispatched: true, dispatchedAt: NOW - MINUTE, error: 'Mac could not prepare it' })
+    sweepForLead(failed, NOW)
+    failed.starts = []
+    sweepForLead(failed, NOW + MINUTE)
+    expect(task(failed).liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: NOW })
+    task(failed).assignment = assignment({ leaseUntil: NOW + 2 * MINUTE + LEASE_MS, progressAt: NOW + 2 * MINUTE })
+    sweepForLead(failed, NOW + 2 * MINUTE)
+    expect(task(failed).liveness).toBeUndefined()
+  })
+
+  it('records a stall only once its wake reaches a Lead: a project without one is told when its Lead arrives', () => {
+    const state = project({ progressAt: NOW - 40 * MINUTE })
+    const chat = state.conversations.find(c => c.id === 'lead')!
+    chat.leadId = null
+    chat.agentIds = []
+    expect(wakes(sweepForLead(state, NOW))).toEqual([])
+    expect(task(state).liveness).toBeUndefined()
+    chat.leadId = 'L'
+    chat.agentIds = ['L']
+    expect(wakes(sweepForLead(state, NOW + MINUTE))).toHaveLength(1)
+    expect(task(state).liveness).toMatchObject({ state: 'quiet' })
+  })
+
+  it('names the person its agent asked, not its requester, while it waits on a decision', () => {
+    const asked = project({ status: 'needs_human', askedOf: 'q' })
+    asked.people.push({ id: 'q', email: 'q@example.com', role: 'collaborator', generation: 'g' } as never)
+    sweepForLead(asked, NOW)
+    expect(task(asked).liveness).toMatchObject({ state: 'waiting', why: 'person', personId: 'q' })
   })
 
   it('clears its state once its work is finished', () => {

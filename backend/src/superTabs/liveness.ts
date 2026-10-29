@@ -211,7 +211,9 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
     if (!worker || assignment.status === 'reconciling') return { state: 'orphaned', why: 'removed', since: now }
     const progress = assignment.progressAt ?? (group.lastActivityAt ? Date.parse(group.lastActivityAt) : now)
     if (assignment.status === 'needs_human') {
-      return { state: 'waiting', why: 'person', personId: waitedOn(state, group), since: group.ledger?.waiting?.since ?? progress }
+      // The person its agent asked, else whom the work waits on by default (its requester, else the project's owner).
+      const asked = assignment.askedOf && state.people.some(p => p.id === assignment.askedOf) ? assignment.askedOf : undefined
+      return { state: 'waiting', why: 'person', personId: asked ?? waitedOn(state, group), since: group.ledger?.waiting?.since ?? progress }
     }
     if (assignment.status === 'review' || assignment.status === 'blocked') return { state: 'waiting', why: assignment.status, since: progress }
     // A review whose build is back with its Engineer waits for the new revision.
@@ -223,10 +225,11 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
   const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
   if (start && !start.harnessId && !start.error) {
     if (start.dispatched) return { state: 'waiting', why: 'starting', since: start.dispatchedAt ?? now }
-    // A start from before requestedAt has no clock to run out.
-    if (start.requestedAt === undefined) return { state: 'waiting', why: 'queued', since: now }
-    const stale = now - Math.max(start.requestedAt, group.leadAction?.at ?? 0) >= START_PICKUP_MS
-    return { state: stale ? 'orphaned' : 'waiting', why: stale ? 'unstarted' : 'queued', since: start.requestedAt }
+    // A start from before requestedAt runs from when it was first recorded queued.
+    const recorded = group.liveness?.why === 'queued' || group.liveness?.why === 'unstarted' ? group.liveness.since : now
+    const asked = start.requestedAt ?? recorded
+    const stale = now - Math.max(asked, group.leadAction?.at ?? 0) >= START_PICKUP_MS
+    return { state: stale ? 'orphaned' : 'waiting', why: stale ? 'unstarted' : 'queued', since: asked }
   }
   if (assignment && FINISHED_WORK.includes(assignment.status)) return null
   if (start?.error && !start.harnessId) return { state: 'orphaned', why: 'start-failed', since: now }
@@ -236,10 +239,10 @@ export function taskLiveness(state: SuperTabState, group: Conversation, now: num
 
 const FINISHED_OR_ARCHIVED = (group: Conversation) => group.archived || (!!group.assignment && FINISHED_WORK.includes(group.assignment.status))
 
-/** What a task's record becomes: its state now. An orphaned task stays so until it has work again, since its failed start
- *  is no longer loaded once it ended. */
+/** What a task's record becomes: its state now. A task whose start failed stays orphaned until it has work again, since
+ *  that start is no longer loaded once it ended; nothing else outlives what made it. */
 const nextState = (state: SuperTabState, group: Conversation, now: number) => taskLiveness(state, group, now)
-  ?? (group.liveness?.state === 'orphaned' && !FINISHED_OR_ARCHIVED(group) ? group.liveness : undefined)
+  ?? (group.liveness?.why === 'start-failed' && !activeWork(group) && !FINISHED_OR_ARCHIVED(group) ? group.liveness : undefined)
 
 /** Records the state of the task a command changed, in that command's own write, so the time checks find nothing to rewrite
  *  (a machine's reading must write no group, read/host.ts). A stall is left to the time checks, which wake the Lead for it;
@@ -268,30 +271,35 @@ function stalledLine(state: SuperTabState, group: Conversation, liveness: TaskLi
 /** Records each task's state where it changed, so readers see it, and wakes each project's Lead once, in its chat, for the
  *  tasks that just turned quiet or orphaned. A task lost or whose start failed has had its own notice already. The record
  *  is the deduplication: a sweep on another server writes the same group, so one of the two retries and finds it recorded.
- *  A working task has no record, so a steady Swarm's sweeps write nothing. */
+ *  A stall is recorded only with a wake that reaches its Lead: a project with none yet is told once it has one. A working
+ *  task has no record, so a steady Swarm's sweeps write nothing. */
 function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
-  const stalled = new Map<string, Conversation[]>()
+  const stalled = new Map<string, Array<{ group: Conversation; next: TaskLiveness }>>()
   for (const group of state.conversations) {
     const before = group.liveness
     const next = nextState(state, group, now)
     if (sameState(before, next)) continue
-    if (next) group.liveness = next
-    else delete group.liveness
     if (next && (next.state === 'quiet' || next.state === 'orphaned') && before?.state !== next.state && next.why !== 'lost' && next.why !== 'start-failed') {
       const projectId = group.projectId ?? 'lead'
-      stalled.set(projectId, [...stalled.get(projectId) ?? [], group])
+      stalled.set(projectId, [...stalled.get(projectId) ?? [], { group, next }])
+      continue
     }
+    if (next) group.liveness = next
+    else delete group.liveness
   }
-  return [...stalled].flatMap(([projectId, groups]) => {
+  return [...stalled].flatMap(([projectId, tasks]) => {
     const chat = state.conversations.find(c => c.id === projectsOf(state).find(p => p.id === projectId)!.leadConversationId)
     const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
     if (!chat || !lead) return []
-    const one = groups.length === 1
-    const text = `${one ? 'A task needs' : `${groups.length} tasks need`} you:\n${groups.map(g => stalledLine(state, g, g.liveness!, now)).join('\n')}\n`
+    const one = tasks.length === 1
+    const text = `${one ? 'A task needs' : `${tasks.length} tasks need`} you:\n${tasks.map(t => stalledLine(state, t.group, t.next, now)).join('\n')}\n`
       + `Act on ${one ? 'it' : 'each'} now: nudge its agent, reassign it, or post in its chat why it waits.`
-    return [reachable(state, { id: stableId('work-stalled', state.id, projectId, String(now)), conversationId: chat.id, author: writtenBy(state, lead), replyTo: null,
+    const row = reachable(state, { id: stableId('work-stalled', state.id, projectId, String(now)), conversationId: chat.id, author: writtenBy(state, lead), replyTo: null,
       recipients: chat.agentIds.includes(lead.id) ? [lead.id] : [], text,
-      source: { kind: 'work-stalled', tasks: groups.map(g => ({ conversationId: g.id, state: g.liveness!.state, why: g.liveness!.why })) } })]
+      source: { kind: 'work-stalled', tasks: tasks.map(t => ({ conversationId: t.group.id, state: t.next.state, why: t.next.why })) } })
+    if (!row.recipients.length) return []
+    for (const t of tasks) t.group.liveness = t.next
+    return [row]
   })
 }
 
