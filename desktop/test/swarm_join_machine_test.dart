@@ -292,6 +292,40 @@ void main() {
     },
   );
 
+  // Review of #2188: an invitation accepted on this computer by someone who
+  // joined by link on another one made no membership, and shares nothing.
+  test('a join or accept adds this computer only when the server says it made the membership', () {
+    // An invitation's accept answers as the backend's commands.ts does.
+    expect(
+      swarmNewMemberRole({
+        'conversationId': 'lead',
+        'alreadyMember': false,
+        'role': 'collaborator',
+      }),
+      'collaborator',
+    );
+    expect(
+      swarmNewMemberRole({
+        'conversationId': 'lead',
+        'alreadyMember': true,
+        'role': 'collaborator',
+      }),
+      isNull,
+    );
+    // A link join, as store.ts answers it.
+    expect(
+      swarmNewMemberRole({
+        'id': 'tab',
+        'role': 'viewer',
+        'alreadyMember': false,
+      }),
+      'viewer',
+    );
+    // An older server says neither: nothing is added.
+    expect(swarmNewMemberRole({'conversationId': 'lead'}), isNull);
+    expect(swarmNewMemberRole({'alreadyMember': false}), isNull);
+  });
+
   group('the note after joining', noteTests);
 }
 

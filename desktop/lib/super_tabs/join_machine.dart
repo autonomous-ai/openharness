@@ -15,6 +15,17 @@ int? superTabSuggestedAgentSlots(MachineResources? resources) {
   return (total / (2 * _agentMemoryBytes)).floor().clamp(1, 16);
 }
 
+/// The role [answer] says this account just became a member as: the
+/// server's own answer to the join that asked, a link join (store.ts
+/// `joinSwarm`) or an invitation's accept (commands.ts `invite.accept`). Null
+/// when the person was a member already, whatever an earlier preview said (they
+/// may have joined on another device meanwhile), or when an older server does
+/// not say: this computer is added only to a membership this request made.
+String? swarmNewMemberRole(Map<String, dynamic> answer) =>
+    answer['alreadyMember'] == false && answer['role'] is String
+    ? answer['role'] as String
+    : null;
+
 /// The engines a Swarm machine runs (backend `swarmEngine`).
 const _swarmEngines = {'claude', 'codex'};
 

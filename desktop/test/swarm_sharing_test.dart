@@ -726,7 +726,10 @@ void main() {
   // Scholes, 2026-10-29: joining adds this computer, so only a join that made
   // the person a member says so, with the role; someone already in it, never.
   testWidgets('tells only a new member\'s join, with its role', (tester) async {
-    Future<List<String>> join(Map<String, dynamic> preview) async {
+    Future<List<String>> join(
+      Map<String, dynamic> preview, {
+      Map<String, dynamic>? joined,
+    }) async {
       final told = <String>[];
       await tester.pumpWidget(
         MaterialApp(
@@ -744,7 +747,7 @@ void main() {
                     request: (_, path, {body}) async =>
                         path.endsWith('/preview')
                         ? {'id': _link.tabId, 'name': 'Pilot', ...preview}
-                        : {'id': _link.tabId},
+                        : {'id': _link.tabId, ...?joined},
                   ),
                 ),
                 child: const Text('open'),
@@ -760,13 +763,34 @@ void main() {
       return told;
     }
 
-    expect(await join({'role': 'collaborator'}), [
-      '${_link.tabId}:collaborator',
-    ]);
-    expect(await join({'role': 'viewer'}), ['${_link.tabId}:viewer']);
+    expect(
+      await join(
+        {'role': 'collaborator'},
+        joined: {'role': 'collaborator', 'alreadyMember': false},
+      ),
+      ['${_link.tabId}:collaborator'],
+    );
+    expect(
+      await join(
+        {'role': 'viewer'},
+        joined: {'role': 'viewer', 'alreadyMember': false},
+      ),
+      ['${_link.tabId}:viewer'],
+    );
     expect(
       await join({'role': 'collaborator', 'alreadyMember': true}),
       isEmpty,
     );
+    // Review of #2188: the preview said not a member, but the person joined on
+    // another device while it was open. The join's own answer decides.
+    expect(
+      await join(
+        {'role': 'collaborator'},
+        joined: {'role': 'collaborator', 'alreadyMember': true},
+      ),
+      isEmpty,
+    );
+    // A server that does not say: nothing is added.
+    expect(await join({'role': 'collaborator'}), isEmpty);
   });
 }

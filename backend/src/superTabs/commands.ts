@@ -538,11 +538,15 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const invite = state.invitations.find(i => i.id === command.inviteId)
     if (!invite || invite.email !== actor.email.trim().toLowerCase()) fail('NOT_FOUND', 'This invitation is unavailable.', 404)
     if (invite.expiresAt <= context.now) fail('EXPIRED', 'This invitation expired.', 410)
-    if (!state.people.some(p => p.id === actor.userId)) {
+    const existing = state.people.find(p => p.id === actor.userId)
+    if (!existing) {
       state.people.push({ id: actor.userId, email: invite.email, role: invite.role, generation: invite.id })
     }
     state.invitations = state.invitations.filter(i => i.id !== invite.id)
     result.conversationId = invite.conversationId
+    // As a link join answers (store.ts joinSwarm): Desktop adds the accepting computer only when this made a member.
+    result.alreadyMember = !!existing
+    result.role = existing?.role ?? invite.role
     return effects
   }
   // The host of a removed agent may have left the Swarm with it: the machine owner the request names confirms the close.
