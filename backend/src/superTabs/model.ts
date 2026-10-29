@@ -77,6 +77,9 @@ export interface Agent {
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
   buddyOf?: { personId: string; generation: string }
+  /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
+   *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
+  teamAccount?: true
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'

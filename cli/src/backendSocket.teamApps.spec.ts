@@ -17,6 +17,7 @@ describe('the account\'s own apps under a remote app policy', () => {
     reply: (_type, payload) => Array.isArray(payload.agents) ? { ...payload, agents: (payload.agents as Array<{ id: string }>).filter(a => a.id !== 'pm') } : payload,
     event: (frame) => (frame.payload as { agentId?: unknown } | undefined)?.agentId === 'pm' ? null : frame,
     watchOnly: () => true,
+    isConfidential: (id) => id === 'pm',
   }
 
   function session(guest?: string) {
@@ -78,10 +79,38 @@ describe('the account\'s own apps under a remote app policy', () => {
     const { socket } = session()
     expect(socket.appWatchOnly('remote')).toBe(true)
     expect(socket.appWatchOnly('')).toBe(false)
-    expect(socket.appWatchOnly('unknown-connection')).toBe(false)
+    // A remote connection with no client record fails closed.
+    expect(socket.appWatchOnly('unknown-connection')).toBe(true)
     socket.remoteAppPolicy = null
     expect(socket.appWatchOnly('remote')).toBe(false)
     expect(session('kim@acme.io').socket.appWatchOnly('remote')).toBe(false)
+  })
+
+  // Security re-review of #2089: turn cards, agent questions and commander events go to the account's paired devices
+  // through sendCommander, and a Team daemon seals them for the Mac owner's devices.
+  it('withholds from the account\'s devices, the Wi-Fi device and its browsers what the policy withholds', () => {
+    const { socket, gw } = session()
+    const commander = vi.spyOn(gw, 'commander').mockImplementation(() => {})
+    const device = vi.spyOn(gw, 'device').mockImplementation(() => true)
+    const user = vi.spyOn(gw, 'user').mockImplementation(() => {})
+    socket.sendCommander({ type: 'question', payload: { agentId: 'pm', question: 'Approve the launch slip?' } })
+    socket.sendCommander({ type: 'turn_card', payload: { agentId: 'worker', recap: 'Tests pass.' } })
+    socket.deviceFrame('dial', 'card', { agentId: 'pm', text: 'private' })
+    socket.deviceFrame('dial', 'card', { agentId: 'worker', text: 'hello' })
+    socket.sendUser({ type: 'notice', payload: { agentId: 'pm' } })
+    socket.sendUser({ type: 'notice', payload: { agentId: 'worker' } })
+    expect(commander.mock.calls.map(([frame]) => (frame as { payload: { agentId: string } }).payload.agentId)).toEqual(['worker'])
+    expect(device.mock.calls.map(([, , payload]) => (payload as { agentId: string }).agentId)).toEqual(['worker'])
+    expect(user.mock.calls.map(([frame]) => (frame as { payload: { agentId: string } }).payload.agentId)).toEqual(['worker'])
+  })
+
+  it('closes a confidential session\'s terminal to the account\'s own apps, unknown connections too, and to no guest or window here', () => {
+    const { socket } = session()
+    expect([socket.appClosedTo('remote', 'pm'), socket.appClosedTo('remote', 'worker'), socket.appClosedTo('unknown-connection', 'pm')]).toEqual([true, false, true])
+    expect(socket.appClosedTo('', 'pm')).toBe(false)
+    expect(session('kim@acme.io').socket.appClosedTo('remote', 'pm')).toBe(false)
+    socket.remoteAppPolicy = null
+    expect(socket.appClosedTo('remote', 'pm')).toBe(false)
   })
 
   it('leaves a guest to the guest policy, which refuses it first', async () => {

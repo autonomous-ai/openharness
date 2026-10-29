@@ -1,4 +1,4 @@
-import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import {
@@ -1275,6 +1275,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const chosen = command.roleId ? chosenRole(project, command.roleId, kind) : null
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (existing && agentRole(existing) === 'reviewer' && command.lead) fail('REVIEWER_NOT_LEAD', 'A Reviewer reviews work and cannot lead a group.')
+      // A Harness Team account hosting a Product Manager serves only its project, and one is never added where another
+      // project's work runs (machines.ts productManagerOn, as admitMachineStart holds a start; security re-review of #2089).
+      const teamPool = teamAccountPool(machineContribution(state, command.machineId))
+      if (!existing && teamPool) {
+        const held = productManagerOn(state, command.machineId)
+        if (held && held !== project.id) fail('TEAM_ACCOUNT_HELD', 'This machine\'s Harness Team account runs another project\'s Product Manager, so it takes only that project\'s work for now.', 403)
+        if (kind === 'lead' && [...projectsOnMachine(state, command.machineId)].some(id => id !== project.id)) {
+          fail('TEAM_ACCOUNT_BUSY', 'This machine\'s Harness Team account runs other projects\' agents, so it cannot host this Product Manager now.', 409)
+        }
+      }
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
       // Added back before its host closed it: the session stays open.
       if (!existing) dropClosing(state, c => c.machineId !== command.machineId || c.harnessId !== command.harnessId)
@@ -1283,7 +1293,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
         name: command.name, configuration: command.configuration, configurationVersion: operationId,
-        ...(chosen?.kind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(chosen ? { roleId: chosen.id } : {}) })
+        ...(chosen?.kind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(chosen ? { roleId: chosen.id } : {}),
+        ...(teamPool ? { teamAccount: true as const } : {}) })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
       }
@@ -1508,6 +1519,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
         ...(start.request.gridModel ? { gridModel: start.request.gridModel } : {}),
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
+        ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId

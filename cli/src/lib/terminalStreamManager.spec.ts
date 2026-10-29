@@ -1215,6 +1215,42 @@ describe('TerminalStreamManager', () => {
     })
   })
 
+  // Security review 2 of #2089: a session that turned confidential (a Swarm Product Manager, superTabs/inCore/teamApps.ts)
+  // after the Mac owner's app opened it went on streaming people's chats to that app.
+  describe('a stream on a session that turned confidential', () => {
+    let closed: boolean
+    beforeEach(() => {
+      closed = false
+      manager = newManager({ closedTo: (connId, agentId) => closed && connId === 'owner-app' && agentId === 'agent-1' })
+    })
+    const output = () => binarySent.filter(({ connId, frame }) => connId === 'owner-app' && frame.kind === TerminalBinaryKind.output)
+
+    it('opened before, is closed and sent nothing more, its resync included', async () => {
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      const streamId = sent.findLast(f => f.type === 'terminal_ready')!.payload.streamId as string
+      sink!.onData(Buffer.from('before'))
+      await vi.advanceTimersByTimeAsync(8)
+      const before = output().length
+      expect(before).toBeGreaterThan(0)
+      closed = true
+      sink!.onData(Buffer.from('Only for the PM: the launch slips a week.'))
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(output()).toHaveLength(before)
+      expect(sent.find(f => f.connId === 'owner-app' && f.type === 'terminal_closed')?.payload).toMatchObject({ code: 'SWARM_CONFIDENTIAL', streamId })
+      const sentBefore = binarySent.length
+      await manager.handleFrame('owner-app', 'terminal_resync', { streamId })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(binarySent).toHaveLength(sentBefore)
+    })
+
+    it('is not opened again', async () => {
+      closed = true
+      await manager.handleFrame('owner-app', 'terminal_open', { requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 80, rows: 24 })
+      expect(sent.at(-1)).toMatchObject({ connId: 'owner-app', payload: expect.objectContaining({ code: 'SWARM_CONFIDENTIAL' }) })
+      expect(sent.some(f => f.type === 'terminal_ready')).toBe(false)
+    })
+  })
+
   describe('a watch-only open', () => {
     let readOnlyOpens: boolean[]
     beforeEach(() => {

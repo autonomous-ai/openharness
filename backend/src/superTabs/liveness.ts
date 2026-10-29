@@ -175,15 +175,16 @@ function buddyNotice(state: SuperTabState, start: AgentStart): MessageDraft[] {
     text: `Could not start ${start.request.name}: ${start.error!}`, source: { kind: 'start-timeout', startId: start.id } }]
 }
 
-/** A Product Manager's start that stopped trying ([text], leadStart.ts), said once in its project's conversation in the name
- *  of the person who asked for it, as a Buddy's is in its owner's. Nothing while it still waits for a machine. */
+/** A Product Manager's start that stopped trying ([text], leadStart.ts), said once as a system row of its project's
+ *  conversation, written under the person who asked for it as a machine's removal is (machines.ts removalEnded). Nothing while
+ *  it still waits for a machine. */
 function leadNotice(state: SuperTabState, start: AgentStart, text: string | null): MessageDraft[] {
   const asker = start.request.leadFor!
   const person = state.people.find(p => p.id === asker.personId && p.generation === asker.generation)
   if (!text || !person || !state.conversations.some(c => c.id === start.request.conversationId)) return []
   return [{ id: stableId('start-timeout', start.id), conversationId: start.request.conversationId, replyTo: null, recipients: [],
     author: { kind: 'person', id: person.id, name: person.email, membershipGeneration: person.generation },
-    text, source: { kind: 'start-timeout', startId: start.id } }]
+    text, source: { kind: 'system' } }]
 }
 
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and

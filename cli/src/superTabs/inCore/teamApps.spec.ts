@@ -7,8 +7,8 @@ import { describe, expect, it, vi } from 'vitest'
 const fixtures = vi.hoisted(() => ({ configFile: '', signedIn: null as null | { kind: string } }))
 vi.mock('../../team/layout.js', async (original) => ({ ...await original<object>(), get TEAM_CONFIG_FILE() { return fixtures.configFile } }))
 vi.mock('../../lib/authSession.js', async (original) => ({ ...await original<object>(), readAuthSession: () => fixtures.signedIn }))
-import { CONFIDENTIAL_RECORD_MAX, confidentialRecord, confidentialRecordFile, createTeamAppPolicy, isTeamDaemon, readConfidentialMarks,
-  teamAppPolicyFor, type HeldSession } from './teamApps.js'
+import { CONFIDENTIAL_RECORD_MAX, confidentialRecord, confidentialRecordFile, createConfidentialPurge, createTeamAppPolicy, isTeamDaemon,
+  readConfidentialMarks, teamAppPolicyFor, type HeldSession, type TeamAppDeps } from './teamApps.js'
 
 // A Harness Team daemon's own account's apps: the Mac owner's (#895). The Swarm's Product Manager there reads people's
 // private chats, so those apps never reach a confidential session, and while one runs there they only watch the others:
@@ -16,13 +16,15 @@ import { CONFIDENTIAL_RECORD_MAX, confidentialRecord, confidentialRecordFile, cr
 
 const dir = () => mkdtempSync(join(tmpdir(), 'team-apps-'))
 
-/** A Team daemon holding [sessions] (all running unless [running] says), whose Swarm marked [marks] confidential (null: the
+/** A Team daemon holding [sessions], running or stopped, whose Swarm marked [marks] confidential (null: the
  *  marks could not be read), with [recorded] kept from before. */
-function policy(marks: string[] | null, sessions: Array<Partial<HeldSession> & { agentId: string }>, recorded: string[] = [], running?: string[]) {
+function policy(marks: string[] | null, sessions: Array<Partial<HeldSession> & { agentId: string }>, recorded: string[] = []) {
   const kept = [...recorded]
   const record = vi.fn((ids: string[]) => { kept.push(...ids) })
+  // A fresh reading for every call: these tests change nothing between calls, and the cache has its own test below.
+  let clock = 0
   const p = createTeamAppPolicy({ marks: () => marks, sessions: () => sessions.map(s => ({ lead: false, ...s })),
-    running: () => running ?? sessions.map(s => s.agentId), recorded: () => kept, record })
+    recorded: () => kept, record, now: () => (clock += 10_000) })
   return Object.assign(p, { record, kept })
 }
 
@@ -85,21 +87,95 @@ describe('the Mac owner\'s apps on a Team daemon running a Product Manager', () 
 })
 
 describe('a Product Manager that stopped', () => {
-  it('stays closed to the owner\'s apps by its record, its history and resume included, once nothing runs that is confidential', () => {
-    const p = policy([], [{ agentId: 'pm', sessionId: 'pm-session' }, { agentId: 'worker' }], ['pm'], ['worker'])
+  it('stays closed to the owner\'s apps by its record, and keeps the account held while it may resume', () => {
+    const p = policy([], [{ agentId: 'pm', sessionId: 'pm-session' }, { agentId: 'worker' }], ['pm'])
     expect(p.refuse('session_get', { sessionId: 'pm-session' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
     expect(p.refuse('agent_resume', { agentId: 'pm' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
     expect(p.reply('agents_list', { agents: [{ id: 'pm' }, { id: 'worker' }] })).toEqual({ agents: [{ id: 'worker' }] })
-    // Nothing confidential runs: the rest is as today.
+    // Stopped (a crash, a restart, a limit), it may resume: the others are still only watched, and no new agent starts
+    // there to read its saved session (security review 2 of #2089).
+    expect(p.watchOnly()).toBe(true)
+    expect(p.refuse('message', { agentId: 'worker' })).toMatchObject({ error: 'TEAM_READ_ONLY' })
+    expect(p.refuse('agent_create', { engine: 'claude', cwd: '/team' })).toMatchObject({ error: 'TEAM_READ_ONLY' })
+    // Search finds nothing of it: its hits and catalog rows, by agent or by session, at any depth of the answer.
+    expect(p.reply('session_search', { hits: [{ agentId: 'pm', text: 'launch slips' }, { sessionId: 'pm-session' }, { agentId: 'worker', text: 'ok' }],
+      catalog: { rows: [{ agentId: 'pm' }, { agentId: 'worker' }] }, total: 3 }))
+      .toEqual({ hits: [{ agentId: 'worker', text: 'ok' }], catalog: { rows: [{ agentId: 'worker' }] }, total: 3 })
+    expect(p.event({ type: 'search_results', payload: { results: [{ hit: { sessionId: 'pm-session' } }, { hit: { agentId: 'worker' } }] } }))
+      .toEqual({ type: 'search_results', payload: { results: [{ hit: { agentId: 'worker' } }] } })
+  })
+
+  it('once its session data is deleted, leaves the account as today, still closed by its record', () => {
+    const p = policy([], [{ agentId: 'worker' }], ['pm'])
     expect(p.watchOnly()).toBe(false)
     expect(p.refuse('message', { agentId: 'worker' })).toBeNull()
+    expect(p.refuse('agent_resume', { agentId: 'pm' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
+  })
+
+  it('kept under a new agent id, is still found by its engine session, which the record keeps too', () => {
+    const p = policy(['pm'], [{ agentId: 'pm', sessionId: 'pm-session' }])
+    p.refuse('agents_list', {})
+    expect(p.kept).toEqual(['pm', 'pm-session'])
+    // The roster's mark went with the old agent id; the same conversation, registered again, is still closed.
+    const later = policy([], [{ agentId: 'pm-again', sessionId: 'pm-session' }], p.kept)
+    expect(later.refuse('session_get', { sessionId: 'pm-session' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
+    expect(later.refuse('terminal_open', { agentId: 'pm-again' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
+  })
+})
+
+// Security re-review of #2089: the guard runs inside the daemon's broadcast. One that throws broke that frame and every later
+// one, so it fails closed instead, and reads what it needs once per burst of frames, not once per frame.
+describe('the policy when what it reads fails', () => {
+  const failing = (what: keyof TeamAppDeps) => {
+    const deps: TeamAppDeps = { marks: () => [], sessions: () => [{ agentId: 'worker', lead: false }], recorded: () => [], record: () => {} }
+    deps[what] = (() => { throw new Error('EIO: disk') }) as never
+    if (what === 'record') deps.marks = () => ['pm']
+    return createTeamAppPolicy(deps)
+  }
+  it.each(['marks', 'sessions', 'recorded', 'record'] as const)('fails closed, without throwing, when %s fails', what => {
+    const p = failing(what)
+    expect(p.event({ type: 'agent_synced', payload: { agent: { id: 'worker' } } })).toBeNull()
+    expect(p.refuse('agents_list', {})).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
+    expect(p.reply('agents_list', { agents: [{ id: 'worker' }], ok: true })).toEqual({ agents: [], ok: true })
+    expect(p.watchOnly()).toBe(true)
+  })
+  it('reads once for frames close together, and again after', () => {
+    let clock = 1_000
+    const sessions = vi.fn(() => [{ agentId: 'worker', lead: false }])
+    const p = createTeamAppPolicy({ marks: () => [], sessions, recorded: () => [], record: () => {}, now: () => clock })
+    for (let i = 0; i < 5; i++) p.event({ type: 'text_delta', payload: { agentId: 'worker' } })
+    expect(sessions).toHaveBeenCalledOnce()
+    clock += 1_000
+    p.event({ type: 'text_delta', payload: { agentId: 'worker' } })
+    expect(sessions).toHaveBeenCalledTimes(2)
+  })
+})
+
+// A Product Manager removed or replaced for good: its chats stay with the Swarm, and its session files in the Team account go.
+describe('the session data of a confidential session the Swarm ended', () => {
+  it('is deleted through the reviewed purge, its worktree kept', async () => {
+    const purge = vi.fn(async (request: Record<string, unknown>) => request.mode === 'inspect' ? { reviewId: 'review-1' } : { ok: true })
+    const ended = createConfidentialPurge({ confidential: id => id === 'pm', session: id => ({ agentId: id, sessionId: `${id}-session`, registeredAt: 5 }), purge })
+    expect(await ended('pm')).toEqual({ ok: true })
+    expect(purge.mock.calls.map(([r]) => r)).toEqual([
+      { agentId: 'pm', sessionId: 'pm-session', createdAt: 5, mode: 'inspect' },
+      { agentId: 'pm', sessionId: 'pm-session', createdAt: 5, mode: 'delete', reviewId: 'review-1', choices: { sessionData: true, worktreeData: false } }])
+  })
+  it('of any other session, or one no longer held, is left alone; a refused review deletes nothing', async () => {
+    const purge = vi.fn(async () => ({ error: 'NOT_FOUND' }))
+    const ended = createConfidentialPurge({ confidential: id => id === 'pm', session: id => id === 'pm' ? { agentId: id, sessionId: null, registeredAt: 5 } : null, purge })
+    expect(await ended('worker')).toEqual({ skipped: true })
+    expect(await createConfidentialPurge({ confidential: () => true, session: () => null, purge })('gone')).toEqual({ skipped: true })
+    expect(await ended('pm')).toEqual({ error: 'NOT_FOUND' })
+    expect(purge).toHaveBeenCalledOnce()
   })
 })
 
 describe('the Mac owner\'s apps on a Team daemon whose marks cannot be read', () => {
-  it('reach no session, and type in or start nothing', () => {
+  it('reach no session, and type in or start nothing, and are told it waits for its Swarm, not that it holds private chats', () => {
     const p = policy(null, [{ agentId: 'worker' }])
-    expect(p.refuse('terminal_open', { agentId: 'worker' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
+    expect(p.refuse('terminal_open', { agentId: 'worker' })).toEqual({ error: 'SWARM_CONFIDENTIAL',
+      message: 'This computer\'s Harness Team account has not heard from its Swarm yet, so its agents are not shown here until it does.' })
     expect(p.refuse('agent_create', { engine: 'claude' })).toMatchObject({ error: 'TEAM_READ_ONLY' })
     expect(p.event({ type: 'agent_synced', payload: { agent: { id: 'worker' } } })).toBeNull()
     expect(p.watchOnly()).toBe(true)
@@ -178,7 +254,7 @@ describe('the record of confidential sessions', () => {
     expect(confidentialRecord(file).unknown()).toBe(true)
     writeFileSync(file, '{"not":"a list"}')
     expect(confidentialRecord(file).unknown()).toBe(true)
-    const p = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'worker' }], () => ['worker'])
+    const p = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'worker' }])
     expect(p.refuse('terminal_open', { agentId: 'worker' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
   })
 })
@@ -189,10 +265,10 @@ describe('the policy as the core runs it', () => {
     const snapshot = join(d, 'super-tabs', 'observers-team-mac.json')
     confidentialRecord(confidentialRecordFile(d)).add([])
     writeFileSync(snapshot, JSON.stringify({ machineId: 'team-mac', confidential: ['marked'] }))
-    const p = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'pm', sessionId: null, swarmSkill: { role: 'lead' } }, { agentId: 'marked' }, { agentId: 'worker' }],
-      () => ['pm', 'marked', 'worker'])
+    const p = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'pm', sessionId: null, swarmSkill: { role: 'lead' } }, { agentId: 'marked' }, { agentId: 'worker' }])
     expect(p.refuse('terminal_open', { agentId: 'marked' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
     expect(p.refuse('terminal_open', { agentId: 'worker' })).toBeNull()
     expect(confidentialRecord(confidentialRecordFile(d)).ids()).toEqual(['marked', 'pm'])
+    expect(p.isConfidential('marked')).toBe(true)
   })
 })

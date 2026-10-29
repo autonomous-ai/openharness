@@ -1,7 +1,8 @@
 import { z } from 'zod'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -308,10 +309,6 @@ export function productManagerOn(state: SuperTabState, machineId: string): strin
   return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
 }
 
-/** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
- *  from a team session). */
-export const teamAccountPool = (pool: ContributedMachine | null | undefined): boolean =>
-  !!pool && (!!pool.hostMachineId || pool.observation?.sessionKind === 'team')
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */

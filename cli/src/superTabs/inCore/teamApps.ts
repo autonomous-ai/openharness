@@ -10,7 +10,7 @@
  *    it stopped (the record kept in `confidentialRecordFile`). Every field of a request that can name a session, an agent's
  *    id or its engine's session id, is resolved to the agent first (security review 1 of #2089: `session_get` names a
  *    session by `sessionId`, which also finds an agent by its id).
- *  - While one runs here, the others are watched only: every agent of a Team account is one macOS user, so typing in any of
+ *  - While one is here, running or stopped (it may resume), the others are watched only: every agent of a Team account is one macOS user, so typing in any of
  *    them, or starting one, is a shell that reads the confidential session's files. Only requests that read are answered,
  *    and the owner's terminal streams are watch-only, their binary input and resizes dropped (terminalStreamManager.ts
  *    `watchOnly`), streams opened before it started included.
@@ -38,6 +38,9 @@ const SESSION_LISTS = ['agentIds', 'sessionIds', 'agents', 'sessions'] as const
 
 const CONFIDENTIAL = { error: 'SWARM_CONFIDENTIAL',
   message: 'This agent runs in this computer\'s Harness Team account and holds people\'s private chats in a Swarm, so it is not shown here.' }
+/** Its marks, or its record, could not be read: often only a Team daemon that has not yet heard from its Swarm. */
+const UNKNOWN = { error: 'SWARM_CONFIDENTIAL',
+  message: 'This computer\'s Harness Team account has not heard from its Swarm yet, so its agents are not shown here until it does.' }
 const READ_ONLY = { error: 'TEAM_READ_ONLY',
   message: 'This computer\'s Harness Team account runs a Swarm Product Manager, so its agents can be watched here but not typed in, and no agent can be started in it.' }
 
@@ -49,12 +52,18 @@ export interface TeamAppDeps {
   marks: () => readonly string[] | null
   /** The sessions this daemon holds, running and stopped, and whether each was launched as a Product Manager. */
   sessions: () => readonly HeldSession[]
-  /** Which of them run now. */
-  running: () => readonly string[]
-  /** The sessions ever found confidential here, kept after they stop (confidentialRecord), and their keeping. */
+  /** The sessions ever found confidential here, by agent id and engine session id, kept after they stop
+   *  (confidentialRecord), and their keeping. */
   recorded: () => readonly string[]
-  record: (agentIds: string[]) => void
+  record: (ids: string[]) => void
+  now?: () => number
 }
+
+/** How long one reading serves: every frame of a burst (a turn's deltas) asks, and a reading lists the stopped sessions on
+ *  disk (security re-review of #2089). Short, so a session that turns confidential is closed within it. */
+export const READING_MS = 500
+/** How deep the rows of an answer are looked for: an answer's lists, and the lists inside its objects and rows. */
+const ROW_DEPTH = 4
 
 /** The sessions a request or a row names, by every field and list that can name one. */
 function named(payload: Record<string, unknown>): string[] {
@@ -73,34 +82,59 @@ function named(payload: Record<string, unknown>): string[] {
 }
 
 /** The policy of a Team daemon. Installed only there (core/main.ts, `isTeamDaemon`). */
-export function createTeamAppPolicy(deps: TeamAppDeps): RemoteAppPolicy {
-  /** One reading of who is confidential, for one request or event. */
+export function createTeamAppPolicy(deps: TeamAppDeps): RemoteAppPolicy & { isConfidential(id: string): boolean } {
+  const now = deps.now ?? Date.now
+  /** Every session confidential, and the account held: what anything that fails reads as. */
+  const closed = { failed: true, unknown: true, confidential: (_id: string) => true, hosting: true }
+  let cached: { at: number; reading: typeof closed } | null = null
+  /** One reading of who is confidential. It runs inside the daemon's broadcast, so it never throws: a reading that fails,
+   *  its record's write included, is the closed one (security re-review of #2089). */
   const read = () => {
-    const marks = deps.marks(), sessions = deps.sessions(), recorded = new Set(deps.recorded())
-    const known = new Set([...marks ?? [], ...sessions.filter(s => s.lead).map(s => s.agentId)])
-    const fresh = [...known].filter(id => !recorded.has(id))
-    if (fresh.length) deps.record(fresh)
-    const agentOf = (id: string) => sessions.find(s => s.agentId === id || s.sessionId === id)?.agentId ?? id
-    const confidential = (id: string) => {
-      const agentId = agentOf(id)
-      return marks === null || known.has(agentId) || recorded.has(agentId)
+    const at = now()
+    if (cached && at - cached.at < READING_MS && at >= cached.at) return cached.reading
+    let reading: typeof closed
+    try {
+      const marks = deps.marks(), sessions = deps.sessions(), recorded = new Set(deps.recorded())
+      const known = new Set([...marks ?? [], ...sessions.filter(s => s.lead).map(s => s.agentId)])
+      // Its engine's session id too: the same conversation registered again under a new agent id stays closed.
+      const keep = [...known, ...sessions.flatMap(s => known.has(s.agentId) && s.sessionId ? [s.sessionId] : [])]
+      const fresh = [...new Set(keep)].filter(id => !recorded.has(id))
+      if (fresh.length) deps.record(fresh)
+      const confidential = (id: string) => {
+        if (marks === null || recorded.has(id) || known.has(id)) return true
+        const held = sessions.find(s => s.agentId === id || s.sessionId === id)
+        return !!held && (known.has(held.agentId) || recorded.has(held.agentId) || (!!held.sessionId && recorded.has(held.sessionId)))
+      }
+      // Held while any confidential session is here, running or stopped: a stopped one may resume (a crash, a restart, a
+      // limit). Its data deleted once the Swarm ends it for good (createConfidentialPurge), the account is released.
+      reading = { failed: false, unknown: marks === null, confidential, hosting: marks === null || sessions.some(s => confidential(s.agentId)) }
+    } catch {
+      reading = closed
     }
-    const running = new Set(deps.running())
-    return { confidential, hosting: () => marks === null || sessions.some(s => running.has(s.agentId) && confidential(s.agentId)) }
+    cached = { at, reading }
+    return reading
   }
+  /** [payload] without a row that names a confidential session, in any list at any depth up to ROW_DEPTH: an agent list, a
+   *  session list, search hits and catalog rows alike (security review 2 of #2089: search hits passed through). A row names
+   *  one by its own fields or, one level down, a field holding an object (a hit's `hit`). */
   const withoutConfidential = (payload: Record<string, unknown>, confidential: (id: string) => boolean) => {
-    const kept = (item: unknown) => !named(item && typeof item === 'object' ? item as Record<string, unknown> : {}).some(confidential)
-    let copy = payload
-    for (const key of ['agents', 'sessions']) {
-      if (Array.isArray(payload[key])) copy = { ...copy, [key]: (payload[key] as unknown[]).filter(kept) }
+    const names = (row: Record<string, unknown>) => named(row).some(confidential)
+      || Object.values(row).some(v => !!v && typeof v === 'object' && !Array.isArray(v) && named(v as Record<string, unknown>).some(confidential))
+    const walk = (value: unknown, depth: number): unknown => {
+      if (depth > ROW_DEPTH || !value || typeof value !== 'object') return value
+      if (Array.isArray(value)) {
+        return value.filter(item => !(item && typeof item === 'object' && !Array.isArray(item) && names(item as Record<string, unknown>)))
+          .map(item => walk(item, depth + 1))
+      }
+      return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, walk(v, depth + 1)]))
     }
-    return copy
+    return walk(payload, 0) as Record<string, unknown>
   }
   return {
     refuse(type, payload) {
       const r = read()
-      if (named(payload).some(r.confidential)) return CONFIDENTIAL
-      return !READS.has(type) && r.hosting() ? READ_ONLY : null
+      if (r.failed || named(payload).some(r.confidential)) return r.unknown ? UNKNOWN : CONFIDENTIAL
+      return !READS.has(type) && r.hosting ? READ_ONLY : null
     },
     reply(_type, payload) {
       return withoutConfidential(payload, read().confidential)
@@ -108,12 +142,33 @@ export function createTeamAppPolicy(deps: TeamAppDeps): RemoteAppPolicy {
     event(frame) {
       const r = read()
       const about = eventAgentId(frame)
-      if (about && r.confidential(about)) return null
+      if (r.failed || (about && r.confidential(about))) return null
       const payload = frame.payload
       return payload && typeof payload === 'object' && !Array.isArray(payload)
         ? { ...frame, payload: withoutConfidential(payload as Record<string, unknown>, r.confidential) } : frame
     },
-    watchOnly: () => read().hosting(),
+    watchOnly: () => read().hosting,
+    isConfidential: (id) => read().confidential(id),
+  }
+}
+
+/**
+ * The session data of a session the Swarm ended for good (a Product Manager removed or replaced, superTabs/host.ts
+ * endSession), deleted when it was confidential: the Swarm keeps its chats, and its files in the Team account, which every
+ * later agent there could read, go. Through the reviewed purge (lib/purgeAgentService.ts), its worktree kept.
+ */
+export function createConfidentialPurge(deps: {
+  confidential: (agentId: string) => boolean
+  session: (agentId: string) => { agentId: string; sessionId?: string | null; registeredAt: number } | null
+  purge: (request: Record<string, unknown>) => Promise<Record<string, unknown>>
+}): (agentId: string) => Promise<Record<string, unknown>> {
+  return async agentId => {
+    const session = deps.confidential(agentId) ? deps.session(agentId) : null
+    if (!session) return { skipped: true }
+    const target = { agentId: session.agentId, sessionId: session.sessionId ?? null, createdAt: session.registeredAt }
+    const review = await deps.purge({ ...target, mode: 'inspect' })
+    if (typeof review.reviewId !== 'string') return review
+    return deps.purge({ ...target, mode: 'delete', reviewId: review.reviewId, choices: { sessionData: true, worktreeData: false } })
   }
 }
 
@@ -171,15 +226,13 @@ export function isTeamDaemon(deps: { configExists?: () => boolean; config?: () =
 }
 
 /** The policy as the core's process runs it (core/main.ts), on a Team daemon: its Swarm marks and its record in [dataDir],
- *  and the sessions it holds, a Product Manager's by the Swarm role it was launched with. */
+ *  and the sessions it holds, running and stopped, a Product Manager's by the Swarm role it was launched with. */
 export function teamAppPolicyFor(dataDir: string, machineId: () => string,
-  sessions: () => ReadonlyArray<{ agentId: string; sessionId?: string | null; swarmSkill?: { role?: string } }>,
-  running: () => readonly string[]): RemoteAppPolicy {
+  sessions: () => ReadonlyArray<{ agentId: string; sessionId?: string | null; swarmSkill?: { role?: string } }>) {
   const record = confidentialRecord(confidentialRecordFile(dataDir))
   return createTeamAppPolicy({
     marks: () => record.unknown() ? null : readConfidentialMarks(observerSnapshotFile(dataDir, machineId()), machineId()),
     sessions: () => sessions().map(s => ({ agentId: s.agentId, sessionId: s.sessionId ?? null, lead: s.swarmSkill?.role === 'lead' })),
-    running,
     recorded: record.ids,
     record: ids => record.add(ids),
   })

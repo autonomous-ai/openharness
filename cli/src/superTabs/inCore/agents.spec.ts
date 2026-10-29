@@ -84,6 +84,38 @@ describe('the Swarm\'s agents, as the core lets it close and reopen them', () =>
     expect(await createSwarmAgents({ ...deps(), members: { leads, harnesses: () => new Set() } }).keepLeadAlive('stopped')).toEqual({ ok: false, error: 'UNSUPPORTED' })
   })
 
+  // A Product Manager removed or replaced for good on a Team daemon: the Swarm keeps its chats, and its session files go
+  // (superTabs/inCore/teamApps.ts createConfidentialPurge, security re-review of #2089).
+  it('deletes, once it closed a member or found it gone, what the Team daemon purges, and says so if that fails', async () => {
+    const closeAgent = vi.fn(async () => ({ closed: true as const }))
+    const byAgent = (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined
+    const purgeEnded = vi.fn(async (_agentId: string) => ({ ok: true }))
+    const harnesses = vi.fn(() => new Set(['live']))
+    const swarm = createSwarmAgents({ ...deps({ byAgent, closeAgent }), members: { leads: () => new Set(), harnesses }, purgeEnded })
+    expect(await swarm.closeMember('live')).toEqual({ closed: true })
+    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
+    expect(purgeEnded.mock.calls.map(([id]) => id)).toEqual(['live', 'absent'])
+    harnesses.mockReturnValue(new Set())
+    expect(await swarm.closeMember('live')).toEqual({ error: 'NOT_A_MEMBER' })
+    expect(purgeEnded).toHaveBeenCalledTimes(2)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    purgeEnded.mockRejectedValueOnce(new Error('EIO'))
+    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
+    purgeEnded.mockResolvedValueOnce({ error: 'NOT_FOUND' } as never)
+    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
+    purgeEnded.mockRejectedValueOnce('disk full')
+    expect(await swarm.closeMember('absent')).toEqual({ closed: true })
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual(['[super-tabs] could not delete the session data of absent: EIO',
+      '[super-tabs] could not delete the session data of absent: NOT_FOUND', '[super-tabs] could not delete the session data of absent: disk full'])
+    // A close that failed deletes nothing: the session is still there.
+    harnesses.mockReturnValue(new Set(['live']))
+    closeAgent.mockResolvedValueOnce({ error: 'AGENT_CHANGED' } as never)
+    purgeEnded.mockClear()
+    expect(await swarm.closeMember('live')).toEqual({ error: 'AGENT_CHANGED' })
+    expect(purgeEnded).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('closes now only a Super Tab member the host retains, and treats an absent one as closed', async () => {
     const closeAgent = vi.fn(async () => ({ closed: true as const }))
     const byAgent = (id: string) => id === 'live' ? { ...row('live'), registeredAt: 1000 } : undefined

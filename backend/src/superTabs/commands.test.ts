@@ -1012,7 +1012,9 @@ it('allows the contributor to keep a completed worker and refuses another projec
   f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, peer)
   expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('keep')
   const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
-  const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
+  // On another machine: a Team account running this project's Lead takes no other project's work (leadStart.ts, #895).
+  const otherLead = f.run({ type: 'agent.add', conversationId: project.conversationId as string, machineId: 'other-host', harnessId: 'other-lead',
+    name: 'other-lead', configuration: config, lead: true }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
 })
 

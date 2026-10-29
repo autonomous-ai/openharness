@@ -53,8 +53,8 @@ export class HostReads {
     const from = request.cursor && !request.full ? readCursor(request.cursor, 0, t0) : { reload: true as const }
     // Outside any transaction: each Swarm's signature and state come through the read cache (cache.ts), at stamps read once.
     const tx = this.db
-    await this.store.hostFor(tx, user, machineId)
     const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    await this.store.hostFor(tx, user, machineId, owned)
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     // Every agent's grant check of this read shares one read of each machine, share, contributor and Workspace membership.
     const grants = new GrantReads(owned)

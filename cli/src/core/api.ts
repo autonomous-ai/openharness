@@ -1506,6 +1506,9 @@ export interface RemoteAppPolicy {
   /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
    *  (lib/terminalStreamManager.ts `watchOnly`). */
   watchOnly(): boolean
+  /** Whether a session, by its agent id or its engine's session id, is closed to the apps: its open terminal streams close
+   *  (lib/terminalStreamManager.ts `closedTo`). */
+  isConfidential(id: string): boolean
 }
 
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its

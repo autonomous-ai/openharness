@@ -297,11 +297,21 @@ export class BackendSocket {
    *  Product Manager may run there, and the account is the Mac's owner's (#895). Null everywhere else. */
   remoteAppPolicy: RemoteAppPolicy | null = null
 
+  /** The policy over [connId] when it is one of the account's own apps away from this desk: not a window here, nor a guest,
+   *  which has its own space (core/guestPolicy.ts). A remote connection with no client record fails closed: it is held. */
+  private appPolicyFor(connId: string): RemoteAppPolicy | null {
+    if (!this.remoteAppPolicy || !connId || this.localClients.has(connId) || isLocalClientId(connId)) return null
+    return this.remoteClient(connId)?.guest !== undefined ? null : this.remoteAppPolicy
+  }
+
   /** Whether [connId] is one of the account's own apps away from this desk, held to watching its terminals now. */
   appWatchOnly(connId: string): boolean {
-    if (!this.remoteAppPolicy || !connId || this.localClients.has(connId) || isLocalClientId(connId)) return false
-    const client = this.remoteClient(connId)
-    return !!client && client.guest === undefined && this.remoteAppPolicy.watchOnly()
+    return this.appPolicyFor(connId)?.watchOnly() ?? false
+  }
+
+  /** Whether [agentId]'s terminal is closed to [connId] now: a confidential session, to the account's own apps. */
+  appClosedTo(connId: string, agentId: string): boolean {
+    return this.appPolicyFor(connId)?.isConfidential(agentId) ?? false
   }
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
@@ -481,6 +491,7 @@ export class BackendSocket {
   /** The Wi-Fi device's answers and events, sealed to one session; and which identity's app said hello on
    *  one. Through the gateway, guarded as every frame of the core's is. */
   deviceFrame(connId: string, type: string, payload: Record<string, unknown>): void {
+    if (!this.forApps({ type, payload })) return
     this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false)
   }
   deviceClient(connId: string, identity: string | null): void { this.toGateway('device', (gateway) => gateway.deviceClient(connId, identity)) }
@@ -589,9 +600,15 @@ export class BackendSocket {
     this.toRemoteApps(frame)
   }
 
+  /** An up-frame as the account's apps and devices away from this desk may have it (`remoteAppPolicy`), or null to withhold
+   *  it: every path to them asks, the paired devices' and the Wi-Fi device's too (security re-review of #2089). */
+  private forApps(frame: Frame): Frame | null {
+    return this.remoteAppPolicy ? this.remoteAppPolicy.event(frame) : frame
+  }
+
   private toRemoteApps(given: Frame): void {
     if (this.thisComputerOnly) return
-    const frame = this.remoteAppPolicy ? this.remoteAppPolicy.event(given) : given
+    const frame = this.forApps(given)
     if (!frame) return
     const guest = this.frameGuest(frame)
     this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))
@@ -676,7 +693,8 @@ export class BackendSocket {
 
   /** Send a user-level notification to every logged-in browser that owns this machine. */
   sendUser(frame: Frame): void {
-    this.toGateway('user', (gateway) => gateway.user(frame))
+    const shown = this.forApps(frame)
+    if (shown) this.toGateway('user', (gateway) => gateway.user(shown))
   }
 
   /**
@@ -697,9 +715,11 @@ export class BackendSocket {
   sendCommander(frame: Frame): void {
     this.onOutboundCommander?.(frame)
     if (isLocalOnly(frame)) return
-    if (env.LOG_FRAMES) logFrame('→', 'device', frame)
+    const shown = this.forApps(frame)
+    if (!shown) return
+    if (env.LOG_FRAMES) logFrame('→', 'device', shown)
     // The sentence a processing card carries for the Pro's cable stays on this computer (onOutboundCommander).
-    this.toGateway('device', (gateway) => gateway.commander(withoutUpdate(frame)))
+    this.toGateway('device', (gateway) => gateway.commander(withoutUpdate(shown)))
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */

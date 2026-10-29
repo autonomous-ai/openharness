@@ -179,7 +179,8 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     const said = sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + MINUTE)
     expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'Its machine did not start it. Harness there may need an update.' })
     // Said once in its project's conversation, in the name of the person who asked for it.
-    expect(said.map(m => [m.conversationId, m.author])).toEqual([[f.app.conversationId, expect.objectContaining({ kind: 'person', id: 'owner' })]])
+    // A system row of its project's conversation, not the asker's own words.
+    expect(said.map(m => [m.conversationId, m.source])).toEqual([[f.app.conversationId, { kind: 'system' }]])
     expect(said[0]!.text).toBe('Could not start Product Manager: its machine did not start it. Harness there may need an update.')
     expect(sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + 2 * MINUTE)).toEqual([])
   })
@@ -329,6 +330,26 @@ describe('the terminal of a Product Manager in a Team account', () => {
     expect(code(mate, { type: 'agent.screen', agentId: 'added-pm', scrollback: 50 })).toBe('TERMINAL_PRIVATE')
   })
 
+  // Security review 2 of #2089: a sibling worker there is the same macOS user, and reads people's chats with it.
+  it('while it holds the account, nobody types in any agent there: its project\'s workers neither', async () => {
+    const t = await running('mate-mac')
+    const group = t.f.run({ type: 'conversation.create', projectId: t.f.app.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    t.f.run({ type: 'agent.add', conversationId: group, machineId: 'mate-team', harnessId: 'sibling', name: 'Sibling', configuration: config, lead: false }, owner,
+      { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } })
+    const sibling = t.f.state.agents.find(a => a.harnessId === 'sibling')!.id
+    const code = (actor: Actor, command: Command) => refusal(() => t.f.run(command, actor))?.code ?? 'ok'
+    expect(code(owner, { type: 'agent.input', agentId: sibling, text: 'cat ~/.claude/projects/*' })).toBe('TERMINAL_PRIVATE')
+    expect(code(owner, { type: 'agent.screen', agentId: sibling, scrollback: 50 })).toBe('ok')
+  })
+
+  it('stays held when its machine row is gone: the rules never fall back to the old ones', async () => {
+    const t = await running('mate-mac')
+    expect(t.f.state.agents.find(a => a.id === t.pm)).toMatchObject({ teamAccount: true })
+    t.f.state.machines = t.f.state.machines!.filter(m => m.machineId !== 'mate-team')
+    expect(t.input(owner)).toBe('TERMINAL_PRIVATE')
+    expect(t.screen(mate)).toBe('TERMINAL_PRIVATE')
+  })
+
   it('on the project owner\'s own machine, its owner still reads and types in it', async () => {
     const t = await running('owner-mac')
     expect(t.screen(owner)).toBe('ok')
@@ -363,6 +384,25 @@ describe('a Team account hosting a Product Manager', () => {
       message: 'The Harness Team account on MacBook Pro runs other projects\' agents, so it cannot host this Product Manager now.' })
     // From the queue it goes to the next free machine instead.
     expect(f.lead(null).result).toMatchObject({ machineId: 'owner-mac' })
+  })
+
+  it('holds an agent added by hand as it holds a start', () => {
+    const f = swarm()
+    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const add = (conversationId: string, harnessId: string, lead: boolean) => f.run({ type: 'agent.add', conversationId, machineId: 'mate-team', harnessId,
+      name: harnessId, configuration: config, lead }, mate, { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } })
+    f.lead('mate-mac')
+    expect(refusal(() => add(web.conversationId, 'web-worker', false))?.code).toBe('TEAM_ACCOUNT_HELD')
+    // The other way round: another project's agent there first, a Product Manager added by hand is refused.
+    const g = swarm()
+    const web2 = g.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const group = g.run({ type: 'conversation.create', projectId: web2.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    const pooled = { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } }
+    g.run({ type: 'agent.add', conversationId: group, machineId: 'mate-team', harnessId: 'web-worker', name: 'W', configuration: config, lead: false }, mate, pooled)
+    expect(refusal(() => g.run({ type: 'agent.add', conversationId: g.app.conversationId, machineId: 'mate-team', harnessId: 'pm', name: 'PM',
+      configuration: config, lead: true }, owner, pooled))?.code).toBe('TEAM_ACCOUNT_BUSY')
+    // And one added by hand there is marked as in a Team account.
+    expect(g.state.agents.find(a => a.harnessId === 'web-worker')).toMatchObject({ teamAccount: true })
   })
 
   it('leaves the project owner\'s own machine as it is', () => {

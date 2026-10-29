@@ -3,8 +3,8 @@ import type { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../lib/db/indexes.js'
 import { activeWork, actorKey, agent, author, conversation, fail, isLeads, stableId, type Actor, type Agent, type Author, type Conversation, type MessageDraft,
   type SuperTabState } from './model.js'
-import { downSince } from './machines.js'
-import { agentProjectId, isConfidential, ledProject, ownSession, projectOf, readAgent, teamSessionAccess } from './projects.js'
+import { downSince, productManagerOn } from './machines.js'
+import { agentProjectId, isConfidential, ledProject, onTeamAccount, ownSession, projectOf, readAgent, teamSessionAccess } from './projects.js'
 import { redactCredentials } from './credentials.js'
 
 /** The Lead reads and types in an agent's terminal through the host of the agent's machine (spec/2026-10-23-lead-sees-agent-terminal.md).
@@ -37,6 +37,11 @@ export interface TerminalRequest { id: string; agentId: string; harnessId: strin
 export function mayDrive(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false, kind: TerminalKind = 'input'): void {
   // For both kinds of requester: no person or agent reads a confidential session but its own (final review, Critical 1).
   const closed = () => {
+    // A Team account holding a Product Manager: every agent there is one macOS user, which reads people's chats with it,
+    // so no person types in any of them (security review 2 of #2089). They talk to them in their groups' chats.
+    if (actor.kind === 'person' && kind === 'input' && onTeamAccount(state, target) && productManagerOn(state, target.machineId)) {
+      fail('TERMINAL_PRIVATE', `${target.displayName ?? target.name} runs in a Harness Team account that holds a Product Manager, so nobody types in it through the Swarm. Talk to it in its group's chat.`, 403)
+    }
     // In a Harness Team account: its project's owner reads its screen, and nobody types in it (projects.ts teamSessionAccess).
     const team = teamSessionAccess(state, actor, target, elsewhere)
     if (team === 'watch' && kind === 'screen') return

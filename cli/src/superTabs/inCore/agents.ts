@@ -6,10 +6,19 @@
  */
 import type { SwarmAgentDeps, SwarmAgents } from '../../core/api.js'
 
-export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members }: SwarmAgentDeps & {
+export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent, creationStatus, members, purgeEnded }: SwarmAgentDeps & {
   /** The Leads and members this machine's Super Tab host keeps (superTabs/retention.ts). */
   members: { leads(): Set<string>; harnesses(): Set<string> }
+  /** On a Team daemon, deletes the session data of a confidential member the Swarm ended (inCore/teamApps.ts); absent elsewhere. */
+  purgeEnded?: (agentId: string) => Promise<Record<string, unknown>>
 }): SwarmAgents {
+  /** A member the Swarm ended for good, closed or already gone: its data goes where the Team daemon says so. Never in the
+   *  close's way: a failure is said in the log, and the next end of the same member tries again. */
+  const ended = async (agentId: string) => {
+    if (!purgeEnded) return
+    const said = await purgeEnded(agentId).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }))
+    if (typeof said.error === 'string') console.warn(`[super-tabs] could not delete the session data of ${agentId}: ${said.error}`)
+  }
   return {
     closeSwarm: async request => {
       const session = byAgent(request.agentId)
@@ -39,7 +48,7 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
     closeMember: async (agentId, creationId) => {
       if (!closeAgent) return { error: 'UNSUPPORTED' }
       const session = byAgent(agentId)
-      if (!session) return { closed: true }
+      if (!session) { await ended(agentId); return { closed: true } }
       let member = false
       try { member = members.harnesses().has(agentId) } catch { /* An unreadable retention names no member. */ }
       // An agent removed before its host wrote a roster naming it: the Swarm's own start receipt proves it (the review of #1635).
@@ -49,7 +58,9 @@ export function createSwarmAgents({ byAgent, stoppedIds, closeAgent, resumeAgent
       }
       if (!member) return { error: 'NOT_A_MEMBER' }
       // The close itself refuses a session that changed during the receipt read.
-      return closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
+      const closed = await closeAgent({ agentId, sessionId: session.sessionId, createdAt: new Date(session.registeredAt).toISOString(), mode: 'now' })
+      if ('closed' in closed && closed.closed) await ended(agentId)
+      return closed
     },
   }
 }

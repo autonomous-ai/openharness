@@ -303,6 +303,8 @@ const routeDecisionOf = (command: Command): string | undefined => command.type =
   : 'decisionId' in command ? command.decisionId : 'routeDecisionId' in command ? command.routeDecisionId : undefined
 
 const machineKey = (environment: string, machineId: string, ownerId: string) => `machine:${environment}:${machineId}:${ownerId}`
+/** A Team account's machine refused to its owner's own sign-in (notTeamMachine). */
+export const TEAM_HOST_ONLY = 'TEAM_HOST_ONLY'
 
 /**
  * What agent grant checks read, kept for one request only. A host read checks every agent on its machine, mostly for the
@@ -372,9 +374,25 @@ export class SuperTabStore {
 
   /** A host route of a team session must name its own machine. */
   /** Shared with the read API (superTabs/read, design section 7.2). */
-  async hostFor(tx: Transaction, user: AuthUser, machineId: string): Promise<void> {
+  /** [owned]: the machine's account row for this sign-in, when the caller already read it (machineAlive), so it is read once. */
+  async hostFor(tx: Transaction, user: AuthUser, machineId: string, owned?: Machine | null): Promise<void> {
     const team = await this.teamHost(tx, user)
     if (team !== null && team !== machineId) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
+    if (team === null) await this.notTeamMachine(user, async () => owned !== undefined ? owned
+      : tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } }))
+  }
+
+  /**
+   * A Harness Team account's machine is hosted, and its agents spoken for, by its team session alone (security review 2 of
+   * #2089). It is a machine of its Mac owner's account, so the owner's ordinary sign-in passed every host check, and could
+   * read every chat its Product Manager can, claim its deliveries and post as it, past every rule the Swarm keeps for it.
+   * [row]: the machine's account row, read once with the request's others; [flagged]: an agent that joined on one.
+   */
+  private async notTeamMachine(user: AuthUser, row: () => Promise<Pick<Machine, 'sessionKind'> | null>, flagged = false): Promise<void> {
+    if (isTeamSession(user)) return
+    if (flagged || (await row())?.sessionKind === 'team') {
+      fail(TEAM_HOST_ONLY, 'Only this computer\'s Harness Team account runs its Swarm agents. Its owner\'s own sign-in cannot act for them.', 403)
+    }
   }
 
   /** What only the person does: a team session has no person to be. */
@@ -589,7 +607,11 @@ export class SuperTabStore {
     if (target.machineOwnerId !== user.sub) fail('FORBIDDEN', 'Only the execution host can speak as this agent.', 403)
     // ...and as an agent only one running on its own machine, never the person's agents elsewhere.
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    await this.agentGrant(tx, state, target)
+    const reads = new GrantReads()
+    await this.agentGrant(tx, state, target, reads)
+    // An agent of a Team account's machine is spoken for by that account alone, never its owner's own sign-in.
+    await this.notTeamMachine(user, () => reads.once(machineKey(state.environment, target.machineId, target.machineOwnerId), () => tx.machine.findFirst({
+      where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: state.environment, ...machineAlive } })), !!target.teamAccount)
     return { kind: 'agent', agentId, machineOwnerId: user.sub }
   }
 
@@ -1846,13 +1868,13 @@ export class SuperTabStore {
   /** Narrow authority: the machine owner can finish a specific queued start,
    * never submit arbitrary commands as its initiating person or lead. */
   private async poolHostActor(tx: Transaction, user: AuthUser, state: SuperTabState, machineId: string, startId: string): Promise<Actor> {
-    await this.hostFor(tx, user, machineId)
+    const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+    await this.hostFor(tx, user, machineId, owned)
     const start = state.starts?.find(s => s.id === startId) ?? fail('NOT_FOUND', 'This start is unavailable.', 404)
     const pool = machineContribution(state, machineId)
     if (!pool || pool.contributorId !== user.sub || pool.generation !== start.poolGeneration || start.request.machineId !== machineId || start.machineOwnerId !== user.sub) {
       fail('FORBIDDEN', 'This start does not belong to this machine contribution.', 403)
     }
-    const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
     if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
     let actor: Actor
     if (start.actorKey.startsWith('agent:')) {
@@ -1936,11 +1958,11 @@ export class SuperTabStore {
     const observation = machineObservationSchema.parse(input)
     const sweep = this.sweepDue(tabId, this.now())
     return transaction(this.db, async tx => {
-      await this.hostFor(tx, user, machineId)
+      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
+      await this.hostFor(tx, user, machineId, owned)
       const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
       const pool = machineContribution(state, machineId)
       if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
-      const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
       if (!owned || !machineBillingAllowsDataPlane(owned)) fail('HOST_UNAVAILABLE', 'This execution host is unavailable.', 403)
       const now = this.now()
       // A machine that went silent while cleaning takes the fallback before this fresh reading can bring it back: its records
@@ -2144,6 +2166,8 @@ export class SuperTabStore {
     const team = await this.teamHost(this.db, user)
     if (team !== null && target.machineId !== team) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
     await this.grantHolds(this.db, seen.swarm, target, inSwarm, reads)
+    if (team === null) await this.notTeamMachine(user, () => reads.once(machineKey(seen.swarm.environment, target.machineId, target.machineOwnerId),
+      () => this.db.machine.findFirst({ where: { machineId: target.machineId, userId: target.machineOwnerId, autonomousEnv: seen.swarm.environment, ...machineAlive } })))
     const senders = new Map<string, Promise<boolean>>()
     const sent = (id: string) => senders.get(id) ?? senders.set(id, this.grantHolds(this.db, seen.swarm, seen.grants[id]!, inSwarm, reads)
       .then(() => true, error => { if (error instanceof SuperTabError) return false; throw error })).get(id)!

@@ -881,6 +881,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // The prompt of each agent's last turn start: what the one-line summary of a working agent says (turns/summaries.ts).
   const turnPrompts = new Map<string, string>()
   const nativeTurns = createNativeTurnObservations({ resolve: id => nativeTurnBinding(registry.byAgent(id)) })
+  /** A Team daemon's purge of an ended confidential member's session data (superTabs/inCore/teamApps.ts); null elsewhere. */
+  let teamPurge: ((agentId: string) => Promise<Record<string, unknown>>) | null = null
   const coreApi = createCoreApi({
     nativeTurns: async (agentId, cursor) => nativeTurns.read(agentId, cursor),
     cloud: cloudDoors,
@@ -1005,7 +1007,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     resumeAgent: async (agentId) => lifecycle.resumeAgent(agentId),
     // What it may close and reopen is decided in this process, on what its host retains (superTabs/inCore/agents.ts).
     ...(swarm ? { swarmAgents: (agentDeps) => swarm.createSwarmAgents({ ...agentDeps,
-      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) } }) } : {}),
+      members: { leads: () => swarm.retainedLeads(env.ADAPTER_DATA_DIR), harnesses: () => swarm.retainedHarnesses(env.ADAPTER_DATA_DIR) },
+      // On a Team daemon, an ended confidential member's session data goes (set below, with the Team daemon's policy).
+      purgeEnded: async (agentId) => teamPurge ? teamPurge(agentId) : { skipped: true } }) } : {}),
     dsh: (session) => backendRef?.dshFrameProvider?.(session) ?? null,
     windows: (frame) => backendRef?.sendLocal(frame),
     daemon: { command: daemonCommand(), port: env.PORT, machineId: () => backendRef?.machineId ?? '', autonomousEnv: session?.autonomousEnv ?? env.AUTONOMOUS_ENV },
@@ -1192,6 +1196,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     isLoopback: isLocalClientId,
     // The Mac owner's apps on a Team daemon running a Swarm Product Manager only watch (superTabs/inCore/teamApps.ts).
     watchOnly: (connId) => backend.appWatchOnly(connId),
+    closedTo: (connId, agentId) => backend.appClosedTo(connId, agentId),
     // For a client that did not introduce itself on `terminal_open` (an older build). A loopback
     // window can only be this computer's desktop; a paired peer is named by its pairing label unless
     // that label is one of the placeholders pairing hands out — those name nothing.
@@ -1431,8 +1436,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // owner's own apps never reach the Swarm's confidential sessions, and only watch the rest while one runs (#895).
   // Decided once, as it starts: only a Team daemon has it (security review 1 of #2089), and it reads the stopped sessions too.
   if (swarm?.isTeamDaemon()) {
-    backend.remoteAppPolicy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(),
-      () => [...registry.list(), ...stoppedAgents.list()], () => registry.list().map((s) => s.agentId))
+    const policy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => [...registry.list(), ...stoppedAgents.list()])
+    backend.remoteAppPolicy = policy
+    teamPurge = swarm.createConfidentialPurge({ confidential: (agentId) => policy.isConfidential(agentId),
+      session: (agentId) => registry.byAgent(agentId) ?? stoppedAgents.get(agentId),
+      purge: async (request) => backend.purgeAgentService ? await backend.purgeAgentService.request(request as never) : { error: 'UNSUPPORTED' } })
   }
   const questionWatcher = asking.questionWatcher
 
