@@ -725,6 +725,39 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId: first.assignmentId, at: 5_000 })
   })
 
+  it('takes the snapshot again when a merge recorded later moves the ship earlier than Done (review of #2097)', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'lead', true)
+    const id = f.create(owner, { checks })
+    f.at(5_000)
+    const a = f.assign(id)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: a.assignmentId, reason: 'Again.' })
+    const other = f.add('other', id)
+    f.state.agents.find(x => x.id === other)!.configuration = { ...config, model: 'sonnet' }
+    f.at(8_000)
+    const b = f.assign(id, other)
+    f.at(8_500)
+    f.passChecks(id, b.assignmentId)
+    f.status(id, b.assignmentId, other, 'done', 'Shipped at rev abc.')
+    expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId: b.assignmentId, model: 'sonnet' })
+    f.group(id).leadId = 'someone-else'
+    f.at(9_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7', mergedAt: new Date(6_000).toISOString() })
+    // The attempt running at the merge, with the lead kept from the ship (no lead history is recorded).
+    expect(f.group(id).ledger).toMatchObject({ shippedAt: 6_000, shippedBy: { assignmentId: a.assignmentId, model: 'opus', at: 5_000 },
+      shippedLeadId: lead })
+  })
+
+  it('ships on the earliest attempt when the merge came before any attempt started', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks })
+    f.at(5_000)
+    const { assignmentId } = f.assign(id)
+    f.at(9_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7', mergedAt: new Date(4_000).toISOString() })
+    expect(f.group(id).ledger).toMatchObject({ shippedAt: 4_000, shippedBy: { assignmentId, at: 5_000 } })
+  })
+
   it('keeps the request\'s first assignment time once its first attempt has rolled off (review of #2097)', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })

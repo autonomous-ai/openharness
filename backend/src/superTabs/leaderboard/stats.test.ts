@@ -328,6 +328,12 @@ describe('Models: temporary workers by engine, model and effort, never by agent 
     expect(model(view, 'opus').shipped.count).toBe(0)
   })
 
+  it('never times a ship as negative, when it merged before its attempt started (review of #2097)', () => {
+    const shippedBy = { assignmentId: 'a1', at: WEEK + 2 * HOUR, engine: 'claude', model: 'opus', effort: 'high' }
+    const view = board(swarm(), [landed(WEEK + HOUR, [run('a1', WEEK + 2 * HOUR)], { shippedBy, firstAssignedAt: WEEK + 2 * HOUR })])
+    expect(model(view, 'opus').shipped).toMatchObject({ count: 1, medianAttemptMs: 0, medianRequestMs: 0 })
+  })
+
   it('times the whole request from its first assignment, kept after its first attempt rolled off (review of #2097)', () => {
     const view = board(swarm(), [landed(WEEK + 5 * HOUR, [run('a21', WEEK + 4 * HOUR)], { firstAssignedAt: WEEK })])
     expect(model(view, 'opus').shipped).toMatchObject({ medianAttemptMs: HOUR, medianRequestMs: 5 * HOUR })

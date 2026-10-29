@@ -140,9 +140,10 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
     if (!last) continue
     const entry = row(last)
     entry.shipped.count++
-    entry.attemptMs.push(shippedAt - last.at)
+    // Merged before its attempt started: shipped at once, never in negative time (Lead, 2026-10-29).
+    entry.attemptMs.push(Math.max(0, shippedAt - last.at))
     const first = ledger.firstAssignedAt ?? runs[0]?.at
-    if (first != null) entry.requestMs.push(shippedAt - first)
+    if (first != null) entry.requestMs.push(Math.max(0, shippedAt - first))
   }
   for (const group of requests) {
     for (const run of group.ledger?.runs ?? []) {

@@ -88,7 +88,13 @@ function shipOn(group: Conversation, run?: Run): void {
   const ledger = group.ledger!
   if (ledger.shippedLeadId !== undefined) return
   ledger.shippedLeadId = group.leadId ?? null
-  const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1)
+  shipAttempt(ledger, run)
+}
+
+/** The attempt a request shipped on: the given one, else the latest started by the time it shipped, else (merged before any
+ *  attempt started) the earliest. */
+function shipAttempt(ledger: GroupLedger, run?: Run): void {
+  const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1) ?? ledger.runs?.[0]
   if (!shipping) return
   const { firstVerdicts: _verdicts, firstReview: _review, ...shippedBy } = shipping
   ledger.shippedBy = shippedBy
@@ -101,11 +107,13 @@ export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z
  *  when Done came first, and whatever its work does next, so work lost or cancelled after the merge still counts. */
 export function recordMerged(group: Conversation, mergedAt: number): void {
   const ledger = group.ledger ??= {}
+  const before = ledger.shippedAt
   ledger.mergedAt = Math.min(ledger.mergedAt ?? mergedAt, mergedAt)
   ledger.shippedAt = ledger.mergedAt
-  // Who led it and which attempt shipped are kept from the first time it shipped; a merge recorded later moves only the
-  // time (review of #2097).
-  shipOn(group)
+  // Who led it and which attempt shipped are kept from the first time it shipped. A merge that moves the ship earlier
+  // takes the attempt running then; the lead stays, as no history of leads is kept (Lead, 2026-10-29).
+  if (ledger.shippedLeadId !== undefined && before != null && ledger.shippedAt < before) shipAttempt(ledger)
+  else shipOn(group)
 }
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
