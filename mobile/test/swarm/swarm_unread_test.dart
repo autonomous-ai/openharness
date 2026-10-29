@@ -93,16 +93,17 @@ void main() {
     return (swarm: swarm, reader: reader, asks: asks);
   }
 
-  /// A change read in which [ids] moved on to [sequence].
+  /// A change read in which [groups] moved, by id, to their [version].
   Future<void> moveOn(
     ({FakeSwarm swarm, SwarmReader reader, SwarmAsks asks}) r,
-    Map<String, Map<String, dynamic>> groups,
-  ) async {
+    Map<String, Map<String, dynamic>> groups, {
+    int version = 20,
+  }) async {
     r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
-      cursor: 'c3',
+      cursor: 'c$version',
       groups: [
         for (final MapEntry(:key, :value) in groups.entries)
-          part(key, 20, value),
+          part(key, version, value),
       ],
     );
     await r.reader.refresh();
@@ -129,6 +130,32 @@ void main() {
 
     expect(chat(r, 'g1'), (bold: true, tags: 0));
     expect(chat(r, 'g2'), (bold: false, tags: 0));
+  });
+
+  test('a reply only in a thread leaves a read chat and its project as they '
+      'were; a message in the main stream still makes them bold', () async {
+    final r = await rig();
+    await moveOn(r, {
+      'g1': {
+        ...groupData('g1', title: 'Fix login', lastMessageSequence: 4),
+        'lastMainSequence': 3,
+      },
+    });
+
+    expect(chat(r, 'g1'), (bold: false, tags: 0));
+    expect(swarmProjectNews(r.reader, r.asks), isEmpty);
+
+    await moveOn(r, version: 21, {
+      'g1': {
+        ...groupData('g1', title: 'Fix login', lastMessageSequence: 5),
+        'lastMainSequence': 5,
+      },
+    });
+
+    expect(chat(r, 'g1'), (bold: true, tags: 0));
+    expect(swarmProjectNews(r.reader, r.asks), {
+      project: (bold: true, tags: 0),
+    });
   });
 
   test("a chat the Lead tagged the person in is bold with the count of the "
