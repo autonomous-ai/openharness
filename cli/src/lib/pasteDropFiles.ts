@@ -15,7 +15,8 @@ import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 
-const PASTE_DROPS_DIR = join(env.ADAPTER_DATA_DIR, 'paste-drops')
+/** Where they land; a Buddy's guard reads its own person's files there (lib/buddyGuard.ts). */
+export const PASTE_DROPS_DIR = join(env.ADAPTER_DATA_DIR, 'paste-drops')
 const RETENTION_MS = 24 * 60 * 60 * 1000
 
 /** Best-effort: a prune failure must never block a paste/drop that is otherwise fine. */

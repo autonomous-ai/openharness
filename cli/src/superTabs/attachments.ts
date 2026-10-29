@@ -59,11 +59,12 @@ async function download(file: MessageAttachment, base: string, fetcher: typeof f
 /** The prompt's list of a message's files, downloaded into this computer's paste-drops folder (kept 24 h), so an
  * agent on any machine can read them. Each file gets up to three tries within one time budget for the message, since
  * the host's single poll loop waits on it. A file that could not be downloaded is named by its URL instead, and
- * `complete` is false, so the host tries again before it next delivers the same message. */
+ * `complete` is false, so the host tries again before it next delivers the same message. `paths` are the files written,
+ * which a Buddy's guard may list when its own person sent them (lib/buddyGuard.ts). */
 export async function attachedFiles(message: Record<string, unknown>, options: { base?: string; fetch?: typeof fetch; budgetMs?: number; now?: () => number } = {}):
-  Promise<{ text: string; complete: boolean }> {
+  Promise<{ text: string; complete: boolean; paths: string[] }> {
   const files = attachmentsOf(message)
-  if (!files.length) return { text: '', complete: true }
+  if (!files.length) return { text: '', complete: true, paths: [] }
   const base = options.base ?? env.SUPER_TAB_ATTACHMENTS_PUBLIC_BASE
   const now = options.now ?? Date.now, deadline = now() + (options.budgetMs ?? BUDGET_MS)
   const lines = await Promise.all(files.map(async file => {
@@ -71,13 +72,17 @@ export async function attachedFiles(message: Record<string, unknown>, options: {
     const label = `sent as ${JSON.stringify(file.name)}, ${formatSize(file.size)}`
     let failure: unknown
     for (let attempt = 0; attempt < 3 && deadline - now() > 0; attempt++) {
-      try { return { line: `- ${await download(file, base, options.fetch ?? fetch, Math.min(DOWNLOAD_MS, deadline - now()))} (${label})`, ok: true } } catch (error) {
+      try {
+        const path = await download(file, base, options.fetch ?? fetch, Math.min(DOWNLOAD_MS, deadline - now()))
+        return { line: `- ${path} (${label})`, path }
+      } catch (error) {
         failure = error
         if (error instanceof Refused) break
       }
     }
     const why = failure instanceof Error ? failure.message : 'out of time'
-    return { line: servedFrom(base, file.url) ? `- Could not download ${file.url} (${label}): ${why}` : `- Could not download a file (${label}): ${why}`, ok: false }
+    return { line: servedFrom(base, file.url) ? `- Could not download ${file.url} (${label}): ${why}` : `- Could not download a file (${label}): ${why}`, path: null }
   }))
-  return { text: `Attached files:\n${lines.map(l => l.line).join('\n')}`, complete: lines.every(l => l.ok) }
+  const paths = lines.flatMap(l => l.path === null ? [] : [l.path])
+  return { text: `Attached files:\n${lines.map(l => l.line).join('\n')}`, complete: paths.length === lines.length, paths }
 }
