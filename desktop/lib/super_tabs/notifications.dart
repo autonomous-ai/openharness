@@ -347,6 +347,17 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
         .where((p) => p.id == mention.leadId)
         .firstOrNull;
     final author = person?.username ?? mention.leadName;
+    // Who tagged, a person or a Lead: one face, in one place.
+    final Widget? face = person != null
+        ? SuperTabAvatar.person(person, size: 24)
+        : switch (c.snapshot?.agent(mention.leadId ?? '')) {
+            final lead? => SuperTabAvatar.agent(
+              lead,
+              name: mention.leadName,
+              size: 24,
+            ),
+            null => null,
+          };
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
@@ -363,20 +374,10 @@ class _SuperTabNotificationsState extends State<SuperTabNotifications> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (person != null)
+                if (face != null)
                   Padding(
                     padding: const EdgeInsets.only(right: 10, top: 2),
-                    child: SuperTabAvatar.person(person, size: 24),
-                  )
-                else if (c.snapshot?.agent(mention.leadId ?? '')
-                    case final lead?)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 10, top: 2),
-                    child: SuperTabAvatar.agent(
-                      lead,
-                      name: mention.leadName,
-                      size: 24,
-                    ),
+                    child: face,
                   ),
                 Expanded(
                   child: Column(
