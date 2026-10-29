@@ -72,7 +72,6 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Projects and workgroups share a text column. Only projects use its icon.
   static const _iconColumn = SuperTabSectionHeading.actionWidth;
-  static const _dotSize = 6.0;
 
   Widget _navigationRow({
     required String key,
@@ -218,12 +217,13 @@ class ProjectSidebar extends StatelessWidget {
             !notificationsSelected &&
             selectedProjectId == project.id &&
             controller.selectedId != buddyChat?.id);
+    // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
     final style = DesktopChrome.control(
-      medium: unread || highlighted,
+      medium: highlighted,
       color: highlighted || unread || project != null || label != null
           ? DesktopChrome.foreground
           : DesktopChrome.muted,
-    );
+    ).copyWith(fontWeight: unread ? grid.AppFont.semibold : null);
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Material(
@@ -319,31 +319,24 @@ class ProjectSidebar extends StatelessWidget {
                       ),
                       SizedBox(
                         width: _iconColumn,
-                        child: Center(
-                          child: waiting
-                              ? Tooltip(
-                                  message: 'Needs a human',
-                                  child: Text(
-                                    '?',
-                                    style: DesktopChrome.control(
-                                      color: grid.AppPalette.warn,
-                                      medium: true,
+                        // Unread is drawn as a bold name; a screen reader
+                        // hears it said, as it heard the dot it replaces.
+                        child: Semantics(
+                          label: unread ? 'Unread messages' : null,
+                          child: Center(
+                            child: waiting
+                                ? Tooltip(
+                                    message: 'Needs a human',
+                                    child: Text(
+                                      '?',
+                                      style: DesktopChrome.control(
+                                        color: grid.AppPalette.warn,
+                                        medium: true,
+                                      ),
                                     ),
-                                  ),
-                                )
-                              : unread
-                              ? Semantics(
-                                  label: 'Unread messages',
-                                  child: Container(
-                                    width: _dotSize,
-                                    height: _dotSize,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: DesktopChrome.accent,
-                                    ),
-                                  ),
-                                )
-                              : null,
+                                  )
+                                : null,
+                          ),
                         ),
                       ),
                     ],
@@ -351,7 +344,7 @@ class ProjectSidebar extends StatelessWidget {
                 ),
               ),
             ),
-            // At the far right edge, since it is always there and the dot
+            // At the far right edge, since it is always there and the mark
             // beside it comes and goes (Dee, 2026-10-28).
             if (project != null) _toggle(project, expanded: expanded),
           ],
@@ -516,9 +509,7 @@ class ProjectSidebar extends StatelessWidget {
             when read.buddyChat != null || controller.canWrite)
           read,
     ];
-    return [
-      for (final read in listed) _buddy(read, named: listed.length > 1),
-    ];
+    return [for (final read in listed) _buddy(read, named: listed.length > 1)];
   }
 
   Widget _buddy(_ProjectReading reading, {required bool named}) {

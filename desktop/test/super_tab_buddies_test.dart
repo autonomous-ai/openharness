@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
-import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
@@ -290,11 +289,7 @@ void main() {
       final name = tester.widget<Text>(
         find.descendant(of: buddyEntry, matching: find.text('Wren')),
       );
-      expect(
-        name.style?.fontWeight,
-        DesktopChrome.control(medium: true).fontWeight,
-      );
-      expect(name.style?.fontWeight, isNot(DesktopChrome.control().fontWeight));
+      expect(name.style?.fontWeight, grid.AppFont.semibold);
       expect(
         find.descendant(of: buddyEntry, matching: find.text('2')),
         findsNothing,

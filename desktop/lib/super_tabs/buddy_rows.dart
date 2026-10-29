@@ -64,7 +64,6 @@ class SuperTabBuddyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final strong = selected || unread;
     final color = onTap == null
         ? DesktopChrome.muted
         : DesktopChrome.foreground;
@@ -111,10 +110,16 @@ class SuperTabBuddyRow extends StatelessWidget {
                                 name,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: DesktopChrome.control(
-                                  medium: strong,
-                                  color: color,
-                                ),
+                                // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                style:
+                                    DesktopChrome.control(
+                                      medium: selected,
+                                      color: color,
+                                    ).copyWith(
+                                      fontWeight: unread
+                                          ? grid.AppFont.semibold
+                                          : null,
+                                    ),
                               ),
                             ),
                             if (project case final project?) ...[
@@ -145,7 +150,11 @@ class SuperTabBuddyRow extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(width: _column),
+                  SizedBox(
+                    width: _column,
+                    // Unread is drawn as a bold name and heard in words.
+                    child: Semantics(label: unread ? 'Unread messages' : null),
+                  ),
                   const SizedBox(width: _column),
                 ],
               ),

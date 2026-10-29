@@ -1,5 +1,5 @@
-// The six Swarm dialogs Ken asked to polish (2026-10-28), photographed light and dark for review: machine details,
-// person profile, Project details, Team at a glance, Share Swarm and Add machine, over in-memory Swarms only.
+// The five Swarm dialogs Ken asked to polish (2026-10-28), photographed light and dark for review: machine details,
+// person profile, Project details, Share Swarm and Add machine, over in-memory Swarms only.
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,7 +8,6 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/project_options.dart';
-import 'package:harness/super_tabs/roster.dart';
 import 'package:harness/super_tabs/sharing.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/engine_identity.dart';
@@ -327,28 +326,6 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, '3-project-details-$theme');
-    }, skip: shots == null);
-
-    testWidgets('team at a glance ($theme)', (tester) async {
-      final server = _swarm();
-      final c = server.controller();
-      addTearDown(c.dispose);
-      await c.refresh();
-      await _pump(
-        tester,
-        brightness,
-        SuperTabRoster(
-          controller: c,
-          onInvite: () {},
-          onOpenAgent: (_) {},
-          onAddAgent: (_) {},
-          onAnswer: (_) {},
-        ),
-      );
-      await tester.tap(find.byTooltip('Team at a glance'));
-      await tester.pumpAndSettle();
-      await captureWindow(tester, shots, '4-team-at-a-glance-$theme');
-      await tester.pumpWidget(const SizedBox());
     }, skip: shots == null);
 
     testWidgets('share swarm ($theme)', (tester) async {

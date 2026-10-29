@@ -26,7 +26,7 @@ import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, 
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
-import { clock, insertParts, loadActive, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts } from './parts/light.js'
@@ -128,7 +128,10 @@ function deliveryTouches(delivery: SuperTabDelivery): Touch[] {
  *  every group's link list from its history. The state shares the loaded records, frozen: a command changes its own copy
  *  (commands.ts applyCommand), and the parts stay what the write is compared with (parts/commit.ts). */
 export async function loadRow(tx: Transaction, row: SwarmRow, named: Named = {}): Promise<Loaded> {
-  const parts = await loadActive(tx, row.id, named)
+  return loadedFrom(row, await loadActive(tx, row.id, named))
+}
+
+function loadedFrom(row: SwarmRow, parts: SwarmParts): Loaded {
   freeze(parts)
   const state = reassemble(parts, { share: true })
   parkLaterConversations(state)
@@ -1937,7 +1940,8 @@ export class SuperTabStore {
     const sweep = this.sweepDue(tabId, this.now())
     return transaction(this.db, async tx => {
       await this.hostFor(tx, user, machineId)
-      const loaded = await this.load(tx, user, tabId), state = structuredClone(loaded.state)
+      // Only the conversations its checks read (parts/load.ts loadObserved): the whole Swarm was ~1.1 MB a report (#876).
+      const loaded = loadedFrom(await this.row(tx, user, tabId), await loadObserved(tx, tabId, machineId)), state = structuredClone(loaded.state)
       const pool = machineContribution(state, machineId)
       if (!pool || pool.contributorId !== user.sub || pool.generation !== observation.generation) fail('CONTRIBUTION_REVOKED', 'Read the current machine contribution.', 403)
       const owned = await tx.machine.findFirst({ where: { machineId, userId: user.sub, autonomousEnv: user.autonomousEnv, ...machineAlive } })
