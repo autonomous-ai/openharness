@@ -399,6 +399,94 @@ void main() {
       }
     });
 
+    // In tests every glyph is a square of the font's size (13 points): these
+    // rows fit their whole line, with room to spare, at either text size.
+    testWidgets('a short part leaves its room to the other: a line that fits '
+        'is never cut', (tester) async {
+      // Room for the widest row at twice the text size.
+      await tester.binding.setSurfaceSize(const Size(1800, 600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final cases = {
+        // A short reason, a long PM action.
+        task(
+          liveness: state('quiet', 'silent', minute * 34),
+          leadAction: {'kind': 'assign', 'at': ago(minute)},
+        ): (
+          width: 700.0,
+          parts: ['Quiet', ' 34m', ' · PM reassigned it 1m ago'],
+        ),
+        // A long reason, a short PM action.
+        task(
+          status: 'blocked',
+          result: 'Needs the staging token',
+          liveness: state('waiting', 'blocked', minute * 5),
+          leadAction: {'kind': 'post', 'at': ago(minute)},
+        ): (
+          width: 800.0,
+          parts: [
+            'Blocked · Needs the staging token',
+            ' · 5m',
+            ' · PM posted 1m ago',
+          ],
+        ),
+      };
+      for (final MapEntry(key: group, value: (:width, :parts))
+          in cases.entries) {
+        for (final scale in [1.0, 2.0]) {
+          await withClock(
+            Clock.fixed(now),
+            () => tester.pumpWidget(
+              app(
+                Center(
+                  child: SizedBox(
+                    width: width * scale,
+                    child: SwarmTaskLine(group),
+                  ),
+                ),
+                scale: scale,
+              ),
+            ),
+          );
+          for (final text in parts) {
+            expect(
+              tester
+                  .renderObject<RenderParagraph>(find.text(text))
+                  .didExceedMaxLines,
+              isFalse,
+              reason: '"$text" ×$scale',
+            );
+          }
+          expect(tester.takeException(), isNull);
+        }
+      }
+    });
+
+    testWidgets('when neither fits, the reason and what the PM did are both '
+        'cut, never the age', (tester) async {
+      final group = task(
+        status: 'blocked',
+        result: 'Needs the staging token and the release signing key',
+        liveness: state('waiting', 'blocked', minute * 5),
+        leadAction: {'kind': 'assign', 'at': ago(minute)},
+      );
+      await withClock(
+        Clock.fixed(now),
+        () => tester.pumpWidget(
+          app(Center(child: SizedBox(width: 400, child: SwarmTaskLine(group)))),
+        ),
+      );
+      RenderParagraph part(String text) =>
+          tester.renderObject<RenderParagraph>(find.text(text));
+      expect(part(' · 5m').didExceedMaxLines, isFalse);
+      expect(
+        part('Blocked · Needs the staging token and the release signing key')
+            .didExceedMaxLines,
+        isTrue,
+      );
+      expect(part(' · PM reassigned it 1m ago').didExceedMaxLines, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('a name before the line, as a project\'s work row leads with '
         'its agent, gives way with the reason', (tester) async {
       await withClock(

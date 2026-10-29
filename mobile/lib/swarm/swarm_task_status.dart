@@ -246,30 +246,97 @@ class _SwarmTaskLineState extends State<SwarmTaskLine> {
       color: AppPalette.textSecondary,
       height: 1.35,
     );
-    Text part(String text) =>
-        Text(text, maxLines: 1, overflow: TextOverflow.ellipsis, style: style);
+    const dot = '● ';
+    final reason = widget.lead == null
+        ? status.reason
+        : '${widget.lead} · ${status.reason}';
+    final pm = status.pm == null ? null : ' · ${status.pm}';
     final id = widget.group.id;
-    return Row(
+    return LayoutBuilder(
       key: ValueKey('swarm-task-line-$id'),
-      children: [
-        // The words say what the dot shows: colour is never the only signal.
-        ExcludeSemantics(
+      builder: (context, constraints) {
+        final (reasonWidth, pmWidth) = _widths(
+          context,
+          style,
+          room: constraints.maxWidth,
+          whole: [dot, status.age],
+          reason: reason,
+          pm: pm,
+        );
+        Widget part(String text, double? width) => SizedBox(
+          width: width,
           child: Text(
-            '● ',
-            key: ValueKey('swarm-task-mark-$id'),
-            style: style.copyWith(color: swarmTaskMarkColor(status.mark)),
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
           ),
-        ),
-        Flexible(
-          child: part(
-            widget.lead == null
-                ? status.reason
-                : '${widget.lead} · ${status.reason}',
-          ),
-        ),
-        Text(status.age, maxLines: 1, softWrap: false, style: style),
-        if (status.pm case final pm?) Flexible(child: part(' · $pm')),
-      ],
+        );
+        return Row(
+          children: [
+            // The words say what the dot shows: colour is never the only
+            // signal.
+            ExcludeSemantics(
+              child: Text(
+                dot,
+                key: ValueKey('swarm-task-mark-$id'),
+                style: style.copyWith(color: swarmTaskMarkColor(status.mark)),
+              ),
+            ),
+            part(reason, reasonWidth),
+            Text(status.age, maxLines: 1, softWrap: false, style: style),
+            if (pm != null) part(pm, pmWidth),
+          ],
+        );
+      },
     );
+  }
+
+  /// The widths [reason] and [pm] get of [room] once the [whole] parts have
+  /// theirs: their own when the line fits. When it does not, they share
+  /// what is left, and one that needs less than half leaves the rest to the
+  /// other, so a short reason never cuts what the PM did, nor the other way
+  /// round. Measured as their [Text]s lay them out.
+  static (double, double) _widths(
+    BuildContext context,
+    TextStyle style, {
+    required double room,
+    required List<String> whole,
+    required String reason,
+    required String? pm,
+  }) {
+    var effective = DefaultTextStyle.of(context).style.merge(style);
+    if (MediaQuery.boldTextOf(context)) {
+      effective = effective.merge(const TextStyle(fontWeight: FontWeight.bold));
+    }
+    final scaler = MediaQuery.textScalerOf(context);
+    final direction = Directionality.maybeOf(context) ?? TextDirection.ltr;
+    double measure(String text) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: effective),
+        textDirection: direction,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      final width = painter.width.ceilToDouble();
+      painter.dispose();
+      return width;
+    }
+
+    final r = measure(reason);
+    final p = pm == null ? 0.0 : measure(pm);
+    if (!room.isFinite) return (r, p);
+    final left = math.max(
+      0.0,
+      room - whole.fold<double>(0, (sum, text) => sum + measure(text)),
+    );
+    if (r + p <= left) return (r, p);
+    final half = left / 2;
+    final reasonWidth = r <= half
+        ? r
+        : p <= half
+        ? left - p
+        : half;
+    return (reasonWidth, math.min(p, left - reasonWidth));
   }
 }

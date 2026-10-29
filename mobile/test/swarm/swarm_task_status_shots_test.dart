@@ -19,8 +19,8 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// The drawer's and the project sheet's task lines in both phone themes, for
-/// the pull request: `SWARM_TASK_STATUS_SHOTS=<dir> flutter test
-/// test/swarm/swarm_task_status_shots_test.dart` on a Mac. Scripted data only.
+/// the pull request, written to the folder `SWARM_TASK_STATUS_SHOTS` names
+/// (run this file alone, on a Mac). Scripted data only.
 final shots = Platform.environment['SWARM_TASK_STATUS_SHOTS'];
 
 void main() {
