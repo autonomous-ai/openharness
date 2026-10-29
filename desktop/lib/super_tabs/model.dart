@@ -1,4 +1,5 @@
 import 'identity.dart' show superTabPersonName;
+import 'live_card_model.dart';
 import 'profile_model.dart';
 
 export 'profile_model.dart';
@@ -162,6 +163,7 @@ class SuperTabConversation {
         (row['pullRequestUrls'] as List?)?.whereType<String>() ??
             const <String>[],
       ),
+      cards = SuperTabCards.fromJson(row['cards']),
       brief = _text(row, 'brief'),
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
@@ -207,6 +209,10 @@ class SuperTabConversation {
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
+
+  /// Its messages drawn as live cards (live_card.dart); none from an older
+  /// backend.
+  final SuperTabCards cards;
   final int lastMessageSequence;
 
   /// Its newest message in the main stream: a reply only in its thread
