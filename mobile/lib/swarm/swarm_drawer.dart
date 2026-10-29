@@ -11,7 +11,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'identity.dart';
 import 'model.dart';
-import 'swarm_conversation.dart';
+import 'swarm_buddy.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
 import 'swarm_home_keeper.dart';
@@ -293,8 +293,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     final work = swarmProjectWork(
       snapshot,
       project,
-      session.accountId,
-      pmChatId: reader == null ? null : swarmPmChat(reader, project.id)?.id,
+      buddies: reader?.buddies ?? SwarmBuddies.none,
     ).active;
     final waits = swarmWaitingOnYou(session.inbox, swarmId);
     SwarmDrawerRow chat(SuperTabConversation g, String title) => SwarmDrawerRow(

@@ -15,7 +15,7 @@ import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
-import 'swarm_conversation.dart';
+import 'swarm_buddy.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
@@ -30,15 +30,15 @@ import 'team_glance.dart';
 
 /// The conversations of one project the person may read, as its sheet lists
 /// them: its work by latest activity, and the quiet or archived work behind
-/// "Older". The project chat is the screen and the person's Chat with PM
-/// ([pmChatId]) is in its header, so they are not here; a private chat is
-/// listed only to its people (the backend's rule, kept here too).
+/// "Older". The project chat is the screen, so it is not here, and neither is
+/// a Buddy chat ([buddies]), which has its own row. Nor is any other private
+/// chat: Buddies replaced Chat with PM (#2090), so the old history an older
+/// server still sends is hidden, as on the desktop (`hiddenByBuddies`).
 ({List<SuperTabConversation> active, List<SuperTabConversation> older})
 swarmProjectWork(
   SuperTabSnapshot snapshot,
-  SuperTabProject project,
-  String accountId, {
-  String? pmChatId,
+  SuperTabProject project, {
+  SwarmBuddies buddies = SwarmBuddies.none,
 }) {
   final work =
       snapshot.conversations
@@ -46,8 +46,8 @@ swarmProjectWork(
             (g) =>
                 g.projectId == project.id &&
                 g.id != project.leadConversationId &&
-                g.id != pmChatId &&
-                (g.audience?.contains(accountId) ?? true),
+                g.audience == null &&
+                !buddies.chatOwners.containsKey(g.id),
           )
           .toList()
         ..sort(
@@ -597,12 +597,7 @@ class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
     if (session == null || snapshot == null || project == null) return null;
     final kept = swarmHomeKept(reader);
     final waits = swarmWaitingOnYou(session.inbox, widget.swarmId);
-    final work = swarmProjectWork(
-      snapshot,
-      project,
-      session.accountId,
-      pmChatId: swarmPmChat(reader!, project.id)?.id,
-    );
+    final work = swarmProjectWork(snapshot, project, buddies: reader!.buddies);
     return (
       glance: swarmTeamGlance(snapshot, projectId: project.id),
       // What was kept is not now, what waits on the person least of all.
@@ -813,12 +808,7 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
         : swarmPmId(snapshot, project);
     final work = snapshot == null || project == null
         ? null
-        : swarmProjectWork(
-            snapshot,
-            project,
-            session.accountId,
-            pmChatId: swarmPmChat(reader!, project.id)?.id,
-          );
+        : swarmProjectWork(snapshot, project, buddies: reader!.buddies);
     final waits = swarmWaitingOnYou(session.inbox, widget.swarmId);
     final waiting = [
       for (final g in work?.active ?? const <SuperTabConversation>[])
