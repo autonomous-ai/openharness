@@ -915,7 +915,7 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     counted.ops.length = 0
     f.clock.now += 29_999
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
-    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
+    expect(counted.ops).toEqual(['SuperTabDelivery.aggregateRaw'])
     counted.ops.length = 0
     f.clock.now += 1
     expect(await f.timed.deliveries(host, f.tab, f.lead)).toEqual([])
@@ -999,7 +999,7 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     counted.ops.length = 0
     f.clock.now += 1_000
     expect(await other.deliveries(host, f.tab, f.lead)).toEqual([])
-    expect(counted.ops).toEqual(['SuperTabDelivery.findMany'])
+    expect(counted.ops).toEqual(['SuperTabDelivery.aggregateRaw'])
   })
 
   it('runs the full checked poll each time while the shared memory cannot be read or written, and still answers', async () => {
@@ -1031,7 +1031,7 @@ describe('the delivery poll of an agent with nothing waiting', () => {
 describe('the delivery poll of an agent with a held delivery', () => {
   // The open deliveries, then the grant the host speaks for its agent under, read outside the Swarm (store.ts grantHolds):
   // its contributor's Workspace membership, its machine and, lent by host to owner here, the contributor and the share.
-  const HELD_READS = ['SuperTabDelivery.findMany', 'SwarmWorkspaceMember.findUnique', 'Machine.findFirst', 'User.findUnique', 'MachineShare.findUnique']
+  const HELD_READS = ['SuperTabDelivery.aggregateRaw', 'SwarmWorkspaceMember.findUnique', 'Machine.findFirst', 'User.findUnique', 'MachineShare.findUnique']
   /** A person's message to the Lead, read by a full poll, claimed and held by its host. */
   const held = async (f: Awaited<ReturnType<typeof swarm>>) => {
     const sent = await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Status?', replyTo: null, recipientIds: [] })
