@@ -3,7 +3,7 @@ import { prisma, machineAlive } from '../lib/prisma.js'
 import { sha256hex } from '../utils/crypto.js'
 import { logger } from '../utils/logger.js'
 import { machineBillingAllowsDataPlane } from '../lib/billingState.js'
-import { getDevicePresence, consumeNewIdQuota } from '../lib/bus.js'
+import { getDevicePresence, consumeNewIdQuota, publishDeviceStatus } from '../lib/bus.js'
 import { env } from '../config/env.js'
 import { AppError } from '../errors/index.js'
 
@@ -95,10 +95,21 @@ export const deviceService = {
     // `userId` is re-applied so a computer that changed hands follows its owner. `name` is deliberately
     // NOT overwritten: it is the user-editable display name, and a reconnect must not undo a rename —
     // the same rule Machine.name follows.
+    // The owner's own row: one write, as before. Matching the owner too lets a row another account holds miss, so
+    // the take-over below can tell that account.
     const touch = (): Promise<DeviceBinding> => prisma.deviceBinding.update({
-      where: { deviceId },
-      data: { userId, computerId, lastSeenAt: new Date() },
+      where: { deviceId, userId },
+      data: { computerId, lastSeenAt: new Date() },
     })
+    // The row exists under another account: it moves to this one, and the previous owner's open web sockets, which
+    // keep their own copy of the account's devices (lib/webWs.ts), drop it at once. Null when there is no row.
+    const takeOver = async (): Promise<DeviceBinding | null> => {
+      const held = await prisma.deviceBinding.findUnique({ where: { deviceId }, select: { userId: true } })
+      if (!held) return null
+      const row = await prisma.deviceBinding.update({ where: { deviceId }, data: { userId, computerId, lastSeenAt: new Date() } })
+      if (held.userId !== userId) void publishDeviceStatus(held.userId, { deviceId, online: false, removed: true })
+      return row
+    }
     // Touch first, create only when there was nothing to touch — rather than one upsert, because only a
     // NEW row may be charged against the account's ceiling and new-id rate, and the reconnect of a known
     // device must stay a single free write. The computer id is self-declared, so without those a valid
@@ -110,6 +121,8 @@ export const deviceService = {
     } catch (err) {
       if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025')) throw err
     }
+    const taken = await takeOver()
+    if (taken) return taken
     // No lock around count → create: parallel fresh ids can overshoot the ceiling, but only by what the
     // (atomic) new-id rate below lets through in one window.
     if (env.HARNESS_DEVICE_LIMIT > 0 && await prisma.deviceBinding.count({ where: { userId } }) >= env.HARNESS_DEVICE_LIMIT) {
@@ -125,7 +138,10 @@ export const deviceService = {
     } catch (err) {
       // Two dials of the same computer raced past the lookup; the id is derived, so the loser's row IS
       // the winner's — converge on it exactly as the upsert used to.
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') return touch()
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        const winner = await takeOver()
+        if (winner) return winner
+      }
       throw err
     }
   },

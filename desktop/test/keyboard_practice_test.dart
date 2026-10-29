@@ -533,4 +533,18 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  test('the shortcut list names the Swarm chat box newline keys', () {
+    final map = MemoryKeymap();
+    addTearDown(map.dispose);
+    final lesson = keyboardLessons(map)
+        .singleWhere((l) => l.command == 'edit.chat_newline');
+    expect(lesson.label, 'New line in a chat message');
+    expect(lesson.group, 'Swarm chat box');
+    expect(lesson.bindings.map((b) => b.sequence), [
+      'shift+enter',
+      'alt+enter',
+    ]);
+    expect(lesson.result, contains('Enter sends'));
+  });
 }

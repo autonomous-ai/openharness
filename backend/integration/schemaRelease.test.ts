@@ -7,6 +7,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
 import { ensureIndex } from '../src/lib/db/indexes.js'
 import { releaseSchema } from '../src/lib/db/schemaRelease.js'
+import { ensureReceiptRule } from '../src/lib/productUsageReceiptSweep.js'
 import { DIRECT, readLight, readParts } from '../src/superTabs/cachedReads.js'
 import * as parts from '../src/superTabs/parts/index.js'
 import { swarm } from '../src/superTabs/read/fixture.test-support.js'
@@ -138,6 +139,35 @@ describe('a release\'s schema step', () => {
     await releaseSchema(db, target)
     expect(await indexChanges(db, since)).toEqual(['collMod SuperTabMention mention_expiry'])
     expect(await expiryIndexes(db)).toEqual(EXPIRY)
+    await db.$disconnect()
+  }, 240_000)
+})
+
+describe('the usage receipt rule (lib/productUsageReceiptSweep.ts)', () => {
+  const rule = async (db: PrismaClient) => ((await db.$runCommandRaw({ listCollections: 1, filter: { name: 'product_usage_receipts' } }) as
+    { cursor: { firstBatch: Array<{ options: Record<string, unknown> }> } }).cursor.firstBatch[0]?.options)
+
+  it('survives a release, with or without a schema change, and the release does not touch it', async () => {
+    const { db, target } = await database()
+    await releaseSchema(db, target)
+    await ensureReceiptRule(db)
+    const installed = await rule(db)
+    expect(installed).toMatchObject({ validator: { $jsonSchema: { required: ['life'] } }, validationLevel: 'strict', validationAction: 'error' })
+    const since = new Date()
+    await releaseSchema(db, target)
+    await releaseSchema(db, { ...target, schema: await schemaWith(groupIndex('@@index([tabId, purgeAt])')) })
+    expect(await rule(db)).toEqual(installed)
+    expect((await indexChanges(db, since)).filter(change => change.includes('product_usage_receipts'))).toEqual([])
+    await db.$disconnect()
+  }, 240_000)
+
+  it('is installed once: a second install sends no change', async () => {
+    const { db, target } = await database()
+    await releaseSchema(db, target)
+    await ensureReceiptRule(db)
+    const since = new Date()
+    await ensureReceiptRule(db)
+    expect(await indexChanges(db, since)).toEqual([])
     await db.$disconnect()
   }, 240_000)
 })

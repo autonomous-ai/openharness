@@ -4,7 +4,7 @@
  * rules are applied per task, as each binds only its own project's groups, with the same checks the route makes
  * (routeCommand.ts), so the plan never offers what the route would refuse. Only new agents are planned, not idle members. */
 import { requiredToolReason, startRequirements } from './capacity.js'
-import { API_BUILDERS, breaks, floorFor, KIND_WORD, liftEffort, quotaOf2, SIZES, type Assessment, type Level, type Policy, type Size, type SwarmRule } from './route.js'
+import { API_BUILDERS, breaks, floorFor, gridQuality, KIND_WORD, liftEffort, quotaOf2, SIZES, type Assessment, type Level, type Policy, type Size, type SwarmRule } from './route.js'
 import { LOCAL_FRESH_MS, OFFLINE, servedModels, STALLED, stalled, takesBuilder, taskRequirement, unreadyPool } from './routeCommand.js'
 import { identifier, object } from './wire.js'
 
@@ -103,7 +103,7 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
       ...unready.all,
       ...shortfalls(observed, needs),
-      ...(stalled(list(state.starts), id) ? [STALLED] : []),
+      ...(stalled(list(state.starts), id, pool, now) ? [STALLED] : []),
     ]
     // An engine that is not ready, or whose account has a window used up, starts nothing (the route refuses both).
     const exhausted = (engine: string) => {
@@ -140,7 +140,7 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
     gridRows.add(id)
     rows[id] = { engine: 'claude', model: 'default', effort: 'default', gridModel: s.model, gridName: s.grid }
     // A Claude Code Builder drives it through the grid relay; an API answers four at once, a local engine one.
-    models.push({ id, engine: 'claude', cost: 1, quality: { default: policy.localModels?.quality ?? 1 },
+    models.push({ id, engine: 'claude', cost: 1, quality: { default: gridQuality(policy, s.model, s.label) },
       concurrency: (s.kind === 'api' ? API_BUILDERS : 1) - s.holders.length, subscription: false, remote: s.kind === 'api' || s.kind === 'shared',
       family: s.model, label: `Claude on ${s.label} (${KIND_WORD[s.kind]})`, ...(s.machines ? { machines: [...s.machines].filter(m => pools.has(m)) } : {}) })
   }
