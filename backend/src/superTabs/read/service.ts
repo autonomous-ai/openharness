@@ -6,7 +6,7 @@ import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { author, fail, groupWithoutMachines, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
-import { waitingMentions } from '../mentions.js'
+import { mentionsDigest, swarmsWithTags, waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import { readMarks, writeReadMark } from '../readMarks.js'
 import type { SuperTabStore } from '../store.js'
@@ -30,6 +30,7 @@ import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
+import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]> & Pick<NonNullable<Parameters<typeof parts.loadLight>[2]>, 'groups'>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
@@ -182,23 +183,47 @@ export class SwarmReads {
     })
   }
 
-  async list(user: AuthUser, after?: string): Promise<SwarmList> {
+  /** The waiting tags of each listed Swarm, as `/:tabId/mentions` and a Swarm's own state count them (readable conversations
+   *  only), so Desktop reads one list instead of one mentions call per Swarm (roadmap 2.5). One match over the page's
+   *  Swarms (swarmsWithTags) finds those with any tag at all; only those load their state to check what the person may still read. A Swarm
+   *  whose count cannot be told here is left out, and the client asks it itself. */
+  private async mentionCounts(user: AuthUser, tabIds: string[]): Promise<Map<string, { count: number; digest: string }>> {
+    const counts = new Map<string, { count: number; digest: string }>()
+    if (!tabIds.length) return counts
+    const tagged = await this.db.superTabMention.aggregateRaw({ pipeline: swarmsWithTags(tabIds, user.sub, this.now()) }) as unknown as Array<{ _id: string }>
+    const withTags = new Set(tagged.map(row => row._id))
+    const actor = { kind: 'person', userId: user.sub, email: user.email } as const
+    for (const tabId of tabIds) {
+      if (!withTags.has(tabId)) { counts.set(tabId, { count: 0, digest: mentionsDigest([]) }); continue }
+      try {
+        const { state } = await this.store.readLoad(user, tabId)
+        await this.store.actor(this.db, user, state)
+        counts.set(tabId, await waitingMentions(this.db, tabId, state, actor, this.now()))
+      } catch { /* Not countable here: the client reads this Swarm's own mentions. */ }
+    }
+    return counts
+  }
+
+  async list(user: AuthUser, after?: string, withMentions = false): Promise<SwarmList> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, memberIds: { has: user.sub },
-      ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101, select: { id: true, ownerId: true, format: true, workspaceId: true } })
+    const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
     // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
     const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
-    const current = new Set((await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
-      select: { workspaceId: true } })).map(m => m.workspaceId))
+    const current = new Set((workspaceIds.length ? await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
+      select: { workspaceId: true } }) : []).map(m => m.workspaceId))
     const page = rows.slice(0, 100).filter(r => r.workspaceId ? current.has(r.workspaceId) : !workspacesRequired())
     // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
-    const legacy = await this.db.superTab.findMany({ where: { id: { in: page.filter(r => r.format !== 2).map(r => r.id) } }, select: { id: true, state: true } })
+    const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
+    const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
     const ids = page.filter(r => r.format === 2).map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
     const [heads, newest] = await transaction(this.db, tx => Promise.all([parts.loadChanged(tx, ids, new Date(0), ['head']), parts.lastChangedAt(tx, ids)]))
+    const mentions = withMentions ? await this.mentionCounts(user, page.map(r => r.id)) : undefined
     return { tabs: page.map(row => {
       const head = (heads.get(row.id)?.[0]?.data ?? legacy.find(l => l.id === row.id)?.state) as { name: string; paused: boolean }
-      return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null }
+      const tags = mentions?.get(row.id)
+      return { id: row.id, name: head.name, ownerId: row.ownerId, workspaceId: row.workspaceId, paused: head.paused, lastChangedAt: newest.get(row.id) ?? null,
+        ...tags ? { mentionsWaiting: tags.count, mentionsDigest: tags.digest } : {} }
     }), next: rows.length > 100 ? rows[99]!.id : null }
   }
 

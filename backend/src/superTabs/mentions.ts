@@ -107,7 +107,17 @@ export async function mentionsWaiting(tx: Tx, tabId: string, state: SuperTabStat
 export async function waitingMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>,
   now: number): Promise<{ count: number; digest: string }> {
   const ids = (await readable(tx, tabId, state, actor, now, true)).map(({ row }) => row.id).sort()
-  return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
+  return { count: ids.length, digest: mentionsDigest(ids) }
+}
+
+/** Which of these Swarms hold a waiting tag for the person, by one plain match (the index on tabId, personId, createdAt
+ *  bounds it; Prisma would send `in` as an $expr that no index can). Raw, so a Swarm list counts a page of Swarms at once. */
+export const swarmsWithTags = (tabIds: string[], personId: string, now: number) => [{ $match: { tabId: { $in: tabIds }, personId, resolvedAt: null,
+  createdAt: { $gt: { $date: new Date(now - MENTION_EXPIRY_MS).toISOString() } } } }, { $group: { _id: '$tabId' } }]
+
+/** The digest of a sorted list of waiting tag ids; a Swarm with none has this one. */
+export function mentionsDigest(ids: string[]): string {
+  return createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16)
 }
 
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {

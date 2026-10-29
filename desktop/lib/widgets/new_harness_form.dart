@@ -2159,19 +2159,34 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     textStyle: DesktopChrome.text(size: 12, medium: true),
   );
 
-  /// "Product Manager: Mac Studio · Claude Code · Opus 5.5 · Change", or why
-  /// New Project waits.
+  /// "Product Manager on Mac Studio · Claude Code · Opus 5.5   Change", the
+  /// repo cloned there first under it, or why New Project waits.
   Widget _desktopLeadLine() {
     final blocked = box.leadBlocked;
+    final note = blocked == null ? box.leadCloneNote : null;
+    final muted = DesktopChrome.text(size: 12, color: DesktopChrome.muted);
     return Row(
       key: const ValueKey('new-harness-lead-line'),
       children: [
         Flexible(
-          child: Text(
-            blocked ?? box.leadLine,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                blocked ?? box.leadLine,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: muted,
+              ),
+              if (note != null)
+                Text(
+                  note,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: muted,
+                ),
+            ],
           ),
         ),
         const SizedBox(width: 4),
@@ -2185,7 +2200,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               onPressed: box.locked
                   ? null
                   : () => setState(() => _leadOpen = !_leadOpen),
-              child: const Text('Change'),
+              // With no machine able to run it, the list says why for each.
+              child: Text(box.leadNone ? 'See why' : 'Change'),
             ),
           ),
         ),
@@ -2326,54 +2342,64 @@ class NewHarnessFormState extends State<NewHarnessForm> {
           selected: chosen,
           label: '${machine.name}, $detail',
           excludeSemantics: true,
-          child: InkWell(
-            onTap: enabled ? () => box.chooseLeadMachine(machine.id) : null,
-            mouseCursor: enabled
-                ? SystemMouseCursors.click
-                : SystemMouseCursors.basic,
-            borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
-            hoverColor: DesktopChrome.selection,
-            focusColor: DesktopChrome.selection,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Row(
-                children: [
-                  SuperTabMachineDot(
-                    status: machine.online
-                        ? SuperTabMachineStatus.live
-                        : SuperTabMachineStatus.offline,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          machine.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: DesktopChrome.text(
-                            size: 13,
-                            color: enabled
-                                ? DesktopChrome.foreground
-                                : DesktopChrome.muted,
-                          ),
-                        ),
-                        Text(
-                          detail,
-                          style: DesktopChrome.text(
-                            size: 12,
-                            color: DesktopChrome.muted,
-                          ),
-                        ),
-                      ],
+          // A greyed-out machine also says why on hover; its label says it to
+          // accessibility already.
+          child: Tooltip(
+            message: machine.startable ? '' : detail,
+            excludeFromSemantics: true,
+            child: InkWell(
+              onTap: enabled ? () => box.chooseLeadMachine(machine.id) : null,
+              mouseCursor: enabled
+                  ? SystemMouseCursors.click
+                  : SystemMouseCursors.basic,
+              borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
+              hoverColor: DesktopChrome.selection,
+              focusColor: DesktopChrome.selection,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  children: [
+                    SuperTabMachineDot(
+                      status: machine.online
+                          ? SuperTabMachineStatus.live
+                          : SuperTabMachineStatus.offline,
                     ),
-                  ),
-                  if (chosen) ...[
-                    const SizedBox(width: 8),
-                    Icon(AppIcons.check, size: 16, color: DesktopChrome.accent),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            machine.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: DesktopChrome.text(
+                              size: 13,
+                              color: enabled
+                                  ? DesktopChrome.foreground
+                                  : DesktopChrome.muted,
+                            ),
+                          ),
+                          Text(
+                            detail,
+                            style: DesktopChrome.text(
+                              size: 12,
+                              color: DesktopChrome.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (chosen) ...[
+                      const SizedBox(width: 8),
+                      Icon(
+                        AppIcons.check,
+                        size: 16,
+                        color: DesktopChrome.accent,
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

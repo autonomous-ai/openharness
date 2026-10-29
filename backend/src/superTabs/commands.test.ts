@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { sweepLiveness } from './liveness.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
+import { startFinished } from './parts/write.js'
 import { agentTarget, broken } from './rules.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 
@@ -748,6 +750,19 @@ describe('route.record and route.override', () => {
       expect(() => run(sized('small', patch))).toThrow()
     }
   })
+  it('writes the job kind from the group\'s owned paths, then the route word, and never takes one sent with the route', () => {
+    const f = routed(), group = f.group()
+    const route = (conversationId: string, patch: Record<string, unknown> = {}, kind?: string) => f.run({ type: 'route.record', conversationId,
+      decision: record({ ...patch, assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.', ...(kind ? { kind } : {}) } }) } as Command, f.leadActor, {}).routeDecisions[0]
+    f.run({ type: 'work.define', conversationId: group, task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['backend/src/superTabs', 'backend/src/superTabs/store.test.ts'] },
+      checks: [{ description: 'Tests pass.', independent: false }] })
+    expect(route(group, {}, 'ui')).toMatchObject({ record: { jobKind: 'backend', assessment: { kind: 'ui' } } })
+    expect(route(group, {}, 'security')).toMatchObject({ record: { jobKind: 'security' } })
+    expect(route(group, { jobKind: 'docs' })).toMatchObject({ record: { jobKind: 'backend' } })
+    // The Lead conversation owns nothing: the route word decides, and a word outside the list is general.
+    expect(route('lead', {}, 'mobile')).toMatchObject({ record: { jobKind: 'mobile' } })
+    expect(route('lead', {}, 'parser')).toMatchObject({ record: { jobKind: 'general' } })
+  })
   it('refuses a pick outside the candidates, a non-lead agent and a busy hour', () => {
     const f = routed()
     const route = (decision: unknown, actor: Actor, context: Partial<CommandContext>) =>
@@ -1292,8 +1307,44 @@ describe('Reviewer role', () => {
     // A known small model it reports is never promoted by its launch (review of ee4ee6c9a).
     expect(member({ engine: 'codex', model: 'gpt-5.5-mini' })).toThrow('Codex gpt-5.5-mini is 1.')
     expect(member({ engine: 'codex', model: 'gpt-5-nano' })).toThrow('Codex gpt-5-nano is 1.')
+    // An agent from before the flag was kept is judged by its start: one that named the model is rated by that model's row.
+    delete f.state.agents.find(a => a.id === reviewer)!.launchedDefault
+    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
     f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-6.1-sol'
     expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).toThrow('Codex gpt-6.1-sol is 1.')
+  })
+
+  it('rates a Reviewer launched on its engine\'s default by the default row after it reports its model, once its start has finished', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const leadActor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' } as const
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    // Started with no model: Codex runs its own default and reports none yet.
+    const startId = f.run({ type: 'agent.start', request: request(group, { role: 'reviewer' }), ...via } as Command, leadActor, { contribution, ...decisionIn(group) }).result.startId as string
+    f.run({ type: 'agent.startDispatch', startId }, leadActor, { contribution })
+    const reviewer = f.run({ type: 'agent.started', startId, harnessId: 'native-reviewer', configuration: { ...config, model: null } }, leadActor, { contribution }).result.agentId as string
+    // A command loads only unfinished starts (parts/load.ts loadActive): the finished one is gone from its state.
+    f.state.starts = f.state.starts!.filter(s => !startFinished(s))
+    const builder = f.add('builder', 'owner', group)
+    f.state.agents.find(a => a.id === builder)!.configuration.engine = 'claude'
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
+      leadActor).result.conversationId as string
+    const pick = () => f.run({ type: 'route.record', conversationId: review, decision: record({ candidates: [candidate('c0', { kind: 'member', agentId: reviewer, machineId: 'host' })], pick: 'c0' }) } as Command, leadActor)
+    expect(pick).not.toThrow()
+    // Codex then reports its slug.
+    const reviewerActor = { kind: 'agent', agentId: reviewer, machineOwnerId: f.state.agents.find(a => a.id === reviewer)!.machineOwnerId } as const
+    const before = f.state.agents.find(a => a.id === reviewer)!.configurationVersion!
+    f.run({ type: 'agent.configuration', previousVersion: before, configuration: { ...config, model: 'gpt-6.1-sol' } }, reviewerActor)
+    expect(pick).not.toThrow()
+    // A small model it reports is still never promoted (review of ee4ee6c9a).
+    const now = f.state.agents.find(a => a.id === reviewer)!.configurationVersion!
+    f.run({ type: 'agent.configuration', previousVersion: now, configuration: { ...config, model: 'gpt-5.5-mini' } }, reviewerActor)
+    expect(pick).toThrow('Codex gpt-5.5-mini is 1.')
+    // A replaced terminal (Change agent) is not the session its start launched: it is rated by the model it reports.
+    f.run({ type: 'agent.rebind', agentId: reviewer, machineId: 'host', projectId: 'lead', previousHarnessId: 'native-reviewer', harnessId: 'native-reviewer-2',
+      configuration: { ...config, model: 'gpt-6.1-sol' } }, reviewerActor)
+    expect(f.state.agents.find(a => a.id === reviewer)).not.toHaveProperty('launchedDefault')
+    expect(pick).toThrow('Codex gpt-6.1-sol is 1.')
   })
 
   it('stores the role chosen at start and reads agents without one as Builders', () => {
@@ -1379,6 +1430,63 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, builderActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: false, lead: false })
     expect(f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head 789' }, builderActor).messages[0]!.recipients).toEqual([lead])
+  })
+
+  describe('work waiting for its review (liveness.ts: its quiet time does not count)', () => {
+    const HOUR = 3_600_000, QUIET = 30 * 60_000
+    function handedOver(status: 'review' | 'working') {
+      const setup = reviewed()
+      const { f, group, builder, reviewer } = setup
+      const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+      const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status, result: 'Ready for review: PR #42 at abc1234' }, builderActor, { now: 2000 })
+      const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
+      const verdict = (passed: boolean, now: number) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed,
+        evidence: passed ? 'Passed at abc1234' : 'Two findings at abc1234' }, reviewerActor, { now })
+      const task = () => f.state.conversations.find(c => c.id === group)!.assignment!
+      /** The task's status after the time checks ran at `now`, on a copy. */
+      const swept = (now: number) => { const copy = structuredClone(f.state); sweepLiveness(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
+      return { ...setup, built, builderActor, verdict, task, swept }
+    }
+
+    it('moves work in review back to working when a review finds problems, tells its Engineer, and counts its quiet time from then', () => {
+      const { verdict, task, swept, builder } = handedOver('review')
+      const foundAt = 2000 + 2 * HOUR
+      expect(swept(foundAt)).toBe('review')
+      const found = verdict(false, foundAt)
+      expect(task()).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234' })
+      expect(found.messages.find(m => m.recipients.includes(builder))?.text).toBe('Working\n\nThe review found problems. Fix them, then hand it over for review again.')
+      expect(swept(foundAt + QUIET)).toBe('working')
+      expect(swept(foundAt + QUIET + 1)).toBe('lost')
+    })
+
+    it('keeps work in review when the review passes', () => {
+      const { verdict, task, swept } = handedOver('review')
+      expect(verdict(true, 2000 + HOUR).messages).toEqual([])
+      expect(task().status).toBe('review')
+      expect(swept(2000 + 2 * HOUR)).toBe('review')
+    })
+
+    it('counts a working hand-off\'s quiet time once a review finds problems, and pauses it again at the Engineer\'s next hand-off', () => {
+      const { f, group, built, builderActor, verdict, task, swept } = handedOver('working')
+      const foundAt = 2000 + 2 * HOUR
+      expect(swept(foundAt)).toBe('working')
+      verdict(false, foundAt)
+      expect(task().status).toBe('working')
+      expect(swept(foundAt + QUIET)).toBe('working')
+      expect(swept(foundAt + QUIET + 1)).toBe('lost')
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: 'Ready for review: PR #42 at def5678' }, builderActor, { now: foundAt + HOUR })
+      expect(swept(foundAt + 3 * HOUR)).toBe('working')
+    })
+
+    it('counts quiet time from when the Lead moves the work out of review', () => {
+      const { f, group, built, leadActor, swept } = handedOver('review')
+      const movedAt = 2000 + 2 * HOUR
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: 'Rebase on main' }, leadActor, { now: movedAt })
+      expect(swept(movedAt + QUIET)).toBe('working')
+      expect(swept(movedAt + QUIET + 1)).toBe('lost')
+    })
   })
 
   describe('a review the Swarm opens by itself', () => {
@@ -3354,7 +3462,8 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp!.carry).toContain(pr)
     expect(g().stepUp!.carry).toContain('Ready: no. Two links are broken.')
     expect(g().stepUp!.carry).toContain('Ready: yes. Branch fix/docs.')
-    expect(effects.messages.find(m => m.recipients.includes(kimi))!.text).toContain('Stop working on it.')
+    // Told only to stop: a stepped-up attempt is not handed back to fix its findings.
+    expect(effects.messages.filter(m => m.recipients.includes(kimi)).map(m => m.text)).toEqual([expect.stringContaining('Stop working on it.')])
     // Each row its own: one write stores them all.
     expect(new Set(effects.messages.map(m => m.id)).size).toBe(effects.messages.length)
     expect(effects.messages.find(m => m.recipients.includes(f.lead))!.text)
@@ -3375,7 +3484,8 @@ describe('stepping up from a cheap model', () => {
     expect(g().stepUp).toMatchObject({ attempt: 3, floor: 3 })
     const opus = builder('opus', 'claude-opus-4-7'), third = assign(opus)
     expect(fail(third.assignmentId, opus).messages.some(m => m.text.includes('stepped up'))).toBe(false)
-    expect(g().assignment).toMatchObject({ id: third.assignmentId, status: 'review' })
+    // Not stepped up: a review that found problems hands it back to its Builder (liveness.ts reviewFoundProblems).
+    expect(g().assignment).toMatchObject({ id: third.assignmentId, status: 'working' })
   })
 
   it('stops after two steps, and never steps up work that did not start on the grid', () => {
@@ -3384,14 +3494,14 @@ describe('stepping up from a cheap model', () => {
     const first = assign(opus)
     fail(first.assignmentId, opus)
     expect(g().stepUp).toBeUndefined()
-    expect(g().assignment!.status).toBe('review')
+    expect(g().assignment!.status).toBe('working')
     // At the cap a failed Sonnet attempt stays with its Builder.
     const { builder: other, assign: give, fail: failIt, g: group } = cheap()
     group().stepUp = { attempt: 3, floor: 3, reason: 'Earlier.', at: 1, carry: '' }
     const sonnet = other('sonnet', 'claude-sonnet-4-5')
     failIt(give(sonnet).assignmentId, sonnet)
     expect(group().stepUp!.attempt).toBe(3)
-    expect(group().assignment!.status).toBe('review')
+    expect(group().assignment!.status).toBe('working')
   })
 
   it('steps up a group whose grid start failed, and not one whose subscription start failed', () => {
@@ -3417,7 +3527,7 @@ describe('stepping up from a cheap model', () => {
     const attempt = assign(codex)
     fail(attempt.assignmentId, codex)
     expect(g().stepUp!.attempt).toBe(2)
-    expect(g().assignment).toMatchObject({ id: attempt.assignmentId, status: 'review' })
+    expect(g().assignment).toMatchObject({ id: attempt.assignmentId, status: 'working' })
   })
 
   it('steps up once for one failed grid start, however often its failure is reported', () => {
@@ -3428,5 +3538,103 @@ describe('stepping up from a cheap model', () => {
     const again = f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused again.' })
     expect(g().stepUp).toMatchObject({ attempt: 2, startId: 's1' })
     expect(again.messages.some(m => m.text.includes('stepped up'))).toBe(false)
+  })
+})
+
+// Ken, 2026-10-28: work kept landing on engines that could not run on their machine (Codex with no tokens on Diego's Mac),
+// until a person told the Product Manager. The server counts failed starts per engine and machine, and the start check
+// refuses an engine its machine reads as signed out, out of quota or suspended.
+describe('an engine that cannot run on a contributed machine', () => {
+  const grid = 'swarm-0123456789ab'
+  const setup = (reading: Record<string, unknown> = {}) => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    f.state.machines = [{ machineId: 'mac', name: 'Mac', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation, generation: 'g1',
+      cwd: '/repo', engines: ['codex'], maxAgents: 8, paused: false, observation: { generation: 'g1', receivedAt: 1000,
+        resources: { cpuPercent: null, memoryTotalBytes: null, memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null,
+          deviceType: null, chip: null, os: null, gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: [], stoppedHarnessIds: [], ...reading } }] as never
+    const start = (id: string, extra: Record<string, unknown> = {}) => ({ id, actorKey: 'person:owner', contributorId: 'owner',
+      membershipGeneration: f.state.people[0]!.generation, machineOwnerId: 'owner', hostGrant: null, poolGeneration: 'g1',
+      request: { conversationId: 'lead', machineId: 'mac', engine: 'codex', name: 'Builder', cwd: '/repo', ...extra }, harnessId: null, dispatched: true, error: null })
+    f.state.starts = ['s1', 's2', 's3', 's4'].map(id => start(id)) as never
+    const fail = (startId: string) => f.run({ type: 'agent.startFailed', startId, error: 'Codex could not launch.' }, owner).messages[0]!
+    const request = (extra: Record<string, unknown> = {}) => ({ conversationId: 'lead', machineId: 'mac', engine: 'codex', name: 'Builder', cwd: '/repo',
+      worktree: true, requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 100, tools: ['git'], devices: [], quotaRequired: false }, ...extra })
+    const begin = (extra: Record<string, unknown> = {}) => f.run({ type: 'agent.start', request: request(extra), ...via } as Command, leadActor,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner' }, ...decisionIn('lead') })
+    return { f, lead, fail, begin, start }
+  }
+
+  it('is suspended by its second failed start in a row, telling the Lead and tagging the machine owner once', () => {
+    const { f, lead, fail } = setup()
+    const first = fail('s1')
+    expect(first.mentions).toBeUndefined()
+    expect(first.text).not.toContain('suspended')
+    const second = fail('s2')
+    expect(second).toMatchObject({ recipients: [lead], mentions: ['owner'] })
+    expect(second.text).toContain('Codex is suspended on this machine for new work: its last 2 starts there failed.')
+    for (const later of ['s3', 's4']) {
+      const notice = fail(later)
+      expect(notice.mentions).toBeUndefined()
+      expect(notice.text).not.toContain('suspended')
+    }
+    expect(Object.keys(f.state.machines![0]!.engineSuspensions!)).toEqual(['codex'])
+  })
+
+  it('counts only failures in a row: a start that ran in between resets the count', () => {
+    const { f, fail } = setup()
+    fail('s1')
+    f.run({ type: 'agent.started', startId: 's2', harnessId: 'native-2', configuration: config }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
+    expect(fail('s3').mentions).toBeUndefined()
+    expect(fail('s4').mentions).toEqual(['owner'])
+  })
+
+  // Review of 4ddd0a1e0: the server timed a start out, then its host reported it failed too; one flaky start suspended Codex.
+  it('counts a start once: a host failure after the server timed the same start out is not a second failure', () => {
+    const { f, fail } = setup()
+    const timedOut = f.state.starts![0]!
+    timedOut.dispatchedAt = 0
+    sweepLiveness(f.state, 3 * 60_000 + 1)
+    expect(timedOut.error).toBeTruthy()
+    const late = fail('s1')
+    expect(late.mentions).toBeUndefined()
+    expect(late.text).not.toContain('suspended')
+    expect(f.state.machines![0]!.engineSuspensions ?? {}).toEqual({})
+    // A different start that fails next is the second in a row.
+    expect(fail('s2').mentions).toEqual(['owner'])
+  })
+
+  it('is refused by the start check while suspended, signed out or out of quota, and a grid model there is not', () => {
+    const suspended = setup()
+    suspended.fail('s1'); suspended.fail('s2')
+    expect(() => suspended.begin()).toThrow('Codex is suspended on this machine')
+    const signedOut = setup({ readiness: { engines: [{ engine: 'codex', installed: true, signedIn: false }] }, localModels: [{ grid, model: 'qwen3', kind: 'local' }] })
+    expect(() => signedOut.begin()).toThrow('Codex is not signed in to a subscription on this machine.')
+    signedOut.f.state.localModels = { grid, enabled: true }
+    expect(signedOut.begin({ gridModel: 'qwen3', gridName: grid }).result.startId).toBeTruthy()
+    const exhausted = setup({ quotas: [{ engine: 'codex', known: true, windows: [{ name: 'weekly', usedPercent: 100, resetsAt: null }] }] })
+    expect(() => exhausted.begin()).toThrow('Codex has no subscription quota left on this machine until its usage window resets.')
+    // A reading that says nothing of the engine keeps today's behaviour.
+    expect(setup().begin().result.startId).toBeTruthy()
+  })
+
+  it('is resumed by the machine owner, or by a Lead passing on the owner\'s message, and by nobody else', () => {
+    const { f, lead, fail } = setup()
+    fail('s1'); fail('s2')
+    const leadActor: Actor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }
+    const resume = { type: 'machine.engineResume', machineId: 'mac', engine: 'codex' } as Command
+    f.invite()
+    expect(() => f.run(resume, peer)).toThrow('Only the machine\'s owner')
+    expect(() => f.run(resume, leadActor)).toThrow('Only the machine\'s owner')
+    const askedIn = { conversationId: 'lead', messageId: 'm-owner' }
+    expect(() => f.run({ ...resume, askedIn } as Command, leadActor, { askedIn: { author: { kind: 'person', id: 'peer' } as never, source: false, createdAt: 1000 } }))
+      .toThrow('Only the machine\'s owner')
+    f.run({ ...resume, askedIn } as Command, leadActor, { askedIn: { author: { kind: 'person', id: 'owner' } as never, source: false, createdAt: 1000 } })
+    expect(f.state.machines![0]!.engineSuspensions).toEqual({})
+    fail('s3'); fail('s4')
+    f.run(resume, owner)
+    expect(f.state.machines![0]!.engineSuspensions).toEqual({})
+    expect(commandSchema.safeParse({ ...resume, engine: 'Not An Engine' }).success).toBe(false)
   })
 })

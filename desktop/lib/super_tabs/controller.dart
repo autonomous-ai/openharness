@@ -210,7 +210,10 @@ class SuperTabController extends ChangeNotifier {
         final value = superTabMap(initial['pending']);
         if (value['operationId'] is String && value['command'] is Map) {
           _pending = value;
-          operationError = 'Check the pending action before sending it again.';
+          _failOperation(
+            'Check the pending action before sending it again.',
+            command: superTabMap(value['command']),
+          );
         }
       }
     }
@@ -270,10 +273,36 @@ class SuperTabController extends ChangeNotifier {
   /// from [operationError] so it shows only under its own conversation.
   final _uploadErrors = <String, String>{};
 
+  /// The conversation the last action that set [operationError] was for, or
+  /// null when it was for none (a machine, a member, the Swarm).
+  String? _operationErrorFor;
+
   /// What the composer of [conversationId] says went wrong: the last action's
-  /// [operationError], else its own upload failure.
-  String? composerError(String conversationId) =>
-      operationError ?? _uploadErrors[conversationId];
+  /// [operationError] when it was for this conversation or for none, else its
+  /// own upload failure. An action still unconfirmed blocks every composer's
+  /// send, so its error shows in each, with Retry.
+  String? composerError(String conversationId) {
+    final failure = operationError;
+    if (failure != null &&
+        (_operationErrorFor == null ||
+            _operationErrorFor == conversationId ||
+            _pending != null)) {
+      return failure;
+    }
+    return _uploadErrors[conversationId];
+  }
+
+  /// Sets [operationError] for [command], remembering its conversation.
+  void _failOperation(
+    String message, {
+    required Map<String, dynamic> command,
+    String? code,
+  }) {
+    operationError = message;
+    operationErrorCode = code;
+    final id = command['conversationId'];
+    _operationErrorFor = id is String ? id : null;
+  }
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
@@ -362,6 +391,17 @@ class SuperTabController extends ChangeNotifier {
     });
   }
 
+  /// How often the idle poll reads: every [pollInterval], or
+  /// [SuperTabReading.awayPoll] while the Swarm is away (never more often
+  /// than [pollInterval]). A push is not an idle poll: [_readGap] keeps
+  /// reading a told change at [pollInterval], so a tag reaches an away
+  /// Swarm's badge and notice as fast as before.
+  Duration get _every {
+    final away = _policy.awayPoll;
+    if (away == null || !_away) return pollInterval;
+    return away > pollInterval ? away : pollInterval;
+  }
+
   /// How often the poll read before pushes: every [pollInterval], or
   /// [SuperTabReading.quietPoll] once the person has been quiet a while.
   Duration get _readGap {
@@ -443,7 +483,19 @@ class SuperTabController extends ChangeNotifier {
   set away(bool value) {
     if (_away == value) return;
     _away = value;
-    if (!_policy.pausesAway || _startedAt == null || _disposed) return;
+    if (_startedAt == null || _disposed) return;
+    if (!_policy.pausesAway) {
+      // Going away slows the poll; coming back reads at once unless a poll
+      // just did ([SuperTabReading.awayPoll]).
+      if (_policy.awayPoll == null) return;
+      final last = _lastFullRead;
+      if (!value &&
+          (last == null || clock.now().difference(last) >= pollInterval)) {
+        unawaited(refresh());
+      }
+      _schedule();
+      return;
+    }
     if (value) {
       _poll?.cancel();
       return;
@@ -1113,20 +1165,41 @@ class SuperTabController extends ChangeNotifier {
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
 
-  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
-  /// reviewer of [group] posted in the loaded history. Null without a reviewer.
+  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5". The verdict is the newest
+  /// review group's for [group], as its Reviewer recorded it (its result or
+  /// check evidence), else the newest `Ready:` message a reviewer of [group]
+  /// posted in the loaded history. Null without a reviewer.
   String? reviewLine(SuperTabConversation? group) {
     final state = snapshot;
-    if (group == null) return null;
-    final reviewers = state?.reviewers(group) ?? const <SuperTabAgent>[];
+    if (group == null || state == null) return null;
+    final reviews =
+        state.conversations.where((c) => c.reviewOf == group.id).toList()
+          ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
+    final reviewers = {
+      for (final r in [
+        ...state.reviewers(group),
+        for (final review in reviews) ...state.reviewers(review),
+      ])
+        r.id: r,
+    }.values;
     if (reviewers.isEmpty) return null;
     final ids = {for (final r in reviewers) r.id};
-    final verdict = messages(group.id).reversed
+    final recorded = reviews
+        .expand(
+          (review) => [
+            review.assignment?['result'],
+            for (final check in review.checks) check['evidence'],
+          ],
+        )
+        .whereType<String>();
+    final posted = messages(group.id).reversed
         .where((m) => m.fromAgent && ids.contains(m.authorId))
-        .map((m) => parseSuperTabVerdict(m.text))
-        .nonNulls
-        .firstOrNull;
-    final names = reviewers.map((r) => state!.agentName(r.id)).join(', ');
+        .map((m) => m.text);
+    final verdict = [
+      ...recorded,
+      ...posted,
+    ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
+    final names = reviewers.map((r) => state.agentName(r.id)).join(', ');
     return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
   }
 
@@ -1323,13 +1396,13 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
-      _poll = Timer.periodic(pollInterval, (_) {
+      _poll = Timer.periodic(_every, (_) {
         if (_pollDue) unawaited(refresh());
       });
       return;
     }
     if (accessRevoked || (_policy.pausesAway && _away)) return;
-    final wait = after ?? pollInterval;
+    final wait = after ?? _every;
     _poll = Timer(
       wait > Duration.zero ? wait : Duration.zero,
       () => unawaited(_tick()),
@@ -1347,7 +1420,7 @@ class SuperTabController extends ChangeNotifier {
           ? refresh()
           : _readMessages(selectedId, light: true));
     }
-    _schedule(pollInterval - clock.now().difference(began));
+    _schedule(_every - clock.now().difference(began));
   }
 
   bool get _fullReadDue {
@@ -2120,13 +2193,19 @@ class SuperTabController extends ChangeNotifier {
     _lastFullRead = clock.now();
     // Taken as the read starts: a push heard while it is out reads once more,
     // on the next allowed read, unless it repeats a time already told.
+    final told = _toldMain || _toldMachine;
     _toldMain = _toldMachine = false;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
     // ([SuperTabReading.messagesWithState]); dropped if the state moves the
     // selection elsewhere.
     final earlyId = selectedId;
-    final earlyQuery = _earlyQuery(earlyId);
+    // Only when something may have happened: a first read, a saved view, a
+    // push, a message waiting for its receipt. Otherwise the messages wait
+    // for the state to say there is news (roadmap 2.5).
+    final earlyQuery = told || !_messagesCurrent(earlyId)
+        ? _earlyQuery(earlyId)
+        : null;
     final early = earlyQuery == null
         ? null
         : (request('GET', '${_messagesPath(earlyId)}$earlyQuery')..ignore());
@@ -2241,14 +2320,21 @@ class SuperTabController extends ChangeNotifier {
       _readUnreadBuddyChats();
       _partsReadAt = clock.now();
       error = null;
-      await (selectedId == earlyId && messagesRead != null
-          ? messagesRead
-          : _readMessages(
-              selectedId,
-              early: selectedId == earlyId && early != null
-                  ? (query: earlyQuery!, page: early)
-                  : null,
-            ));
+      // A state that moved nothing, over messages read at that very state,
+      // has no news for the conversation: no read of it (roadmap 2.5).
+      if (early != null ||
+          !_messagesCurrent(selectedId) ||
+          read.full ||
+          read.changed) {
+        await (selectedId == earlyId && messagesRead != null
+            ? messagesRead
+            : _readMessages(
+                selectedId,
+                early: selectedId == earlyId && early != null
+                    ? (query: earlyQuery!, page: early)
+                    : null,
+              ));
+      }
       if (stateReads == 1) {
         // Where a first open's time went, from the tab asking to the chat it shows.
         appLog.debug(
@@ -2541,6 +2627,22 @@ class SuperTabController extends ChangeNotifier {
     return tail != null ? '?after=$tail' : '';
   }
 
+  /// The state's last change when [id]'s newest messages were read: while the
+  /// state has not moved past it, nothing new can be in the conversation.
+  final _messagesAt = <String, int>{};
+
+  /// [id]'s messages are as new as the state held, and nothing outside the
+  /// state is waited for: no receipt, no saved page, no newer page asked for.
+  bool _messagesCurrent(String id) =>
+      _policy.messagesWhenChanged &&
+      !_showingSaved &&
+      snapshot != null &&
+      _messages[id] != null &&
+      _messagesAt[id] == lastChangedAt &&
+      !_holding(id) &&
+      !_latestWanted.contains(id) &&
+      !_receiptOpen(id);
+
   /// The query of [id]'s messages read to start beside a state read, or null.
   /// On first open only for the conversation the saved state named; after
   /// that, for a conversation the state has and no read of it under way.
@@ -2624,6 +2726,8 @@ class SuperTabController extends ChangeNotifier {
     // A light check asks only for new messages, which wait while holding.
     if (light && _holding(id)) return;
     final generation = _heldGeneration[id];
+    // What the Swarm's state had said when this read was asked for.
+    final stateAt = lastChangedAt;
     // What [id] held was replaced while newer messages were on their way.
     bool replaced() => !older && _heldGeneration[id] != generation;
     try {
@@ -2811,6 +2915,7 @@ class SuperTabController extends ChangeNotifier {
       }
       _dropShownSends(id);
       if (reactionSeq is int) _reactionSeq[id] = reactionSeq;
+      if (!older && !holding) _messagesAt[id] = stateAt;
       if (older || replacing || !_before.containsKey(id)) {
         _before[id] = SuperTabPage.read(answer['next']);
       }
@@ -2922,8 +3027,11 @@ class SuperTabController extends ChangeNotifier {
     } catch (failure) {
       if (!_disposed && _isUpdateRequired(failure)) {
         _requireUpdate();
-        operationError = updateMessage;
-        operationErrorCode = 'UPDATE_REQUIRED';
+        _failOperation(
+          updateMessage,
+          command: superTabMap(pending['command']),
+          code: 'UPDATE_REQUIRED',
+        );
         // Refused by the backend: nothing was done, nothing to retry.
         _refuse(pending, operationError!);
         _pending = null;
@@ -2933,10 +3041,13 @@ class SuperTabController extends ChangeNotifier {
           _pending = pending;
         }
       } else if (!_disposed) {
-        operationError = failure is SuperTabFailure
-            ? failure.message
-            : 'The action is not confirmed. Retry to check it.';
-        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
+        _failOperation(
+          failure is SuperTabFailure
+              ? failure.message
+              : 'The action is not confirmed. Retry to check it.',
+          command: superTabMap(pending['command']),
+          code: failure is SuperTabFailure ? failure.code : null,
+        );
         if (failure is SuperTabFailure &&
             failure.statusCode >= 400 &&
             failure.statusCode < 500 &&
@@ -3033,7 +3144,10 @@ class SuperTabController extends ChangeNotifier {
         ? said.where((id) => !isPerson(id)).toList()
         : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
-      operationError = 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.';
+      _failOperation(
+        'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.',
+        command: {'conversationId': selectedId},
+      );
       _changed();
       return null;
     }

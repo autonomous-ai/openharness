@@ -1,6 +1,7 @@
 // Files in a Swarm conversation: the composer takes pasted, dropped and picked
 // files and uploads them before the message, and a message shows its files as
-// chips that load nothing until clicked.
+// chips that load nothing until clicked (pictures, shown in place, are in
+// super_tab_message_media_test.dart).
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -288,8 +289,13 @@ void main() {
       expect(command['text'], 'See these');
       expect(command['attachmentIds'], ['attachment-1', 'attachment-2']);
       expect(controller.attachments('lead').isEmpty, isTrue);
+      // The picture shows in place, the text file as a chip.
       expect(
-        find.byKey(const ValueKey('super-attachment:attachment-1')),
+        find.byKey(const ValueKey('super-attachment-inline:attachment-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('super-attachment:attachment-2')),
         findsOneWidget,
       );
       await close(tester, controller);
@@ -623,18 +629,13 @@ void main() {
   });
 
   group('messages', () {
-    testWidgets('show chips and load nothing until a click', (tester) async {
+    testWidgets('a file shows as a chip and loads nothing until a click', (
+      tester,
+    ) async {
       final server = ConversationServer()
         ..append(
           'Here',
           attachments: [
-            {
-              'id': 'a1',
-              'name': 'shot.png',
-              'mime': 'image/png',
-              'size': 2048,
-              'url': 'https://cdn.harness.autonomous.ai/a1/shot.png',
-            },
             {
               'id': 'a2',
               'name': 'report.pdf',
@@ -655,21 +656,9 @@ void main() {
       };
       addTearDown(() => browserOpener = original);
 
-      expect(find.text('shot.png'), findsOneWidget);
-      expect(find.text('2 KB'), findsOneWidget);
       expect(find.text('report.pdf'), findsOneWidget);
       expect(find.text('3.0 MB'), findsOneWidget);
-      expect(find.byType(Image), findsNothing);
-
-      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-attachment-image:a1')),
-        findsOneWidget,
-      );
       expect(opened, isEmpty);
-      await tester.tap(find.text('Close'));
-      await tester.pumpAndSettle();
 
       await tester.tap(find.byKey(const ValueKey('super-attachment:a2')));
       await tester.pumpAndSettle();
@@ -922,24 +911,6 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('No preview'), findsOneWidget);
       expect(find.byType(FinderCodeEditor), findsNothing);
-      await tester.tap(find.text('Close'));
-      await tester.pumpAndSettle();
-      await close(tester, controller);
-    });
-
-    testWidgets('the picture viewer offers Download', (tester) async {
-      final (controller, _, _) = await showFiles(tester, [
-        row('a1', 'shot.png', 'image/png', 2048),
-      ]);
-
-      await tester.tap(find.byKey(const ValueKey('super-attachment:a1')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('super-attachment-image:a1')),
-        findsOneWidget,
-      );
-      expect(find.text('Download'), findsOneWidget);
-      expect(find.text('Open in browser'), findsOneWidget);
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
       await close(tester, controller);
