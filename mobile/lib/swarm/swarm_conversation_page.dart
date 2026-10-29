@@ -2224,7 +2224,7 @@ class _Day extends StatelessWidget {
 /// none ([count] 0), Jump to latest while they read far back (Swarm Home C);
 /// a tap goes down to the foot. The chat's and a thread's.
 class SwarmNewPill extends StatelessWidget {
-  const SwarmNewPill({required this.count, required this.onTap});
+  const SwarmNewPill({super.key, required this.count, required this.onTap});
 
   static const double _height = 36;
 
