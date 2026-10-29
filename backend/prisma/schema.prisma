@@ -1120,8 +1120,10 @@ model SuperTabMention {
   authorAgentId  String
   createdAt      DateTime
   resolvedAt     DateTime?
-  /// reply | done
+  /// reply | done | worker
   resolvedBy     String?
+  /// A tag the Lead made about a task with no worker: not listed before this time (superTabs/mentions.ts). Unset on every other tag.
+  holdUntil      DateTime?
 
   @@index([tabId, personId, createdAt])
   @@index([tabId, conversationId, personId])

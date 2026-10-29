@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
@@ -153,6 +155,61 @@ void main() {
       ]);
       expect(c.buddy('lead'), isNull);
       expect(c.buddyChat('lead'), isNotNull);
+    });
+
+    test(
+      'renaming the Buddy sends its chat and the name, and the Swarm shows it',
+      () async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = server.controller(account: 'peer');
+        addTearDown(c.dispose);
+        await c.refresh();
+
+        expect(await c.renameBuddy('lead', '  Sparky '), isTrue);
+
+        expect(commands(server, 'buddy.rename'), [
+          {
+            'type': 'buddy.rename',
+            'conversationId': 'buddy-peer-lead',
+            'name': 'Sparky',
+          },
+        ]);
+        expect(c.snapshot!.agentName('wren'), 'Sparky');
+        expect(c.buddyChat('lead')?.buddyName, 'Sparky');
+      },
+    );
+
+    test('clearing the name sends none, for the default', () async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.renameBuddy('lead', 'Sparky');
+
+      expect(await c.renameBuddy('lead', '   '), isTrue);
+
+      expect(commands(server, 'buddy.rename').last['name'], isNull);
+      expect(c.snapshot!.agentName('wren'), "ken.tran's Buddy");
+      expect(c.buddyChat('lead')?.buddyName, isNull);
+    });
+
+    test('a refused rename says why and keeps the name', () async {
+      final server = buddySwarm();
+      giveBuddy(server);
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+      server.refuse = {
+        'code': 'BUDDY_NAME_TAKEN',
+        'message': 'Lead is taken in this Swarm. Choose another.',
+      };
+
+      expect(await c.renameBuddy('lead', 'Lead'), isFalse);
+
+      expect(c.operationError, 'Lead is taken in this Swarm. Choose another.');
+      expect(c.snapshot!.agentName('wren'), 'Wren');
     });
 
     test('the shortcut opens the Buddy chat and never creates a private conversation', () async {
@@ -468,6 +525,38 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Your Buddy'), findsOneWidget);
         expect(find.textContaining("peer's Buddy"), findsNothing);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'a removed Buddy with a chosen name keeps it in the sidebar and its chat\'s header',
+      (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        (server.state['agents'] as List).removeWhere(
+          (a) => (a as Map)['id'] == 'wren',
+        );
+        final chat = (server.state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .firstWhere((g) => g['id'] == 'buddy-peer-lead');
+        chat
+          ..['buddyName'] = 'Sparky'
+          ..['title'] = 'Sparky';
+        final c = await show(tester, server);
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('Sparky')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          findsNothing,
+        );
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Sparky · Your Buddy'), findsOneWidget);
+        expect(find.text('Message Sparky'), findsOneWidget);
         await close(tester, c);
       },
     );
@@ -1038,6 +1127,180 @@ void main() {
           await close(tester, c);
         },
       );
+    });
+
+    group('Rename Buddy (mockup confirmed by Diego, 10-29)', () {
+      Future<void> openRename(WidgetTester tester) async {
+        await tester.tap(buddyEntry);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Buddy options'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Rename Buddy…'));
+        await tester.pumpAndSettle();
+      }
+
+      final nameField = find.byKey(const ValueKey('super-buddy-name'));
+
+      testWidgets('names the Buddy for everyone, and its header shows it', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        await openRename(tester);
+
+        expect(find.text('Rename your Buddy'), findsOneWidget);
+        expect(
+          find.text('Everyone in this Swarm sees this name.'),
+          findsOneWidget,
+        );
+        await tester.enterText(nameField, 'Sparky');
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await tester.pumpAndSettle();
+
+        expect(commands(server, 'buddy.rename'), [
+          {
+            'type': 'buddy.rename',
+            'conversationId': 'buddy-peer-lead',
+            'name': 'Sparky',
+          },
+        ]);
+        expect(find.text('Rename your Buddy'), findsNothing);
+        expect(find.text('Sparky · Your Buddy'), findsOneWidget);
+        await close(tester, c);
+      });
+
+      testWidgets(
+        'starts from the chosen name; empty goes back to the default, as it says',
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          final c = await show(tester, server);
+          await c.renameBuddy('lead', 'Sparky');
+          await openRename(tester);
+
+          expect(
+            tester.widget<TextField>(nameField).controller!.text,
+            'Sparky',
+          );
+          expect(
+            find.text('Leave it empty to go back to "ken.tran\'s Buddy".'),
+            findsOneWidget,
+          );
+          await tester.enterText(nameField, '');
+          await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+          await tester.pumpAndSettle();
+
+          expect(commands(server, 'buddy.rename').last['name'], isNull);
+          expect(find.text("ken.tran's Buddy · Your Buddy"), findsOneWidget);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets('a refusal shows in the dialog, which keeps the name typed', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        await openRename(tester);
+        server.refuse = {
+          'code': 'BUDDY_NAME_TAKEN',
+          'message': 'Lead is taken in this Swarm. Choose another.',
+        };
+        await tester.enterText(nameField, 'Lead');
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.text('Lead is taken in this Swarm. Choose another.'),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.widget<TextField>(nameField).controller!.text, 'Lead');
+        expect(find.text('Wren · Your Buddy'), findsOneWidget);
+        server.refuse = null;
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        await close(tester, c);
+      });
+
+      testWidgets(
+        'says Saving… while the server answers, and takes no second Save',
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          final c = await show(tester, server);
+          await openRename(tester);
+          await tester.enterText(nameField, 'Sparky');
+          final hold = server.holdCommands = Completer<void>();
+          await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+          await tester.pump();
+
+          expect(find.widgetWithText(FilledButton, 'Saving…'), findsOneWidget);
+          await tester.tap(find.widgetWithText(FilledButton, 'Saving…'));
+          await tester.pump();
+          expect(commands(server, 'buddy.rename'), hasLength(1));
+          hold.complete();
+          server.holdCommands = null;
+          await tester.pumpAndSettle();
+          expect(find.text('Rename your Buddy'), findsNothing);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets('scrolls in a short window, as Add a Buddy does', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        await openRename(tester);
+        server.refuse = {
+          'code': 'BUDDY_NAME_TAKEN',
+          'message': 'Lead is taken in this Swarm. Choose another.',
+        };
+        await tester.enterText(nameField, 'Lead');
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await tester.pumpAndSettle();
+        server.refuse = null;
+        await tester.binding.setSurfaceSize(const Size(1280, 330));
+        await tester.pumpAndSettle();
+
+        // Nothing overflows: the dialog's content scrolls instead.
+        expect(tester.takeException(), isNull);
+        final dialog = find.byType(AlertDialog);
+        await tester.dragUntilVisible(
+          find.descendant(
+            of: dialog,
+            matching: find.text('Lead is taken in this Swarm. Choose another.'),
+          ),
+          find.descendant(of: dialog, matching: find.byType(Scrollable)).first,
+          const Offset(0, -40),
+        );
+        await tester.binding.setSurfaceSize(const Size(1280, 800));
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        await close(tester, c);
+      });
+
+      testWidgets('is offered before any Buddy runs', (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        (server.state['agents'] as List).removeWhere(
+          (a) => (a as Map)['id'] == 'wren',
+        );
+        final c = await show(tester, server);
+        await openRename(tester);
+        await tester.enterText(nameField, 'Early');
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Early · Your Buddy'), findsOneWidget);
+        await close(tester, c);
+      });
     });
 
     testWidgets(

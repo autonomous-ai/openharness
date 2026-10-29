@@ -1,6 +1,6 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
-import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
+import { buddyGuardCommand, buddyGuardSource, buddyReadsOf } from './buddyGuard.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { isMessagesCommand } from '../engines/kit/messagesHook.js'
 import { isManagedHook } from '../engines/kit/notifyHooks.js'
@@ -667,7 +667,7 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
   if (!parseSwarmSkill(saved)) throw new Error('A Swarm skill needs a role and session key')
   const root = realpathSync(workspace)
   // First, so a skill that cannot be prepared still leaves a Buddy's folder locked (re-check of #1992).
-  if (saved.role === 'buddy') lockBuddyFolder(root)
+  if (saved.role === 'buddy') lockBuddyFolder(root, saved.key)
   const dir = skillDirectory(root, saved, true)!
   ignoreHarnessRuntime(root)
   const file = join(dir, 'SKILL.md')
@@ -729,13 +729,14 @@ function harnessClaudeHooks(): Record<string, unknown[]> {
  * and every file in it is made read-only. Its folders stay writable, so the worktree is removed like any other, and the
  * Harness runtime folder (its skill and records) is left alone. A Codex Buddy runs in Codex's read-only sandbox instead,
  * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
+ * Its guard reads its own session's list of what its person sent it (lib/buddyGuard.ts `buddyReadsOf`).
  */
-function lockBuddyFolder(root: string): void {
+function lockBuddyFolder(root: string, key: string): void {
   const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
   // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
   for (const file of [settings, guard]) if (existsSync(file)) chmodSync(file, 0o600)
-  writeFileSync(guard, buddyGuardSource(root), { mode: 0o600 })
+  writeFileSync(guard, buddyGuardSource(root, buddyReadsOf(key)), { mode: 0o600 })
   writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard), null, 2)}\n`, { mode: 0o600 })
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {

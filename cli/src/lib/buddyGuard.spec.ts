@@ -1,9 +1,11 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { appendFileSync, chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  truncateSync, utimesSync, writeFileSync, type Stats } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterAll, describe, expect, it } from 'vitest'
-import { buddyGuardCommand, buddyGuardSource } from './buddyGuard.js'
+import { dirname, join } from 'node:path'
+import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { allowBuddyReads, artifactLinks, buddyGuardCommand, buddyGuardSource, buddyReadsOf, forgetBuddyReads } from './buddyGuard.js'
 
 // The guard Claude Code runs before each of a Buddy's tool calls, run here as it runs there: the script, with node, the
 // hook's input on stdin and its decision on stdout.
@@ -17,16 +19,21 @@ symlinkSync(outside, join(root, 'out'))
 symlinkSync(join(outside, 'secret.txt'), join(root, 'outlink'))
 symlinkSync(join(parent, 'gone'), join(root, 'broken'))
 symlinkSync(join(root, 'a.txt'), join(root, 'inlink'))
+// Where Harness downloads chat files (lib/pasteDropFiles.ts), and the list of those its person attached in its own Buddy
+// chat, which the host keeps for this Buddy alone (superTabs/host.ts).
+const drops = join(parent, 'paste-drops')
+const reads = { file: join(parent, 'buddy-reads', 'session.json'), drops }
+mkdirSync(drops); mkdirSync(dirname(reads.file))
 const script = join(root, 'buddy-guard.mjs')
-writeFileSync(script, buddyGuardSource(root))
+writeFileSync(script, buddyGuardSource(root, reads))
 afterAll(() => rmSync(parent, { recursive: true, force: true }))
 
-function hook(stdin: string): { status: number | null; stdout: string } {
-  const run = spawnSync(process.execPath, [script], { input: stdin, encoding: 'utf8', timeout: 10_000 })
+function hook(stdin: string, guard = script): { status: number | null; stdout: string } {
+  const run = spawnSync(process.execPath, [guard], { input: stdin, encoding: 'utf8', timeout: 10_000 })
   return { status: run.status, stdout: run.stdout }
 }
-function decide(tool: string, input: Record<string, unknown>): string {
-  const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: root }))
+function decide(tool: string, input: Record<string, unknown>, guard = script): string {
+  const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: root }), guard)
   expect(run.status).toBe(0)
   const output = JSON.parse(run.stdout).hookSpecificOutput
   expect(output.hookEventName).toBe('PreToolUse')
@@ -291,6 +298,9 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     const reason = JSON.parse(run.stdout).hookSpecificOutput.permissionDecisionReason
     for (const allowed of ['git grep', 'gh issue view', 'gh pr view', 'harness super-tab']) expect(reason).toContain(allowed)
     expect(reason).toContain('nobody will be asked')
+    // And how to open what its person sent it, when it tried the shell or another path (Tony, 10-30).
+    expect(reason).toContain('A file your person sent you in your chat opens with Read, by the path you were given')
+    expect(reason).toContain('an Artifact link they sent, with the Artifact tool\'s read and that link')
   })
 
   it('fails closed: a guard that cannot run blocks the call (exit 2) instead of falling back to other rules', () => {
@@ -302,6 +312,398 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     const working = spawnSync('/bin/sh', ['-c', buddyGuardCommand(process.execPath, script)],
       { input: JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(root, 'a.txt') } }), encoding: 'utf8' })
     expect([working.status, JSON.parse(working.stdout).hookSpecificOutput.permissionDecision]).toEqual([0, 'allow'])
+  })
+})
+
+// Tony, 10-30: his Buddy could not open the screenshot he sent it, nor an Artifact he linked, in their Buddy chat. Its
+// person's own files and links there, as the host lists them for this Buddy, and nothing else.
+describe('what its person sent in its own Buddy chat', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+  const shot = join(drops, '1a2b3c4d-screen.png'), otherChat = join(drops, '5e6f7a8b-screen.png')
+  const LINK = 'https://claude.ai/artifact/abc-123', CODE_LINK = 'https://claude.ai/code/artifact/0b7e8f2c-1d2e-4f3a-9b8c-7d6e5f4a3b2c'
+  const identity = (path: string) => {
+    const stat = lstatSync(path, { bigint: true })
+    return { path, dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
+  }
+  /** The list as the host writes it (allowBuddyReads), written here by hand. */
+  const list = (files: unknown[], links: unknown[] = []) => writeFileSync(reads.file, JSON.stringify({ version: 1, files, links }))
+  const now = () => Date.now()
+  beforeEach(() => {
+    for (const path of [shot, otherChat]) { rmSync(path, { force: true }); writeFileSync(path, PNG) }
+    list([{ ...identity(shot), at: now() }], [{ url: LINK, at: now() }, { url: CODE_LINK, at: now() }])
+  })
+
+  it('lets Read open a picture its person sent, by the path it was handed', () => {
+    expect(decide('Read', { file_path: shot })).toBe('allow')
+    expect(decide('Read', { file_path: shot, offset: 1, limit: 10 })).toBe('allow')
+  })
+
+  it.each([
+    ['another chat\'s file in the same folder', () => otherChat],
+    ['the folder itself', () => drops],
+    ['the path with a ".." in it', () => `${drops}/../paste-drops/1a2b3c4d-screen.png`],
+    ['the path with a doubled slash', () => `${drops}//1a2b3c4d-screen.png`],
+    ['the path relative to its folder', () => join('..', 'paste-drops', '1a2b3c4d-screen.png')],
+    ['a link to it', () => { const link = join(drops, 'link.png'); rmSync(link, { force: true }); symlinkSync(shot, link); return link }],
+  ])('refuses Read of %s', (_, path) => {
+    expect(decide('Read', { file_path: path() })).toBe('deny')
+  })
+
+  it('refuses a listed path that is a link, whatever it points to', () => {
+    const link = join(drops, '9c9c9c9c-link.png')
+    rmSync(link, { force: true }); symlinkSync(otherChat, link)
+    list([{ ...identity(link), at: now() }])
+    expect(decide('Read', { file_path: link })).toBe('deny')
+    list([{ ...identity(otherChat), path: link, at: now() }])
+    expect(decide('Read', { file_path: link })).toBe('deny')
+  })
+
+  it('refuses it while it has a second name (a hard link), and lets it again once that is gone', () => {
+    const second = join(parent, 'second-name.png')
+    linkSync(shot, second)
+    expect(decide('Read', { file_path: shot })).toBe('deny')
+    expect(decide('Read', { file_path: second })).toBe('deny')
+    rmSync(second)
+    expect(decide('Read', { file_path: shot })).toBe('allow')
+  })
+
+  it('refuses another file put in its place, or the same file grown since', () => {
+    rmSync(shot); writeFileSync(join(drops, 'filler'), PNG); writeFileSync(shot, PNG)
+    rmSync(join(drops, 'filler'))
+    expect(decide('Read', { file_path: shot })).toBe('deny')
+    list([{ ...identity(shot), at: now() }])
+    expect(decide('Read', { file_path: shot })).toBe('allow')
+    appendFileSync(shot, 'more')
+    expect(decide('Read', { file_path: shot })).toBe('deny')
+  })
+
+  // Security reviews 1 and 2 of #2248: written over in place, a file keeps its device, inode and size, and Read opened bytes
+  // its person never sent. Its SHA-256, taken when it was listed, is what tells.
+  describe('bytes its person never sent, in the same file at the same length', () => {
+    const note = join(drops, 'c0ffee00-note.txt')
+    beforeEach(() => {
+      rmSync(note, { force: true }); writeFileSync(note, 'OWNER')
+      list([{ ...identity(note), at: now() }])
+      expect(decide('Read', { file_path: note })).toBe('allow')
+    })
+    const same = (before: Stats) => {
+      const after = lstatSync(note)
+      expect([after.dev, after.ino, after.size, after.nlink]).toEqual([before.dev, before.ino, before.size, 1])
+    }
+
+    it('refuses it once written over with other bytes of the same length, and lets it again once they are its own', () => {
+      const before = lstatSync(note)
+      writeFileSync(note, 'OTHER', { flag: 'r+' })
+      same(before)
+      expect(readFileSync(note, 'utf8')).toBe('OTHER')
+      expect(decide('Read', { file_path: note })).toBe('deny')
+      writeFileSync(note, 'OWNER', { flag: 'r+' })
+      expect(decide('Read', { file_path: note })).toBe('allow')
+    })
+
+    it('refuses it once grown and cut back to its length with other bytes', () => {
+      const before = lstatSync(note)
+      writeFileSync(note, 'OTHER, and more besides', { flag: 'r+' })
+      expect(decide('Read', { file_path: note })).toBe('deny')
+      truncateSync(note, 5)
+      same(before)
+      expect(readFileSync(note, 'utf8')).toBe('OTHER')
+      expect(decide('Read', { file_path: note })).toBe('deny')
+    })
+  })
+
+  it('refuses a listed file outside Harness\'s downloads folder', () => {
+    list([{ ...identity(join(outside, 'secret.txt')), at: now() }, { ...identity(join(root, 'a.txt')), path: join(outside, 'secret.txt'), at: now() }])
+    expect(decide('Read', { file_path: join(outside, 'secret.txt') })).toBe('deny')
+  })
+
+  it('keeps a file a day, as Harness keeps the download', () => {
+    list([{ ...identity(shot), at: now() - 24 * 60 * 60 * 1000 }])
+    expect(decide('Read', { file_path: shot })).toBe('deny')
+    list([{ ...identity(shot), at: now() - 23 * 60 * 60 * 1000 }])
+    expect(decide('Read', { file_path: shot })).toBe('allow')
+  })
+
+  it.each([
+    ['missing', () => rmSync(reads.file)],
+    ['not JSON', () => writeFileSync(reads.file, '{"files": [')],
+    ['a list', () => writeFileSync(reads.file, '[]')],
+    ['files that are not a list', () => writeFileSync(reads.file, JSON.stringify({ files: { 0: identity(shot) } }))],
+    ['entries that are not files', () => list([null, 1, shot, [shot]])],
+    ['an entry without its time', () => list([identity(shot)])],
+    ['an entry with its identity as numbers', () => list([{ ...identity(shot), dev: Number(identity(shot).dev), ino: Number(identity(shot).ino), size: PNG.length, at: now() }])],
+    ['an entry without its SHA-256', () => list([{ ...identity(shot), sha256: undefined, at: now() }])],
+    ['an entry with another file\'s SHA-256', () => list([{ ...identity(shot), sha256: createHash('sha256').update('other').digest('hex'), at: now() }])],
+  ])('refuses everything when the list is %s', (_, make) => {
+    make()
+    expect(decide('Read', { file_path: shot })).toBe('deny')
+    expect(decide('Artifact', { action: 'read', url: LINK })).toBe('deny')
+  })
+
+  it.each([
+    ['Write', { file_path: shot, content: 'x' }],
+    ['Edit', { file_path: shot, old_string: 'a', new_string: 'b' }],
+    ['MultiEdit', { file_path: shot, edits: [] }],
+    ['NotebookEdit', { notebook_path: shot, new_source: 'x' }],
+    ['Bash', { command: `cat ${shot}`, description: 'x' }],
+    ['Bash', { command: `head -c 10 ${shot}`, description: 'x' }],
+    ['Grep', { pattern: 'x', path: drops }],
+    ['Grep', { pattern: 'x', path: shot }],
+    ['Glob', { pattern: '*', path: drops }],
+    ['Glob', { pattern: shot }],
+    ['LS', { path: drops }],
+  ])('only reads it, with Read: refuses %s (%j)', (tool, input) => {
+    expect(decide(tool, input)).toBe('deny')
+  })
+
+  it('reads its own list only: another Buddy\'s guard refuses this Buddy\'s file and lets its own', () => {
+    const theirs = { file: join(parent, 'buddy-reads', 'their-session.json'), drops }
+    const guard = join(parent, 'their-guard.mjs')
+    writeFileSync(guard, buddyGuardSource(root, theirs))
+    writeFileSync(theirs.file, JSON.stringify({ version: 1, files: [{ ...identity(otherChat), at: now() }], links: [] }))
+    expect(decide('Read', { file_path: shot }, guard)).toBe('deny')
+    expect(decide('Read', { file_path: otherChat }, guard)).toBe('allow')
+    expect(decide('Read', { file_path: otherChat })).toBe('deny')
+  })
+
+  it.each([
+    { action: 'read', url: LINK },
+    { action: 'read', url: `${LINK}/` },
+    { action: 'read', url: 'https://CLAUDE.ai/artifact/abc-123' },
+    { action: 'read', url: CODE_LINK },
+    { action: 'read', url: LINK, prompt: 'What does the chart show?' },
+    { action: 'read', url: LINK, page: true },
+  ])('lets the Artifact tool read a link its person sent (%j)', input => {
+    expect(decide('Artifact', input)).toBe('allow')
+  })
+
+  it.each([
+    // Links it was not sent.
+    { action: 'read', url: 'https://claude.ai/artifact/abc-1234' },
+    { action: 'read', url: 'https://claude.ai/code/artifact/abc-123' },
+    { action: 'read', url: `${LINK}?version=2` },
+    { action: 'read', url: `${LINK}#top` },
+    { action: 'read', url: `${LINK}/files` },
+    { action: 'read', url: 'https://claude.ai/artifact/abc-123%2F..' },
+    { action: 'read', url: 'http://claude.ai/artifact/abc-123' },
+    { action: 'read', url: 'https://claude.ai:8443/artifact/abc-123' },
+    { action: 'read', url: 'https://someone@claude.ai/artifact/abc-123' },
+    { action: 'read', url: 'https://evil.claude.ai/artifact/abc-123' },
+    { action: 'read', url: 'https://claude.ai.example.com/artifact/abc-123' },
+    { action: 'read', url: 'claude.ai/artifact/abc-123' },
+    { action: 'read', url: 'abc-123' },
+    { action: 'read' },
+    { action: 'read', url: ['https://claude.ai/artifact/abc-123'] },
+    // Anything but reading the page: its other actions, saving a file of it to a folder, or another type.
+    { url: LINK },
+    { action: 'list' },
+    { action: 'list', url: LINK, scope: 'files' },
+    { action: 'publish', url: LINK, file_path: 'page.html' },
+    { action: 'delete', url: LINK },
+    { action: 'open', url: LINK },
+    { action: 'pin', url: LINK },
+    { action: 'quickstart', intent: 'other' },
+    { action: 'read', url: LINK, path: 'index.html' },
+    { action: 'read', url: LINK, paths: ['index.html'] },
+    { action: 'read', url: LINK, out_dir: drops },
+    { action: 'read', url: LINK, type_url: LINK },
+    { action: 'read', url: LINK, prompt: 1 },
+    { action: 'read', url: LINK, page: 'yes' },
+  ])('refuses the Artifact tool anything else (%j)', input => {
+    expect(decide('Artifact', input)).toBe('deny')
+  })
+
+  it('keeps a link a day, and lets no other tool use it', () => {
+    list([], [{ url: LINK, at: now() - 24 * 60 * 60 * 1000 }])
+    expect(decide('Artifact', { action: 'read', url: LINK })).toBe('deny')
+    list([], [{ url: LINK, at: now() }])
+    expect(decide('WebFetch', { url: LINK, prompt: 'x' })).toBe('deny')
+    expect(decide('ArtifactComments', { url: LINK })).toBe('deny')
+    expect(decide('ArtifactData', { url: LINK, action: 'list', collection: 'x' })).toBe('deny')
+    expect(decide('Bash', { command: `curl ${LINK}`, description: 'x' })).toBe('deny')
+  })
+})
+
+describe('the host\'s list of what a Buddy\'s person sent it', () => {
+  const lists = join(parent, 'lists')
+  const mine = { file: join(lists, 'mine.json'), drops }
+  const guard = join(parent, 'list-guard.mjs')
+  writeFileSync(guard, buddyGuardSource(root, mine))
+  const sent = join(drops, 'aaaa0001-plan.pdf'), later = join(drops, 'aaaa0002-chart.png')
+  const held = () => JSON.parse(readFileSync(mine.file, 'utf8'))
+  const identity = (path: string) => {
+    const stat = lstatSync(path, { bigint: true })
+    return { path, dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), sha256: createHash('sha256').update(readFileSync(path)).digest('hex') }
+  }
+  beforeEach(() => {
+    rmSync(lists, { recursive: true, force: true })
+    for (const path of [sent, later]) { rmSync(path, { force: true }); writeFileSync(path, 'bytes') }
+  })
+
+  it('is kept for each Buddy session apart, in Harness\'s data folder, beside its downloads folder', () => {
+    expect(buddyReadsOf('session-key')).toEqual({
+      file: join(process.env.ADAPTER_DATA_DIR!, 'buddy-reads', '1add55581aaea687f8c5e7919f217cb6640cba7d2c14e7e4d6d4df21460642cf.json'),
+      drops: join(process.env.ADAPTER_DATA_DIR!, 'paste-drops') })
+    expect(buddyReadsOf('another-session').file).not.toBe(buddyReadsOf('session-key').file)
+  })
+
+  it('lists each file with what makes it that file, and each link, and the guard then lets the Buddy read them', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: ['https://claude.ai/artifact/abc-123'] }, 1_000)
+    expect(held()).toEqual({ version: 1, session: 'harness-1', files: [{ ...identity(sent), at: 1_000 }], links: [{ url: 'https://claude.ai/artifact/abc-123', at: 1_000 }] })
+    expect(lstatSync(mine.file).mode & 0o777).toBe(0o600)
+    expect(lstatSync(lists).mode & 0o777).toBe(0o700)
+    expect(readdirSync(lists)).toEqual(['mine.json'])
+    // Now: the first file, listed at 1 000 ms since 1970, is long past its day.
+    allowBuddyReads(mine, { session: 'harness-1', files: [later], links: [] })
+    expect(decide('Read', { file_path: later }, guard)).toBe('allow')
+    expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+  })
+
+  it.each([
+    ['a file outside the downloads folder', () => join(outside, 'secret.txt')],
+    ['a path into it with a ".."', () => `${drops}/../paste-drops/aaaa0001-plan.pdf`],
+    ['a link', () => { const link = join(drops, 'aaaa0003-link'); rmSync(link, { force: true }); symlinkSync(sent, link); return link }],
+    ['a file with a second name', () => { const twin = join(drops, 'aaaa0004-twin'); rmSync(twin, { force: true }); linkSync(later, twin); return later }],
+    ['a folder', () => drops],
+    ['a file that is gone', () => join(drops, 'aaaa0005-gone.png')],
+    ['a file larger than a message\'s file can be', () => { const big = join(drops, 'aaaa0006-big'); writeFileSync(big, Buffer.alloc(10 * 1024 * 1024 + 1)); return big }],
+  ])('lists no %s', (_, path) => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent, path()], links: [] }, 1_000)
+    expect(held().files).toEqual([{ ...identity(sent), at: 1_000 }])
+  })
+
+  it('lists only claude.ai Artifact links', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [], links: ['https://example.com/artifact/x', 'https://claude.ai/artifact/ok', 'http://claude.ai/artifact/x',
+      'https://claude.ai/artifact/x?v=1', 'https://claude.ai/chat/x'] }, 1_000)
+    expect(held().links).toEqual([{ url: 'https://claude.ai/artifact/ok', at: 1_000 }])
+  })
+
+  it('writes nothing when there is nothing to list', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [join(outside, 'secret.txt')], links: ['https://example.com'] }, 1_000)
+    expect(existsSync(lists)).toBe(false)
+  })
+
+  it('keeps the day\'s earlier entries, drops those a day old, and moves one sent again to its newest time', () => {
+    const DAY = 24 * 60 * 60 * 1000
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: ['https://claude.ai/artifact/a'] }, 1_000)
+    allowBuddyReads(mine, { session: 'harness-1', files: [later], links: ['https://claude.ai/artifact/b'] }, 2_000)
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: ['https://claude.ai/artifact/a'] }, 3_000)
+    expect(held()).toEqual({ version: 1, session: 'harness-1', files: [{ ...identity(later), at: 2_000 }, { ...identity(sent), at: 3_000 }],
+      links: [{ url: 'https://claude.ai/artifact/b', at: 2_000 }, { url: 'https://claude.ai/artifact/a', at: 3_000 }] })
+    allowBuddyReads(mine, { session: 'harness-1', files: [], links: ['https://claude.ai/artifact/c'] }, 2_000 + DAY)
+    expect(held()).toEqual({ version: 1, session: 'harness-1', files: [{ ...identity(sent), at: 3_000 }],
+      links: [{ url: 'https://claude.ai/artifact/a', at: 3_000 }, { url: 'https://claude.ai/artifact/c', at: 2_000 + DAY }] })
+  })
+
+  it('holds at most the last 100 files and 50 links', () => {
+    const many = Array.from({ length: 105 }, (_, i) => { const path = join(drops, `bbbb${String(i).padStart(4, '0')}-f`); writeFileSync(path, 'x'); return path })
+    const links = Array.from({ length: 55 }, (_, i) => `https://claude.ai/artifact/l${i}`)
+    allowBuddyReads(mine, { session: 'harness-1', files: many.slice(0, 60), links: links.slice(0, 30) }, 1_000)
+    allowBuddyReads(mine, { session: 'harness-1', files: many.slice(60), links: links.slice(30) }, 2_000)
+    expect(held().files.map((f: { path: string }) => f.path)).toEqual(many.slice(5))
+    expect(held().links.map((l: { url: string }) => l.url)).toEqual(links.slice(5))
+    for (const path of many) rmSync(path)
+  })
+
+  it('starts again from an unreadable list rather than failing the delivery', () => {
+    mkdirSync(lists)
+    writeFileSync(mine.file, '{"files": [')
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] }, 1_000)
+    expect(held()).toEqual({ version: 1, session: 'harness-1', files: [{ ...identity(sent), at: 1_000 }], links: [] })
+    writeFileSync(mine.file, JSON.stringify({ version: 1, session: 'harness-1', files: [null, { path: 1 }, { ...identity(later), at: 'now' },
+      { ...identity(later), sha256: undefined, at: 900 }], links: [{ url: 2, at: 1 }] }))
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] }, 1_000)
+    expect(held()).toEqual({ version: 1, session: 'harness-1', files: [{ ...identity(sent), at: 1_000 }], links: [] })
+  })
+
+  it('removes the lists of other Buddy sessions untouched for a day, and keeps the rest', () => {
+    const DAY = 24 * 60 * 60 * 1000, at = Date.now()
+    mkdirSync(lists)
+    for (const name of ['old.json', 'old.json.0d1e.tmp', 'recent.json']) writeFileSync(join(lists, name), '{}')
+    utimesSync(join(lists, 'old.json'), new Date(at - DAY - 1_000), new Date(at - DAY - 1_000))
+    utimesSync(join(lists, 'old.json.0d1e.tmp'), new Date(at - DAY - 1_000), new Date(at - DAY - 1_000))
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] }, at)
+    expect(readdirSync(lists).sort()).toEqual(['mine.json', 'recent.json'])
+  })
+
+  it('keeps nothing another session listed under the same key', () => {
+    allowBuddyReads(mine, { session: 'harness-0', files: [sent], links: ['https://claude.ai/artifact/a'] }, 1_000)
+    allowBuddyReads(mine, { session: 'harness-1', files: [later], links: [] }, 2_000)
+    expect(held()).toEqual({ version: 1, session: 'harness-1', files: [{ ...identity(later), at: 2_000 }], links: [] })
+  })
+
+  // Lead, 10-30: a Buddy removed, or its chat purged with its project, keeps nothing listed until the day is out. The Swarm
+  // closes its session then (superTabs/host.ts endSession), and that session's lists go.
+  // Re-check 1 of 116fa43a1: whose a list is that names no session cannot be told, so it goes too. Not JSON, not a list,
+  // or a list from before lists named their session (which still allows its links): deleting one only ever refuses.
+  it('forgets the lists of a session the Swarm ended and those that name none, and keeps every other session\'s', () => {
+    const theirs = { file: join(lists, 'theirs.json'), drops }
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    allowBuddyReads(theirs, { session: 'harness-2', files: [later], links: [] })
+    writeFileSync(join(lists, 'broken.json'), '{"session": ')
+    writeFileSync(join(lists, 'null.json'), 'null')
+    writeFileSync(join(lists, 'nameless.json'), JSON.stringify({ version: 1, files: [], links: [{ url: 'https://claude.ai/artifact/a', at: Date.now() }] }))
+    writeFileSync(join(lists, 'note.txt'), 'harness-1')
+    expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
+    forgetBuddyReads('harness-1', lists)
+    expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json'])
+    expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+    forgetBuddyReads('harness-1', lists)
+    expect(readdirSync(lists).sort()).toEqual(['note.txt', 'theirs.json'])
+  })
+
+  // Re-check 1 of 116fa43a1: a list that could not be read was skipped and the cleanup said it was done; once it could be
+  // read again, it allowed again. It may be another session's, and the failure may pass (too many open files), so it is
+  // not deleted blind: the cleanup fails, and is tried again.
+  it('fails while a list cannot be read, keeps it to try again, and removes it once it can; the guard allows nothing meanwhile', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: [] })
+    chmodSync(mine.file, 0o000)
+    try {
+      expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      expect(existsSync(mine.file)).toBe(true)
+      expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+    } finally { if (existsSync(mine.file)) chmodSync(mine.file, 0o600) }
+    forgetBuddyReads('harness-1', lists)
+    expect(existsSync(mine.file)).toBe(false)
+    expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+  })
+
+  // Re-check 2 of #2248: a list the host cannot delete must still allow nothing, and the failure must reach the host, which
+  // tries again before it acknowledges the end of the session.
+  it('empties a list it cannot delete, so the guard allows nothing, fails so it is tried again, and deletes it then', () => {
+    allowBuddyReads(mine, { session: 'harness-1', files: [sent], links: ['https://claude.ai/artifact/a'] })
+    expect(decide('Read', { file_path: sent }, guard)).toBe('allow')
+    chmodSync(lists, 0o500)
+    try {
+      expect(() => forgetBuddyReads('harness-1', lists)).toThrow(/EACCES|EPERM/)
+      expect(existsSync(mine.file)).toBe(true)
+      expect(decide('Read', { file_path: sent }, guard)).toBe('deny')
+      expect(decide('Artifact', { action: 'read', url: 'https://claude.ai/artifact/a' }, guard)).toBe('deny')
+    } finally { chmodSync(lists, 0o700) }
+    forgetBuddyReads('harness-1', lists)
+    expect(existsSync(mine.file)).toBe(false)
+  })
+
+  it('forgets nothing, and fails nothing, where no list was ever written', () => {
+    expect(() => forgetBuddyReads('harness-1', lists)).not.toThrow()
+    expect(existsSync(lists)).toBe(false)
+  })
+
+  it.each([
+    ['a plain link', 'See https://claude.ai/artifact/abc-123', ['https://claude.ai/artifact/abc-123']],
+    ['a link in Markdown, and one at the end of a sentence', '[the plan](https://claude.ai/artifact/abc-123) and https://claude.ai/code/artifact/0b7e-8f2c.',
+      ['https://claude.ai/artifact/abc-123', 'https://claude.ai/code/artifact/0b7e-8f2c']],
+    ['a link with a query, a fragment or a trailing slash, as its artifact', 'https://claude.ai/artifact/a?v=2 https://claude.ai/artifact/b#top https://claude.ai/artifact/c/',
+      ['https://claude.ai/artifact/a', 'https://claude.ai/artifact/b', 'https://claude.ai/artifact/c']],
+    ['the preview site, and a host in capitals', 'https://preview.claude.ai/artifact/p1 HTTPS://CLAUDE.AI/artifact/p2',
+      ['https://preview.claude.ai/artifact/p1', 'https://claude.ai/artifact/p2']],
+    ['one link sent twice', 'https://claude.ai/artifact/x and again https://claude.ai/artifact/x', ['https://claude.ai/artifact/x']],
+    ['no look-alikes', 'http://claude.ai/artifact/a https://claude.ai.example.com/artifact/b https://evil.claude.ai/artifact/c '
+      + 'https://claude.ai:8443/artifact/d https://me@claude.ai/artifact/e https://claude.ai/artifact/f/files https://claude.ai/chat/g '
+      + 'claude.ai/artifact/h https://claude.ai/artifact/i%2F..', []],
+  ])('finds the Artifact links in a message: %s', (_, text, links) => {
+    expect(artifactLinks(text)).toEqual(links)
   })
 })
 
