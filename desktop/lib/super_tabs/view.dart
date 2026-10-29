@@ -20,6 +20,7 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'catch_up_card.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -356,6 +357,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // The line is placed once the messages reach back to the mark.
     } else if (_unread.decide(id, shown, mark, own: c.isOwn)) {
       _revealUnreadLine(id);
+      _loadCatchUp(id, mark);
     } else if (firstView || (grew && atEnd)) {
       _followEnd(id);
     } else if (atEnd) {
@@ -504,14 +506,28 @@ class _SuperTabViewState extends State<SuperTabView>
       id,
       0,
       arrived: (row) {
+        // The line itself, not its row: with the catch-up card under it the
+        // row can be taller than the view, and its top would go above it.
+        final line = _unread.key.currentContext;
         unawaited(
-          Scrollable.ensureVisible(row, alignment: .15).then((_) {
+          Scrollable.ensureVisible(
+            line != null && line.mounted ? line : row,
+            alignment: .15,
+          ).then((_) {
             _checkUnreadLine();
           }),
         );
       },
     );
   }
+
+  /// Reads [id]'s catch-up card for the span after [mark], shown under its
+  /// line once it arrives.
+  void _loadCatchUp(String id, int mark) => unawaited(
+    _unread.catchUps.load(id, () => c.readCatchUp(id, mark)).then((shown) {
+      if (shown && mounted) setState(() {});
+    }),
+  );
 
   /// Shows the jump pill while the reader is scrolled away from the line, and
   /// Jump to latest while the list is away from its newest message.
@@ -2701,8 +2717,17 @@ class _SuperTabViewState extends State<SuperTabView>
                 previous?.createdAt?.toLocal(),
               ))
             _date(time),
-          if (message.id == _unread.lineAt(c.selectedId))
+          if (message.id == _unread.lineAt(c.selectedId)) ...[
             SuperTabNewMessagesLine(key: _unread.key),
+            if (_unread.catchUps.of(c.selectedId) case final summary?)
+              SuperTabCatchUpCard(
+                summary: summary,
+                onOpen: (messageId) =>
+                    unawaited(_openMessage(c.selectedId, messageId)),
+                onClose: () =>
+                    setState(() => _unread.catchUps.dismiss(c.selectedId)),
+              ),
+          ],
           // The message itself is kept in place: its
           // date moves above earlier ones as they come.
           _BuiltRow(
