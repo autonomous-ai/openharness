@@ -26,7 +26,6 @@ import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
-import 'swarm_team_line.dart';
 import 'team_glance.dart';
 
 /// The conversations of one project the person may read, as its sheet lists
@@ -658,8 +657,8 @@ class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
 /// A project's team in words, as its menu says it (Tony, 2026-10-29): "17
 /// working · 3 down", no faces — or, while work waits on the person
 /// ([waiting]), how much does, in the warning colour, with only who is down
-/// of the team. Who is down is red, as on [SwarmTeamLine]. Counted from the
-/// Home kept ([kept]), it reads "Updating…".
+/// of the team. Who is down is red. Counted from the Home kept ([kept]), it
+/// reads "Updating…".
 class SwarmStatusText extends StatelessWidget {
   const SwarmStatusText(
     this.glance, {

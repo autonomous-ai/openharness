@@ -18,7 +18,6 @@ import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
-import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
 import 'swarm_leaderboard.dart';
 import 'swarm_models_page.dart';
@@ -27,18 +26,20 @@ import 'swarm_reader.dart';
 import 'swarm_machines.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
-import 'swarm_team_line.dart';
-import 'team_glance.dart';
+import 'swarm_unread.dart';
 
 /// Swarm Home's drawer, from the left edge like the desktop's sidebar, as the
 /// approved prototype draws it: its title and a close button; Swarm Home
 /// with what waits on the person; Buddies, the person's Buddy chat in each
 /// project (Tony, 2026-10-29, as on the desktop since #2090); the projects,
-/// each with its initial and its team in a line — its name opens the
-/// project, its arrow lists its chats: Buddy chat, the project chat, its
-/// leaderboard, then its work, what waits on the person first; then Your
-/// models and Your devices, read only; then Settings at its foot. A row
-/// closes the drawer before it opens anything.
+/// each with its initial and its name, no team line (Team at a glance is
+/// gone, as on the desktop) — its name opens the project, its arrow lists
+/// its chats: Buddy chat, the project chat, its leaderboard, then its work,
+/// what waits on the person first; then Your models and Your devices, read
+/// only; then Settings at its foot. A row closes the drawer before it opens
+/// anything. A chat, a Buddy or a project with something new is bold, with
+/// the tags waiting in it as `@N` ([swarmChatNews], [swarmProjectNews]),
+/// as Tony approved (2026-10-29).
 class SwarmDrawer extends StatefulWidget {
   const SwarmDrawer({
     super.key,
@@ -167,19 +168,9 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                   ],
                   for (final swarm in swarms)
                     ...switch (inbox!.reader(swarm.id)) {
-                      SwarmReader(snapshot: final snapshot?)
-                          when snapshot.projects.isNotEmpty =>
-                        [
-                          _Caption(several ? swarm.name : 'Projects'),
-                          for (final project in snapshot.projects)
-                            ..._project(
-                              session!,
-                              swarm.id,
-                              snapshot,
-                              project,
-                              then,
-                            ),
-                        ],
+                      final SwarmReader reader
+                          when reader.snapshot?.projects.isNotEmpty ?? false =>
+                        _projects(session!, swarm, reader, several, then),
                       SwarmReader(snapshot: null, error: null) || null => [
                         _Caption(several ? swarm.name : 'Projects'),
                         _ProjectsLoading('swarm-drawer-loading-${swarm.id}'),
@@ -282,6 +273,10 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
           key: ValueKey('swarm-drawer-buddy-${swarm.id}-${project.id}'),
           leading: SwarmBuddyAvatar(reader: reader, projectId: project.id),
           title: swarmBuddyName(reader, project.id),
+          news: switch (swarmBuddyChat(reader, project.id)) {
+            final chat? => swarmChatNews(reader, inbox!.asks(swarm.id), chat),
+            null => swarmNoNews,
+          },
           asides: [
             if (rows.length > 1)
               several
@@ -294,12 +289,38 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     ];
   }
 
+  /// A Swarm's projects under its caption, what is new in each worked out
+  /// once for them all ([swarmProjectNews]).
+  List<Widget> _projects(
+    SwarmSession session,
+    SwarmListing swarm,
+    SwarmReader reader,
+    bool several,
+    void Function(VoidCallback action) then,
+  ) {
+    final snapshot = reader.snapshot!;
+    final news = swarmProjectNews(reader, session.inbox.asks(swarm.id));
+    return [
+      _Caption(several ? swarm.name : 'Projects'),
+      for (final project in snapshot.projects)
+        ..._project(
+          session,
+          swarm.id,
+          snapshot,
+          project,
+          news[project.id] ?? swarmNoNews,
+          then,
+        ),
+    ];
+  }
+
   /// A project's row, and while its arrow is open, its chats ([_chats]).
   List<Widget> _project(
     SwarmSession session,
     String swarmId,
     SuperTabSnapshot snapshot,
     SuperTabProject project,
+    SwarmRowNews news,
     void Function(VoidCallback action) then,
   ) {
     final id = '$swarmId/${project.id}';
@@ -312,11 +333,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
               key: ValueKey('swarm-drawer-project-$swarmId-${project.id}'),
               leading: SwarmProjectTile(project.name),
               title: project.name,
-              detail: SwarmTeamLine(
-                swarmTeamGlance(snapshot, projectId: project.id),
-                size: AppType.captionSize,
-                kept: swarmHomeKept(session.inbox.reader(swarmId)),
-              ),
+              news: news,
               onTap: () => then(() => widget.onProject(swarmId, project.id)),
             ),
           ),
@@ -352,19 +369,27 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
       buddies: reader?.buddies ?? SwarmBuddies.none,
     ).active;
     final waits = swarmWaitingOnYou(session.inbox, swarmId);
+    final asks = session.inbox.asks(swarmId);
+    SwarmRowNews news(SuperTabConversation? g) => reader == null || g == null
+        ? swarmNoNews
+        : swarmChatNews(reader, asks, g);
     SwarmDrawerRow chat(SuperTabConversation g, String title) => SwarmDrawerRow(
       key: ValueKey('swarm-drawer-chat-${g.id}'),
       title: title,
       sub: true,
+      news: news(g),
       onTap: () => then(() => widget.onChat(swarmId, g.id)),
     );
+    final buddyChat = reader == null
+        ? null
+        : swarmBuddyChat(reader, project.id);
     return [
-      if (reader != null &&
-          (swarmBuddyChat(reader, project.id) != null || swarmCanWrite(reader)))
+      if (reader != null && (buddyChat != null || swarmCanWrite(reader)))
         SwarmDrawerRow(
           key: ValueKey('swarm-drawer-buddy-chat-$swarmId-${project.id}'),
           title: 'Buddy chat',
           sub: true,
+          news: news(buddyChat),
           onTap: () => then(() => widget.onBuddy(swarmId, project.id)),
         ),
       if (lead != null) chat(lead, 'Project chat'),
@@ -516,7 +541,9 @@ class _Disclosure extends StatelessWidget {
 /// One row of the drawer: a glyph or a project's tile, a title, quiet words
 /// after it ([asides]) and maybe a line under it, a count; selected, it sits
 /// on a rounded fill. A chat under its project ([sub]) is shorter, quieter,
-/// and lined up with the project's name.
+/// and lined up with the project's name. Something new in it ([news]) sets
+/// its title in bold, with no dot, and the tags waiting in it as `@N` at its
+/// trailing edge (desktop design system: Unread, Mentions).
 class SwarmDrawerRow extends StatelessWidget {
   const SwarmDrawerRow({
     super.key,
@@ -528,6 +555,7 @@ class SwarmDrawerRow extends StatelessWidget {
     this.sub = false,
     this.trailing = false,
     this.asides = const [],
+    this.news = swarmNoNews,
     required this.onTap,
   });
 
@@ -546,6 +574,9 @@ class SwarmDrawerRow extends StatelessWidget {
 
   /// Opens a page of its own: a chevron at its right.
   final bool trailing;
+
+  /// What is new in it: unread or tagged ([swarmChatNews]).
+  final SwarmRowNews news;
   final VoidCallback? onTap;
 
   /// Every row but a chat under its project clears this, for a thumb.
@@ -597,17 +628,29 @@ class SwarmDrawerRow extends StatelessWidget {
                       Row(
                         children: [
                           Flexible(
-                            child: Text(
-                              title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: sub
-                                  ? AppType.body(
-                                      color: AppPalette.textSecondary,
-                                    )
-                                  : AppType.label(
-                                      color: AppPalette.textPrimary,
-                                    ),
+                            // Unread is heard in words, as the bold is seen;
+                            // tags say their own.
+                            child: Semantics(
+                              label: news.bold && news.tags == 0
+                                  ? 'Unread messages'
+                                  : null,
+                              child: Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: switch ((sub, news.bold)) {
+                                  (_, true) => AppType.label(
+                                    color: AppPalette.textPrimary,
+                                    fontWeight: AppFont.semibold,
+                                  ),
+                                  (true, false) => AppType.body(
+                                    color: AppPalette.textSecondary,
+                                  ),
+                                  (false, false) => AppType.label(
+                                    color: AppPalette.textPrimary,
+                                  ),
+                                },
+                              ),
                             ),
                           ),
                           for (final aside in asides) ...[
@@ -632,6 +675,10 @@ class SwarmDrawerRow extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (news.tags > 0) ...[
+                  const SizedBox(width: 12),
+                  SwarmTags(news.tags),
+                ],
                 if (badge case final badge?) ...[
                   const SizedBox(width: 12),
                   badge,
@@ -682,8 +729,8 @@ class _ProjectsLoading extends StatelessWidget {
   );
 }
 
-/// One project's row on its way: its tile, a bar for its name and a longer
-/// one for its team's line, each as tall as the line it stands for.
+/// One project's row on its way: its tile and a bar for its name, as tall as
+/// the line it stands for.
 class _ProjectLoading extends StatelessWidget {
   const _ProjectLoading({super.key, required this.width});
 
@@ -703,21 +750,9 @@ class _ProjectLoading extends StatelessWidget {
             radius: AppCard.insetRadius,
           ),
           const SizedBox(width: AppSpace.m),
+          // The real row's metrics: its title alone.
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // The real row's metrics: its title, then its team's line
-                // ([SwarmTeamLine] at the caption's size).
-                SkeletonText(style: AppType.label(), widthFactor: width),
-                const SizedBox(height: 2),
-                SkeletonText(
-                  style: AppType.caption(height: 1.35),
-                  widthFactor: (width + .25).clamp(0, 1),
-                ),
-              ],
-            ),
+            child: SkeletonText(style: AppType.label(), widthFactor: width),
           ),
         ],
       ),

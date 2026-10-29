@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
@@ -6,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
+
+import '../voice_fakes.dart' show MemoryKeyValueStore;
 
 import 'swarm_fixture.dart';
 
@@ -840,5 +843,83 @@ void main() {
       expect(lists(), 3);
       i.dispose();
     });
+  });
+
+  test("each Swarm's reader has its read marks, kept on the phone; a move of "
+      'them is told, and a Swarm off the list takes them', () async {
+    final fake = backend({
+      'a': [groupData('g1', lastMessageSequence: 3)],
+    });
+    final store = MemoryKeyValueStore();
+    final i = SwarmInbox(
+      accountId: me,
+      request: fake.request,
+      readMarks: store,
+    );
+    addTearDown(i.dispose);
+    await i.refresh();
+    await settle();
+    final marks = i.reader('a')!.readMarks!;
+    // The first read's marks are written a moment after it.
+    await until(() => store.values['swarm_read_marks.$me.a'] != null);
+    var told = 0;
+    i.addListener(() => told++);
+
+    marks.markRead('g1', 5);
+    await settle();
+    expect(told, greaterThan(0));
+
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': <Object>[],
+      'next': null,
+    };
+    await i.refresh();
+    await settle();
+
+    expect(i.reader('a'), isNull);
+    expect(store.values['swarm_read_marks.$me.a'], isNull);
+  });
+
+  test('an inbox closing keeps its read marks: the next one, for the same '
+      'account, reads what came since as unread', () async {
+    const key = 'swarm_read_marks.$me.a';
+    final store = MemoryKeyValueStore();
+    final first = SwarmInbox(
+      accountId: me,
+      request: backend({
+        'a': [groupData('g1', lastMessageSequence: 3)],
+      }).request,
+      readMarks: store,
+    );
+    await first.refresh();
+    await settle();
+    await until(() => store.values[key] != null);
+
+    first.dispose();
+    await settle();
+
+    expect(store.values[key], isNotNull, reason: 'kept, not forgotten');
+    expect(jsonDecode(store.values[key]!), {
+      'marks': {'g1': 3},
+    });
+    final next = SwarmInbox(
+      accountId: me,
+      request: backend({
+        'a': [groupData('g1', lastMessageSequence: 6)],
+      }).request,
+      readMarks: store,
+    );
+    addTearDown(next.dispose);
+    await next.refresh();
+    await settle();
+    final reader = next.reader('a')!;
+    await until(
+      () => reader.readMarks!.unread(reader.snapshot!.conversation('g1')!),
+    );
+
+    expect(
+      reader.readMarks!.unread(reader.snapshot!.conversation(leadChat)!),
+      isFalse,
+    );
   });
 }

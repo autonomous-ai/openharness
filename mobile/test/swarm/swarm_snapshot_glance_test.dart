@@ -5,14 +5,13 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_team_line.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
-/// A project's team line is counted once per Swarm read: Home, the drawer
-/// and the project's page all draw the one glance of the read they show.
+/// A project's team line is counted once per Swarm read: the project's page
+/// draws the one glance of the read it shows.
 void main() {
   FakeSwarm backend() {
     final fake = FakeSwarm();
@@ -73,25 +72,15 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets("Home, the drawer and the project's menu draw one glance", (
-    tester,
-  ) async {
+  testWidgets("the project's menu draws the read's one glance", (tester) async {
     final host = await pump(tester);
     final reader = host.session!.inbox.reader(tab)!;
-    final read = reader.snapshot;
-    SwarmTeamGlance glanceIn(String row) => tester
-        .widget<SwarmTeamLine>(
-          find.descendant(of: key(row), matching: find.byType(SwarmTeamLine)),
-        )
-        .glance;
-
-    final home = glanceIn('swarm-project-$tab-$project');
-    expect(home.line, '1 waiting');
+    final read = reader.snapshot!;
+    final glance = swarmTeamGlance(read, projectId: project);
+    expect(glance.line, '1 waiting');
 
     await tester.tap(key('swarm-menu'));
     await tester.pumpAndSettle();
-    final drawer = glanceIn('swarm-drawer-project-$tab-$project');
-
     await tester.tap(key('swarm-drawer-project-$tab-$project'));
     await tester.pumpAndSettle();
     await tester.tap(key('swarm-project-menu'));
@@ -106,7 +95,6 @@ void main() {
         .glance;
 
     expect(reader.snapshot, same(read), reason: 'still the same read');
-    expect(drawer, same(home));
-    expect(page, same(home));
+    expect(page, same(glance));
   });
 }

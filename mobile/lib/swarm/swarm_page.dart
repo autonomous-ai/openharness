@@ -12,7 +12,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
 import 'swarm_choices.dart';
@@ -29,8 +28,7 @@ import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
-import 'swarm_team_line.dart';
-import 'team_glance.dart';
+import 'swarm_unread.dart';
 
 /// Swarm Home from anywhere in the shell: every page closed and Swarm Home
 /// the root again ([PhoneShellScope.onShowSwarm]). Without the shell — a
@@ -282,6 +280,14 @@ class _SwarmPageState extends State<SwarmPage> {
                   projectId: project.id,
                 ),
                 title: swarmBuddyName(reader, project.id),
+                news: switch (swarmBuddyChat(reader, project.id)) {
+                  final chat? => swarmChatNews(
+                    reader,
+                    inbox.asks(swarm.id),
+                    chat,
+                  ),
+                  null => swarmNoNews,
+                },
                 detail: SwarmRow.line(
                   [
                     project.name,
@@ -321,8 +327,8 @@ class _SwarmPageState extends State<SwarmPage> {
           first: first && buddies.isEmpty && reading.isEmpty && i == 0,
         ),
         switch (inbox.reader(swarm.id)) {
-          SwarmReader(snapshot: final snapshot?) => SwarmGroup(
-            children: _projects(context, swarm.id, snapshot),
+          final SwarmReader reader when reader.snapshot != null => SwarmGroup(
+            children: _projects(context, swarm.id, reader),
           ),
           SwarmReader(error: final error?) => SwarmGroup(
             children: [
@@ -333,7 +339,10 @@ class _SwarmPageState extends State<SwarmPage> {
               ),
             ],
           ),
-          _ => SwarmSkeletonRows(id: 'swarm-projects-loading-${swarm.id}'),
+          _ => SwarmSkeletonRows(
+            id: 'swarm-projects-loading-${swarm.id}',
+            titleOnly: true,
+          ),
         },
       ],
       if (inbox.swarms.isEmpty) ...[
@@ -369,7 +378,7 @@ class _SwarmPageState extends State<SwarmPage> {
       SwarmCaption('Buddies', first: first),
       SwarmSkeletonRows(id: 'swarm-buddy-loading', round: true),
       const SwarmCaption('Projects'),
-      SwarmSkeletonRows(id: 'swarm-projects-loading'),
+      SwarmSkeletonRows(id: 'swarm-projects-loading', titleOnly: true),
     ];
     return swarmNeedsFirst
         ? [...needs(first: first), ...swarms(first: false)]
@@ -415,24 +424,26 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
+  /// A Swarm's projects, each its tile and its name, no team line (Team at
+  /// a glance is gone, as on the desktop): bold with something new in it,
+  /// and its tags waiting as `@N` ([swarmProjectNews]).
   List<Widget> _projects(
     BuildContext context,
     String swarmId,
-    SuperTabSnapshot snapshot,
+    SwarmReader reader,
   ) {
+    final snapshot = reader.snapshot!;
     if (snapshot.projects.isEmpty) {
       return [const SwarmRow(title: 'No project yet', onTap: null)];
     }
+    final news = swarmProjectNews(reader, _session?.inbox.asks(swarmId));
     return [
       for (final project in snapshot.projects)
         SwarmRow(
           key: ValueKey('swarm-project-$swarmId-${project.id}'),
           leading: SwarmProjectTile(project.name),
           title: project.name,
-          detail: SwarmTeamLine(
-            swarmTeamGlance(snapshot, projectId: project.id),
-            kept: swarmHomeKept(_session?.inbox.reader(swarmId)),
-          ),
+          news: news[project.id] ?? swarmNoNews,
           onTap: () => _openProject(context, swarmId, project.id),
         ),
     ];

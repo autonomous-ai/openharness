@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../core/harness_file_store.dart';
+import '../core/local_key_value_store.dart';
 import '../notify/system_notices.dart';
 import '../phone/voice_input_controller.dart';
 import '../settings/experimental_features.dart';
@@ -30,12 +32,14 @@ class SwarmSession extends ChangeNotifier {
     Duration pollInterval = const Duration(seconds: 15),
     this.undoWindow = swarmUndoWindow,
     SwarmHomeCache? homeCache,
+    LocalKeyValueStore? readMarks,
   }) : inbox = SwarmInbox(
          accountId: accountId,
          request: request,
          upload: upload,
          pollInterval: pollInterval,
          homeCache: homeCache,
+         readMarks: readMarks,
        ) {
     _announcer = SwarmAnnouncer(
       notices,
@@ -184,11 +188,13 @@ class SwarmHost extends ChangeNotifier {
     ExperimentalFeaturesStore? features,
     this.computers,
     SwarmHomeCache? homeCache,
+    LocalKeyValueStore? readMarks,
     this.uploadAvatar,
     this.voice,
     this.dictation,
   }) : features = features ?? experimentalFeaturesStore,
-       homeCache = homeCache ?? SwarmHomeCache.device() {
+       homeCache = homeCache ?? SwarmHomeCache.device(),
+       readMarks = readMarks ?? HarnessFileStore.shared {
     account.addListener(_update);
     this.features.addListener(_update);
     computers?.addListener(_computersChanged);
@@ -214,6 +220,10 @@ class SwarmHost extends ChangeNotifier {
   /// The last Home of the session's account, kept for a cold start; cleared
   /// when the account leaves or Swarm is turned off.
   final SwarmHomeCache homeCache;
+
+  /// Where the session's read marks are kept on the phone: each chat's id
+  /// and how far it was read, under the account and the Swarm.
+  final LocalKeyValueStore readMarks;
 
   /// Sends an avatar photo with the phone's own sign-in; null where none can
   /// go, and only the built-in pictures are offered.
@@ -272,6 +282,7 @@ class SwarmHost extends ChangeNotifier {
             upload: upload,
             notices: notices,
             homeCache: homeCache,
+            readMarks: readMarks,
           )..foreground = _foreground);
     notifyListeners();
   }

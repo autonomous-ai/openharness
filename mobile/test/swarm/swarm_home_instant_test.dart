@@ -378,43 +378,6 @@ void main() {
       stopReads(host);
     },
   );
-  testWidgets(
-    'the Home kept hides its team counts until its Swarm is read again: '
-    'counts kept are not now',
-    (tester) async {
-      final answer = Completer<Object?>();
-      final (:host, fake: _) = await coldStart(
-        tester,
-        list: (_) => answer.future,
-      );
-      final row = key('swarm-project-$tab-$project');
-      Finder inRow(String text) =>
-          find.descendant(of: row, matching: find.text(text));
-
-      // Kept: Nova waiting on the person in Fix login.
-      expect(inRow('Updating…'), findsOneWidget);
-      expect(
-        find.descendant(of: row, matching: find.textContaining('waiting')),
-        findsNothing,
-      );
-
-      answer.complete({
-        'tabs': [
-          {'id': tab, 'name': 'Phone Swarm', 'ownerId': me},
-        ],
-        'next': null,
-      });
-      await tester.pump();
-      await tester.pump();
-      await tester.pump();
-
-      // Read again: nobody holds work.
-      expect(inRow('All idle'), findsOneWidget);
-      expect(inRow('Updating…'), findsNothing);
-      stopReads(host);
-    },
-  );
-
   testWidgets("a project opened from the Home kept: its menu's status reads "
       'Updating… until its Swarm is read again', (tester) async {
     final (:host, :fake) = await coldStart(tester);
@@ -452,27 +415,9 @@ void main() {
     stopReads(host);
   });
 
-  testWidgets('the drawer hides the team counts kept too', (tester) async {
-    await coldStart(tester);
-
-    await tester.tap(key('swarm-menu'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-
-    final row = key('swarm-drawer-project-$tab-$project');
-    expect(
-      find.descendant(of: row, matching: find.text('Updating…')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: row, matching: find.textContaining('waiting')),
-      findsNothing,
-    );
-  });
-
   testWidgets(
-    'a first read of the Swarm that fails keeps the counts kept hidden, on '
-    'Home and in the drawer, until a read gets through',
+    'a first read of the Swarm that fails keeps Home Updating… until a read '
+    'gets through',
     (tester) async {
       final answer = Completer<Object?>();
       final (:host, :fake) = await coldStart(
@@ -494,38 +439,13 @@ void main() {
       expect(inbox.loaded, isTrue);
       expect(inbox.reader(tab)!.error, isNotNull, reason: 'the read failed');
 
-      final home = key('swarm-project-$tab-$project');
-      final drawer = key('swarm-drawer-project-$tab-$project');
-      void hidden() {
-        for (final row in [home, drawer]) {
-          expect(
-            find.descendant(of: row, matching: find.text('Updating…')),
-            findsOneWidget,
-          );
-          expect(
-            find.descendant(of: row, matching: find.textContaining('waiting')),
-            findsNothing,
-          );
-        }
-        expect(updating(), findsOneWidget);
-      }
-
-      await tester.tap(key('swarm-menu'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
-      hidden();
+      expect(updating(), findsOneWidget);
 
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
       await inbox.refresh();
       await tester.pump();
       await tester.pump();
 
-      for (final row in [home, drawer]) {
-        expect(
-          find.descendant(of: row, matching: find.text('All idle')),
-          findsOneWidget,
-        );
-      }
       expect(updating(), findsNothing);
       stopReads(host);
     },

@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/local_key_value_store.dart';
 import 'model.dart';
 import 'swarm_asks.dart';
 import 'swarm_buddy.dart';
 import 'swarm_home_cache.dart';
 import 'swarm_home_keeper.dart';
+import 'swarm_read_marks.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
@@ -89,6 +91,7 @@ class SwarmInbox extends ChangeNotifier {
     this.pollInterval = const Duration(seconds: 15),
     SwarmHomeCache? homeCache,
     Duration homeWait = const Duration(seconds: 30),
+    this.readMarks,
   }) : _home = homeCache == null
            ? null
            : SwarmHomeKeeper(homeCache, accountId, wait: homeWait) {
@@ -97,6 +100,10 @@ class SwarmInbox extends ChangeNotifier {
 
   /// Keeps the last Home ([SwarmHomeCache]), so a cold start draws it at once.
   final SwarmHomeKeeper? _home;
+
+  /// Where each Swarm's read marks are kept on the phone ([SwarmReadMarks]);
+  /// null keeps them in memory only.
+  final LocalKeyValueStore? readMarks;
 
   /// Draws the Home kept until the list is read: each Swarm's reader holds
   /// the view kept, which its first read replaces. One that does not read
@@ -450,6 +457,8 @@ class SwarmInbox extends ChangeNotifier {
       request: request,
       upload: upload,
     )..addListener(_relay);
+    reader.readMarks = SwarmReadMarks(reader, store: readMarks)
+      ..addListener(_relay);
     _asks[id] = SwarmAsks(reader)
       ..onArrived = ((ask) => onArrived?.call(switch (ask) {
         final SuperTabDecision decision => SwarmDecisionNeed(id, decision),
@@ -460,14 +469,21 @@ class SwarmInbox extends ChangeNotifier {
     return reader;
   }
 
-  /// A Swarm off the list: what a screen still holds of it is taken back
-  /// ([SwarmReader.revoke]) before it is dropped.
-  void _drop(String id) {
+  /// A Swarm off the list ([lost]), or the inbox closing: what a screen
+  /// still holds of it is taken back ([SwarmReader.revoke]) before it is
+  /// dropped.
+  void _drop(String id, {bool lost = true}) {
     _asks.remove(id)?.dispose();
-    _readers.remove(id)
-      ?..removeListener(_relay)
-      ..revoke()
-      ..dispose();
+    final reader = _readers.remove(id)?..removeListener(_relay);
+    if (reader != null) {
+      final marks = reader.readMarks;
+      // Lost, it is revoked first, so its read marks leave the phone too;
+      // the inbox closing keeps them, written now, for the next one.
+      if (!lost) marks?.dispose();
+      reader.revoke();
+      if (lost) marks?.dispose();
+      reader.dispose();
+    }
     _workSeen.remove(id);
   }
 
@@ -573,7 +589,7 @@ class SwarmInbox extends ChangeNotifier {
     _disposed = true;
     _poll?.cancel();
     for (final id in _readers.keys.toList()) {
-      _drop(id);
+      _drop(id, lost: false);
     }
     super.dispose();
   }

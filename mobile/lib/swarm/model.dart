@@ -317,6 +317,11 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      readMarks = Map.unmodifiable({
+        if (row['readMarks'] case final Map marks)
+          for (final MapEntry(:key, :value) in marks.entries)
+            if (key is String && value is num) key: value.toInt(),
+      }),
       buddiesEnabled = row['buddies'] == true,
       buddyStarts = List.unmodifiable([
         for (final start
@@ -388,6 +393,10 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
+  /// conversation, on any of their devices. Never another person's.
+  final Map<String, int> readMarks;
   // Built on first use: a read is never changed, and lookups run per row on
   // every build.
   late final _conversationsById = _byId(conversations, (c) => c.id);

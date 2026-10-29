@@ -103,7 +103,8 @@ class SwarmConversationPage extends StatefulWidget {
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
 }
 
-class _SwarmConversationPageState extends State<SwarmConversationPage> {
+class _SwarmConversationPageState extends State<SwarmConversationPage>
+    with WidgetsBindingObserver {
   SwarmSession? _session;
   SwarmConversation? _conversation;
   final _text = TextEditingController();
@@ -139,6 +140,19 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// No other screen covers this one.
   bool _visible = true;
+
+  /// Harness is in front, as the shell counts it (resumed, or the app
+  /// switcher over it).
+  bool _inFront = _isInFront(WidgetsBinding.instance.lifecycleState);
+
+  static bool _isInFront(AppLifecycleState? state) =>
+      state == null ||
+      state == AppLifecycleState.resumed ||
+      state == AppLifecycleState.inactive;
+
+  /// What it shows is seen: read ([SwarmConversation.shown]).
+  bool get _seen => _visible && _inFront;
+
   bool _watching = false;
 
   /// What the chat draws of its Swarm's read, told to the page only when
@@ -162,8 +176,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _text.addListener(_typed);
     _scroll.addListener(_scrolled);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _inFront = _isInFront(state);
+    _conversation?.shown = _seen;
   }
 
   @override
@@ -171,6 +192,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     super.didChangeDependencies();
     // Off while a screen pushed over this one covers it.
     _visible = TickerMode.valuesOf(context).enabled;
+    _conversation?.shown = _seen;
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
         _voice = SwarmVoice(
@@ -208,7 +230,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       return;
     }
     session.inbox.removeListener(_attach);
-    final c = _conversation = SwarmConversation(reader, widget.conversationId);
+    // Set before what the chat kept is shown, so it is read only as far as
+    // it is seen: opened at a message, through it until the person goes
+    // down to the foot.
+    final c = _conversation = SwarmConversation(
+      reader,
+      widget.conversationId,
+      shown: _seen,
+      heldAt: widget.messageId ?? _held.value,
+    );
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);
@@ -294,6 +324,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _close();
     _voice?.dispose();
     _view.dispose();
@@ -369,6 +400,15 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     _nearTop();
     if (!_scroll.hasClients) return;
     final back = _scroll.offset > _readingBack;
+    // At the foot all is seen; reading back, only what was seen at the foot
+    // before, or the message a notice opened the chat at.
+    if (_conversation case final c?) {
+      if (!back) {
+        c.heldAt = null;
+      } else {
+        c.heldAt ??= c.messages.lastOrNull?.id;
+      }
+    }
     if (back == (_held.value != null)) return;
     _held.value = back ? _conversation?.messages.lastOrNull?.id : null;
   }
@@ -472,7 +512,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           : 'The original message is no longer in this chat.';
       if (found) _target = messageId;
     });
-    if (!found) return;
+    if (!found) {
+      // Nothing to read back to: at the foot, all is seen.
+      if (!_scroll.hasClients || _scroll.offset <= _readingBack) {
+        c.heldAt = null;
+      }
+      return;
+    }
     _reveal(c, messageId, 0);
     _litTimer?.cancel();
     setState(() => _lit = messageId);
