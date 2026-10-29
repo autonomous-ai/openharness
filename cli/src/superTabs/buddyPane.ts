@@ -15,6 +15,7 @@ import { sendPane } from '../messages/command.js'
 import { runningPane, type PaneProbe } from './callerPane.js'
 
 const BUDDY = 'A Buddy talks with its owner in its own chat: it may not send to, start, tell or close other sessions.'
+const UNSURE = 'Harness could not confirm whether this harness is a Buddy just now, so it did not run this. Try again in a moment.'
 export const WINDOWS_BUDDY = 'This Windows computer runs a Buddy, and Harness cannot tell its pane from this one, so an agent here may not do this '
   + 'while it runs. Run it from your own terminal.'
 
@@ -46,6 +47,8 @@ export async function buddyRefusal(deps: {
     const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], running.pane, where.machineId)
     if (!caller) return null
     const answer = await daemon.request('super_tabs', { action: 'buddyCheck', harnessId: caller.agentId }, 10_000)
-    return answer.ok === true && answer.buddy === true ? BUDDY : null
+    // The Swarm answered it is on: one that then cannot say for this harness is no answer of "no Buddy" (re-check 1 of #2093).
+    if (answer.ok !== true || typeof answer.buddy !== 'boolean') return UNSURE
+    return answer.buddy ? BUDDY : null
   } finally { daemon.close() }
 }

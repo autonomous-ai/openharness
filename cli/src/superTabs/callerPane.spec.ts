@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import { processProbe, runningPane } from './callerPane.js'
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -69,6 +70,36 @@ describe('reading the real processes and panes', () => {
     expect(chain.slice(0, 2)).toEqual([process.pid, process.ppid])
     expect(new Set(chain).size).toBe(chain.length)
   })
+
+  // Re-check 1 of #2093 (critical): Harness's own tmux, which install.sh puts on Macs without Homebrew's and in Team
+  // accounts, was not looked for, so there every agent's Swarm command was refused. The daemon's tmux comes first.
+  it('reads the panes with the tmux the daemon uses: the managed one first, then the system\'s', async () => {
+    const tmux = await isolatedTmux()
+    try {
+      await tmux.run('new-session', '-d', '-s', 'probe', 'sleep 30')
+      const pane = await tmux.run('display-message', '-p', '-t', 'probe', '#{pane_id}')
+      const pid = Number(await tmux.run('display-message', '-p', '-t', 'probe', '#{pane_pid}'))
+      // A runtime folder as the installer leaves it: the build under it, and current-tmux naming it.
+      const runtime = join(tmux.root, 'runtime'), managed = join(runtime, 'tmux-3.5a', 'bin', 'tmux')
+      mkdirSync(dirname(managed), { recursive: true })
+      symlinkSync(resolveBinaryOnPath('tmux')!, managed)
+      writeFileSync(join(runtime, 'current-tmux'), `${managed}\n`)
+      const server = { pid: 0, command: 'tmux' }
+      // Only the managed tmux on this machine.
+      expect(processProbe(tmux.env, 'darwin', { runtimeDir: runtime, systemTmux: [] }).panes(server)).toContainEqual({ pane, pid })
+      // Another version where the system keeps tmux, which cannot talk to the daemon's server: the managed one is used.
+      const other = join(tmux.root, 'other-tmux')
+      writeFileSync(other, '#!/bin/sh\necho "protocol version mismatch (client 7, server 8)" >&2\nexit 1\n', { mode: 0o755 })
+      expect(processProbe(tmux.env, 'darwin', { runtimeDir: runtime, systemTmux: [other] }).panes(server)).toContainEqual({ pane, pid })
+      // No managed tmux: the system's is used, and one that cannot read the server reads as nothing.
+      const none = join(tmux.root, 'no-runtime')
+      expect(processProbe(tmux.env, 'darwin', { runtimeDir: none, systemTmux: [resolveBinaryOnPath('tmux')!] }).panes(server)).toContainEqual({ pane, pid })
+      expect(processProbe(tmux.env, 'darwin', { runtimeDir: none, systemTmux: [other] }).panes(server)).toBeNull()
+      // A record naming a tmux outside the runtime folder is not trusted.
+      writeFileSync(join(runtime, 'current-tmux'), `${other}\n`)
+      expect(processProbe(tmux.env, 'darwin', { runtimeDir: runtime, systemTmux: [] }).panes(server)).toBeNull()
+    } finally { await tmux.close() }
+  }, 30_000)
 
   it('finds the pane a command runs in, whatever its environment says, and refuses when it cannot be proven', async () => {
     const tmux = await isolatedTmux()

@@ -10,13 +10,15 @@
  * It fails closed (security review 2's late finding): a command that may run in a pane but cannot prove which one, with TMUX
  * pointing at a socket that does not exist, a fake tmux first on PATH, or a double fork with TMUX still set, went on as a
  * person's terminal. Now ps unreadable, a tmux server among its parents, or TMUX or TMUX_PANE set, with no pane proven, is a
- * refusal; ps and tmux are run from where the system keeps them, never from PATH. What it cannot see is a command that
+ * refusal; ps and tmux are run from where the system (or Harness's own runtime) keeps them, never from PATH. What it cannot see is a command that
  * detached itself from its pane on purpose and cleared TMUX and TMUX_PANE: it reads as a person's terminal (the PR names it).
  * Windows has no tmux to check against, and keeps TMUX_PANE as it was.
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, readlinkSync } from 'node:fs'
-import { basename } from 'node:path'
+import { userInfo } from 'node:os'
+import { basename, join } from 'node:path'
+import { managedTmuxPath } from '../lib/tmuxOnPath.js'
 
 export interface Process { pid: number; command: string }
 
@@ -53,13 +55,22 @@ const firstOf = (paths: string[]): string | undefined => paths.find(path => exis
 /** Where systems keep tmux: Homebrew on Apple silicon and Intel, then the system's own. Never PATH, which a command sets. */
 const TMUX_PATHS = ['/opt/homebrew/bin/tmux', '/usr/local/bin/tmux', '/usr/bin/tmux', '/bin/tmux', '/run/current-system/sw/bin/tmux']
 
-/** tmux and ps as the system has them, with [env]'s tmux socket: steered elsewhere, that server's panes are not its parents. */
-export const processProbe = (env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): PaneProbe => ({
+/** This account's Harness runtime folder, from the user database rather than HOME or ADAPTER_RUNTIME_DIR, which a command sets. */
+const accountRuntimeDir = (): string => join(userInfo().homedir, '.harness', 'runtime')
+
+/**
+ * tmux and ps as the system has them, with [env]'s tmux socket: steered elsewhere, that server's panes are not its parents.
+ * tmux is the one the daemon runs (lib/tmuxOnPath.ts): Linux names the server's own executable; otherwise Harness's own
+ * build, which install.sh lays down on a Mac without Homebrew's and in Team accounts (re-check 1 of #2093: missing it there
+ * refused every agent's Swarm command), and only then where systems keep it. A tmux of another version cannot read the
+ * daemon's server, so the daemon's own comes first.
+ */
+export const processProbe = (env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform,
+  options: { runtimeDir?: string; systemTmux?: string[] } = {}): PaneProbe => ({
   panes: server => {
-    // Linux names the server's own executable; macOS gives no path for it.
     let binary: string | undefined
     if (platform === 'linux' && server.pid > 0) { try { binary = readlinkSync(`/proc/${server.pid}/exe`) } catch { /* below */ } }
-    binary ??= firstOf(TMUX_PATHS)
+    binary ??= managedTmuxPath(options.runtimeDir ?? accountRuntimeDir()) ?? firstOf(options.systemTmux ?? TMUX_PATHS)
     const out = binary ? read(binary, ['list-panes', '-a', '-F', '#{pane_id} #{pane_pid}'], env) : null
     if (out === null) return null
     return out.split('\n').map(line => line.trim().split(' ')).filter(([pane, pid]) => /^%\d+$/.test(pane ?? '') && /^\d+$/.test(pid ?? ''))

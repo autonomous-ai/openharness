@@ -63,3 +63,12 @@ it('fails closed on Windows while this computer runs a Buddy, for an agent\'s sh
   }
   expect(await buddyRefusal({ ...daemon(swarm(false, true)).deps, env: {} }, 'win32')).toBeNull()
 })
+
+// Re-check 1 of #2093 (minor 7): with the Swarm on, an error on the harness's own question read as "no Buddy".
+it('refuses when the Swarm is on but cannot answer for this harness', async () => {
+  for (const failed of [{ error: 'SERVICE_FAILED', service: 'superTabs' }, { error: 'SERVICE_UNAVAILABLE', retryable: true }, { ok: true }]) {
+    const d = daemon(payload => payload.harnessId === undefined ? { ok: true, buddiesHere: false } : failed)
+    expect(await buddyRefusal(d.deps, 'darwin'))
+      .toBe('Harness could not confirm whether this harness is a Buddy just now, so it did not run this. Try again in a moment.')
+  }
+})
