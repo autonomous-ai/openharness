@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
@@ -12,10 +14,10 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// The person's own Buddy chat on the phone (#2090; Desktop's Buddy chat,
-/// `buddies.dart`): named after their Buddy, with what it runs on under the
-/// header, the PM's private lines read as "River (PM) → you", every question
-/// the PM asked them in the project, Start your Buddy while none runs, and
-/// Remove Buddy in its ⋮.
+/// `buddies.dart`): named after their Buddy, its messages right under the
+/// header (Tony, 10-29), the PM's private lines read as "River (PM) → you",
+/// every question the PM asked them in the project, Start your Buddy while
+/// none runs, and Remove Buddy in its ⋮.
 void main() {
   const chat = 'buddy-me';
   const messages = '/api/super-tabs/$tab/conversations/$chat/messages';
@@ -72,11 +74,11 @@ void main() {
   };
 
   /// One Swarm where the person has their Buddy chat in Mobile, reading
-  /// [page]; [buddy] runs in it, or none. [after] is what the Swarm reads
-  /// next, as a start or a removal changes it.
+  /// [page]; [buddy] runs in it, or none, beside the [others] agents.
   FakeSwarm backend({
     List<Map<String, dynamic>> page = const [],
     Map<String, dynamic>? buddy,
+    List<Map<String, dynamic>> others = const [],
     List<Map<String, dynamic>> machines = const [],
     List<Map<String, dynamic>> starts = const [],
     List<Map<String, dynamic>> decisions = const [],
@@ -103,6 +105,7 @@ void main() {
         agents: [
           agent('agent-lead', name: 'Lead', displayName: 'River'),
           ?buddy,
+          ...others,
         ],
         machines: machines,
         starts: starts,
@@ -126,7 +129,7 @@ void main() {
     return fake;
   }
 
-  Future<void> pump(WidgetTester tester, FakeSwarm fake) async {
+  Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -147,6 +150,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    return host;
+  }
+
+  /// The Swarm read again, as its next poll would.
+  Future<void> readAgain(WidgetTester tester, SwarmHost host) async {
+    unawaited(host.session!.inbox.reader(tab)!.refresh());
+    await tester.pumpAndSettle();
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
@@ -163,13 +173,15 @@ void main() {
       };
 
   group('with its Buddy running', () {
-    testWidgets('is named after the Buddy, under its project, and says what '
-        'it runs on and that only the person reads it', (tester) async {
+    testWidgets('is named after the Buddy, under its project, and its '
+        'messages start right under that, with no line of what it runs on '
+        '(Tony, 10-29)', (tester) async {
       await pump(
         tester,
         backend(
           buddy: wren(),
           machines: [machine('mac-1', 'Tonys-MacBook-Pro.local')],
+          page: [message('m1', 1, author: 'agent-wren')],
         ),
       );
 
@@ -179,10 +191,16 @@ void main() {
         reason: 'never Chat with PM (#2090)',
       );
       expect(find.text('#Mobile'), findsOneWidget);
+      expect(key('swarm-buddy-where'), findsNothing);
+      expect(key('swarm-buddy-bar'), findsNothing);
+      expect(find.textContaining('Tonys-MacBook-Pro'), findsNothing);
+      expect(find.textContaining('only you can read'), findsNothing);
       expect(
-        tester.widget<Text>(key('swarm-buddy-where')).data,
-        'Claude on Tonys-MacBook-Pro · only you can read this chat',
+        tester.getRect(key('swarm-messages')).top,
+        tester.getRect(key('swarm-chat-header')).bottom,
+        reason: 'nothing between the header and the messages',
       );
+      expect(key('swarm-message-m1'), findsOneWidget);
       expect(hint(tester), 'Message Wren');
       expect(key('swarm-buddy-start'), findsNothing);
     });
@@ -201,6 +219,85 @@ void main() {
         tester.widget<Text>(key('swarm-buddy-where')).data,
         'Claude on Dee Studio · its owner can see its terminal',
         reason: 'a person the Swarm does not list goes unnamed',
+      );
+    });
+
+    testWidgets("the person's Buddy in another project, on someone else's "
+        'machine, says nothing in this chat', (tester) async {
+      await pump(
+        tester,
+        backend(
+          buddy: wren(),
+          others: [
+            {
+              ...buddyData(
+                'agent-orion',
+                displayName: 'Orion',
+                machineId: 'mac-dee',
+              ),
+              'projectId': 'project-2',
+              'machineOwnerId': 'person-dee',
+            },
+          ],
+          machines: [
+            machine('mac-1', 'Tonys-MacBook-Pro'),
+            machine('mac-dee', 'Dee Studio', owner: 'person-dee'),
+          ],
+        ),
+      );
+
+      expect(tester.widget<Text>(key('swarm-title')).data, 'Wren');
+      expect(key('swarm-buddy-bar'), findsNothing);
+      expect(find.textContaining('Dee Studio'), findsNothing);
+      expect(find.textContaining('can see its terminal'), findsNothing);
+    });
+
+    testWidgets('access revoked while it is open: the line naming the '
+        'machine and who can see it goes, and nothing offers a start', (
+      tester,
+    ) async {
+      final fake = backend(
+        buddy: {...wren(), 'machineOwnerId': 'person-dee'},
+        machines: [machine('mac-1', 'Dee Studio', owner: 'person-dee')],
+      );
+      final host = await pump(tester, fake);
+      expect(key('swarm-buddy-where'), findsOneWidget);
+
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'You cannot read this Swarm.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      await readAgain(tester, host);
+
+      expect(key('swarm-buddy-bar'), findsNothing);
+      expect(find.textContaining('Dee Studio'), findsNothing);
+      expect(find.textContaining('can see its terminal'), findsNothing);
+      expect(key('swarm-buddy-start'), findsNothing);
+      expect(key('swarm-buddy-menu'), findsNothing);
+    });
+
+    testWidgets('a read that fails puts nothing under the header: no line, '
+        'no Loading, the messages stay', (tester) async {
+      final fake = backend(
+        buddy: wren(),
+        machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
+        page: [message('m1', 1, author: 'agent-wren')],
+      );
+      final host = await pump(tester, fake);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+          throw const SuperTabFailure('UNAVAILABLE', 'Down', statusCode: 503);
+      await readAgain(tester, host);
+
+      expect(key('swarm-buddy-bar'), findsNothing);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      expect(key('swarm-message-m1'), findsOneWidget);
+      expect(
+        tester.getRect(key('swarm-messages')).top,
+        tester.getRect(key('swarm-chat-header')).bottom,
       );
     });
 
@@ -332,6 +429,11 @@ void main() {
       await pump(tester, fake);
 
       expect(find.text('Wren is offline. Your chat stays.'), findsOneWidget);
+      expect(
+        find.textContaining('Tonys-MacBook-Pro'),
+        findsNothing,
+        reason: 'on its own machine, only that it is offline',
+      );
       expect(
         find.descendant(
           of: key('swarm-buddy-start-again'),
