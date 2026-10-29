@@ -63,6 +63,10 @@ class SuperTabFixtureConnection extends WsConn {
   /// The most agents preparation says this machine may run; null for a Harness
   /// from before setup reported it.
   int? maxAvailableAgents = 16;
+
+  /// What this Mac's daemon remembers of its Harness Team account setup
+  /// (`teamSetupStatus`); null answers as a daemon too old to say.
+  Map<String, dynamic>? teamSetup;
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
@@ -178,6 +182,10 @@ class SuperTabFixtureConnection extends WsConn {
         throw backendFailure!;
       }
       if (payload['action'] == 'wake') return {'ok': true};
+      if (payload['action'] == 'teamSetupStatus') {
+        if (teamSetup case final setup?) return {'ok': true, ...setup};
+        throw const SuperTabFailure('INVALID_REQUEST', 'Unknown action.');
+      }
       if (payload['action'] == 'prepareContribution') {
         if (prepared.add(payload['operationId']) || keepPreparing) {
           return {'ok': true, 'state': 'preparing'};
