@@ -181,8 +181,6 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
     grid.AppTheme.watch(context);
     final projects = buddyProjects(c);
     final machines = _machines;
-    final projectName =
-        projects.where((p) => p.id == _project).firstOrNull?.name ?? '';
     Widget label(String text) => SizedBox(
       width: _labelWidth,
       child: Text(
@@ -198,14 +196,8 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
+            // No description (Dee, 10-29: fewer words); the fields say it.
             children: [
-              Text(
-                'A private agent to think things through with. It runs on '
-                'your own machine, reads #$projectName and your chat with '
-                'it, and posts to the PM only when you ask.',
-                style: DesktopChrome.text(),
-              ),
-              const SizedBox(height: 16),
               Row(
                 children: [
                   label('Project'),

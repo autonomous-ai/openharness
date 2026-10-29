@@ -592,6 +592,8 @@ void main() {
         findsOneWidget,
       );
       expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
+      // No description: the fields say it (Dee, 10-29: fewer words).
+      expect(find.textContaining('think things through'), findsNothing);
       await tester.tap(dialogMachine);
       await tester.pumpAndSettle();
       expect(find.text(kBuddyOwnMachines), findsOneWidget);
