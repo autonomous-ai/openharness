@@ -14,9 +14,10 @@ import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
+import 'leaderboard_fixture.dart';
 import 'swarm_fixture.dart';
 
-/// Set to a folder to write the phone leaderboard's screenshots there, light
+/// Set to a folder to write the phone leaderboard's screenshot there, light
 /// and dark, over a scripted backend: never a real Swarm.
 final shots = Platform.environment['SWARM_LEADERBOARD_SHOTS'];
 
@@ -33,6 +34,19 @@ void main() {
     for (final family in ['.AppleSystemUIFont', 'Roboto']) {
       await (FontLoader(family)..addFont(Future.value(sf))).load();
     }
+    // The title's terminal face, and the crown: the test engine reaches no
+    // system font, so each is loaded under a name the app already asks for
+    // (the mono face, and the last of the sans fallbacks for the emoji).
+    final mono = ByteData.sublistView(
+      await File('/System/Library/Fonts/SFNSMono.ttf').readAsBytes(),
+    );
+    await (FontLoader(
+      '.AppleSystemUIFontMonospaced',
+    )..addFont(Future.value(mono))).load();
+    final emoji = ByteData.sublistView(
+      await File('/System/Library/Fonts/Apple Color Emoji.ttc').readAsBytes(),
+    );
+    await (FontLoader('Arial')..addFont(Future.value(emoji))).load();
     final manifest =
         jsonDecode(await rootBundle.loadString('FontManifest.json')) as List;
     for (final entry in manifest.cast<Map<String, dynamic>>()) {
@@ -53,7 +67,15 @@ void main() {
       'next': null,
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
-      ...firstLoad(),
+      ...firstLoad(
+        machines: [
+          {
+            'machineId': 'mac-1',
+            'name': 'Mac Studio.local',
+            'contributorId': me,
+          },
+        ],
+      ),
       'members': [
         part(me, 1, person(me)),
         part('diego', 1, person('diego', role: 'collaborator')),
@@ -63,35 +85,100 @@ void main() {
       ],
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
-    fake.routes[path] = (_) => leaderboardData(
-      week: monday,
-      people: [
-        {
-          ...scoreData(
-            'diego',
-            points: 28,
-            rank: 1,
-            shipped: 8,
-            unblocked: 1,
-            lentMs: 40 * 3600000,
-          ),
-          'displayName': 'Diego',
-          'prevWeekPoints': 20,
-        },
-        {
-          ...scoreData('ken', points: 21, rank: 2, shipped: 3, unblocked: 4),
-          'displayName': 'Ken',
-          'prevWeekPoints': 25,
-        },
-        {
-          ...scoreData(me, points: 6, rank: 3, unblocked: 2),
-          'displayName': 'Dee',
-          'prevWeekPoints': 6,
-        },
-        scoreData('tony', points: 2, rank: 4, shipped: 1),
-        scoreData('maximilian', points: 0, rank: 5),
-      ],
-    );
+    fake.routes[path] = (_) =>
+        leaderboardData(
+            week: monday,
+            people: [
+              {
+                ...scoreData(
+                  'diego',
+                  points: 28,
+                  rank: 1,
+                  shipped: 8,
+                  unblocked: 1,
+                  lentMs: 40 * 3600000,
+                ),
+                'displayName': 'Diego',
+              },
+              {
+                ...scoreData(
+                  'ken',
+                  points: 21,
+                  rank: 2,
+                  shipped: 3,
+                  unblocked: 4,
+                ),
+                'displayName': 'Ken',
+              },
+              {
+                ...scoreData(me, points: 6, rank: 3, unblocked: 2),
+                'displayName': 'Dee',
+              },
+              scoreData('tony', points: 2, rank: 4, shipped: 1),
+              scoreData('maximilian', points: 0, rank: 5),
+            ],
+          )
+          ..['agents'] = [
+            agentScoreData(
+              'agent-lead',
+              displayName: 'River',
+              points: 36,
+              rank: 1,
+              shipped: 12,
+            ),
+            agentScoreData(
+              'buddy-ken',
+              displayName: 'Aria',
+              kind: 'buddy',
+              personId: 'ken',
+              points: 12,
+              rank: 2,
+              shipped: 4,
+            ),
+            agentScoreData(
+              'buddy-old',
+              displayName: 'Former Buddy',
+              kind: 'buddy',
+              points: 0,
+              rank: 3,
+            ),
+          ]
+          ..['byModel'] = [
+            modelScoreData(
+              'claude',
+              model: 'claude-opus-5-5',
+              effort: 'high',
+              reviewed: 8,
+              passed: 7,
+            ),
+            modelScoreData(
+              'claude',
+              model: 'claude-opus-5-5',
+              effort: 'xhigh',
+              reviewed: 4,
+              passed: 4,
+            ),
+            modelScoreData(
+              'codex',
+              model: 'gpt-5.6-sol',
+              effort: 'xhigh',
+              reviewed: 16,
+              passed: 13,
+            ),
+            modelScoreData(
+              'claude',
+              model: 'claude-sonnet-5-5',
+              reviewed: 10,
+              passed: 7,
+            ),
+            // Nothing reviewed this week: not listed.
+            modelScoreData(
+              'codex',
+              model: 'gpt-5.5',
+              effort: 'medium',
+              reviews: 5,
+            ),
+          ];
     return fake;
   }
 

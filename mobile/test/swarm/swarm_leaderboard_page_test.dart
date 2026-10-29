@@ -11,16 +11,22 @@ import 'package:harness_mobile/swarm/swarm_leaderboard.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart' show SwarmAvatar;
 
 import '../theme/sheet_shape.dart';
 import '../voice_fakes.dart';
+import 'leaderboard_fixture.dart';
 import 'swarm_fixture.dart';
 
 /// The leaderboard page over a scripted backend, built to the design system's
-/// Numbers and rankings at phone sizes: skeleton rows while it reads, the
-/// team's total as quiet text with the week picker, then each person as a row
-/// of rank, avatar, name over their non-zero numbers, change against last
-/// week and points; a week picker and a person's week in bottom sheets.
+/// Numbers and rankings at phone sizes, with the desktop's member list's
+/// rows on one screen, no tabs: Humans with the week picker, skeleton rows
+/// while it reads, then each person as a row of rank, avatar, name (number
+/// one's with the crown) over their non-zero numbers, and points, the one
+/// number; then the PM and Buddies, ranked the same way with their Team
+/// line, read only; then the models, each with only the share of its work
+/// approved at its first review; a week picker and a person's week in
+/// bottom sheets.
 void main() {
   const path = '/api/super-tabs/$tab/leaderboard?projectId=$project';
   // Wednesday 28 October 2026; this week's Monday is the 26th.
@@ -41,12 +47,62 @@ void main() {
         ..['prevWeekPoints'] = 5,
     );
     people.last['rank'] = 4;
+    // The desktop's Agents and Models for the same week
+    // (desktop/test/super_tab_leaderboard_tabs_test.dart).
+    data['agents'] = [
+      agentScoreData(
+        'agent-lead',
+        displayName: 'River',
+        points: 36,
+        rank: 1,
+        shipped: 12,
+      ),
+      agentScoreData(
+        'buddy-ken',
+        displayName: 'Aria',
+        kind: 'buddy',
+        personId: 'ken',
+        points: 12,
+        rank: 2,
+        shipped: 4,
+      ),
+    ];
+    data['byModel'] = [
+      modelScoreData(
+        'claude',
+        model: 'opus',
+        effort: 'high',
+        points: 93,
+        rank: 1,
+        shipped: 31,
+        medianAttemptMs: 47 * 60000,
+        medianRequestMs: 3 * 3600000,
+        reviewed: 34,
+        passed: 28,
+      ),
+      modelScoreData(
+        'codex',
+        model: 'gpt-5.5',
+        points: 52,
+        rank: 2,
+        shipped: 17,
+      ),
+      modelScoreData(
+        'codex',
+        model: 'gpt-5.5',
+        effort: 'medium',
+        points: 5,
+        rank: 3,
+        reviews: 5,
+      ),
+    ];
     return data;
   }
 
   /// One Swarm whose members are the viewer, diego and ken; dee scores on
-  /// the board but has left.
-  FakeSwarm backend() {
+  /// the board but has left. Its agents are the fixture's, River the PM,
+  /// unless [agents] says otherwise.
+  FakeSwarm backend({List<Map<String, dynamic>>? agents}) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -55,7 +111,16 @@ void main() {
       'next': null,
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
-      ...firstLoad(),
+      ...firstLoad(
+        agents: agents,
+        machines: [
+          {
+            'machineId': 'mac-1',
+            'name': 'Mac Studio.local',
+            'contributorId': me,
+          },
+        ],
+      ),
       'members': [
         part(me, 1, person(me)),
         part('diego', 1, {
@@ -136,26 +201,22 @@ void main() {
 
     expect(key('swarm-leaderboard-loading'), findsNothing);
     expect(find.text('Leaderboard'), findsOneWidget);
-    // The team's total leads, as quiet text, with the week picker beside it.
-    const team = 'swarm-leaderboard-team';
-    final total = inside(
-      team,
-      find.text('19 shipped this week · 11 last week'),
-    );
-    expect(total, findsOneWidget);
-    expect(tester.widget<Text>(total).style!.fontSize, AppType.captionSize);
-    expect(tester.widget<Text>(total).style!.color, AppPalette.textSecondary);
+    // Humans leads, the week picker at its right, then the rows.
     expect(
-      inside(team, inside('swarm-leaderboard-week', find.text('This week'))),
+      inside('swarm-leaderboard-heading-humans', key('swarm-leaderboard-week')),
       findsOneWidget,
     );
     expect(
-      y(tester, team),
+      inside('swarm-leaderboard-week', find.text('This week')),
+      findsOneWidget,
+    );
+    expect(
+      y(tester, 'swarm-leaderboard-week'),
       lessThan(y(tester, 'swarm-leaderboard-person-diego')),
     );
 
     const diego = 'swarm-leaderboard-person-diego';
-    expect(inside(diego, find.text('diego')), findsOneWidget);
+    expect(inside(diego, find.textContaining('diego')), findsOneWidget);
     // The face diego chose, not the initial.
     expect(inside(diego, find.text('🦉')), findsOneWidget);
     expect(inside(diego, find.text('D')), findsNothing);
@@ -163,18 +224,15 @@ void main() {
       tester.getSemantics(key(diego)),
       isSemantics(
         label:
-            'diego, place 1, 28 points, 8 shipped, 1 unblocked, '
-            '40 hours lent, up 8 from last week',
+            'diego, place 1, 28 points, number one this week, 8 shipped, '
+            '1 unblocked, 40 hours lent',
         isButton: true,
       ),
     );
     // The label says what the row shows: a number at zero is left out.
     expect(
       tester.getSemantics(key('swarm-leaderboard-person-ken')),
-      isSemantics(
-        label: 'ken, place 2, 21 points, 3 shipped, down 4 from last week',
-        isButton: true,
-      ),
+      isSemantics(label: 'ken, place 2, 21 points, 3 shipped', isButton: true),
     );
     expect(
       tester.getSemantics(key('swarm-leaderboard-person-dee')),
@@ -297,27 +355,489 @@ void main() {
     expect(style.color, AppPalette.textSecondary);
   });
 
-  testWidgets('an arrow against last week, by shape and colour, and none '
-      'when level', (tester) async {
+  testWidgets('one number per row: no change against last week, and no '
+      "team's total", (tester) async {
     await pump(tester, backend());
     await tester.pumpAndSettle();
-    Icon arrow(String id) => tester.widget<Icon>(
-      inside('swarm-leaderboard-trend-$id', find.byType(Icon)),
-    );
+    // diego moved up 8 and ken down 4 against last week: neither says so.
+    for (final id in ['diego', 'ken', me, 'dee']) {
+      final row = key('swarm-leaderboard-person-$id');
+      expect(
+        find.descendant(of: row, matching: find.byType(Icon)),
+        findsNothing,
+      );
+      expect(key('swarm-leaderboard-trend-$id'), findsNothing);
+      expect(
+        tester.getSemantics(row).label,
+        isNot(contains('last week')),
+        reason: id,
+      );
+    }
     expect(
-      inside('swarm-leaderboard-trend-diego', find.text('8')),
+      inside('swarm-leaderboard-person-diego', find.text('8')),
+      findsNothing,
+    );
+    expect(key('swarm-leaderboard-team'), findsNothing);
+    expect(find.textContaining('shipped this week'), findsNothing);
+    expect(find.textContaining('11 last week'), findsNothing);
+  });
+
+  testWidgets("number one's crown beside their name, said in words, and "
+      "nobody's at the start of a week", (tester) async {
+    final fake = backend();
+    await pump(tester, fake);
+    await tester.pumpAndSettle();
+    const crown = 'swarm-leaderboard-crown-diego';
+    expect(
+      inside('swarm-leaderboard-person-diego', key(crown)),
       findsOneWidget,
     );
-    expect(arrow('diego').color, AppPalette.online);
+    expect(inside(crown, find.text('👑')), findsOneWidget);
+    expect(find.text('👑'), findsOneWidget, reason: 'only number one');
+    // At the metadata size, so a crowned row is as tall as any other.
     expect(
-      inside('swarm-leaderboard-trend-ken', find.text('4')),
+      tester.widget<Text>(inside(crown, find.text('👑'))).style!.fontSize,
+      AppType.captionSize,
+    );
+    expect(
+      tester.getSize(key('swarm-leaderboard-person-diego')).height,
+      tester.getSize(key('swarm-leaderboard-person-ken')).height,
+    );
+
+    // Last week's number one wears it for last week.
+    await tester.tap(key('swarm-leaderboard-week'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Last week'));
+    await tester.pumpAndSettle();
+    expect(key('swarm-leaderboard-crown-ken'), findsOneWidget);
+    expect(
+      tester.getSemantics(key('swarm-leaderboard-person-ken')).label,
+      contains('number one last week'),
+    );
+
+    // Monday morning: everyone on 0, nobody has taken #1 yet.
+    fake.routes[path] = (_) => leaderboardData(
+      week: monday,
+      people: [
+        scoreData('diego', points: 0, rank: 1),
+        scoreData('ken', points: 0, rank: 1),
+      ],
+    );
+    await tester.tap(key('swarm-leaderboard-week'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('This week').last);
+    await tester.pumpAndSettle();
+    expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+    expect(find.text('👑'), findsNothing);
+  });
+
+  group('Humans, Agents and Models on one screen', () {
+    /// A phone tall enough for the whole board, so every list is built.
+    void tall(WidgetTester tester) {
+      tester.view.physicalSize = const Size(1170, 4500);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+    }
+
+    Finder row(String id) => key('swarm-leaderboard-row-$id');
+    Finder inRow(String id, Finder finder) =>
+        find.descendant(of: row(id), matching: finder);
+    Finder model(String name) => key('swarm-leaderboard-model-$name');
+    Finder inModel(String name, Finder finder) =>
+        find.descendant(of: model(name), matching: finder);
+
+    /// [id]'s line holds [parts]: what fits shown, whole parts from its
+    /// start, and all of them heard.
+    void hasLine(WidgetTester tester, String id, List<String> parts) {
+      final full = parts.join(' · ');
+      final shown = tester
+          .widget<Text>(
+            find.descendant(
+              of: key('swarm-leaderboard-line-$id'),
+              matching: find.byType(Text),
+            ),
+          )
+          .data!;
+      expect(shown, startsWith(parts.first));
+      expect(
+        shown == full || full.substring(shown.length).startsWith(' · '),
+        isTrue,
+        reason: shown,
+      );
+      expect(tester.getSemantics(row(id)).label, endsWith(parts.join(', ')));
+    }
+
+    /// Three models' first reviews this week: Opus at two efforts (11 of
+    /// 12), GPT-5.6 Sol (13 of 16), Sonnet (7 of 10), and one with nothing
+    /// reviewed.
+    Map<String, dynamic> withModels() => {
+      ...board(),
+      'byModel': [
+        modelScoreData('codex', model: 'gpt-5.6-sol', reviewed: 16, passed: 13),
+        modelScoreData(
+          'claude',
+          model: 'claude-opus-5-5',
+          effort: 'high',
+          reviewed: 8,
+          passed: 7,
+        ),
+        modelScoreData(
+          'claude',
+          model: 'claude-opus-5-5',
+          effort: 'xhigh',
+          reviewed: 4,
+          passed: 4,
+        ),
+        modelScoreData(
+          'claude',
+          model: 'claude-sonnet-5-5',
+          reviewed: 10,
+          passed: 7,
+        ),
+        modelScoreData('codex', model: 'gpt-5.5', effort: 'medium', reviews: 5),
+      ],
+    };
+
+    testWidgets('no tabs: Humans with the week picker, then Agents, then '
+        'Models, all from one read, and the week sets all three', (
+      tester,
+    ) async {
+      tall(tester);
+      final fake = backend();
+      fake.routes[path] = (_) => withModels();
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      for (final name in ['humans', 'agents', 'models']) {
+        expect(key('swarm-leaderboard-tab-$name'), findsNothing, reason: name);
+      }
+      expect(find.text('Humans'), findsOneWidget);
+      expect(find.text('Agents'), findsOneWidget);
+      expect(find.text('Models'), findsOneWidget);
+      final order = [
+        y(tester, 'swarm-leaderboard-heading-humans'),
+        y(tester, 'swarm-leaderboard-person-diego'),
+        y(tester, 'swarm-leaderboard-person-dee'),
+        y(tester, 'swarm-leaderboard-heading-agents'),
+        y(tester, 'swarm-leaderboard-row-agent-agent-lead'),
+        y(tester, 'swarm-leaderboard-row-agent-buddy-ken'),
+        y(tester, 'swarm-leaderboard-heading-models'),
+        y(tester, 'swarm-leaderboard-model-Opus 5.5'),
+      ];
+      expect(order, [...order]..sort(), reason: 'top to bottom');
+      for (final heading in ['Humans', 'Agents', 'Models']) {
+        expect(
+          tester.getSemantics(find.text(heading)),
+          isSemantics(label: heading, isHeader: true),
+        );
+      }
+      expect(fake.paths.where((p) => p.contains('/leaderboard')), [
+        path,
+      ], reason: 'one read serves all three lists');
+
+      // Last week's board has people only: no Agents or Models to show.
+      await tester.tap(key('swarm-leaderboard-week'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Last week'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-ken'), findsOneWidget);
+      expect(find.text('Agents'), findsNothing);
+      expect(find.text('Models'), findsNothing);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+    });
+
+    testWidgets('the PM and Buddies: role, the line their Team row gives, '
+        "the engine's mark and points; no crown; read only", (tester) async {
+      tall(tester);
+      await pump(tester, backend());
+      await tester.pumpAndSettle();
+      const pm = 'agent-agent-lead', buddy = 'agent-buddy-ken';
+      expect(inRow(pm, find.textContaining('River')), findsOneWidget);
+      expect(inRow(pm, find.textContaining('  PM')), findsOneWidget);
+      // What it is doing, where and on what, as the desktop's row says it.
+      hasLine(tester, pm, ['Idle', 'Mac Studio', 'Opus · high']);
+      expect(key('swarm-leaderboard-engine-$pm'), findsOneWidget);
+      expect(inRow(pm, find.text('36')), findsOneWidget);
+      expect(inRow(pm, find.text('1')), findsOneWidget, reason: 'its place');
+      // Aria, Buddy of ken, is in no Swarm read here: its name and person
+      // as the board and the members give them, and nothing more.
+      expect(inRow(buddy, find.textContaining('Aria')), findsOneWidget);
+      expect(inRow(buddy, find.textContaining('Buddy · ken')), findsOneWidget);
+      expect(key('swarm-leaderboard-line-$buddy'), findsNothing);
+      expect(key('swarm-leaderboard-engine-$buddy'), findsNothing);
+      expect(inRow(buddy, find.text('12')), findsOneWidget);
+      // What they shipped is not the line any more.
+      expect(find.textContaining('shipped', findRichText: true), findsWidgets);
+      expect(inRow(pm, find.textContaining('12 shipped')), findsNothing);
+      // The crown is the top person's alone.
+      expect(key('swarm-leaderboard-crown-$pm'), findsNothing);
+      expect(find.text('👑'), findsOneWidget);
+      expect(
+        tester.getSemantics(row(pm)),
+        isSemantics(
+          label: 'River, PM, place 1, 36 points, Idle, Mac Studio, Opus · high',
+          isButton: false,
+        ),
+      );
+      expect(
+        tester.getSemantics(row(buddy)).label,
+        'Aria, Buddy · ken, place 2, 12 points',
+      );
+      // Rank and points each hold one right-aligned column, the people's too.
+      double right(Finder finder) => tester.getTopRight(finder).dx;
+      expect(
+        right(inRow(pm, find.text('36'))),
+        right(inRow(buddy, find.text('12'))),
+      );
+      expect(
+        right(inRow(pm, find.text('36'))),
+        right(inside('swarm-leaderboard-person-diego', find.text('28'))),
+      );
+      expect(
+        right(inRow(pm, find.text('1'))),
+        right(inRow(buddy, find.text('2'))),
+      );
+      // Read only: a tap opens nothing.
+      await tester.tap(row(pm));
+      await tester.pumpAndSettle();
+      expect(find.byType(BottomSheet), findsNothing);
+    });
+
+    testWidgets("a Buddy's person is named as their own row names them; one "
+        'who has left, not at all', (tester) async {
+      tall(tester);
+      final fake = backend();
+      fake.routes[path] = (_) {
+        final data = board();
+        (data['people'] as List<Map<String, dynamic>>)[1]['displayName'] =
+            'Ken Nguyen';
+        (data['agents'] as List<Map<String, dynamic>>).add(
+          agentScoreData(
+            'buddy-dee',
+            displayName: 'Old Buddy',
+            kind: 'buddy',
+            personId: 'dee',
+            points: 0,
+            rank: 3,
+          ),
+        );
+        return data;
+      };
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(
+        inside('swarm-leaderboard-person-ken', find.text('Ken Nguyen')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSemantics(row('agent-buddy-ken')).label,
+        'Aria, Buddy · Ken Nguyen, place 2, 12 points',
+      );
+      // dee is on the board but no longer a member: the Buddy names nobody.
+      expect(
+        tester.getSemantics(row('agent-buddy-dee')).label,
+        'Old Buddy, Buddy, place 3, 0 points',
+      );
+    });
+
+    testWidgets("a Buddy of this project reads Idle or Down; an effort that "
+        'names none is left out', (tester) async {
+      tall(tester);
+      final fake = backend(
+        agents: [
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+          {
+            ...agent('buddy-ken', name: 'Aria', displayName: 'Aria'),
+            'buddyOf': {'personId': 'ken'},
+            'configuration': {
+              'engine': 'codex',
+              'model': 'gpt-5.6-sol',
+              'effort': 'auto',
+            },
+          },
+        ],
+      );
+      final host = await pump(tester, fake);
+      await tester.pumpAndSettle();
+      const buddy = 'agent-buddy-ken';
+      hasLine(tester, buddy, ['Idle', 'Mac Studio', 'GPT-5.6 Sol']);
+      expect(key('swarm-leaderboard-engine-$buddy'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'agents': [
+          part('buddy-ken', 2, {
+            ...agent('buddy-ken', name: 'Aria', displayName: 'Aria'),
+            'buddyOf': {'personId': 'ken'},
+            'downSince': '2026-10-28T01:00:00.000Z',
+          }),
+        ],
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+      hasLine(tester, buddy, ['Down', 'Mac Studio', 'Opus · high']);
+    });
+
+    testWidgets('models: the share of their work approved at its first '
+        'review, the most approved first, and nothing else', (tester) async {
+      tall(tester);
+      final fake = backend();
+      fake.routes[path] = (_) => withModels();
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(inModel('Opus 5.5', find.text('92%')), findsOneWidget);
+      expect(inModel('GPT-5.6 Sol', find.text('81%')), findsOneWidget);
+      expect(inModel('Sonnet 5.5', find.text('70%')), findsOneWidget);
+      // Nothing reviewed this week: no share, no row.
+      expect(model('GPT-5.5'), findsNothing);
+      expect(
+        y(tester, 'swarm-leaderboard-model-Opus 5.5'),
+        lessThan(y(tester, 'swarm-leaderboard-model-GPT-5.6 Sol')),
+      );
+      expect(
+        y(tester, 'swarm-leaderboard-model-GPT-5.6 Sol'),
+        lessThan(y(tester, 'swarm-leaderboard-model-Sonnet 5.5')),
+      );
+      // The name and the number alone: no place, points, effort or mark.
+      expect(
+        find.descendant(of: model('Opus 5.5'), matching: find.byType(Text)),
+        findsNWidgets(2),
+      );
+      expect(inModel('Opus 5.5', find.textContaining('high')), findsNothing);
+      expect(find.text('👑'), findsOneWidget, reason: "the top person's");
+      // A screen reader hears the counts behind the share.
+      expect(
+        tester.getSemantics(model('Opus 5.5')),
+        isSemantics(
+          label: 'Opus 5.5, 92% approved, 11 of 12 passed first review',
+        ),
+      );
+      // The name starts where the faces do; the share ends where points do.
+      final face = find.descendant(
+        of: key('swarm-leaderboard-person-diego'),
+        matching: find.byType(SwarmAvatar),
+      );
+      expect(
+        tester.getTopLeft(inModel('Opus 5.5', find.text('Opus 5.5'))).dx,
+        tester.getTopLeft(face).dx,
+      );
+      expect(
+        tester.getTopRight(inModel('Opus 5.5', find.text('92%'))).dx,
+        tester
+            .getTopRight(
+              inside('swarm-leaderboard-person-diego', find.text('28')),
+            )
+            .dx,
+      );
+    });
+
+    testWidgets('no agent and no model reviewed: no Agents or Models, and '
+        'the people as ever', (tester) async {
+      tall(tester);
+      final fake = backend();
+      fake.routes[path] = (_) => {
+        ...board(),
+        'agents': <Object>[],
+        'byModel': [modelScoreData('codex', model: 'gpt-5.5', shipped: 3)],
+      };
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      expect(find.text('Agents'), findsNothing);
+      expect(find.text('Models'), findsNothing);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+    });
+
+    testWidgets("an agent id reused in another project wears none of that "
+        "agent's face, line or engine", (tester) async {
+      tall(tester);
+      final owl = {'kind': 'preset', 'key': 'owl'};
+      final fake = backend(
+        agents: [
+          {
+            ...agent('agent-lead', name: 'Lead', displayName: 'River'),
+            'avatar': owl,
+          },
+          // The same terminal added again in another project: the backend
+          // names the one this board credits "Former Buddy" and gives no
+          // person.
+          {
+            ...agent('agent-moved', name: 'Moved', displayName: 'Sol'),
+            'projectId': 'project-2',
+            'avatar': {'kind': 'preset', 'key': 'fox'},
+          },
+        ],
+      );
+      fake.routes[path] = (_) => {
+        ...board(),
+        'agents': [
+          agentScoreData(
+            'agent-lead',
+            displayName: 'River',
+            points: 36,
+            rank: 1,
+            shipped: 12,
+          ),
+          agentScoreData(
+            'agent-moved',
+            displayName: 'Former Buddy',
+            kind: 'buddy',
+            points: 3,
+            rank: 2,
+            shipped: 1,
+          ),
+        ],
+      };
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(inRow('agent-agent-lead', find.text('🦉')), findsOneWidget);
+      const moved = 'agent-agent-moved';
+      expect(inRow(moved, find.textContaining('Former Buddy')), findsOneWidget);
+      expect(inRow(moved, find.text('🦊')), findsNothing, reason: 'its face');
+      expect(inRow(moved, find.textContaining('Sol')), findsNothing);
+      expect(key('swarm-leaderboard-line-$moved'), findsNothing);
+      expect(key('swarm-leaderboard-engine-$moved'), findsNothing);
+      // No person given: no one named as its owner.
+      expect(
+        tester.getSemantics(row(moved)).label,
+        'Former Buddy, Buddy, place 2, 3 points',
+      );
+    });
+  });
+
+  testWidgets("a person's status beside their name while it lasts", (
+    tester,
+  ) async {
+    final fake = backend();
+    fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+      ...firstLoad(),
+      'members': [
+        part(me, 1, person(me)),
+        part('diego', 1, {
+          ...person('diego', role: 'collaborator'),
+          'status': {'text': 'Coffee break', 'emoji': '☕'},
+        }),
+        part('ken', 1, {
+          ...person('ken', role: 'collaborator'),
+          'status': {'text': 'At lunch', 'until': '2026-10-01T00:00:00.000Z'},
+        }),
+      ],
+    };
+    await pump(tester, fake);
+    await tester.pumpAndSettle();
+    const diego = 'swarm-leaderboard-person-diego';
+    expect(
+      inside(diego, find.textContaining('Coffee break', findRichText: true)),
       findsOneWidget,
     );
-    expect(arrow('ken').icon, isNot(arrow('diego').icon));
-    final context = tester.element(key('swarm-leaderboard-trend-ken'));
-    expect(arrow('ken').color, Theme.of(context).colorScheme.error);
-    expect(key('swarm-leaderboard-trend-$me'), findsNothing);
-    expect(key('swarm-leaderboard-trend-dee'), findsNothing);
+    expect(
+      tester.getSemantics(key(diego)).label,
+      startsWith(
+        'diego, place 1, 28 points, number one this week, '
+        'Coffee break, 8 shipped',
+      ),
+    );
+    // Over: not shown.
+    expect(find.textContaining('At lunch', findRichText: true), findsNothing);
   });
 
   testWidgets("the viewer's own row has the selected fill, no other", (
@@ -363,15 +883,17 @@ void main() {
     expect(ink, paints..rrect(color: focus));
   });
 
-  testWidgets('no cups, medals, sparkles or emoji of its own', (tester) async {
+  testWidgets("no cups, medals or sparkles: number one's crown is its one "
+      'mark', (tester) async {
     await pump(tester, backend());
     await tester.pump();
     await tester.pump();
-    for (final mark in ['🥇', '🥈', '🥉', '🚀', '✨']) {
+    for (final mark in ['🥇', '🥈', '🥉', '🏆', '🚀', '✨']) {
       expect(find.textContaining(mark), findsNothing, reason: mark);
     }
     expect(key('swarm-leaderboard-sparkle'), findsNothing);
     await tester.pumpAndSettle();
+    expect(find.text('👑'), findsOneWidget);
   });
 
   testWidgets('the week picker shows another week', (tester) async {
@@ -396,11 +918,6 @@ void main() {
     expect(fake.paths.last, '$path&week=$lastWeek');
     expect(
       inside('swarm-leaderboard-week', find.text('Last week')),
-      findsOneWidget,
-    );
-    const team = 'swarm-leaderboard-team';
-    expect(
-      inside(team, find.text('11 shipped last week · 11 the week before')),
       findsOneWidget,
     );
     expect(key('swarm-leaderboard-person-diego'), findsNothing);
@@ -726,19 +1243,12 @@ void main() {
         findsNothing,
         reason: 'the old account\'s board is gone at once',
       );
-      expect(find.textContaining('shipped this week'), findsNothing);
+      expect(key('swarm-leaderboard-person-ken'), findsNothing);
 
       await tester.pumpAndSettle();
       expect(key('swarm-leaderboard-person-diego'), findsNothing);
       expect(
         inside('swarm-leaderboard-points-ken', find.text('9')),
-        findsOneWidget,
-      );
-      expect(
-        inside(
-          'swarm-leaderboard-team',
-          find.text('2 shipped this week · 11 last week'),
-        ),
         findsOneWidget,
       );
       expect(
@@ -762,7 +1272,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(key('swarm-leaderboard-person-diego'), findsNothing);
-      expect(key('swarm-leaderboard-team'), findsNothing);
+      expect(key('swarm-leaderboard-tab-humans'), findsNothing);
       expect(key('swarm-leaderboard-loading'), findsNothing);
 
       await tester.pump(const Duration(minutes: 11));

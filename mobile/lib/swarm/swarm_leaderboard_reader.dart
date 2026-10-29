@@ -33,28 +33,20 @@ String? _text(Object? value) =>
     value is String && value.isNotEmpty ? value : null;
 
 /// One project's week as the leaderboard read answers it
-/// (`backend/src/superTabs/leaderboard/contract.ts`): what it shipped, each
-/// person who reads the project with their points, most first, and its PM
-/// and Buddies, and the models its workers ran on, ranked the same way. The
+/// (`backend/src/superTabs/leaderboard/contract.ts`): each person who reads
+/// the project with their points, most first, and its PM and Buddies, and
+/// the models its workers ran on, ranked the same way. The
 /// desktop's `SuperTabLeaderboard` (`desktop/lib/super_tabs/leaderboard`),
 /// kept to what the phone shows.
 class SwarmLeaderboard {
   SwarmLeaderboard.fromJson(Map<String, dynamic> json)
     : week = _int(json['week']),
-      shipped = _int(_map(_map(json['goal'])['thisWeek'])['shipped']),
-      shippedBefore = _int(_map(_map(json['goal'])['lastWeek'])['shipped']),
       people = _rows(json['people'], SwarmScore.fromJson),
       agents = _rows(json['agents'], SwarmAgentScore.fromJson),
       byModel = _rows(json['byModel'], SwarmModelScore.fromJson);
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
-
-  /// What the project shipped in the week.
-  final int shipped;
-
-  /// What it shipped the week before.
-  final int shippedBefore;
 
   /// Most points first.
   final List<SwarmScore> people;
@@ -154,8 +146,7 @@ class SwarmScore {
       displayName = switch (json['displayName']) {
         final String name when name.isNotEmpty => name,
         _ => null,
-      },
-      prevWeekPoints = _optional(json['prevWeekPoints']);
+      };
 
   final String personId;
 
@@ -171,9 +162,6 @@ class SwarmScore {
 
   /// The profile name; null from a server before names.
   final String? displayName;
-
-  /// The same scoring for the week before; null from a server before it.
-  final int? prevWeekPoints;
 }
 
 /// "6 min" under an hour, then hours with one decimal unless whole: "3 h",
@@ -200,64 +188,56 @@ List<String> swarmNumbers(SwarmScore score) {
   ];
 }
 
-/// "up 8 from last week", "down 4 …"; null when level, or from a server
-/// without last week (the desktop's `leaderboardTrend`).
-String? swarmTrend(SwarmScore score) {
-  final before = score.prevWeekPoints;
-  if (before == null || before == score.points) return null;
-  final change = score.points - before;
-  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
-}
-
-/// Whether a row wears the crown: first on the board, with points. At the
-/// start of a week everyone ties at 0, and no one has taken #1 yet. People
-/// and agents wear it; models never do (the desktop's, after #2128).
+/// Whether a person's row wears the crown: first on the board, with points.
+/// At the start of a week everyone ties at 0, and no one has taken #1 yet.
+/// Only people wear it; agents and models do not (the desktop's member list,
+/// 10-29).
 bool swarmCrowned({required int rank, required int points}) =>
     rank == 1 && points > 0;
 
-/// "12 shipped" for the PM, "4 proposals shipped" for a Buddy; empty at
-/// zero (the desktop's `LeaderboardAgentRow`).
-List<String> swarmAgentNumbers(SwarmAgentScore score) => [
-  if (score.shipped > 0)
-    score.buddy
-        ? _plural(score.shipped, 'proposal shipped', 'proposals shipped')
-        : '${score.shipped} shipped',
-];
+/// "Opus 5.5": a model as people know it, else its engine's name.
+String swarmModelLabel(String engine, String? model) =>
+    model == null ? engineIdentity(engine).label : _modelDisplayName(model);
 
-/// A model's numbers in words, each left out at zero: "31 shipped", "82%
-/// passed first review", "47 min to ship", "5 reviews". [full] is what a
-/// screen reader hears: the counts behind the share, and the time from the
-/// request's first attempt beside the shipping attempt's (the desktop's
-/// `leaderboardModelNumbers`, whose [full] is its hover).
-List<String> swarmModelNumbers(SwarmModelScore score, {bool full = false}) {
-  final attempt = score.medianAttemptMs, request = score.medianRequestMs;
+/// One model in the Models list: the share of its work this week that passed
+/// its first review, approved without changes.
+typedef SwarmModelApproval = ({
+  String name,
+  int reviewed,
+  int passed,
+  int percent,
+});
+
+/// Each model whose work had a first review this week, by name across its
+/// efforts, the most approved first, then the most reviewed (the desktop's
+/// Models list, 10-29: the number alone). A model with nothing reviewed has
+/// no share to show, and is left out.
+List<SwarmModelApproval> swarmModelApprovals(List<SwarmModelScore> scores) {
+  final counts = <String, (int, int)>{};
+  for (final score in scores) {
+    if (score.reviewed <= 0) continue;
+    final name = swarmModelLabel(score.engine, score.model);
+    final (reviewed, passed) = counts[name] ?? (0, 0);
+    counts[name] = (reviewed + score.reviewed, passed + score.passed);
+  }
   return [
-    if (score.shipped > 0) '${score.shipped} shipped',
-    if (score.reviewed > 0)
-      full
-          ? '${score.passed} of ${score.reviewed} passed first review'
-          : '${(score.passed * 100 / score.reviewed).round()}% passed first '
-                'review',
-    if (attempt != null)
-      full
-          ? [
-              '${swarmDuration(attempt)} from the shipping attempt',
-              if (request != null) '${swarmDuration(request)} from the first',
-            ].join(', ')
-          : '${swarmDuration(attempt)} to ship',
-    if (score.reviews > 0) _plural(score.reviews, 'review'),
-  ];
+    for (final MapEntry(key: name, value: (reviewed, passed)) in counts.entries)
+      (
+        name: name,
+        reviewed: reviewed,
+        passed: passed,
+        percent: (passed.clamp(0, reviewed) * 100 / reviewed).round(),
+      ),
+  ]..sort(
+    (a, b) => switch (b.percent.compareTo(a.percent)) {
+      0 => switch (b.reviewed.compareTo(a.reviewed)) {
+        0 => a.name.compareTo(b.name),
+        final order => order,
+      },
+      final order => order,
+    },
+  );
 }
-
-/// "Opus 5.5 · high": the model as people know it, else its engine's name,
-/// then its effort (the desktop's `LeaderboardModelRow`).
-String swarmModelName(SwarmModelScore score) => [
-  switch (score.model) {
-    final String model => _modelDisplayName(model),
-    null => engineIdentity(score.engine).label,
-  },
-  ?score.effort,
-].join(' · ');
 
 /// A model as people know it: "Opus 5.5" for `claude-opus-5-5`, "Opus" for
 /// the `opus` alias, "GPT-5.6 Sol" for `gpt-5.6-sol`. Other names stay

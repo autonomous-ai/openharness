@@ -15,8 +15,6 @@ void main() {
       final read = SwarmLeaderboard.fromJson(leaderboardData());
 
       expect(read.week, 1792454400000);
-      expect(read.shipped, 19);
-      expect(read.shippedBefore, 11);
       expect(
         [for (final p in read.people) p.personId],
         ['diego', 'ken', 'dee'],
@@ -46,8 +44,6 @@ void main() {
         ],
       });
 
-      expect(read.shipped, 0);
-      expect(read.shippedBefore, 0);
       final kim = read.people.single;
       expect(kim.points, 0);
       expect(kim.medal, isNull);
@@ -218,103 +214,107 @@ void main() {
       );
     });
 
-    test('the change against last week, none when level or unknown', () {
-      SwarmScore score(int points, int? before) => SwarmScore.fromJson({
-        ...scoreData('a', points: points, rank: 1),
-        'prevWeekPoints': ?before,
-      });
-      expect(swarmTrend(score(28, 20)), 'up 8 from last week');
-      expect(swarmTrend(score(21, 25)), 'down 4 from last week');
-      expect(swarmTrend(score(5, 5)), isNull);
-      expect(swarmTrend(score(5, null)), isNull);
-    });
-
-    // The desktop's words for the same data
-    // (desktop/test/super_tab_leaderboard_tabs_test.dart).
-    test("a model's numbers in words, a share as a whole percent, zeros "
-        'left out', () {
-      SwarmModelScore score(Map<String, dynamic> extra) =>
-          SwarmModelScore.fromJson({
-            'engine': 'claude',
-            'model': 'opus',
-            ...extra,
-          });
-      final opus = score({
-        'shipped': {
-          'count': 31,
-          'medianAttemptMs': 47 * 60000,
-          'medianRequestMs': 3 * 3600000,
-        },
-        'firstReview': {'reviewed': 34, 'passed': 28},
-      });
-      expect(swarmModelNumbers(opus), [
-        '31 shipped',
-        '82% passed first review',
-        '47 min to ship',
-      ]);
-      expect(swarmModelNumbers(opus, full: true), [
-        '31 shipped',
-        '28 of 34 passed first review',
-        '47 min from the shipping attempt, 3 h from the first',
-      ]);
-      // Only the shipping attempt's time known: said alone in full too.
+    test('a model by the name people know it, else its engine', () {
+      expect(swarmModelLabel('claude', 'opus'), 'Opus');
+      expect(swarmModelLabel('claude', 'claude-opus-5-5'), 'Opus 5.5');
       expect(
-        swarmModelNumbers(
-          score({
-            'shipped': {'count': 1, 'medianAttemptMs': 6 * 60000},
-          }),
-          full: true,
-        ),
-        ['1 shipped', '6 min from the shipping attempt'],
+        swarmModelLabel('claude', 'claude-sonnet-5-5[1m]'),
+        'Sonnet 5.5[1m]',
       );
-      expect(swarmModelNumbers(score({'reviews': 1})), ['1 review']);
-      expect(swarmModelNumbers(score({'reviews': 5})), ['5 reviews']);
-      expect(swarmModelNumbers(score({})), isEmpty);
-    });
-
-    test('a model by the name people know it, then its effort', () {
-      String name(String engine, String? model, [String? effort]) =>
-          swarmModelName(
-            SwarmModelScore.fromJson({
-              'engine': engine,
-              'model': model,
-              'effort': effort,
-            }),
-          );
-      expect(name('claude', 'opus', 'high'), 'Opus · high');
-      expect(name('claude', 'claude-opus-5-5', 'high'), 'Opus 5.5 · high');
-      expect(name('claude', 'claude-sonnet-5-5[1m]'), 'Sonnet 5.5[1m]');
-      expect(name('codex', 'gpt-5.5'), 'GPT-5.5');
-      expect(name('codex', 'gpt-5.5', 'medium'), 'GPT-5.5 · medium');
-      expect(name('codex', 'gpt-5.6-sol', 'xhigh'), 'GPT-5.6 Sol · xhigh');
+      expect(swarmModelLabel('codex', 'gpt-5.5'), 'GPT-5.5');
+      expect(swarmModelLabel('codex', 'gpt-5.6-sol'), 'GPT-5.6 Sol');
       // Unknown and provider-qualified names stay exact.
-      expect(name('opencode', 'qwen/qwen3-coder'), 'qwen/qwen3-coder');
+      expect(
+        swarmModelLabel('opencode', 'qwen/qwen3-coder'),
+        'qwen/qwen3-coder',
+      );
       // No model reported: the engine's name.
-      expect(name('codex', null), 'Codex');
-      expect(name('claude', null, 'low'), 'Claude · low');
+      expect(swarmModelLabel('codex', null), 'Codex');
     });
 
-    test("an agent's numbers: what it shipped, a Buddy's as proposals", () {
-      List<String> numbers(String kind, int shipped) => swarmAgentNumbers(
-        SwarmAgentScore.fromJson(
-          agentScoreData(
-            'a',
-            displayName: 'A',
-            kind: kind,
-            points: shipped * 3,
-            rank: 1,
-            shipped: shipped,
-          ),
+    // The desktop's Models list (10-29): each model's share of work approved
+    // at its first review, the number alone.
+    test("models by the share of their work approved at its first review, "
+        'the most approved first', () {
+      SwarmModelScore score(
+        String engine,
+        String? model, {
+        String? effort,
+        int reviewed = 0,
+        int passed = 0,
+      }) => SwarmModelScore.fromJson(
+        modelScoreData(
+          engine,
+          model: model,
+          effort: effort,
+          reviewed: reviewed,
+          passed: passed,
         ),
       );
-      expect(numbers('pm', 12), ['12 shipped']);
-      expect(numbers('buddy', 4), ['4 proposals shipped']);
-      expect(numbers('buddy', 1), ['1 proposal shipped']);
-      expect(numbers('pm', 0), isEmpty);
-      expect(numbers('buddy', 0), isEmpty);
+      final approvals = swarmModelApprovals([
+        score('codex', 'gpt-5.6-sol', reviewed: 16, passed: 13),
+        // One model at two efforts is one row: 11 of 12.
+        score(
+          'claude',
+          'claude-opus-5-5',
+          effort: 'high',
+          reviewed: 8,
+          passed: 7,
+        ),
+        score(
+          'claude',
+          'claude-opus-5-5',
+          effort: 'xhigh',
+          reviewed: 4,
+          passed: 4,
+        ),
+        score('claude', 'claude-sonnet-5-5', reviewed: 10, passed: 7),
+        // Nothing reviewed yet: no share to show.
+        score('codex', 'gpt-5.5', effort: 'medium'),
+      ]);
+      expect(approvals, [
+        (name: 'Opus 5.5', reviewed: 12, passed: 11, percent: 92),
+        (name: 'GPT-5.6 Sol', reviewed: 16, passed: 13, percent: 81),
+        (name: 'Sonnet 5.5', reviewed: 10, passed: 7, percent: 70),
+      ]);
+      expect(swarmModelApprovals(const []), isEmpty);
     });
 
-    test('the crown: first place, and only with points', () {
+    test('an equal share puts the most reviewed first, then the name', () {
+      SwarmModelScore score(String model, int reviewed, int passed) =>
+          SwarmModelScore.fromJson(
+            modelScoreData(
+              'codex',
+              model: model,
+              reviewed: reviewed,
+              passed: passed,
+            ),
+          );
+      expect(
+        [
+          for (final a in swarmModelApprovals([
+            score('b-model', 2, 1),
+            score('a-model', 2, 1),
+            score('c-model', 4, 2),
+          ]))
+            a.name,
+        ],
+        ['c-model', 'a-model', 'b-model'],
+      );
+    });
+
+    test('a share never reads over 100%, whatever a count says', () {
+      expect(
+        swarmModelApprovals([
+          SwarmModelScore.fromJson(
+            modelScoreData('claude', model: 'opus', reviewed: 3, passed: 5),
+          ),
+        ]).single.percent,
+        100,
+      );
+    });
+
+    test("a person's crown: first place, and only with points", () {
       expect(swarmCrowned(rank: 1, points: 28), isTrue);
       expect(swarmCrowned(rank: 2, points: 21), isFalse);
       // At the start of a week everyone ties at 0: no one has taken #1 yet.
@@ -393,7 +393,7 @@ void main() {
       await shown;
 
       expect(fake.paths.last, '$path&week=$lastWeek');
-      expect(read.board!.shipped, 11);
+      expect(read.board!.week, lastWeek);
       expect(told.first, isNull);
     });
 
@@ -407,10 +407,10 @@ void main() {
       final first = read.refresh();
 
       await read.showWeek(lastWeek);
-      slow.complete(leaderboardData(shipped: 19));
+      slow.complete(leaderboardData());
       await first;
 
-      expect(read.board!.shipped, 11);
+      expect(read.board!.week, lastWeek);
     });
 
     test('a failed refresh keeps the board and says why', () async {
@@ -424,7 +424,7 @@ void main() {
 
       fail = true;
       await read.refresh();
-      expect(read.board!.shipped, 19);
+      expect(read.board!.people.first.personId, 'diego');
       expect(read.error, 'No computer answered.');
 
       fail = false;
