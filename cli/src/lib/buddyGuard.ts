@@ -89,7 +89,9 @@ const GREP_LONG = new Set(['include', 'exclude', 'exclude-dir', 'include-dir', '
 const SUPER_TAB = new Set(['status', 'messages', 'message', 'decisions', 'post', 'propose', 'help'])
 const MAY = 'A Buddy only reads, so this was refused and nobody will be asked. Read the code with Read, Grep and Glob. ' +
   'In the shell, run one plain command at a time (no pipes, redirects, ;, &&, $() or globs): git grep, log, show, diff, ' +
-  'blame or status; gh issue view or list; gh pr view, list or diff; ls, cat, rg, head, tail, wc or grep; or harness super-tab.'
+  'blame or status; gh issue view or list; gh pr view, list or diff; ls, cat, rg, head, tail, wc or grep; or harness super-tab. ' +
+  'A file your person sent you in your chat opens with Read, by the path you were given; an Artifact link they sent, with the ' +
+  'Artifact tool\'s read and that link.'
 
 // The command's words, or null when the shell could read it any other way.
 function words(command) {

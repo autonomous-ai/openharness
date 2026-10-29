@@ -1147,10 +1147,10 @@ export class SuperTabHost {
     this.core.turns.deliver(entry.harnessId, this.prompt(entry, message, attached, command, quote ?? '', result.buddyNews === true), id)
   }
 
-  /** Whether a Buddy's delivery is its own person's message in their own Buddy chat: the one place its guard lets it read
-   *  what it is sent (lib/buddyGuard.ts). Read as the Buddy now, never from the delivery alone: the server marks news from
-   *  outside its chat, and the PM's private lines to its person, another person's message, another chat, or the same agent
-   *  id on another session, Buddy or person's membership are not its person's own. */
+  /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one source of files and links its
+   *  guard lets it read (lib/buddyGuard.ts). Read as the Buddy now, never from the delivery alone. Not its person's own: news
+   *  from outside its chat (the server marks it), the PM's private lines there, another person's message, another chat, an
+   *  archived one, and its agent id on another session, as another person's Buddy, or from an earlier membership. */
   private async fromOwnPerson(entry: Entry, message: Json, buddyNews: boolean): Promise<boolean> {
     const author = object(message.author)
     if (buddyNews || author.kind !== 'person' || !identifier(author.id)) return false

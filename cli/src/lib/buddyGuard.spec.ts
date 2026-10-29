@@ -297,6 +297,9 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     const reason = JSON.parse(run.stdout).hookSpecificOutput.permissionDecisionReason
     for (const allowed of ['git grep', 'gh issue view', 'gh pr view', 'harness super-tab']) expect(reason).toContain(allowed)
     expect(reason).toContain('nobody will be asked')
+    // And how to open what its person sent it, when it tried the shell or another path (Tony, 10-30).
+    expect(reason).toContain('A file your person sent you in your chat opens with Read, by the path you were given')
+    expect(reason).toContain('an Artifact link they sent, with the Artifact tool\'s read and that link')
   })
 
   it('fails closed: a guard that cannot run blocks the call (exit 2) instead of falling back to other rules', () => {
