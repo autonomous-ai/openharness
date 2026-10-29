@@ -298,10 +298,10 @@ them their due without disturbing the work.
 
 **Two registers.** Instrument surfaces (terminals, panes, tabs, pickers,
 dialogs, the footer, Settings) stay calm: everything above applies unchanged
-and nothing there celebrates. Emoji are not icons and do not appear there.
-Team surfaces (the leaderboard, profiles and the project chat) are where people
-appear, and they may be warm: they may name a moment, carry a mark and smile in
-their words.
+and nothing there celebrates. Harness's own UI uses no emoji on instrument
+surfaces; what people and programs write shows as written. Team surfaces (the
+leaderboard, profiles and the project chat) are where people appear, and they
+may be warm: they may name a moment, carry a mark and smile in their words.
 
 **Earned, not ambient.** One real event earns one moment: a person ships,
 unblocks a teammate or takes #1. Harness notices it once, where the team
@@ -345,8 +345,10 @@ leaderboard) share four rules.
 - **Status column.** Goal: compare status down the list at a glance. Status
   marks use the shared activity vocabulary (see the
   [icon design system](icon-design-system.md#deliberate-exceptions)) and sit
-  in a fixed trailing column, last in the row; a mention's `@N` sits just
-  before it. Names and marks keep their positions as status changes.
+  in a fixed trailing column, last on rows that show status (agents,
+  conversations); a mention's `@N` sits just before it. Ranking rows have no
+  status mark and keep the points number last. Names and marks keep their
+  positions as status changes.
 - **Names.** Goal: recognize teammates the way they know each other. People
   show as usernames, by default the prefix of their email address
   (`mai@example.com` shows as `mai`); full identity stays available to
