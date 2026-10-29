@@ -16,6 +16,8 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'controller.dart';
 import 'identity.dart';
+import 'leaderboard/models_section.dart';
+import 'leaderboard/reader.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
@@ -45,6 +47,7 @@ class ProjectSidebar extends StatelessWidget {
     this.onOpenAgent,
     this.onOpenBuddyChat,
     this.readLocal,
+    this.board,
     this.now = DateTime.now,
   });
   final SuperTabController controller;
@@ -64,6 +67,10 @@ class ProjectSidebar extends StatelessWidget {
   /// Opens the reader's Buddy chat in a project, by project id; the
   /// controller's [SuperTabController.openBuddyChat] when not given.
   final ValueChanged<String>? onOpenBuddyChat;
+
+  /// The open project's week board the right pane shows, for Models; none
+  /// without it.
+  final SuperTabLeaderboardReader? board;
 
   /// Forwarded to the embedded [SuperTabMachines]; a test gives it to have
   /// the Machines group's readings taken without a real machine.
@@ -876,6 +883,14 @@ class ProjectSidebar extends StatelessWidget {
               );
             },
           ),
+          if (board case final board?) ...[
+            const SizedBox(height: 16),
+            LeaderboardModelsSection(
+              board: board,
+              projectId: snapshot?.projectFor(controller.selectedId)?.id,
+              now: now,
+            ),
+          ],
         ],
       ),
     );

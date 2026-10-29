@@ -237,6 +237,8 @@ export interface Conversation {
   ledger?: import('./leaderboard/record.js').GroupLedger
   /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
   liveness?: TaskLiveness
+  /** Its last step up from a cheaper model (stepUp.ts); absent until one. */
+  stepUp?: import('./stepUp.js').StepUp
   /** The Lead's last action on its task: an assignment, route, start or post here (commands.ts). */
   leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
 }

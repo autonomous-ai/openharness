@@ -35,15 +35,19 @@ export interface AgentSettings {
    *  gets no exception from Agent Messages (2026-10-11), so this one-way order from the starter is the person's to
    *  allow, not a side effect of starting. */
   agentsTellAgents: boolean
+  /** A program acting for the person (the lamp's `lamp-tasks`, not an agent) may give more work to an idle harness of
+   *  theirs in a pane (`harness reply`, messages/replyLocal.ts), as the person could by typing in Harness. Off by
+   *  default, and not `agents-tell-agents`, which is about agents (#1628). */
+  programsReply: boolean
 }
 
-export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false }
+export const AGENT_SETTINGS_DEFAULTS: AgentSettings = { agentsStartAgents: false, pullRequestLine: false, agentMessages: false, agentMessagesHideSummary: false, agentsTellAgents: false, programsReply: false }
 
 /** Each setting's name in `harness settings`, and its key. */
-export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary' }
+export const AGENT_SETTING_NAMES: Record<string, keyof AgentSettings> = { 'agents-start-agents': 'agentsStartAgents', 'agents-tell-agents': 'agentsTellAgents', 'pull-request-line': 'pullRequestLine', 'agent-messages': 'agentMessages', 'agent-messages-hide-summary': 'agentMessagesHideSummary', 'programs-reply': 'programsReply' }
 
 /** Each setting's account experiment, as the backend names it (lib/experimentalSettings.ts `experimentalFeatures`). */
-export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents' }
+export const AGENT_SETTING_EXPERIMENTS: Record<keyof AgentSettings, string> = { agentsStartAgents: 'agents_start_agents', pullRequestLine: 'agent_pull_request_line', agentMessages: 'agent_messages', agentMessagesHideSummary: 'agent_messages_hide_summary', agentsTellAgents: 'agents_tell_agents', programsReply: 'programs_reply' }
 
 /** The flag an agent adds to `harness settings <name> on` once the person said yes to it (agentClient/settings.ts). */
 export const PERSON_SAID_YES = '--person-said-yes'
@@ -55,6 +59,7 @@ export const AGENT_SETTING_QUESTIONS: Record<keyof AgentSettings, string> = {
   pullRequestLine: 'May a harness another agent started say so in the pull requests it opens?',
   agentMessages: 'May agents in the same tab message each other?',
   agentMessagesHideSummary: 'May Harness share a one-line summary of what your harnesses do with the people in your shared tabs?',
+  programsReply: 'May programs that act for you, like your lamp, give more work to a harness of yours that is idle, as you could by typing to it?',
 }
 
 /**
