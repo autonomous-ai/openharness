@@ -703,8 +703,10 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     const asked = await run(f.tab, { type: 'lead.start', projectId, machineId: null, engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
     expect(asked.result).toMatchObject({ waiting: true })
     expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.leadStarts).toBeUndefined()
-    // Contributed for every project, as a Mac added to a Swarm with projects is; the fixture's serves only the first.
+    // Contributed for every project, as a Mac added to a Swarm with projects is; the fixture's serves only the first. Its
+    // Builder of that first project goes, so the account can serve this project alone.
     await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
     const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
     await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
     const row = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!
@@ -719,6 +721,35 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     expect(read.state.projects!.find(p => p.id === projectId)!.lead).toMatchObject({ status: 'started', machineId: 'team-mac' })
     expect((await store.messages(owner, f.tab, home, {})).messages.map(m => m.text))
       .toEqual(expect.arrayContaining(['Waiting for a machine to start the Product Manager.', 'Product Manager started on MacBook Pro · Team.']))
+  })
+
+  // The isolated confidential run (docs/performance/2026-10-27-pm-confidential-isolated-run.test.mts), its Team machine case:
+  // a Product Manager in another person's Team account, every way of watching or driving it through the Swarm.
+  it('in another person\'s Team account: its project\'s owner only watches it, and the Mac\'s owner neither watches nor drives it', async () => {
+    const f = await fixture()
+    const created = (await run(f.tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result
+    const projectId = String(created.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    // The fixture's own Builder of the owner's first project runs there: it goes first, so the account serves one project.
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const placed = await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
+    const startId = String(placed.result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const pm = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `team-pm-${randomUUID()}`, configuration: config })).result.agentId)
+    const terminal = (user: AuthUser, command: Command) => run(f.tab, command, user).then(() => 'ok', (error: { code?: string }) => error.code)
+    expect(await terminal(owner, { type: 'agent.screen', agentId: pm, scrollback: 50 })).toBe('ok')
+    expect(await terminal(owner, { type: 'agent.input', agentId: pm, text: 'ls ~' })).toBe('TERMINAL_PRIVATE')
+    expect(await terminal(person, { type: 'agent.screen', agentId: pm, scrollback: 50 })).toBe('TERMINAL_PRIVATE')
+    expect(await terminal(person, { type: 'agent.input', agentId: pm, text: 'ls ~' })).toBe('TERMINAL_PRIVATE')
+    // Its host's roster: confidential, watched by its project's owner alone, never by the Mac's owner.
+    const row = (await rosterRows(store, team, 'team-mac')).find(r => r.tabId === f.tab && r.agent.id === pm)!
+    expect(row).toMatchObject({ confidential: true })
+    expect(row.observers.map((o: { email: string }) => o.email)).toEqual([owner.email])
+    // And no other project's work starts there while it runs.
+    await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
+      cwd: '/team/lead', worktree: true, requirements } })).rejects.toMatchObject({ code: 'TEAM_ACCOUNT_HELD' })
   })
 
   it('is refused on the teammate\'s personal Mac even while the Swarm does not yet require Team accounts', async () => {
