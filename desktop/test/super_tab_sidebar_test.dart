@@ -173,16 +173,9 @@ void main() {
       ]) {
         expect(tester.getTopLeft(label).dx, textX, reason: '$label');
       }
-      // A workgroup's dot is in the rows' right status column; a project's
-      // chevron takes that column and its dot sits just left of it.
-      expect(
-        tester.getCenter(unreadDot('offline')).dx,
-        tester.getCenter(toggle).dx,
-      );
-      expect(
-        tester.getCenter(unreadDot('lead')).dx,
-        tester.getCenter(toggle).dx - tester.getSize(toggle).width,
-      );
+      // Unread is a bold name, with no dot in either row (Dee, 2026-10-29).
+      expect(unreadDot('offline'), findsNothing);
+      expect(unreadDot('lead'), findsNothing);
       for (final row in [newProject, devices, work]) {
         final bounds = tester.getRect(row);
         expect(bounds.left, tester.getRect(project).left);

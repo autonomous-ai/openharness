@@ -161,25 +161,100 @@ void main() {
     },
   );
 
-  testWidgets('an unread project shows its dot just left of the chevron', (
+  // Unread is a bold name and nothing else (Dee, 2026-10-29): no dot beside
+  // it, so nothing in the status column to line up.
+  Finder unreadDot(Finder row) => find.descendant(
+    of: row,
+    matching: find.byWidgetPredicate(
+      (w) => w is Semantics && w.properties.label == 'Unread messages',
+    ),
+  );
+  FontWeight? weightOf(WidgetTester tester, Finder row, String text) => tester
+      .widget<RichText>(
+        find
+            .descendant(
+              of: row,
+              matching: find.byWidgetPredicate(
+                (w) => w is RichText && w.text.toPlainText() == text,
+              ),
+            )
+            .first,
+      )
+      .text
+      .style
+      ?.fontWeight;
+
+  testWidgets(
+    'an unread project and workgroup show their names in bold, with no dot',
+    (tester) async {
+      // Not "Offline editing": it waits for a person, which shows "?" there.
+      final server = humansSwarm();
+      addNumberedWorkgroups(server, 1);
+      final controller = await show(tester, server);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      final g1 = find.byKey(const ValueKey('super-group-g1'));
+      final name = tester
+          .widget<RichText>(
+            find.descendant(of: g1, matching: find.byType(RichText)).first,
+          )
+          .text
+          .toPlainText();
+      // Read: the project open (medium), the workgroup in ordinary weight.
+      expect(weightOf(tester, project, 'Pilot'), isNot(grid.AppFont.semibold));
+      expect(weightOf(tester, g1, name), grid.AppFont.regular);
+
+      server.append('New work', conversationId: 'g1');
+      await controller.select('offline');
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(weightOf(tester, project, 'Pilot'), grid.AppFont.semibold);
+      expect(weightOf(tester, g1, name), grid.AppFont.semibold);
+      expect(unreadDot(project), findsNothing);
+      expect(unreadDot(g1), findsNothing);
+      // Nothing round drawn in either row.
+      for (final row in [project, g1]) {
+        expect(
+          tester
+              .widgetList<Container>(
+                find.descendant(of: row, matching: find.byType(Container)),
+              )
+              .where(
+                (c) =>
+                    c.decoration is BoxDecoration &&
+                    (c.decoration! as BoxDecoration).shape == BoxShape.circle,
+              ),
+          isEmpty,
+        );
+      }
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('an unread Buddy row shows its name in bold, with no dot', (
     tester,
   ) async {
-    // Not "Offline editing": it waits for a person, which shows "?" there.
-    final server = humansSwarm();
-    addNumberedWorkgroups(server, 1);
-    final controller = await show(tester, server);
-    server.append('New work', conversationId: 'g1');
-    await controller.refresh();
-    await tester.pumpAndSettle();
-    final dot = find.descendant(
-      of: project,
-      matching: find.byWidgetPredicate(
-        (w) => w is Semantics && w.properties.label == 'Unread messages',
+    Future<void> row({required bool unread}) => tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: SuperTabPmChatRow(
+            key: const ValueKey('pm'),
+            agentId: null,
+            name: 'Buddy',
+            tooltip: 'Your Buddy · Pilot',
+            unread: unread,
+            onTap: () {},
+          ),
+        ),
       ),
     );
-    expect(dot, findsOneWidget);
-    expect(tester.getCenter(dot).dx, lessThan(tester.getRect(toggle).left));
-    await close(tester, controller);
+    final pm = find.byKey(const ValueKey('pm'));
+    await row(unread: false);
+    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.regular);
+    await row(unread: true);
+    expect(weightOf(tester, pm, 'Buddy'), grid.AppFont.semibold);
+    expect(unreadDot(pm), findsNothing);
   });
 
   testWidgets(
