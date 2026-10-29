@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Agent, Assignment, Conversation, SuperTabState } from './model.js'
+import { agentOnly, type Agent, type Assignment, type Conversation, type SuperTabState } from './model.js'
 import { ARCHIVE_QUIET_MS, archivable, IDLE_STOP_MS, stopIdleWorkers } from './tidy.js'
 
 const MINUTE = 60_000
@@ -32,16 +32,26 @@ const at = START + IDLE_STOP_MS
 const target = (state: SuperTabState, id = 'w') => state.agents.find(a => a.id === id)!
 
 describe('stopping idle workers', () => {
-  it('stops a Swarm-started Builder 15 minutes after its last activity, with one quiet line in its last group', () => {
+  it('stops a Swarm-started Builder 15 minutes after its last activity, with one line in its last group for the Lead', () => {
     const state = swarm()
     const rows = stopIdleWorkers(state, 'lead', at, new Set())
     expect(target(state)).toMatchObject({ workDecision: 'stop' })
     expect(target(state).releaseId).toEqual(expect.any(String))
     // Marked as the idle check's, so its host may withdraw it if its folder changed since (agent.stopRefused).
     expect(target(state).idleStop).toEqual({ previous: null })
-    expect(rows).toEqual([expect.objectContaining({ conversationId: 'g1', recipients: [], replyTo: null,
+    // Ken, 2026-10-29: the Lead's to handle, delivered to it; people do not read it (model.ts agentOnly).
+    expect(rows).toEqual([expect.objectContaining({ conversationId: 'g1', recipients: ['L'], replyTo: null,
       author: expect.objectContaining({ kind: 'agent', id: 'L' }), text: 'Rowan stopped: no work for 15 minutes.',
       source: { kind: 'idle-stop', agentId: 'w' } })])
+    expect(rows.map(row => agentOnly(row.source, row.recipients))).toEqual([true])
+  })
+
+  it('tells a Lead outside the worker\'s last group in its own chat, and hides the copy left in that group for no one', () => {
+    const state = swarm({ groups: [group({ agentIds: ['w'] })] })
+    const rows = stopIdleWorkers(state, 'lead', at, new Set())
+    expect(rows.map(row => [row.conversationId, row.recipients])).toEqual([['g1', []], ['lead', ['L']]])
+    expect(rows.map(row => agentOnly(row.source, row.recipients))).toEqual([true, true])
+    expect(rows.map(row => row.source?.agentId)).toEqual(['w', 'w'])
   })
 
   it('waits until a full 15 minutes have passed since its group last spoke', () => {
@@ -65,7 +75,7 @@ describe('stopping idle workers', () => {
 
   it('stops a worker that never got a task, saying so in the Lead conversation when it sits in no group', () => {
     const state = swarm({ groups: [] })
-    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ conversationId: 'lead' })])
+    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ conversationId: 'lead', recipients: ['L'] })])
     expect(target(state).workDecision).toBe('stop')
   })
 
