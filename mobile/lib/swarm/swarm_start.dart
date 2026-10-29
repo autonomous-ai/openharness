@@ -301,7 +301,7 @@ class SwarmIntroPage extends StatelessWidget {
   static const _ticks = [
     'See what needs you',
     'Answer in one tap',
-    'Chat with your PM',
+    'Brainstorm with your Buddy',
   ];
 
   @override
