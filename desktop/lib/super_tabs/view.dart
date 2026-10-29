@@ -20,6 +20,7 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
@@ -106,6 +107,8 @@ class _SuperTabViewState extends State<SuperTabView>
   final _latest = <String, int>{};
   final _following = <String, bool>{};
   final _newAfter = <String, int>{};
+  // Conversations whose list is scrolled away from its newest message.
+  final _awayFromEnd = <String>{};
   final _unread = SuperTabUnreadLines();
   final _replies = <String, SuperTabMessage>{};
   String? _selected;
@@ -272,6 +275,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (c.accessRevoked) {
       _replies.clear();
       _newAfter.clear();
+      _awayFromEnd.clear();
       _unread.reset();
     }
     final visible =
@@ -486,7 +490,8 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Shows the jump pill while the reader is scrolled away from the line.
+  /// Shows the jump pill while the reader is scrolled away from the line, and
+  /// Jump to latest while the list is away from its newest message.
   void _checkUnreadLine() {
     final scroll = _scroll[c.selectedId];
     var away = false;
@@ -497,7 +502,15 @@ class _SuperTabViewState extends State<SuperTabView>
       final top = line == null ? null : _topInList(line);
       away = top == null || top < 0 || top > scroll.position.viewportDimension;
     }
-    if (away == _unread.away || !mounted) return;
+    final id = c.selectedId;
+    final awayFromEnd =
+        scroll != null &&
+        scroll.hasClients &&
+        scroll.position.extentAfter >= 40;
+    if ((away == _unread.away && awayFromEnd == _awayFromEnd.contains(id)) ||
+        !mounted) {
+      return;
+    }
     // A list settling its extent moves the position mid-layout: draw the pill
     // on the next frame then.
     if (SchedulerBinding.instance.schedulerPhase ==
@@ -505,7 +518,14 @@ class _SuperTabViewState extends State<SuperTabView>
       WidgetsBinding.instance.addPostFrameCallback((_) => _checkUnreadLine());
       return;
     }
-    setState(() => _unread.away = away);
+    setState(() {
+      _unread.away = away;
+      if (awayFromEnd) {
+        _awayFromEnd.add(id);
+      } else {
+        _awayFromEnd.remove(id);
+      }
+    });
   }
 
   /// Esc: everything loaded in the open conversation is read, line and all.
@@ -2652,6 +2672,8 @@ class _SuperTabViewState extends State<SuperTabView>
         : messages.where((message) => message.sequence > newAfter).length;
     // More came than were read: the count is a floor.
     final moreNew = c.hasNewer(c.selectedId);
+    // Scrolled away from the newest message, or newer pages wait unread.
+    final awayFromEnd = _awayFromEnd.contains(c.selectedId) || moreNew;
     final reply = _replies[c.selectedId];
     final outgoing = c
         .outgoing(c.selectedId)
@@ -2889,7 +2911,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           ),
                         ),
                       ),
-                    if (newCount > 0 || back)
+                    if (newCount > 0 || back || awayFromEnd)
                       Positioned(
                         bottom: 12,
                         left: 20,
@@ -2910,19 +2932,11 @@ class _SuperTabViewState extends State<SuperTabView>
                                   ),
                                   label: const Text('Back to reply'),
                                 ),
-                              if (newCount > 0)
-                                FilledButton.icon(
-                                  key: const ValueKey('super-new-messages'),
+                              if (newCount > 0 || awayFromEnd)
+                                SuperTabJumpToLatest(
                                   onPressed: _jumpToLatest,
-                                  icon: const Icon(
-                                    AppIcons.chevronDown,
-                                    size: 16,
-                                  ),
-                                  label: Text(
-                                    moreNew
-                                        ? '$newCount+ new messages'
-                                        : '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
-                                  ),
+                                  count: newCount,
+                                  more: moreNew,
                                 ),
                             ],
                           ),
