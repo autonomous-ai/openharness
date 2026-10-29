@@ -451,6 +451,30 @@ describe('host form (design 4.10)', () => {
     return (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === tabId)?.pool as { machine: { paused: boolean } } | undefined
   }
 
+  // WS roadmap Phase 2a: the host reads its changes only when told (lib/swarmHostPushes.ts), so every commit its read would
+  // wake for must tell it, and a commit that concerns other machines, or only this machine's reading, must not.
+  it('tells this machine\'s host after a commit exactly when its host read would wake for it', async () => {
+    const s = await hostScene()
+    const { generation } = await fullRead(s.tabId)
+    const told: Array<{ tabId: string; machineIds: string[]; lastChangedAt: number }> = []
+    const store = new SuperTabStore(db, Date.now, null, { hostsChanged: change => { told.push(change) } })
+    const run = (body: Record<string, unknown>) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: body as never })
+    const toldHere = () => told.filter(t => t.tabId === s.tabId && t.machineIds.includes(machine))
+    await run({ type: 'conversation.rename', conversationId: s.secretGroup, title: 'Not this machine' })
+    expect(toldHere()).toEqual([])
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
+    expect(toldHere()).toEqual([])
+    const before = Date.now()
+    await run({ type: 'conversation.rename', conversationId: s.web, title: 'Its worker\'s group' })
+    expect(toldHere()).toEqual([{ tabId: s.tabId, machineIds: expect.arrayContaining([machine]), lastChangedAt: expect.any(Number) }])
+    expect(toldHere()[0]!.lastChangedAt).toBeGreaterThanOrEqual(before)
+    await run({ type: 'machine.pause', machineId: machine, paused: true })
+    expect(toldHere()).toHaveLength(2)
+  })
+
   it('wakes the host for a pause even when a reading lands after it, before the host polls', async () => {
     const s = await hostScene()
     const { cursor, generation } = await fullRead(s.tabId)

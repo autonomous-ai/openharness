@@ -395,9 +395,17 @@ export class SuperTabHost {
       if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
     })
   }
-  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. */
+  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. Or that a commit changed
+   *  what this host reads (WS roadmap Phase 2a): a pass now if its feed reads now, else on the tick after its one-second gap. */
   private pushed(notice: BackendNotice): void {
-    if (notice.type !== 'super_tab_deliveries' || this.stopped) return
+    if (this.stopped) return
+    if (notice.type === 'swarm_host_changed') {
+      this.sources.feed.heard(notice)
+      // A pass reads every busy agent's list again: started only when the feed reads now, else the next tick reads it.
+      if (this.sources.feed.readsNow) void this.tick()
+      return
+    }
+    if (notice.type !== 'super_tab_deliveries') return
     this.pushUntil = this.now() + PUSH_LEASE_MS
     if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
     else this.pushAll = true
@@ -610,7 +618,8 @@ export class SuperTabHost {
     return retry
   }
   private async poll(): Promise<void> {
-    const data = (await this.sources.feed.refresh()).roster
+    // Each second, unless the server pushes Swarm changes: then when told, and in full each minute (hostFeed.ts due).
+    const data = (await this.sources.feed.due()).roster
     if (this.stopped) return
     // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
     const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil

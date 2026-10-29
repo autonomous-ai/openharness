@@ -1,5 +1,5 @@
 import type { Prisma } from '@prisma/client'
-import { agentOnly, conversation, fail, isLeads, type MessageDraft, type SuperTabState } from '../model.js'
+import { agentOnly, conversation, fail, isLeads, type AgentStart, type MessageDraft, type SuperTabState } from '../model.js'
 import { split } from './shape.js'
 import { guardedWrite, PartConflict, type HeadColumns, type HostColumns, type PartWrite } from './write.js'
 import type { GroupData, MachineData, Part, PartKind, SwarmParts } from './types.js'
@@ -144,6 +144,60 @@ export function hostMarker(kind: PartKind, before: unknown, after: unknown, mach
   return { host: { hostMachineIds: [...new Set(machines)] } }
 }
 
+/**
+ * Which host a part concerns from its data alone: every host of the Swarm for the head and its people (names, pause,
+ * observers), the machine of an agent or a start, none for the other kinds, whose writes leave markers instead (hostMarker).
+ * The one rule the host read wakes by (read/host.ts) and the push names hosts by (hostsToTell).
+ */
+export function plainHost(kind: PartKind, data: unknown): 'all' | string | null {
+  switch (kind) {
+    case 'head': case 'member': return 'all'
+    case 'agent': {
+      const machineId = (data as { machineId?: unknown } | null)?.machineId
+      return typeof machineId === 'string' ? machineId : null
+    }
+    case 'start': {
+      const machineId = (data as AgentStart | null)?.request?.machineId
+      return typeof machineId === 'string' ? machineId : null
+    }
+    default: return null
+  }
+}
+
+/**
+ * The machines whose hosts a commit's writes concern, by the same rules the host read wakes a Swarm for a machine
+ * (read/host.ts woken): the head and members for every host of the Swarm before or after; an agent or a start for its
+ * machine; a group for the machines its marker names; a machine's settings for that machine, the Mac it follows and the
+ * team accounts that follow it. A machine's reading alone tells nobody. Each host is pushed these (lib/swarmHostPushes.ts).
+ */
+export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState, after: SuperTabState): string[] {
+  const hosts = new Set<string>()
+  const pools = [...before.machines ?? [], ...after.machines ?? []]
+  for (const write of writes) {
+    if (write.op === 'touch') continue
+    switch (write.kind) {
+      case 'head': case 'member': case 'agent': case 'start': {
+        const host = plainHost(write.kind, write.data)
+        if (host === 'all') for (const state of [before, after]) for (const id of indexesOf(state).machineIds) hosts.add(id)
+        else if (host) hosts.add(host)
+        break
+      }
+      case 'group':
+        for (const id of write.host?.hostMachineIds ?? []) hosts.add(id)
+        break
+      case 'machine': {
+        if (!write.host?.hostChangedAt) break
+        hosts.add(write.key)
+        const follows = (write.data as MachineData | null)?.contribution?.hostMachineId
+        if (follows) hosts.add(follows)
+        for (const pool of pools) if (pool.hostMachineId === write.key) hosts.add(pool.machineId)
+        break
+      }
+    }
+  }
+  return [...hosts]
+}
+
 /** The agents a group's write let go: in its members or its work before, in neither after. Each is written again, data
  *  unchanged, so its host hears of it whatever later writes to the group leave in that group's marker (review round 2). */
 export function departedAgents(before: unknown, after: unknown): string[] {
@@ -153,7 +207,7 @@ export function departedAgents(before: unknown, after: unknown): string[] {
 }
 
 export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; state: SuperTabState; row: { id: string; revision: number } },
-  next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number> }> {
+  next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number>; hosts: string[] }> {
   const { parts } = loaded, { stamp } = opts
   capReleased(next)
   const after = split(next, { tabId: parts.tabId, version: 0, now: stamp, messageBase: parts.sequenceBase })
@@ -223,5 +277,5 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       data: { revision: loaded.row.revision + 1, ...indexesOf(next) } })
     if (!updated.count) throw new PartConflict('head', 'index')
   }
-  return { written, versions }
+  return { written, versions, hosts: hostsToTell(writes, loaded.state, next) }
 }

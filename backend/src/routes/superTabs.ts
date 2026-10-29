@@ -140,8 +140,8 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries }, { tellSessionViewers }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'),
-    import('./harnessLinks.js')])
+  const [bus, { announceSwarmDeliveries }, { announceSwarmHostChanges }, { tellSessionViewers }] = await Promise.all([import('../lib/bus.js'),
+    import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('./harnessLinks.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -152,6 +152,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
       deliveriesWaiting: announceSwarmDeliveries,
+      // And each machine whose host read a commit changed, so hosts read their Swarm changes only when told (WS Phase 2a).
+      hostsChanged: announceSwarmHostChanges,
       // The host's answer often lands on another instance than the sender's wait.
       terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),

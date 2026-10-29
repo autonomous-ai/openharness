@@ -2786,6 +2786,33 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // WS roadmap Phase 2a: the server says over this socket when a commit changed what this machine's host reads
+  // (backend lib/swarmHostPushes.ts).
+  it('hands the backend\'s swarm_host_changed to the Swarm host, never to the windows, and only the backend\'s', async () => {
+    const socket = relaySocket('token')
+    const heard: unknown[] = []
+    const frames: Array<Record<string, unknown>> = []
+    socket.onAccountNotice = (notice) => { heard.push(notice) }
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-1', lastChangedAt: 1_700 } } })
+    // Naming no Swarm, or naming one wrongly, it only says the server pushes.
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-1', lastChangedAt: 'soon' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload: {} } })
+    await vi.waitFor(() => expect(heard).toEqual([{ type: 'swarm_host_changed', tabId: 'tab-1', lastChangedAt: 1_700 },
+      { type: 'swarm_host_changed' }, { type: 'swarm_host_changed' }]))
+    // A client relayed with its own connId, or a local one, is not the backend.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'swarm_host_changed', payload: { tabId: 'tab-2', lastChangedAt: 1 } } })
+    socket.handleLocalFrame('local:swarm', { type: 'swarm_host_changed', payload: { tabId: 'tab-3', lastChangedAt: 1 } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(heard).toHaveLength(3)
+    expect(frames.filter((f) => f.type === 'swarm_host_changed')).toEqual([])
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   // Stability roadmap 2.4: the server says over this socket when work waits for an agent here (backend lib/adapterWs.ts).
   it('hands the backend\'s super_tab_deliveries to the Swarm host, never to the windows, and only the backend\'s', async () => {
     const socket = relaySocket('token')
