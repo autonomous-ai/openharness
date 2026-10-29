@@ -845,6 +845,50 @@ void main() {
       }
     });
 
+    testWidgets('an agent of the same name in another project is never '
+        'offered', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      final full = fake.routes['/api/super-tabs/$tab/parts']!(null)! as Map;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
+        ...full,
+        'agents': [
+          ...full['agents'] as List,
+          part('agent-other', 1, {
+            ...agent('agent-other', displayName: 'Nova'),
+            'projectId': 'project-2',
+          }),
+        ],
+      };
+      await pump(tester, fake);
+
+      await type(tester, '@N');
+      expect(key('swarm-pick-agent-builder'), findsOneWidget);
+      expect(key('swarm-pick-agent-other'), findsNothing);
+    });
+
+    testWidgets('losing the Swarm with the @ list open leaves no name on '
+        'screen', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      final host = await pump(tester, fake);
+      await type(tester, '@');
+      expect(find.text('kenji'), findsOneWidget);
+
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-mention-picker'), findsNothing);
+      for (final name in ['kenji', 'dee', 'River', 'Nova']) {
+        expect(find.textContaining(name), findsNothing, reason: name);
+      }
+    });
+
     testWidgets('someone who leaves the Swarm leaves the list, and a tag of '
         'them in the draft is not sent', (tester) async {
       final fake = backend([message('m1', 1)], members: everyone);
