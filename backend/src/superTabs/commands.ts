@@ -1,4 +1,4 @@
-import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, projectFolder, requireTeamWork, teamMachineFor, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { z } from 'zod'
 import { tokensByModelSchema } from './costs/tokens.js'
@@ -27,9 +27,10 @@ import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
-import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
+import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
 import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
+import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, requestLead, WAITING_TEXT } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -110,6 +111,9 @@ export const commandSchema = z.discriminatedUnion('type', [
     throughRevision: z.number().int().nonnegative().safe().optional(), text: text.nullable() }).strict()
     .refine(c => (c.through === undefined) !== (c.throughRevision === undefined), 'Acknowledge with through, the map your wake-up names.'),
   z.object({ type: z.literal('project.repository'), projectId: id, repositoryUrl }).strict(),
+  z.object({ type: z.literal('lead.start'), projectId: id, machineId: id.nullable(), engine: swarmEngine,
+    model: z.string().trim().min(1).max(200).optional(), effort: z.string().trim().min(1).max(80).optional(),
+    branchRef: z.string().max(1024).regex(/^refs\/(heads|remotes)\/[^\s\x00-\x1f\x7f]+$/).optional(), repositoryUrl: repositoryUrl.optional() }).strict(),
   z.object({ type: z.literal('project.skills'), projectId: id, mode: z.enum(['default', 'orchestration', 'custom']), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.roles.create'), projectId: id, roles: roleSet }).strict(),
   z.object({ type: z.literal('project.role.set'), projectId: id, role }).strict(),
@@ -710,7 +714,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const removeAgent = (target: Agent, { lead = false, close = true } = {}) => {
     if (!lead) protectLead(state, target.id)
     if (close && !state.closingSessions?.some(c => c.agentId === target.id && c.harnessId === target.harnessId)) {
-      (state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId })
+      // A confidential session in a Team account keeps the account for its project until its host confirms the close, which
+      // it does once the session's data there is deleted (security re-check 2 of #2089).
+      const held = onTeamAccount(state, target) && isConfidential(state, target) ? { heldFor: agentProjectId(state, target), since: context.now } : {}
+      ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId, ...held })
     }
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
@@ -877,6 +884,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         agentIds: [], archived: false, brief: command.brief, checks: [], assignment: null, lastMessageSequence: 0 })
       result.projectId = operationId
       result.conversationId = leadConversationId
+      break
+    }
+    case 'lead.start': {
+      if (actor.kind !== 'person') fail('HUMAN_REQUIRED', `A person starts a project's ${LEAD_NAME}.`, 403)
+      if (state.paused) fail('PAUSED', 'New work is paused in this Swarm.')
+      const project = manageProject(state, actor, command.projectId)
+      const home = conversation(state, project.leadConversationId)
+      if (home.leadId && home.agentIds.includes(home.leadId)) fail('LEAD_EXISTS', `This project already has its ${LEAD_NAME}.`)
+      if (leadStarting(state, project.id)) fail('LEAD_STARTING', `This project's ${LEAD_NAME} is already starting.`)
+      if (!project.repository?.repositoryUrl && !command.repositoryUrl) fail('REPOSITORY_REQUIRED', 'Choose the repository this project works in.', 400)
+      const { type: _type, projectId: _projectId, machineId, ...request } = command
+      const placed = requestLead(state, project, person(state, actor.userId), machineId, request, operationId, context)
+      Object.assign(result, placed)
+      if ('waiting' in placed) message(home.id, WAITING_TEXT, [], null, SYSTEM_ROW)
       break
     }
     case 'project.skills': {
@@ -1267,6 +1288,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const chosen = command.roleId ? chosenRole(project, command.roleId, kind) : null
       if (existing?.workDecision === 'stop' && command.lead) fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (existing && agentRole(existing) === 'reviewer' && command.lead) fail('REVIEWER_NOT_LEAD', 'A Reviewer reviews work and cannot lead a group.')
+      // A Harness Team account hosting a Product Manager serves only its project, and one is never added where another
+      // project's work runs (machines.ts productManagerOn, as admitMachineStart holds a start; security re-review of #2089).
+      const teamPool = teamAccountPool(machineContribution(state, command.machineId))
+      if (!existing && teamPool) {
+        const held = productManagerOn(state, command.machineId)
+        if (held && held !== project.id) fail('TEAM_ACCOUNT_HELD', 'This machine\'s Harness Team account runs another project\'s Product Manager, so it takes only that project\'s work for now.', 403)
+        if (kind === 'lead' && [...projectsOnMachine(state, command.machineId)].some(id => id !== project.id)) {
+          fail('TEAM_ACCOUNT_BUSY', 'This machine\'s Harness Team account runs other projects\' agents, so it cannot host this Product Manager now.', 409)
+        }
+      }
       if (!existing) reserveHarnessSlot(state, command.machineId, command.harnessId, operationId)
       // Added back before its host closed it: the session stays open.
       if (!existing) dropClosing(state, c => c.machineId !== command.machineId || c.harnessId !== command.harnessId)
@@ -1275,7 +1306,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         machineOwnerId: grant.machineOwnerId, contributorId: grant.contributorId, membershipGeneration: contributor.generation,
         hostGrant: grant.hostGrant ?? null,
         name: command.name, configuration: command.configuration, configurationVersion: operationId,
-        ...(chosen?.kind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(chosen ? { roleId: chosen.id } : {}) })
+        ...(chosen?.kind === 'reviewer' ? { role: 'reviewer' as const } : {}), ...(chosen ? { roleId: chosen.id } : {}),
+        ...(teamPool ? { teamAccount: true as const } : {}) })
       if (existing && (existing.machineOwnerId !== grant.machineOwnerId || existing.contributorId !== grant.contributorId)) {
         fail('ALREADY_SHARED', 'This session already has a contributor. Use the existing tab agent.')
       }
@@ -1478,7 +1510,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.type === 'agent.startSettled') {
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
-        if (!start.poolSettled) message(start.request.conversationId, command.warning
+        // A Product Manager is never assigned work: its conversation already said where it started.
+        if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
           : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
         start.poolSettled = true
@@ -1487,6 +1520,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
         start.error = command.error
+        // A Product Manager's start says so in its project's conversation only when it stops trying (leadStart.ts).
+        if (start.request.leadFor) {
+          const ended = leadStartFailed(state, start, command.error, context.now)
+          if (ended) message(start.request.conversationId, ended, [], null, SYSTEM_ROW)
+          break
+        }
         // The Lead is woken, so it starts the work elsewhere once or reports it (cli superTabs/start.ts): written in its own
         // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
@@ -1510,12 +1549,18 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ...(start.request.role ? { role: start.request.role } : {}), ...(start.request.roleId ? { roleId: start.request.roleId } : {}),
         ...(start.request.gridModel ? { gridModel: start.request.gridModel } : {}),
         ...(start.request.buddyOf ? { buddyOf: start.request.buddyOf } : {}),
+        ...(teamAccountPool(machineContribution(state, start.request.machineId)) ? { teamAccount: true as const } : {}),
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
+      if (start.request.leadFor) {
+        // Taking over from a Lead that left, as agent.add does.
+        if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
+        message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
+      }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
-      if (!start.request.buddyOf) message(group.id, start.poolGeneration
+      else if (!start.request.buddyOf) message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
         : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
       break

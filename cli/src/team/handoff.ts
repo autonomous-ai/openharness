@@ -18,20 +18,14 @@ import { constants, fstatSync, openSync, readSync, closeSync, unlinkSync } from 
 import { b64e, sign, utf8 } from '../lib/e2ee/core.js'
 import type { AuthSession } from '../lib/authSession.js'
 import { HANDOFF_CODE } from './layout.js'
+import { TeamSignInError } from './signInError.js'
+
+export { TeamSignInError }
 
 export type Post = <T>(path: string, body: unknown, headers?: Record<string, string>) => Promise<T>
 export type Get = <T>(path: string, headers?: Record<string, string>) => Promise<T>
 export type Delete = <T>(path: string, headers?: Record<string, string>) => Promise<T>
 type SignedIn = { session: AuthSession; headers: Record<string, string> }
-
-export class TeamSignInError extends Error {
-  constructor(message: string, readonly code: 'NOT_SIGNED_IN' | 'TEAM_SESSION' | 'EXPIRED' | 'BACKEND' | 'NOT_TEAM' | 'UNSAFE_FILE' | 'NO_PROOF',
-    /** The backend's HTTP status, when it answered with one. */
-    readonly status?: number) {
-    super(message)
-    this.name = 'TeamSignInError'
-  }
-}
 
 /** One wire form for a computer id, as the backend keeps it (`normalizeComputerId`): lowercase, without dashes. */
 export const wireComputerId = (raw: string) => raw.trim().toLowerCase().replace(/-/g, '')

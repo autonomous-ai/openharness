@@ -153,6 +153,8 @@ export const LAUNCH_ERROR_CODES = [
   // The engine itself: preparing it (engines/nativeLaunch.ts) and its start (core/agents/newPane.ts).
   'engine_cannot_run', 'engine_install_failed', 'engine_did_not_start', 'engine_not_installed', 'start_timeout',
   'engine_launch_refused',
+  // A Codex launch in a home of its own (a Swarm Product Manager's) the owner's relay cannot sign in (team/relay.ts).
+  'owner_relay_unavailable',
   // A Store harness (core/agents/dshThrough.ts, services/storeLaunch.ts).
   'dsh_not_installed', 'dsh_unavailable', 'dsh_runtime_failed',
   // A conversation Harness did not start, opened in it (core/agents/adopt.ts, externalResume.ts, lib/registry.ts).
