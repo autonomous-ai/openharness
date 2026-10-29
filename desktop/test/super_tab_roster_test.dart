@@ -1546,7 +1546,7 @@ void main() {
     'agents on another computer show their Swarm state with the tabs\' marks, most urgent first',
     (tester) async {
       final f = await fixture(tester);
-      await tester.binding.setSurfaceSize(const Size(280, 900));
+      await tester.binding.setSurfaceSize(const Size(280, 540));
       final now = DateTime.now().millisecondsSinceEpoch;
       // This Mac reads neither computer itself: only the Swarm says how they are.
       f.server.state['machines'] = [
@@ -1628,9 +1628,16 @@ void main() {
       ];
       expect(tops, [...tops]..sort());
       expect(tops.toSet(), hasLength(expected.length));
-      // The words stay as they were: a task with no turn seen reads Assigned.
+      // The words agree with the mark where something stops the agent; a task
+      // with no turn seen still reads Assigned.
+      expect(f.lineText(tester, 6), startsWith('Down'));
+      expect(f.lineText(tester, 7), startsWith('Down'));
+      expect(f.lineText(tester, 8), startsWith('Down'));
       expect(f.lineText(tester, 1), startsWith('Assigned'));
+      final saved = grid.AppTheme.brightness.value;
+      addTearDown(() => grid.AppTheme.brightness.value = saved);
       for (final brightness in Brightness.values) {
+        grid.AppTheme.brightness.value = brightness;
         await f.show(tester, brightness: brightness);
         await captureBoundary(
           tester,

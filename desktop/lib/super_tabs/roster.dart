@@ -197,11 +197,18 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     );
   }
 
-  HarnessActivity _activity(SuperTabAgent agent) {
+  /// This Mac's reading of the agent; null when it cannot see it, or reads
+  /// its status as unknown.
+  HarnessActivity? _native(SuperTabAgent agent) {
     final app = widget.app;
     final native = app == null
         ? null
         : harnessActivity(app, agent.machineId, agent.harnessId);
+    return native == HarnessActivity.unknown ? null : native;
+  }
+
+  HarnessActivity _activity(SuperTabAgent agent) {
+    final native = _native(agent);
     // Keep the shared lifecycle precedence. A retained workgroup question must
     // not make a stopped or disconnected harness look available for input.
     if (native == HarnessActivity.offline ||
@@ -210,6 +217,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         native == HarnessActivity.failed ||
         native == HarnessActivity.needsInput) {
       return native!;
+    }
+    if (native == null) {
+      if (_swarmDown(agent) case final down?) return down;
     }
     if (c.snapshot?.conversations.any(
           (group) =>
@@ -221,6 +231,37 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
       return HarnessActivity.needsInput;
     }
     return native ?? HarnessActivity.unknown;
+  }
+
+  /// What the Swarm knows of an agent this Mac cannot see that stops it
+  /// running (Dee, 2026-10-29): its computer silent, offline; its session
+  /// stopped; its start failed. Null when none is known. While the Swarm
+  /// cannot be read, its computers are not called offline.
+  HarnessActivity? _swarmDown(SuperTabAgent agent) {
+    final snapshot = c.snapshot;
+    final machine = snapshot?.pool(snapshot.placeOf(agent.machineId));
+    final at = switch (machine?['observation']) {
+      {'receivedAt': final num at} => at.toInt(),
+      _ => null,
+    };
+    if (machine != null &&
+        !c.backendUnreachable &&
+        superTabMachineStatus(
+              age: at == null
+                  ? null
+                  : widget.now().difference(
+                      DateTime.fromMillisecondsSinceEpoch(at),
+                    ),
+            ) ==
+            SuperTabMachineStatus.offline) {
+      return HarnessActivity.offline;
+    }
+    if (agent.downSince != null) return HarnessActivity.paused;
+    final task = SuperTabAgentInfo(c, null, agent).taskGroup;
+    return task?.liveness?['state'] == 'orphaned' &&
+            task?.liveness?['why'] == 'start-failed'
+        ? HarnessActivity.failed
+        : null;
   }
 
   /// A person's email and role, and their week when the board has them. One's
@@ -335,63 +376,21 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
 
   /// The mark an agent's row shows, which also orders the list: its activity,
   /// except that lost work shows the tabs' Offline, since nothing runs it
-  /// (Dee, 2026-10-29). When this Mac cannot see the agent, the Swarm's own
-  /// state gives the mark ([_swarmActivity]).
+  /// (Dee, 2026-10-29). An agent this Mac cannot see, and the Swarm knows
+  /// nothing stopping, takes its mark from its work: a prompt on its screen
+  /// needs input; finished and in review, done; a task under way, working;
+  /// nothing held, idle. Its words still say only Assigned for a task.
   HarnessActivity _shownActivity(SuperTabAgentInfo info) {
-    if (info.taskGroup?.assignment?['status'] == 'lost') {
-      return HarnessActivity.offline;
+    final work = info.taskGroup?.assignment?['status'];
+    if (work == 'lost') return HarnessActivity.offline;
+    final activity = info.activity ?? HarnessActivity.unknown;
+    if (activity != HarnessActivity.unknown || _native(info.agent) != null) {
+      return activity;
     }
-    final app = widget.app;
-    final native = app == null
-        ? null
-        : harnessActivity(app, info.agent.machineId, info.agent.harnessId);
-    return native == null || native == HarnessActivity.unknown
-        ? _swarmActivity(info)
-        : info.activity ?? HarnessActivity.unknown;
-  }
-
-  /// An agent's mark from the Swarm's state, in the tabs' words (Dee,
-  /// 2026-10-29): agents on other computers showed only the hollow mark. Its
-  /// computer silent: offline; its session stopped: stopped; its start
-  /// failed: failed; a question or stuck work: needs input; finished and in
-  /// review: done; a task under way: working; nothing held: idle. While the
-  /// Swarm cannot be read, its computers are not called offline.
-  HarnessActivity _swarmActivity(SuperTabAgentInfo info) {
-    final agent = info.agent, snapshot = c.snapshot;
-    final machine = snapshot?.pool(snapshot.placeOf(agent.machineId));
-    final at = switch (machine?['observation']) {
-      {'receivedAt': final num at} => at.toInt(),
-      _ => null,
-    };
-    if (machine != null &&
-        !c.backendUnreachable &&
-        superTabMachineStatus(
-              age: at == null
-                  ? null
-                  : widget.now().difference(
-                      DateTime.fromMillisecondsSinceEpoch(at),
-                    ),
-            ) ==
-            SuperTabMachineStatus.offline) {
-      return HarnessActivity.offline;
-    }
-    if (agent.downSince != null) return HarnessActivity.paused;
-    final liveness = info.taskGroup?.liveness;
-    if (liveness?['state'] == 'orphaned' &&
-        liveness?['why'] == 'start-failed') {
-      return HarnessActivity.failed;
-    }
-    if (agent.alerting.contains('prompt') ||
-        snapshot?.conversations.any(
-              (group) =>
-                  !group.closed &&
-                  group.assignment?['agentId'] == agent.id &&
-                  superTabWorkWaits(group.assignment?['status']),
-            ) ==
-            true) {
+    if (info.agent.alerting.contains('prompt')) {
       return HarnessActivity.needsInput;
     }
-    return switch (info.taskGroup?.assignment?['status']) {
+    return switch (work) {
       'review' => HarnessActivity.done,
       'working' || 'planned' => HarnessActivity.working,
       _ => HarnessActivity.idle,

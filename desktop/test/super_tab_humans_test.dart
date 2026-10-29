@@ -163,6 +163,47 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets(
+    'lends no order from a board for another project, a failed read or a lost project',
+    (tester) async {
+      // By name, letter case aside: dee, diego, huy, ken, maximilian…,
+      // scholes, tony.
+      const byName = [
+        'peer',
+        'diego',
+        'huy',
+        'owner',
+        'maximilian.alexander.longname',
+        'scholes',
+        'tony',
+      ];
+      final other = humansSwarm();
+      other.leaderboard!['projectId'] = 'other';
+      var controller = await show(tester, other);
+      expect(order(tester, byName), byName);
+      await close(tester, controller);
+
+      final failed = humansSwarm()..leaderboard = null;
+      controller = await show(tester, failed);
+      expect(order(tester, byName), byName);
+      expect(find.textContaining('Loading'), findsNothing);
+      await close(tester, controller);
+
+      final lost = humansSwarm();
+      controller = await show(tester, lost);
+      expect(order(tester, byName).take(2), ['peer', 'owner']);
+      lost.state['projects'] = <Object>[];
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(order(tester, byName), byName);
+      expect(
+        find.byKey(const ValueKey('leaderboard-points-peer')),
+        findsNothing,
+      );
+      await close(tester, controller);
+    },
+  );
+
   Finder within(String id, String text) =>
       find.descendant(of: person(id), matching: find.text(text));
   // Number one's name carries the crown beside it in the same line.
