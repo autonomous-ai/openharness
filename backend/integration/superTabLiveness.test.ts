@@ -46,7 +46,7 @@ afterAll(async () => {
 })
 
 /** A Swarm whose Lead runs on one of host's machines and whose worker runs on another, assigned "Ship the parser". */
-async function swarm({ legacy = false, client = db, hooks }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks } = {}) {
+async function swarm({ legacy = false, client = db, hooks, independent = false }: { legacy?: boolean; client?: PrismaClient; hooks?: SuperTabStoreHooks; independent?: boolean } = {}) {
   let now = 10_000_000
   const timed = new SuperTabStore(client, () => now, null, hooks)
   const tab = (await timed.create(owner, randomUUID(), 'Liveness', legacy ? undefined : 'public')).id
@@ -64,7 +64,7 @@ async function swarm({ legacy = false, client = db, hooks }: { legacy?: boolean;
     conversationId, machineId, harnessId, name, configuration: config, lead })).result.agentId)
   const lead = await add('lead', 'lead-host', harness.lead, 'Lead', true)
   const group = String((await execute({ type: 'conversation.create', title: 'Ship the parser', brief: 'Implement it',
-    checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    checks: [{ description: 'Verified', independent }] })).result.conversationId)
   const worker = await add(group, 'test-host', harness.worker, 'Worker')
   const assignmentId = String((await execute({ type: 'work.assign', conversationId: group, agentId: worker })).result.assignmentId)
   const observe = (machineId: string, running: string[], extra: Partial<MachineObservation> = {}, store = timed) => store.observeMachine(host, tab, machineId, {
@@ -464,6 +464,40 @@ function recordingGroups() {
 
 // Every machine reports every 15 s, and each report loaded, copied and compared the whole Swarm: about 1.1 MB for a busy one
 // (#876). It reads only the conversations its checks read, whole, and writes only what it changed.
+describe('work waiting for its review', () => {
+  // 2026-10-29: five Engineers who had pushed and handed over lost their tasks after 30 quiet minutes waiting for a Reviewer.
+  it('stays with its Engineer through 45 quiet minutes in review or after a hand-off, and counts 30 from a review that found problems', async () => {
+    const f = await swarm({ independent: true })
+    const handedOver = f.clock.now
+    const status = (status: 'review' | 'working', result: string) =>
+      f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status, result }, host, f.worker)
+    /** Both machines report every minute, the worker's screen still since the hand-off, and the Lead polls. */
+    const quiet = async (from: number, minutes: number) => {
+      for (let minute = 1; minute <= minutes; minute++) {
+        f.clock.now = from + minute * MINUTE
+        await f.beat(handedOver)
+        await f.leadInbox()
+      }
+    }
+    await status('review', 'Ready for review: PR #7 at 4f9c2e1')
+    await quiet(handedOver, 45)
+    expect((await f.assignment()).status).toBe('review')
+    // Engineers usually stay working with the hand-off as their result, since done waits for the review.
+    await status('working', 'Ready for review: PR #7 at 4f9c2e1')
+    await quiet(f.clock.now, 45)
+    expect((await f.assignment()).status).toBe('working')
+    expect(await f.lostRows()).toEqual([])
+    const check = (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.checks[0]!.id
+    await f.execute({ type: 'work.check', conversationId: f.group, assignmentId: f.assignmentId, checkId: check, passed: false, evidence: 'Two findings' })
+    const found = f.clock.now
+    await quiet(found, 30)
+    expect((await f.assignment()).status).toBe('working')
+    f.clock.now = found + 30 * MINUTE + 1
+    await f.beat(handedOver)
+    expect(await f.assignment()).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+  })
+})
+
 describe('a machine\'s report', () => {
   /** `n` conversations whose work finished but that are not yet quiet, each with a long brief: copies of a real one. */
   async function finishedGroups(f: Awaited<ReturnType<typeof swarm>>, n: number) {

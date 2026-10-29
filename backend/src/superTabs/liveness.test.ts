@@ -43,6 +43,44 @@ describe('the lease on a worker\'s task', () => {
   })
 })
 
+describe('a task waiting for review', () => {
+  // 2026-10-29: five Engineers who had pushed and handed over lost their tasks after 30 quiet minutes waiting for a Reviewer.
+  const handedOver = 1_000_000
+  const quiet = (status: 'review' | 'working', minutes: number) => status === 'review'
+    ? swarm(assignment({ status, result: 'Ready for review: abc123', leaseUntil: handedOver + LEASE_MS, progressAt: handedOver }),
+      { receivedAt: handedOver + minutes * MINUTE, harnessProgress: { h: handedOver } })
+    : swarm(assignment({ status, leaseUntil: handedOver + LEASE_MS, progressAt: handedOver }),
+      { receivedAt: handedOver + minutes * MINUTE, harnessProgress: { h: handedOver } })
+
+  it('stays with its Engineer through 45 quiet minutes, while working work is still lost after 30', () => {
+    expect(status(quiet('review', 45), handedOver + 45 * MINUTE)).toMatchObject({ status: 'review', result: 'Ready for review: abc123' })
+    expect(status(quiet('working', 30), handedOver + 30 * MINUTE).status).toBe('working')
+    expect(status(quiet('working', 30), handedOver + 30 * MINUTE + 1)).toMatchObject({ status: 'lost', lost: { reason: 'no progress for 30 minutes' } })
+  })
+
+  // Engineers stay working with a "Ready for review" result, since done is refused until the review passes (Lead, 2026-10-29).
+  const working = (result: string, patch: Partial<Assignment> = {}) => status(swarm(assignment({ result, leaseUntil: handedOver + LEASE_MS,
+    progressAt: handedOver, ...patch }), { receivedAt: handedOver + 45 * MINUTE, harnessProgress: { h: handedOver } }), handedOver + 45 * MINUTE)
+
+  it('stays with its Engineer through 45 quiet minutes while working with a ready-for-review hand-off naming a revision', () => {
+    expect(working('Ready for review: https://github.com/example/project/pull/2180 at 4f9c2e1').status).toBe('working')
+    expect(working('ready for review — PR #2180, head 4f9c2e1d8a').status).toBe('working')
+  })
+
+  it('counts quiet time for a hand-off without a revision, any other result, or one a review has since found problems in', () => {
+    expect(working('Ready for review soon, running the suite').status).toBe('lost')
+    expect(working('Fixed 4f9c2e1; running the suite').status).toBe('lost')
+    expect(working('Ready for review: 4f9c2e1', { reviewFoundAt: handedOver }).status).toBe('lost')
+  })
+
+  it('is still lost at once when its session stops or its machine goes offline', () => {
+    const stopped = quiet('review', 1)
+    stopped.machines![0]!.observation!.stoppedHarnessIds = ['h']
+    expect(status(stopped, handedOver + MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its session on Mac stopped' } })
+    expect(status(quiet('review', 1), handedOver + 4 * MINUTE)).toMatchObject({ status: 'lost', lost: { reason: 'its machine Mac has been offline for 2 minutes' } })
+  })
+})
+
 describe('a worker whose task is lost', () => {
   it('is marked lost in the same write that loses its task, so routing keeps it out after a cancel or reassignment', () => {
     const state = swarm(assignment({ leaseUntil: 1 })), now = 1 + LEASE_MS + 1

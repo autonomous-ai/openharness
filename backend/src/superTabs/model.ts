@@ -157,6 +157,9 @@ export interface Assignment {
   progressAt?: number
   /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
   askedOf?: string
+  /** When a review last found problems in its hand-off: the hand-off no longer pauses its quiet time (liveness.ts
+   *  waitingForReview). Its next status clears it. */
+  reviewFoundAt?: number
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }

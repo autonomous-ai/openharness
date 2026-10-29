@@ -6,6 +6,7 @@ import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type A
 import type { RouteDecision } from './routeRecord.js'
 import { agentTarget, broken } from './rules.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
+import { sweepLiveness } from './liveness.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -1280,6 +1281,63 @@ describe('Reviewer role', () => {
     f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: null }, builderActor)
     f.run({ type: 'conversation.agent', conversationId: group, agentId: reviewer, present: false, lead: false })
     expect(f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Head 789' }, builderActor).messages[0]!.recipients).toEqual([lead])
+  })
+
+  describe('work waiting for its review (liveness.ts: its quiet time does not count)', () => {
+    const HOUR = 3_600_000, QUIET = 30 * 60_000
+    function handedOver(status: 'review' | 'working') {
+      const setup = reviewed()
+      const { f, group, builder, reviewer } = setup
+      const built = f.run({ type: 'work.assign', conversationId: group, agentId: builder }).result.assignmentId as string
+      const builderActor: Actor = { kind: 'agent', agentId: builder, machineOwnerId: 'host-owner' }
+      const reviewerActor: Actor = { kind: 'agent', agentId: reviewer, machineOwnerId: 'target-owner' }
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status, result: 'Ready for review: PR #42 at abc1234' }, builderActor, { now: 2000 })
+      const checkId = f.state.conversations.find(c => c.id === group)!.checks[0]!.id
+      const verdict = (passed: boolean, now: number) => f.run({ type: 'work.check', conversationId: group, assignmentId: built, checkId, passed,
+        evidence: passed ? 'Passed at abc1234' : 'Two findings at abc1234' }, reviewerActor, { now })
+      const task = () => f.state.conversations.find(c => c.id === group)!.assignment!
+      /** The task's status after the time checks ran at `now`, on a copy. */
+      const swept = (now: number) => { const copy = structuredClone(f.state); sweepLiveness(copy, now); return copy.conversations.find(c => c.id === group)!.assignment!.status }
+      return { ...setup, built, builderActor, verdict, task, swept }
+    }
+
+    it('moves work in review back to working when a review finds problems, tells its Engineer, and counts its quiet time from then', () => {
+      const { verdict, task, swept, builder } = handedOver('review')
+      const foundAt = 2000 + 2 * HOUR
+      expect(swept(foundAt)).toBe('review')
+      const found = verdict(false, foundAt)
+      expect(task()).toMatchObject({ status: 'working', result: 'Ready for review: PR #42 at abc1234' })
+      expect(found.messages.find(m => m.recipients.includes(builder))?.text).toBe('Working\n\nThe review found problems. Fix them, then hand it over for review again.')
+      expect(swept(foundAt + QUIET)).toBe('working')
+      expect(swept(foundAt + QUIET + 1)).toBe('lost')
+    })
+
+    it('keeps work in review when the review passes', () => {
+      const { verdict, task, swept } = handedOver('review')
+      expect(verdict(true, 2000 + HOUR).messages).toEqual([])
+      expect(task().status).toBe('review')
+      expect(swept(2000 + 2 * HOUR)).toBe('review')
+    })
+
+    it('counts a working hand-off\'s quiet time once a review finds problems, and pauses it again at the Engineer\'s next hand-off', () => {
+      const { f, group, built, builderActor, verdict, task, swept } = handedOver('working')
+      const foundAt = 2000 + 2 * HOUR
+      expect(swept(foundAt)).toBe('working')
+      verdict(false, foundAt)
+      expect(task().status).toBe('working')
+      expect(swept(foundAt + QUIET)).toBe('working')
+      expect(swept(foundAt + QUIET + 1)).toBe('lost')
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: 'Ready for review: PR #42 at def5678' }, builderActor, { now: foundAt + HOUR })
+      expect(swept(foundAt + 3 * HOUR)).toBe('working')
+    })
+
+    it('counts quiet time from when the Lead moves the work out of review', () => {
+      const { f, group, built, leadActor, swept } = handedOver('review')
+      const movedAt = 2000 + 2 * HOUR
+      f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: 'Rebase on main' }, leadActor, { now: movedAt })
+      expect(swept(movedAt + QUIET)).toBe('working')
+      expect(swept(movedAt + QUIET + 1)).toBe('lost')
+    })
   })
 
   describe('a review the Swarm opens by itself', () => {
