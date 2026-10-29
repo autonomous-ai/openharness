@@ -163,6 +163,61 @@ void main() {
     expect(scroll(tester).extentAfter, lessThan(40));
   });
 
+  // Review of #2131, item 1: the first unread is older than the latest page.
+  testWidgets('a first unread a few pages back is loaded, and the view opens '
+      'at it', (tester) async {
+    final server = _server(80)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final c = await show(tester, server);
+    expect(c.messages('lead').any((m) => m.id == 'message-6'), isTrue);
+    expect(onScreen(tester, find.text('Update 6')), isTrue);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 6')).dy),
+    );
+    // Nothing was marked read while the history loaded.
+    expect(c.readMark('lead'), 5);
+  });
+
+  testWidgets('a first unread many pages back opens at its page, not the '
+      'whole history', (tester) async {
+    final server = _server(200)..messagePage = 20;
+    server.markReadElsewhere('lead', 5);
+    final reads = <String>[];
+    server.onRead = reads.add;
+    final c = await show(tester, server);
+    expect(onScreen(tester, find.text('Update 6')), isTrue);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 6')).dy),
+    );
+    // Bounded: the latest page, three back, then the page after the mark;
+    // the middle of the gap is never read.
+    expect(reads.where((r) => r.contains('before=121')), isEmpty);
+    expect(c.messages('lead').any((m) => m.id == 'message-100'), isFalse);
+    expect(c.hasNewer('lead'), isTrue);
+    expect(c.readMark('lead'), 5);
+  });
+
+  // Review of #2131, item 2.
+  testWidgets('the reader\'s own reply in a thread does not read the chat', (
+    tester,
+  ) async {
+    final server = _server(30)..markReadElsewhere('lead', 28);
+    server.append('My thread reply');
+    server.messages.last['thread'] = 'message-5';
+    await show(tester, server);
+    expect(find.byKey(_line), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 29')).dy),
+    );
+    // Seen at the end of the list, under the line, they are read as any
+    // conversation read to its end is; the line stays for this visit.
+    await tester.pump(const Duration(seconds: 5));
+    expect(find.byKey(_line), findsOneWidget);
+  });
+
   testWidgets('no line when everything is read', (tester) async {
     final server = _server(10)..markReadElsewhere('lead', 10);
     await show(tester, server);

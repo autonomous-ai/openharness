@@ -780,6 +780,71 @@ class SuperTabController extends ChangeNotifier {
     await _readMessages(id);
   }
 
+  /// At most this many older pages are read to reach a reader's read mark;
+  /// past them the page just after the mark is read instead.
+  static const _pagesToMark = 3;
+
+  /// Whether [id]'s held messages reach back to [mark], or nothing older is
+  /// left to read.
+  bool heldBackTo(String id, int mark) {
+    final held = _messages[id];
+    return held == null ||
+        held.isEmpty ||
+        held.first.sequence <= mark ||
+        !hasOlder(id);
+  }
+
+  /// Holds [id]'s messages back to the reader's [mark], so its first unread
+  /// is among them: older pages while the mark is at most [_pagesToMark]
+  /// pages back, else the page just after it alone, with the newer ones
+  /// waiting for [showLatest] as under a reader scrolled up.
+  Future<void> loadBackTo(String id, int mark) async {
+    for (var page = 0; page < _pagesToMark; page++) {
+      if (_disposed || heldBackTo(id, mark)) return;
+      await _readMessages(id, older: true);
+    }
+    if (_disposed || heldBackTo(id, mark)) return;
+    await _readAfterMark(id, mark);
+  }
+
+  /// Replaces what [id] holds with the page just after [mark]. A read of
+  /// newer messages under way finishes first, so it cannot land on top.
+  Future<void> _readAfterMark(String id, int mark) async {
+    for (
+      var under = _reading[(id, false)];
+      under != null;
+      under = _reading[(id, false)]
+    ) {
+      await under;
+    }
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    final answer = await request('GET', '${_messagesPath(id)}?after=$mark');
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return;
+    }
+    final rows = answer['messages'] as List;
+    final page = [
+      for (final row in rows) SuperTabMessage.fromJson(superTabMap(row)),
+    ]..sort(superTabMessageOrder);
+    if (page.isEmpty) return;
+    if (page.any((m) => m.conversationId != id)) {
+      throw const FormatException('A different conversation was returned.');
+    }
+    _rows.remove(id);
+    _keepRows(id, rows);
+    _messages[id] = page;
+    _before[id] = SuperTabPage.of(page.first);
+    if (answer['next'] != null) {
+      _readingBack.add(id);
+      _newer.add(id);
+      _pagesBelow[id] = 1;
+    }
+    _viewVersion++;
+    _changed();
+  }
+
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
   int _loadedMessageSequence(String id) =>

@@ -288,7 +288,17 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     _selected = id;
     setState(() {});
-    if (_unread.decide(id, _shownMessages(id), c.readMark(id), own: c.isOwn)) {
+    final mark = c.readMark(id), shown = _shownMessages(id);
+    if (_unread.startHistory(
+      id,
+      shown,
+      mark,
+      heldBack: c.heldBackTo(id, mark),
+    )) {
+      _loadBackToMark(id, mark);
+    } else if (_unread.waitsForHistory(id)) {
+      // The line is placed once the messages reach back to the mark.
+    } else if (_unread.decide(id, shown, mark, own: c.isOwn)) {
       _revealUnreadLine(id);
     } else if (firstView || (grew && atEnd)) {
       _followEnd(id);
@@ -382,6 +392,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _readToEnd(String id, int sequence) {
     final scroll = _scroll[id];
     if (c.selectedId != id ||
+        _unread.waitsForHistory(id) ||
         !_chatIsVisible ||
         scroll == null ||
         !scroll.hasClients ||
@@ -398,6 +409,17 @@ class _SuperTabViewState extends State<SuperTabView>
   void _follow(String id, bool following) {
     _following[id] = following;
     c.readingBack(id, !following);
+  }
+
+  /// Reads [id]'s messages back to the reader's [mark] (bounded by the
+  /// controller), then places its line.
+  void _loadBackToMark(String id, int mark) {
+    unawaited(
+      c.loadBackTo(id, mark).catchError((Object _) {}).whenComplete(() {
+        _unread.historyLoaded(id);
+        if (mounted) _changed();
+      }),
+    );
   }
 
   /// Brings [id]'s New messages line into view near the top, and stops

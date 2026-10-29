@@ -7,7 +7,7 @@ import 'model.dart';
 
 /// The first message of [shown] the reader has not read, for the New messages line: in the main stream (a reply
 /// that lives only in its thread is read there), from someone else, and after both the reader's read mark [mark] and
-/// their own newest message, since writing in a chat reads what came before it. Null when everything is read, and
+/// their own newest message in the chat, since writing in a chat reads what came before it. Null when everything is read, and
 /// for a conversation the reader has never read on any device (no mark), which opens at its end as before.
 String? superTabFirstUnread(
   List<SuperTabMessage> shown,
@@ -17,7 +17,11 @@ String? superTabFirstUnread(
   if (mark <= 0) return null;
   var read = mark;
   for (final message in shown) {
-    if (own(message) && message.sequence > read) read = message.sequence;
+    // A reply of one's own that lives only in its thread reads that thread,
+    // not the chat.
+    if (own(message) && message.inMainStream && message.sequence > read) {
+      read = message.sequence;
+    }
   }
   for (final message in shown) {
     if (message.sequence > read && message.inMainStream && !own(message)) {
@@ -32,6 +36,9 @@ String? superTabFirstUnread(
 /// conversation, or Esc, forgets it.
 class SuperTabUnreadLines {
   final _at = <String, String?>{};
+
+  /// Conversations reading back to the mark before their line is placed, and those that did this visit.
+  final _loading = <String>{}, _loaded = <String>{};
 
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
@@ -53,9 +60,36 @@ class SuperTabUnreadLines {
     return (_at[id] = superTabFirstUnread(shown, mark, own: own)) != null;
   }
 
+  /// Whether [id]'s line waits for older messages to load: nothing is followed or marked read meanwhile.
+  bool waitsForHistory(String id) => _loading.contains(id);
+
+  /// Whether [id] must first read back to the [mark] the held messages do not reach ([heldBack] false) for its line,
+  /// once per visit; when true, the caller loads and then calls [historyLoaded].
+  bool startHistory(
+    String id,
+    List<SuperTabMessage> shown,
+    int mark, {
+    required bool heldBack,
+  }) {
+    if (_at.containsKey(id) || _loading.contains(id) || _loaded.contains(id)) {
+      return false;
+    }
+    if (heldBack || mark <= 0 || shown.isEmpty || shown.last.sequence <= mark) {
+      return false;
+    }
+    _loading.add(id);
+    return true;
+  }
+
+  void historyLoaded(String id) {
+    if (_loading.remove(id)) _loaded.add(id);
+  }
+
   /// [id] was left: the next visit decides again.
   void forget(String? id) {
     _at.remove(id);
+    _loading.remove(id);
+    _loaded.remove(id);
     away = false;
   }
 
@@ -67,6 +101,8 @@ class SuperTabUnreadLines {
 
   void reset() {
     _at.clear();
+    _loading.clear();
+    _loaded.clear();
     away = false;
   }
 }
