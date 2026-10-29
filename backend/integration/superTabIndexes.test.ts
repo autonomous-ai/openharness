@@ -149,6 +149,10 @@ describe('message page reads', () => {
     }
     await db.superTabMessage.createMany({ data: rows.map(row => ({ recipientIds: [], mentions: [], ...row, tabId: 'T', conversationId: 'qa', text: 'x',
       author: row.author as object, createdAt: new Date(T0 + row.sequence * 1000) })) })
+    // Replies in the same thread id elsewhere, another conversation's and another Swarm's: never counted, named or read.
+    await db.superTabMessage.createMany({ data: [['T', 'qz'], ['U', 'qa']].map(([tabId, conversationId]) => ({ id: `${tabId}-${conversationId}-r`, tabId: tabId!,
+      conversationId: conversationId!, thread: 'qa-root', sequence: 30_000, text: 'x', author: person('elsewhere'), recipientIds: [], mentions: [outsider.userId],
+      createdAt: new Date(T0 + 30_000_000) })) })
     const [threads, profile] = await profiled('SuperTabMessage', () => pageThreads(db, 'T', 'qa', ['qa-root', 'qb-root', 'qc-root']))
     const last = { lastSequence: 10_498, lastAt: new Date(T0 + 10_498_000) }
     expect(threadSummaries(s.state, group, threads)).toEqual([
