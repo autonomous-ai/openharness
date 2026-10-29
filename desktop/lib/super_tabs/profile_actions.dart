@@ -20,6 +20,11 @@ extension SuperTabProfileActions on SuperTabController {
           },
   });
 
+  /// The reader's own username, trimmed (the server lowercases it), or back
+  /// to their default when null. A taken name comes back in words.
+  Future<String?> setUsername(String? username) =>
+      _profile({'type': 'member.username', 'username': username?.trim()});
+
   /// [agentId]'s avatar when given (its contributor's or Lead's to change),
   /// else the reader's own: [preset], or back to the default when null.
   /// An upload goes through [uploadAvatar].

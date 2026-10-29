@@ -1505,7 +1505,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               ],
               body: SuperTabMachineDetails(
                 name: name,
-                owner: person?.email,
+                owner: person?.username,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,

@@ -76,6 +76,33 @@ void main() {
     expect(c.snapshot!.people.single.status, isNull);
   });
 
+  test('a username is set and cleared as the person’s own', () async {
+    final server = ConversationServer();
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    expect(c.snapshot!.people.single.username, 'owner');
+    expect(await c.setUsername('  River '), isNull);
+    expect(lastCommand(server), {
+      'type': 'member.username',
+      'username': 'River',
+    });
+    expect(c.snapshot!.people.single.username, 'river');
+    expect(await c.setUsername(null), isNull);
+    expect(lastCommand(server), {'type': 'member.username', 'username': null});
+    expect(c.snapshot!.people.single.username, 'owner');
+  });
+
+  test('a taken username is refused in words', () async {
+    final server = ConversationServer()
+      ..refuse = {'code': 'USERNAME_TAKEN', 'message': 'dee is taken.'};
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    expect(await c.setUsername('dee'), 'dee is taken.');
+    expect(c.snapshot!.people.single.username, 'owner');
+  });
+
   testWidgets('an upload becomes the person’s avatar, a preset an agent’s', (
     tester,
   ) async {
