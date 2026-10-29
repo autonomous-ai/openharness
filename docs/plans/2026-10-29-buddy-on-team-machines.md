@@ -28,9 +28,19 @@ Mac's Harness Team account, with a chat-only Buddy. Security review 1 found it u
    another chat, or a person.
 3. **The machine's sign-in cannot act as that Buddy.** Today a Team account's sign-in speaks for every agent on its
    machine (`store.ts actor`). For a Buddy it would need the Buddy's sign-in too.
-4. **Privacy is checked while it runs, not only at start.** A Team account whose privacy check fails or goes stale
-   stops its Buddies (session closed, data purged as for confidential sessions) and tells their people in their chat.
-   The privacy check is also run at launch (dispatch).
+4. **Privacy is checked while it runs, not only at start, and the server does not wait for the host to stop it.** The
+   check runs at launch (dispatch) too. A host that is offline can't acknowledge a stop or a purge, so:
+   - **Revocation is immediate and server-side.** When the Team account's privacy check fails or goes stale, or its
+     host's lease (below) lapses, the server revokes the Buddy's sign-in at once. Every route refuses it from then on,
+     whatever the host does. The person is told in their chat.
+   - **A bounded host lease.** The Buddy's sign-in is valid only while its host renews a lease (for example every 60 s,
+     carrying a fresh passing privacy check). A host that can't renew it runs a watchdog that kills the sandbox (or the
+     user's processes) when the lease runs out, so a Buddy cut off from the server also stops on the machine.
+   - **Purge is pending until acknowledged.** The session's data on that machine is deleted when its host next connects
+     and confirms it, as the existing closing-session hold (`heldFor`) does for confidential sessions. Until then the
+     record says "purge pending", and the Team account keeps taking only that project's work.
+   - **Rollback keeps revocation.** Revoked sign-ins stay revoked after a rollback: revocation is a server record checked
+     before any token is accepted, and tokens expire on their own (lease length), so an older backend can't revive one.
 5. **A chat-only read.** Full and change-feed reads give that Buddy only its person, its project's name, its chat and
    itself: no roster, emails, members, progress or repository (red tests are on the closed branch).
 6. **Pickers match the server.** Eligibility (Team account present, private, not removed) and the account chosen come
@@ -47,23 +57,35 @@ The Team Mac gets one extra computer user per person who has a Buddy there ("bud
 with only their Buddy-bound sign-ins. File permissions keep them from the Team account and from each other.
 
 - macOS: creating a user needs an administrator (`sysadminctl`/`dscl`), so the Mac's owner is asked once per person,
-  much like Team account setup today. Each user is a home of about 100–300 MB plus the project clone. The engine sign-in
-  (Claude) has to come from the owner's relay, as it does for the Team account (#2114). Removal deletes the user.
-- Linux: `useradd` needs root once per person, or an unprivileged user namespace (`unshare`/`bubblewrap`) without root
-  where the distribution allows it.
+  much like Team account setup today. Each user is a home plus the project clone; the size of an empty home (a guess
+  of 100–300 MB) is **unverified** and has to be measured. The engine sign-in (Claude) has to come from the owner's relay,
+  as it does for the Team account (#2114). Removal deletes the user.
+- Linux: `useradd` needs root once per person. (An unprivileged user namespace is not a separate user; that is option
+  B and needs B's whole policy.)
 - Cost: an admin prompt per person per machine, a user to tidy up, and a launch path that crosses users (the daemon
   starts the Buddy as that user through a small privileged helper, or the user's own login agent).
 
 ### B. Each Buddy in an OS sandbox under the Team account's user
 
-The Buddy's processes run in a sandbox that denies the Team account's Harness files, engine homes other than its own,
-the daemon's socket and other agents' folders. It can reach only its folder, the engine API and a narrow Buddy endpoint.
+The Buddy's processes run in a sandbox under the Team account's computer user. Every control below is required; **the
+start is refused, with a reason in the Buddy chat, when any of them is unavailable** on that machine (an old kernel or
+Landlock ABI, user namespaces turned off, `sandbox-exec` missing, the proxy not running).
 
-- macOS: `sandbox-exec` with a profile (deprecated, but Claude Code and Codex use it for their sandboxes). Its rules
-  apply to every child process. No admin needed.
-- Linux: `bubblewrap` (namespaces) or Landlock. No root on most distributions.
-- Its Buddy-bound sign-in reaches the server through a broker that accepts only that Buddy's token, never the machine's
-  sign-in: the daemon's own socket stays outside the sandbox.
+- **Files.** Only its folder (read) and its own engine state are reachable. The Team account's Harness files, other
+  engine homes, other agents' folders and the daemon's socket are denied.
+- **Network: an external allowlisting proxy.** The sandbox has no network of its own. Its only outbound path is a
+  proxy outside the sandbox that allows by host name: the engine's API and the Buddy broker, nothing else. Port rules
+  alone (as Landlock gives) can't do this, since any HTTPS host would pass. Linux: a network namespace whose only route
+  is the proxy's socket. macOS: the profile denies all network except the proxy's local port.
+- **Processes and IPC.** No signals, tracing or process inspection outside the sandbox. No shared memory, Mach or
+  XPC lookups, or Unix sockets other than the proxy's and the broker's. Linux: PID, IPC and mount namespaces. macOS:
+  profile rules for `process-info`, `signal`, `mach-lookup` and `ipc`.
+- **A sanitized start.** The Buddy starts with an empty environment plus an allowlist (no Harness or engine tokens, no
+  `SSH_AUTH_SOCK`), and with every inherited file descriptor closed except its terminal.
+- **Its sign-in.** It reaches the server only through the broker, which accepts that Buddy's token and nothing else.
+  The daemon's own socket and sign-in stay outside.
+- macOS: `sandbox-exec` with such a profile (deprecated, but Claude Code and Codex use it). Linux: `bubblewrap` for the
+  namespaces plus Landlock for files. Neither needs admin or root on most systems.
 - Cost: a sandbox profile to keep in step with Claude Code's needs (its config, cache and the API), a broker route, and
   testing on both platforms. The engine credential still has to be readable inside the sandbox, so the Buddy can use the
   Team account's Claude subscription. That's acceptable, since it already runs on it.
@@ -86,11 +108,12 @@ staying "your machines" only. Requirement 1 decides when team machines appear in
 - **Compatibility:** older hosts never receive a team-machine Buddy start: it is offered only to hosts reporting a new
   capability, as the Product Manager start is.
 - **Migration and rollback:** new records only. Rolling back stops team-machine Buddies first (the `buddy.remove`
-  steps).
+  steps), and their revoked sign-ins stay revoked (requirement 4).
 - **Audience:** every rule is on the server: placement, token scope, chat-only reads, privacy stops.
 - **Identity:** the Buddy acts only with its own sign-in, never the Team account's or the Mac owner's.
-- **Failure:** a sandbox or user that can't be set up refuses the start with a reason in the Buddy chat. A privacy failure
-  stops the Buddy and says so there.
+- **Failure:** a sandbox or user that can't be set up, or a required control that is missing, refuses the start with a
+  reason in the Buddy chat. A privacy failure or a lapsed lease revokes the sign-in at once and says so there. The
+  machine-side stop and purge follow when the host can act (requirement 4).
 - **Platforms:** macOS and Linux as above. Windows is refused, as Buddies are today.
 
 ## Carried over
