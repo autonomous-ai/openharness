@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -8,13 +8,16 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PERMISSION_MODES } from './engineLaunch.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
+import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 
 /**
  * A Buddy's folder, as Harness prepares it, driven through the real Claude Code with the flags a Buddy launches with. A
  * local stand-in for the model API asks for each tool call in turn and reads back what Claude Code answered, so what is
  * allowed and what is refused is Claude Code's own doing with the guard, not the guard's alone (lib/buddyGuard.spec.ts).
- * In print mode a call that would wait for a prompt is refused instead, so this proves the decisions; dontAsk is what
- * keeps the interactive session from asking.
+ * It runs twice: in print mode, and in a private tmux as a Buddy's session runs, where every call has to be answered
+ * with no key pressed. With the asking mode a Buddy had before, that session stopped at "Do you want to proceed?".
  *
  * The throwaway user settings allow pushing, gh, echo, sed, curl and editing and turn hooks off, as a person's own may:
  * the guard is what refuses, where dontAsk alone would honour those rules.
@@ -73,9 +76,17 @@ function fakeModel(calls: Call[]) {
   return { server, results, id: (call: Call) => `toolu_${calls.indexOf(call) + 1}` }
 }
 
-describe.skipIf(!hasClaude)('a Buddy\'s folder with the real Claude Code', () => {
+const hasTmux = (() => { try { execFileSync('tmux', ['-V'], { stdio: 'ignore' }); return true } catch { return false } })()
+const API_KEY = 'sk-ant-not-a-key-0123456789abcdefghij'
+
+describe.skipIf(!hasClaude).each([
+  { mode: 'print', skip: false },
+  // The session a Buddy runs: in a terminal nobody types into. Every call must be answered with no key pressed.
+  { mode: 'interactive', skip: !hasTmux },
+])('a Buddy\'s folder with the real Claude Code ($mode)', ({ mode, skip }) => {
   let root: string, folder: string, remote: string, bin: string, ran: string, posts: string[], sinkPath: string
-  let api: ReturnType<typeof fakeModel>, sink: Server, stdout = ''
+  let api: ReturnType<typeof fakeModel>, sink: Server, stdout = '', tmux: IsolatedTmux | undefined, pane: number | undefined
+  const screens: string[] = []
   const git = (...args: string[]) => execFileSync('git', args, { cwd: folder, encoding: 'utf8',
     env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com',
       GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' } }).trim()
@@ -103,6 +114,7 @@ describe.skipIf(!hasClaude)('a Buddy\'s folder with the real Claude Code', () =>
   }
 
   beforeAll(async () => {
+    if (skip) return
     root = mkdtempSync(join(tmpdir(), 'buddy-claude-'))
     folder = join(root, 'buddy'); remote = join(root, 'remote.git'); bin = join(root, 'bin'); ran = join(root, 'ran')
     for (const dir of [folder, bin, ran, join(root, 'home'), join(root, 'config')]) mkdirSync(dir)
@@ -135,58 +147,87 @@ describe.skipIf(!hasClaude)('a Buddy\'s folder with the real Claude Code', () =>
     await new Promise<void>((resolve) => api.server.listen(0, '127.0.0.1', resolve))
     const env: NodeJS.ProcessEnv = {
       PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin`, HOME: join(root, 'home'), SHELL: '/bin/bash',
-      CLAUDE_CONFIG_DIR: join(root, 'config'), ANTHROPIC_API_KEY: 'sk-ant-not-a-key',
+      CLAUDE_CONFIG_DIR: join(root, 'config'), ANTHROPIC_API_KEY: API_KEY,
       ANTHROPIC_BASE_URL: `http://127.0.0.1:${(api.server.address() as AddressInfo).port}`,
       GIT_CONFIG_GLOBAL: '/dev/null', DISABLE_AUTOUPDATER: '1', TMPDIR: root,
     }
-    const claude = spawn(claudeBin!, ['-p', 'go', ...PERMISSION_MODES.claude!.dontAsk, '--model', 'claude-sonnet-4-5', '--output-format', 'json'],
-      { cwd: folder, env, stdio: ['ignore', 'pipe', 'pipe'] })
-    claude.stdout.on('data', (chunk) => { stdout += chunk })
-    await new Promise<void>((resolve, reject) => { claude.on('error', reject); claude.on('close', () => resolve()) })
+    const args = [...PERMISSION_MODES.claude!.dontAsk, '--model', 'claude-sonnet-4-5']
+    if (mode === 'print') {
+      const claude = spawn(claudeBin!, ['-p', 'go', ...args, '--output-format', 'json'], { cwd: folder, env, stdio: ['ignore', 'pipe', 'pipe'] })
+      claude.stdout.on('data', (chunk) => { stdout += chunk })
+      await new Promise<void>((resolve, reject) => { claude.on('error', reject); claude.on('close', () => resolve()) })
+      return
+    }
+    // A first run asks about its theme, the API key and the folder: answered beforehand, as a person's set-up has them, so
+    // the only thing left that could ask is a tool call.
+    writeFileSync(join(root, 'config', '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, theme: 'dark',
+      customApiKeyResponses: { approved: [API_KEY.slice(-20)], rejected: [] },
+      projects: { [realpathSync(folder)]: { hasTrustDialogAccepted: true, allowedTools: [] } } }))
+    const launch = join(root, 'launch.sh')
+    writeFileSync(launch, `${Object.entries(env).map(([name, value]) => `export ${name}=${shellQuote(String(value))}`).join('\n')}\n`
+      + `cd ${shellQuote(folder)} && exec ${[claudeBin!, ...args, 'go'].map(shellQuote).join(' ')}\n`)
+    tmux = await isolatedTmux()
+    await tmux.run('new-session', '-d', '-x', '160', '-y', '45', '/bin/bash', launch)
+    // The pane's process is Claude Code (launch.sh execs it): waited for at the end, as it writes its config while it goes.
+    pane = Number(await tmux.run('display-message', '-p', '#{pane_pid}'))
+    const total = Object.keys(allowed).length + Object.keys(refused).length
+    for (const started = Date.now(); api.results.size < total && Date.now() - started < 90_000;) {
+      screens.push(await tmux.run('capture-pane', '-p').catch(() => ''))
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+    screens.push(await tmux.run('capture-pane', '-p').catch(() => ''))
   }, 180_000)
   afterAll(async () => {
+    if (skip) return
+    await tmux?.close()
+    // kill-server returns before the pane's process has gone; it kept writing its plugin cache under the removal (ENOTEMPTY).
+    const alive = () => { try { process.kill(pane!, 0); return true } catch { return false } }
+    for (const started = Date.now(); pane && alive() && Date.now() - started < 15_000;) await new Promise((resolve) => setTimeout(resolve, 100))
     await new Promise<void>((resolve) => api?.server.close(() => resolve()))
     await new Promise<void>((resolve) => sink?.close(() => resolve()))
     rmSync(root, { recursive: true, force: true })
   })
 
-  it('finished the conversation, every call answered', () => {
-    expect(JSON.parse(stdout).result).toBe('done')
-    expect(api.results.size).toBe(Object.keys(allowed).length + Object.keys(refused).length)
+  it.skipIf(skip)('answered every call, and asked nobody', () => {
+    expect(api.results.size, screens.at(-1)).toBe(Object.keys(allowed).length + Object.keys(refused).length)
+    if (mode === 'print') expect(JSON.parse(stdout).result).toBe('done')
+    // What Claude Code's asking mode showed for these calls before (the baseline in the pull request).
+    else expect(screens.filter((screen) => /Do you want to proceed\?/.test(screen))).toEqual([])
   })
 
-  it('runs git log, git grep, gh issue view, its Super Tab post and Read', () => {
+  it.skipIf(skip)('runs git log, git grep, gh issue view, its Super Tab post and Read', () => {
     expect(api.results.get(api.id(allowed.gitLog))).toEqual({ is_error: false, content: expect.stringContaining('first commit') })
     expect(api.results.get(api.id(allowed.gitGrep))).toEqual({ is_error: false, content: expect.stringContaining('notes.txt:1:first') })
     expect(api.results.get(api.id(allowed.ghIssueView))).toEqual({ is_error: false, content: expect.stringContaining('gh-ran') })
     expect(api.results.get(api.id(allowed.post))).toEqual({ is_error: false, content: expect.stringContaining('harness-ran') })
     expect(api.results.get(api.id(allowed.read))?.content).toContain('first')
-    expect(readFileSync(join(ran, 'gh'), 'utf8')).toBe('issue view 7 --comments\n')
+    // Interactive Claude Code also runs gh itself as it starts (its own issue list): not a tool call, so not the guard's.
+    expect(readFileSync(join(ran, 'gh'), 'utf8').split('\n')).toContain('issue view 7 --comments')
     expect(readFileSync(join(ran, 'harness'), 'utf8')).toBe('super-tab --tab t post chat hello; nothing > here op-1\n')
   })
 
-  it.each(Object.keys(refused))('refuses %s, and it never ran', (name) => {
+  it.skipIf(skip).each(Object.keys(refused))('refuses %s, and it never ran', (name) => {
     const result = api.results.get(api.id(refused[name as keyof typeof refused]))
     expect(result?.is_error).toBe(true)
   })
 
-  it('pushed nothing', () => {
+  it.skipIf(skip)('pushed nothing', () => {
     expect(execFileSync('git', ['--git-dir', remote, 'for-each-ref'], { encoding: 'utf8' })).toBe('')
   })
-  it('opened no pull request, wrote no comment and started no agent', () => {
+  it.skipIf(skip)('opened no pull request, wrote no comment and started no agent', () => {
     expect(readFileSync(join(ran, 'gh'), 'utf8')).not.toMatch(/^(pr create|issue comment)/m)
     expect(readFileSync(join(ran, 'harness'), 'utf8')).not.toContain('new codex')
   })
-  it('wrote no file', () => {
+  it.skipIf(skip)('wrote no file', () => {
     expect(readFileSync(join(folder, 'notes.txt'), 'utf8')).toBe('first\n')
     expect(existsSync(join(folder, 'created.txt'))).toBe(false)
     expect(readdirSync(folder).sort()).toEqual(['.claude', '.git', '.harness', 'notes.txt'])
   })
-  it('POSTed nothing', () => {
+  it.skipIf(skip)('POSTed nothing', () => {
     expect(posts.filter((post) => post.includes(sinkPath))).toEqual([])
   })
 
-  it('tells the agent why a Bash call was refused', () => {
+  it.skipIf(skip)('tells the agent why a Bash call was refused', () => {
     expect(api.results.get(api.id(refused.gitPush))?.content).toContain('A Buddy only reads')
   })
 })
