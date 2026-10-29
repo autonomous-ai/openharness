@@ -373,6 +373,8 @@ export class SwarmCards {
       }
     }))
     this.tabs = known
+    // A Swarm that left the cards (access lost) takes the dial's side with it.
+    for (const tabId of [...this.sides.keys()]) if (!known.has(tabId)) this.sides.delete(tabId)
     this.rows = rows.map(row => ({ id: row.id as string, name: row.name }))
     const me = (await this.core.account.identity().catch(() => null))?.accountId
     // Another person signed in: nothing of the last account's is kept, and the list is said again whatever it is.
@@ -523,6 +525,7 @@ export class SwarmCards {
     // At most two backend reads of recaps run at once: a Pro that asks in a loop cannot flood the backend.
     if (this.recapsRunning >= MAX_RECAPS_IN_FLIGHT) throw new Error('too many recap reads at once')
     this.recapsRunning++
+    const reader = this.me
     try {
       const path = `/api/super-tabs/${tabId}/conversations/${found.id}/messages`
       const newest = object(await backend(this.core, 'GET', path))
@@ -532,6 +535,9 @@ export class SwarmCards {
       if (!said && typeof before.sequence === 'number' && identifier(before.id)) {
         said = lastAgentMessage(list(object(await backend(this.core, 'GET', `${path}?before=${before.sequence}&beforeId=${before.id}`)).messages), found.voices)
       }
+      // Access to the Swarm ended, another person signed in, or the face moved on while the read was out: the answer is not
+      // this reader's to have now (a Buddy chat is its owner's alone), so it is neither given nor kept.
+      if (this.me !== reader || this.target(tabId, leadId, chat)?.id !== found.id) return { tabId, leadId, text: '', at: 0, none: true }
       const recap: LeadRecap = said ? { tabId, leadId, text: cut(said.text, RECAP_BYTES), at: said.at, none: false, ...named } : { tabId, leadId, text: '', at: 0, none: true, ...named }
       this.recaps.set(key, { sequence: found.sequence, recap })
       return recap

@@ -1042,6 +1042,54 @@ describe('SwarmCards Buddy side', () => {
   })
 })
 
+// Privacy edges reviews keep finding (Lead, 10-29): an answer read for one reader, or while access lasted, is never given
+// after it ended.
+describe('SwarmCards access ending while a read is out', () => {
+  const buddySays = [said(1, 'a1', { text: 'from the PM' }), said(2, 'y1', { text: 'from the Buddy' })]
+  /** The next messages read waits until `release`. */
+  const held = (t: ReturnType<typeof chatSwarm>) => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    t.call.mockImplementationOnce(async () => { await gate; return { status: 200, body: { success: true, data: { messages: buddySays, next: null } } } })
+    return () => release()
+  }
+
+  it('drops a recap read in flight when access to its Swarm is lost, and keeps nothing of it', async () => {
+    const t = chatSwarm({ 'pm-web': buddySays }, true)
+    await t.cards.tick()
+    t.cards.side('t1', 'buddy')
+    const release = held(t)
+    const pending = t.cards.recap('t1', 'a1', 'buddy')
+    t.failing.set('t1', 403)
+    t.tabs.t1.lastChangedAt++
+    await t.cards.tick()
+    release()
+    expect(await pending).toEqual({ tabId: 't1', leadId: 'a1', text: '', at: 0, none: true })
+    // Access back: the side is forgotten with the Swarm, and the recap is read again, never served from the dropped one.
+    t.failing.delete('t1')
+    t.tabs.t1.lastChangedAt++
+    await t.cards.tick()
+    const reads = t.reads('pm-web')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ chatId: 'lead-web', none: true })
+    t.cards.side('t1', 'buddy')
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'from the Buddy', chatId: 'pm-web' })
+    expect(t.reads('pm-web')).toBe(reads + 1)
+  })
+
+  it('drops a recap read in flight when another person signs in', async () => {
+    const t = chatSwarm({ 'pm-web': buddySays }, true)
+    await t.cards.tick()
+    t.cards.side('t1', 'buddy')
+    const release = held(t)
+    const pending = t.cards.recap('t1', 'a1', 'buddy')
+    vi.mocked(t.core.account.identity).mockResolvedValue({ accountId: 'sam', email: 'sam@x.io' } as never)
+    t.tabs.t1.lastChangedAt++
+    await t.cards.tick()
+    release()
+    expect(await pending).toEqual({ tabId: 't1', leadId: 'a1', text: '', at: 0, none: true })
+  })
+})
+
 describe('SwarmCards Buddy notices', () => {
   it('raises a buddy notice for the Buddy\'s new message, never for the owner\'s', async () => {
     const t = chatSwarm({ 'pm-web': [said(2, 'y1', { text: 'an idea' }), said(3, 'me', { author: { kind: 'person', id: 'me' } })] }, true)
