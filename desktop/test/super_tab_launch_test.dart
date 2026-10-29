@@ -671,7 +671,8 @@ void main() {
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
       final machines = box.integration!.leadMachines!;
-      expect(machines.map((m) => m.id), ['m', 'rig', 'laptop', 'old']);
+      // Your own first, the unavailable ones included.
+      expect(machines.map((m) => m.id), ['m', 'laptop', 'rig', 'old']);
       final studio = machines.first;
       expect(studio.name, 'Mac Studio');
       expect(studio.startable, isTrue);
@@ -684,9 +685,13 @@ void main() {
       expect(studio.folders, {
         'github.com/autonomous-ai/autonomous-os': '/swarm/m/p1',
       });
-      expect(machines[1].unavailable, 'Another person’s machine');
-      expect(machines[2].maySleep, isTrue);
-      expect(machines[2].unavailable, 'Not connected to this computer');
+      expect(machines[1].maySleep, isTrue);
+      expect(machines[1].unavailable, 'Not connected to this computer');
+      // Its Team account's host has not said it can start a PM.
+      expect(
+        machines[2].unavailable,
+        'Update Harness on 2x 4090 Rig to run a Product Manager there.',
+      );
       expect(machines[3].online, isFalse);
       expect(bestLeadMachine(machines, null)?.id, 'm');
     },
@@ -733,6 +738,148 @@ void main() {
       'runningHarnessIds': [for (var i = 0; i < running; i++) 'h$i'],
     },
   };
+
+  /// A machine row as the Swarm read sends it, with its derived figures.
+  Map<String, dynamic> machineRow(
+    String id,
+    String name, {
+    String contributor = 'diego',
+    String? host,
+    String kind = 'computer',
+    int available = 4,
+    bool lead = false,
+    Map<String, dynamic> teamWork = const {'allowed': true},
+  }) => {
+    'machineId': id,
+    'name': name,
+    'cwd': '/swarm/$id',
+    'contributorId': contributor,
+    'maxAgents': 8,
+    'availableSlots': available,
+    'paused': false,
+    'hostMachineId': ?host,
+    'teamWork': teamWork,
+    'observation': {
+      'receivedAt': DateTime.now().millisecondsSinceEpoch,
+      'sessionKind': kind,
+      'runningHarnessIds': <String>[],
+      if (lead) 'capabilities': ['leadStart'],
+    },
+  };
+
+  void addDiego(SuperTabLaunchFixture f) =>
+      (f.connection.server.state['people'] as List).add({
+        'id': 'diego',
+        'email': 'diego@example.com',
+        'role': 'collaborator',
+      });
+
+  test('a teammate’s Mac takes the PM in its Team account', () async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('diego-mac', 'Diego MacBook'),
+      machineRow(
+        'diego-team',
+        'Diego MacBook',
+        host: 'diego-mac',
+        kind: 'team',
+        available: 3,
+        lead: true,
+      ),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final diego = box.integration!.leadMachines!
+        .where((m) => m.id == 'diego-mac')
+        .single;
+    expect(diego.unavailable, isNull);
+    expect(diego.startable, isTrue);
+    expect(diego.freeAgents, 3);
+    expect(diego.own, isFalse);
+    expect(diego.native, isFalse);
+    expect(diego.team, isTrue);
+  });
+
+  for (final (what, rows, reason) in [
+    (
+      'has no Team account',
+      [machineRow('rig', '2x 4090 Rig', lead: true)],
+      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+    ),
+    (
+      'fails its Team account’s privacy check',
+      [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+          teamWork: {
+            'allowed': false,
+            'code': 'PRIVACY_CHECK_FAILED',
+            'reason': 'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+          },
+        ),
+      ],
+      'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+    ),
+    (
+      'runs an older Harness',
+      [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+        ),
+      ],
+      'Update Harness on Diego MacBook to run a Product Manager there.',
+    ),
+  ]) {
+    test('a teammate’s machine that $what says why', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final row = box.integration!.leadMachines!.where((m) => !m.own).single;
+      expect(row.unavailable, reason);
+      expect(row.startable, isFalse);
+    });
+  }
+
+  test('your own machines come before a teammate’s with more room', () async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('diego-mac', 'Diego MacBook'),
+      machineRow(
+        'diego-team',
+        'Diego MacBook',
+        host: 'diego-mac',
+        kind: 'team',
+        available: 30,
+        lead: true,
+      ),
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 2),
+      // Yours, but this Desktop has no connection to it: the Swarm starts it.
+      machineRow('far', 'Office Mini', contributor: 'owner', lead: true),
+      machineRow('old', 'Old Mini', contributor: 'owner'),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final machines = box.integration!.leadMachines!;
+    expect(machines.map((m) => m.id).take(3), ['m', 'far', 'diego-mac']);
+    expect(machines.first.native, isTrue);
+    final far = machines[1];
+    expect((far.native, far.startable, far.team), (false, true, false));
+    final old = machines.where((m) => m.id == 'old').single;
+    expect(old.unavailable, 'Not connected to this computer');
+  });
 
   test('free agents are the server’s count, not slots minus running', () async {
     final f = SuperTabLaunchFixture();

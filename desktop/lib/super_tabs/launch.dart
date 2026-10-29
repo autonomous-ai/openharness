@@ -293,6 +293,17 @@ class SuperTabLaunch {
     LeadMachine row(String id, Map<String, dynamic> pool) {
       final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
       final observation = part(reading['observation']);
+      final name = pool['name'] as String? ?? id;
+      final own = pool['contributorId'] == accountId;
+      final connected = app.stateOf(id) != null;
+      // Its host says it can start a Product Manager (backend leadStart.ts).
+      final capable =
+          (observation['capabilities'] as List?)?.contains('leadStart') == true;
+      // Another person's Mac runs one only in its Harness Team account.
+      final team =
+          !own &&
+          (reading['hostMachineId'] != null ||
+              observation['sessionKind'] == 'team');
       final received = observation['receivedAt'];
       final online =
           received is num &&
@@ -303,7 +314,7 @@ class SuperTabLaunch {
       final device = part(observation['resources'])['deviceType'];
       return LeadMachine(
         id: id,
-        name: pool['name'] as String? ?? id,
+        name: name,
         online: online,
         // The server's count: it also holds pending starts and the Team
         // account sharing a Mac. A backend without it: slots minus running.
@@ -344,15 +355,26 @@ class SuperTabLaunch {
         maySleep:
             superTabMachineSymbol(device is String ? device : null) ==
             'laptopcomputer',
+        own: own,
+        native: own && connected,
+        team: team,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused
-            : pool['contributorId'] != accountId
-            ? 'Another person’s machine'
-            : app.stateOf(id) == null
-            ? 'Not connected to this computer'
-            : pool['paused'] == true
-            ? 'Paused in this Swarm'
-            : null,
+            : own
+            ? (connected
+                  ? (pool['paused'] == true ? 'Paused in this Swarm' : null)
+                  : capable
+                  ? null
+                  : 'Not connected to this computer')
+            : !team
+            ? '$name has no Harness Team account yet, so it runs only its '
+                  'owner’s projects.'
+            : switch (reading['teamWork']) {
+                {'allowed': false, 'reason': final String reason} => reason,
+                _ when !capable =>
+                  'Update Harness on $name to run a Product Manager there.',
+                _ => null,
+              },
       );
     }
 
