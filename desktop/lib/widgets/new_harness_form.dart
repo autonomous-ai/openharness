@@ -2246,6 +2246,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 const SizedBox(width: 8),
                 Flexible(
                   flex: 2,
+                  fit: FlexFit.tight,
                   child: Text(
                     status,
                     maxLines: 1,
