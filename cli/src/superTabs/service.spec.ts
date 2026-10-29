@@ -1012,6 +1012,19 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     expect(offer).toHaveBeenCalledTimes(2)
   })
 
+  it('tells only Desktop on this Mac why there is no account, asking nothing and starting nothing', async () => {
+    const offer = vi.fn(async () => ({ state: 'started' as const }))
+    const status = vi.fn(async () => ({ state: 'failed' as const, detail: 'launchd would not start it' }))
+    const service = superTabService(fakeCore(), { teamSetup: async () => ({ offer, decline: vi.fn(), status }) })
+    expect(await service.requests.super_tabs({ action: 'teamSetupStatus' }, owner)).toEqual({ ok: true, state: 'failed', detail: 'launchd would not start it' })
+    // Through the relay, or anyone but the owner: the reason can name this Mac's own setup, so it stays on this Mac.
+    for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetupStatus' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(status).toHaveBeenCalledOnce()
+    expect(offer).not.toHaveBeenCalled()
+  })
+
   it('at app start, answers at once on a Mac that hosts no Swarm work, as no regular user\'s does', async () => {
     const offer = vi.fn(async (_reason: string, _shared: () => Promise<boolean>) => ({ state: 'not-shared' as const }))
     const make = vi.fn(async () => ({ offer, decline: vi.fn() }))
