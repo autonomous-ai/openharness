@@ -15,7 +15,7 @@ import '../test/voice_fakes.dart' show MemoryKeyValueStore;
 
 /// Swarm Home and its drawer while they read, on a simulator, a screenshot
 /// at each step: before the list answers (rows on their way in Needs you,
-/// Chat with PM and the projects, and in the drawer); the Swarm read while
+/// Buddies and the projects, and in the drawer); the Swarm read while
 /// what waits on the person is still being read; then everything read.
 ///
 /// Every answer is scripted in memory ([FakeSwarm]) and held until the step

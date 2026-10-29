@@ -15,9 +15,10 @@ const swarmNeedsFirst = true;
 
 // 3. A project opens on its project chat: prototype B (Tony, 2026-10-28),
 // with nothing under the header and a ⋮ menu at its end (Tony, 2026-10-29):
-// Chat with PM, and the team's status in words, which opens its work (by
-// latest activity, quiet and archived work behind "Older") and its team in a
-// sheet (`swarm_project_page.dart`). Tony's answer, so no choice is left here.
+// Buddy chat (Chat with PM until #2090), and the team's status in words,
+// which opens its work (by latest activity, quiet and archived work behind
+// "Older") and its team in a sheet (`swarm_project_page.dart`). Tony's answer,
+// so no choice is left here.
 
 /// 4. Posting: text, @mentions and files — from the photo library, the camera
 /// or Files, by Desktop's limits (Tony, 2026-10-28). False: files are opened,

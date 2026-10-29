@@ -91,7 +91,8 @@ class SwarmConversationPage extends StatefulWidget {
   /// who is in it (`swarm_project_page.dart`).
   final String? title, subtitle;
 
-  /// At the header's end: a project's Chat with PM.
+  /// At the header's end: a project's ⋮ menu. The person's own Buddy chat
+  /// has its own, Remove Buddy, when this is null.
   final Widget? action;
 
   /// Under the header: a project's team in one line.

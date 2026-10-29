@@ -22,8 +22,8 @@ import '../test/swarm/swarm_fixture.dart';
 /// Swarm Home in the real shell on a simulator, a screenshot at each step:
 /// the app opens on Swarm Home; Needs you opens one thing at a time, a tag
 /// with Done, a decision answered with one tap and its Undo; the drawer with
-/// Chat with PM, the projects and a project's chats, and no Harness there; a
-/// project on its project chat, its ⋮ menu at the top right; Chat with PM
+/// Buddies, the projects and a project's chats, and no Harness there; a
+/// project on its project chat, its ⋮ menu at the top right; the Buddy chat
 /// itself; Harness through an agent's notice and back with the terminal's
 /// Swarm mark; and Swarm turned off, the terminal as it always was.
 ///
@@ -63,8 +63,8 @@ void main() {
       await walk.waitFor(walk.key('swarm-drawer-home'));
     }
 
-    // ① The app opens on Swarm Home: Needs you, one thing open; Chat with
-    // PM; the projects with their team line. No terminal yet.
+    // ① The app opens on Swarm Home: Needs you, one thing open; Buddies;
+    // the projects with their team line. No terminal yet.
     await walk.waitFor(walk.key('swarm-need-decision:d1'));
     await walk.waitFor(walk.key('swarm-project-$tab-$project'));
     expect(find.byType(TerminalPage), findsNothing);
@@ -97,13 +97,13 @@ void main() {
 
     // ⑤ The drawer: Swarm Home, the projects with their initial and team
     // line, then Settings, and no Harness; a project's arrow lists its chats,
-    // Chat with PM first.
+    // Buddy chat first, where Chat with PM was (#2090).
     await drawer();
     expect(walk.key('swarm-drawer-settings'), findsOneWidget);
     expect(walk.key('swarm-drawer-harness'), findsNothing);
     await walk.shot('drawer');
     await tester.tap(walk.key('swarm-drawer-chats-$tab-$project'));
-    await walk.waitFor(walk.key('swarm-drawer-pm-$tab-$project'));
+    await walk.waitFor(walk.key('swarm-drawer-buddy-chat-$tab-$project'));
     await walk.waitFor(walk.key('swarm-drawer-chat-$leadChat'));
     await walk.shot('drawer-chats');
 
@@ -114,7 +114,7 @@ void main() {
     expect(find.byType(SwarmProjectPage), findsOneWidget);
     await walk.shot('project');
 
-    // ⑥½ The menu: Chat with PM and the team's status, which opens the
+    // ⑥½ The menu: Buddy chat and the team's status, which opens the
     // project's work, then each agent, in a sheet over the chat.
     await tester.tap(walk.key('swarm-project-menu'));
     await walk.waitFor(walk.key('swarm-project-menu-status'));
@@ -130,15 +130,16 @@ void main() {
     await tester.tap(walk.key('swarm-team-close'));
     await walk.waitGone(walk.key('swarm-team-close'));
 
-    // ⑦ Chat with PM, from the menu: the person and the Product Manager
-    // alone.
+    // ⑦ The Buddy chat, from the menu: the person and their Buddy alone,
+    // the PM's private line to them read as "River (PM) → you".
     await tester.tap(walk.key('swarm-project-menu'));
-    await walk.waitFor(walk.key('swarm-project-menu-pm-chat'));
-    await tester.tap(walk.key('swarm-project-menu-pm-chat'));
+    await walk.waitFor(walk.key('swarm-project-menu-buddy-chat'));
+    await tester.tap(walk.key('swarm-project-menu-buddy-chat'));
     await walk.waitFor(find.byType(SwarmConversationPage));
     await walk.waitFor(find.textContaining('Passkeys are ready'));
+    await walk.waitFor(find.text('River (PM) → you'));
     FocusManager.instance.primaryFocus?.unfocus();
-    await walk.shot('pm-chat');
+    await walk.shot('buddy-chat');
     await back();
     await back();
     await walk.waitFor(walk.key('swarm-menu'));
@@ -175,7 +176,7 @@ void main() {
     double offset() => tester.state<ScrollableState>(list).position.pixels;
 
     // ① Home, scrolled down to its projects.
-    await walk.waitFor(walk.key('swarm-home-pm-$tab-$project'));
+    await walk.waitFor(walk.key('swarm-home-buddy-$tab-$project'));
     await tester.drag(list, const Offset(0, -500));
     await walk.wait(1200);
     final scrolled = offset();
@@ -258,7 +259,8 @@ Future<void> _openTerminal(WidgetTester tester, _Walk walk) async {
 /// One Swarm, "Phone Swarm", as the backend would send it: Mobile app (River
 /// its Product Manager, Nova waiting on the person, Kai working, Atlas
 /// down), Website (Cleo), a decision and a tag for the person, and their
-/// Chat with PM of Mobile app. A decision answered and a tag done leave.
+/// Buddy Wren in Mobile app with its chat. A decision answered and a tag done
+/// leave.
 /// [more] projects besides, for a Home taller than the screen.
 class _Swarm {
   _Swarm({int more = 0}) {
@@ -306,6 +308,7 @@ class _Swarm {
           'downSince': '2026-10-27T01:00:00.000Z',
         },
         inWeb(agent('agent-cleo', name: 'Lead', displayName: 'Cleo')),
+        buddyData('agent-wren', displayName: 'Wren'),
       ],
       groups: [
         groupData(
@@ -332,7 +335,7 @@ class _Swarm {
           agentIds: ['agent-atlas'],
           lastMessageSequence: 3,
         ),
-        groupData('g-pm', title: 'sam', audience: [me]),
+        buddyChatData('buddy-me', agentIds: ['agent-wren']),
         inWeb(
           groupData(
             webLead,
@@ -390,12 +393,12 @@ class _Swarm {
       'messages': <Object>[],
       'next': null,
     };
-    fake.routes['/api/super-tabs/$tab/conversations/g-pm/messages'] = (_) => {
+    fake.routes['/api/super-tabs/$tab/conversations/buddy-me/messages'] = (_) => {
       'messages': [
-        _message('pm-1', 'g-pm', 1, me, 'How close are passkeys?'),
+        _message('pm-1', 'buddy-me', 1, me, 'How close are passkeys?'),
         _message(
           'pm-2',
-          'g-pm',
+          'buddy-me',
           2,
           'agent-lead',
           'Passkeys are ready behind a flag. Nova is waiting on one '

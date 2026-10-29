@@ -221,7 +221,7 @@ void main() {
       await walk.shot('swarm');
 
       // ② A project: its project chat, its ⋮ menu at the top right with
-      // Chat with PM and the team's status; the status opens its work by
+      // Buddy chat and the team's status; the status opens its work by
       // latest.
       await tester.tap(find.text('Mobile app').last);
       await walk.waitFor(walk.key('swarm-project-menu'));

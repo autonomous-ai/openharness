@@ -102,7 +102,7 @@ void main() {
       addTearDown(() => experimentalFeaturesStore.value = saved);
       experimentalFeaturesStore.value = {...saved, PhoneExperiment.swarm};
 
-      // ① Swarm Home at the root: needs first, Chat with PM, the projects.
+      // ① Swarm Home at the root: needs first, Buddies, the projects.
       // Its drawer, with no way to Harness; Harness from the project
       // team’s Open terminal action; the
       // terminal's mark goes back to Swarm Home.
@@ -134,7 +134,7 @@ void main() {
       await waitFor(key('swarm-messages'));
       await wait(3000);
       await shot('project');
-      // Its ⋮ menu: Chat with PM and the team's status, as it reads now.
+      // Its ⋮ menu: Buddy chat and the team's status, as it reads now.
       await tester.tap(key('swarm-project-menu'));
       await waitFor(key('swarm-project-menu-status'));
       await shot('project-menu');
