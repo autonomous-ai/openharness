@@ -141,20 +141,23 @@ void main() {
   });
 
   group('a link into a hidden Chat with PM', () {
+    /// Ken's Chat with PM from before Buddies replaced it, as a server from
+    /// before 10-29 still sends it (as in super_tab_buddies_test).
     Future<(ConversationServer, String, String)> hidden() async {
       final server = buddySwarm(enabled: false);
-      final peer = server.controller(account: 'peer');
-      await peer.refresh();
-      await peer.openPmChat('lead');
-      final chat = peer.pmChat('lead')!.id;
-      await peer.select('lead');
-      pmReply(server, chat, 'Earlier answer from the PM');
-      final message = server.messages.last['id'] as String;
-      await peer.refresh();
-      server.state['buddies'] = true;
-      giveBuddy(server);
-      peer.dispose();
-      return (server, chat, message);
+      (server.state['conversations'] as List).add({
+        ...conversationFixture('old-pm-chat', 'ken.tran'),
+        'projectId': 'lead',
+        'leadId': 'lead-agent',
+        'agentIds': ['lead-agent'],
+        'audience': {
+          'people': [
+            {'id': 'peer', 'generation': 'fixture'},
+          ],
+        },
+      });
+      pmReply(server, 'old-pm-chat', 'Earlier answer from the PM');
+      return (server, 'old-pm-chat', server.messages.last['id'] as String);
     }
 
     testWidgets('stays where the reader is, with Message unavailable', (
