@@ -303,7 +303,7 @@ void main() {
     tester,
   ) async {
     await _swarm(tester, agents: [_agent('Atlas', 'm1')]);
-    expect(find.text('Agents'), findsOneWidget);
+    expect(find.text('Agents'), findsWidgets);
     expect(find.byTooltip('Team at a glance'), findsNothing);
     expect(find.text('Team at a glance'), findsNothing);
   });

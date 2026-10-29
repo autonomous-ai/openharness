@@ -5,18 +5,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/pm_chat_rows.dart';
+import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/humans_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
-/// The sidebar's rows: a direct message click highlights only that row; a
+/// The sidebar's rows: a Buddy chat click highlights only that row; a
 /// project's name opens its chat and only the chevron at its right end shows
 /// or hides its conversations (Dee, 2026-10-28); a machine click expands it,
 /// and its details are in the right-click menu.
 void main() {
-  final dm = find.byKey(const ValueKey('super-pm-chat-lead'));
+  final dm = find.byKey(const ValueKey('super-buddy-lead'));
   final project = find.byKey(const ValueKey('super-group-lead'));
   final workgroup = find.byKey(const ValueKey('super-group-offline'));
   final machine = find.byKey(const ValueKey('super-machine-studio'));
@@ -68,34 +68,34 @@ void main() {
   );
 
   testWidgets(
-    'a direct message click highlights only that row and leaves projects collapsed',
+    'a Buddy chat click highlights only that row and leaves projects collapsed',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       // Its chat exists already: opening it again is a plain selection.
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       await controller.select('lead');
       controller.expandedProjects.clear();
       await tester.pumpAndSettle();
 
       await tester.tap(dm);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, controller.pmChat('lead')!.id);
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
       expect(controller.expandedProjects, isEmpty);
       expect(workgroup, findsNothing);
-      expect(tester.widget<SuperTabPmChatRow>(dm).selected, isTrue);
+      expect(tester.widget<SuperTabBuddyRow>(dm).selected, isTrue);
       await close(tester, controller);
     },
   );
 
   testWidgets(
-    'a direct message opened for the first time leaves projects collapsed',
+    'a Buddy chat opened for the first time leaves projects collapsed',
     (tester) async {
       final controller = await show(tester, humansSwarm());
       controller.expandedProjects.clear();
       await tester.pumpAndSettle();
       await tester.tap(dm);
       await tester.pumpAndSettle();
-      expect(controller.selectedId, controller.pmChat('lead')!.id);
+      expect(controller.selectedId, controller.buddyChat('lead')!.id);
       expect(controller.expandedProjects, isEmpty);
       await close(tester, controller);
     },
@@ -105,7 +105,7 @@ void main() {
     'a project name click opens its chat and leaves its list as it was',
     (tester) async {
       final controller = await show(tester, humansSwarm());
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       controller.expandedProjects.clear();
       await tester.pumpAndSettle();
 
@@ -115,7 +115,7 @@ void main() {
       expect(controller.expandedProjects, isEmpty);
       expect(workgroup, findsNothing);
 
-      // Open, and the chat left for a direct message: the name comes back to
+      // Open, and the chat left for the Buddy chat: the name comes back to
       // it without closing the list.
       await tester.tap(toggle);
       await tester.tap(dm);
@@ -133,7 +133,7 @@ void main() {
     'the chevron at the far right of a project toggles its list and leaves the chat open',
     (tester) async {
       final controller = await show(tester, humansSwarm());
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       controller.expandedProjects.clear();
       await tester.tap(dm);
       await tester.pumpAndSettle();
@@ -258,7 +258,7 @@ void main() {
       MaterialApp(
         theme: grid.buildAppTheme(brightness: Brightness.light),
         home: Scaffold(
-          body: SuperTabPmChatRow(
+          body: SuperTabBuddyRow(
             key: const ValueKey('pm'),
             agentId: null,
             name: 'Buddy',
@@ -457,7 +457,7 @@ void main() {
     'Enter on a project name opens it; → and ← show and hide its conversations',
     (tester) async {
       final controller = await show(tester, humansSwarm());
-      await controller.openPmChat('lead');
+      await controller.openBuddyChat('lead');
       controller.expandedProjects.clear();
       await tester.tap(dm);
       await tester.pumpAndSettle();

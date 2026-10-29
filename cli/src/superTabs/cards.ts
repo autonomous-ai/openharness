@@ -12,8 +12,8 @@
  * A paused Swarm keeps its card and every Lead reads `done`.
  *
  * For the round dial (design 2026-10-28-round-dial-swarm-chat) every Lead also carries the chat on its project's face (`chat`):
- * the Lead conversation, or the project's Chat with PM or group the window has open (`want`'s focus); and the newest message
- * the Lead wrote in its Lead conversation or Chat with PM since the baseline (`notice`), the dial's one alert. `state` keeps
+ * the Lead conversation, or the reader's Buddy chat or group the window has open (`want`'s focus); and the newest message
+ * the Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline (`notice`), the dial's one alert. `state` keeps
  * its meaning for the Pro and older dials, which never read either.
  */
 import { randomUUID } from 'node:crypto'
@@ -46,8 +46,9 @@ function cut(text: string, bytes: number): string {
 const list = (v: unknown): Json[] => Array.isArray(v) ? v.map(object) : []
 const projectKey = (project: Json): string => String(project.id ?? 'lead')
 const inProject = (conversation: Json, projectId: string): boolean => (conversation.projectId ?? 'lead') === projectId
-/** The reader's Chat with PM: the backend sends a private conversation's `audience` only to the people in it (`visibleState`). */
-const isPmChat = (conversation: Json): boolean => !!conversation.audience && typeof conversation.audience === 'object'
+/** The reader's own private chat in a project: their Buddy chat, where the PM's private lines land since Buddies replaced
+ *  Chat with PM (backend buddies.ts, 10-29). The backend sends a Buddy chat to its owner alone. The dial still calls it `pm`. */
+const isPmChat = (conversation: Json): boolean => conversation.kind === 'buddy'
 const sequenceOf = (conversation: Json): number => typeof conversation.lastMessageSequence === 'number' ? conversation.lastMessageSequence : 0
 
 /** The conversation on a project's face and its kind: the one the window has open when it is a live conversation of this
@@ -59,7 +60,8 @@ function faceOf(conversations: Json[], projectId: string, lead: Json, focus?: st
   if (open) return { conversation: open, kind: isPmChat(open) ? 'pm' : 'group' }
   return cardId(lead.id) ? { conversation: lead, kind: 'lead' } : null
 }
-/** Whose messages are the chat's recap: the Lead's in its conversation and Chat with PM, the group's agents' in a group. */
+/** Whose messages are the chat's recap: the Lead's in its conversation and in the reader's Buddy chat (its private lines),
+ *  the group's agents' in a group. */
 function voicesOf(face: { conversation: Json; kind: ChatKind }, leadId: string): Set<string> {
   if (face.kind !== 'group') return new Set([leadId])
   return new Set(Array.isArray(face.conversation.agentIds) ? face.conversation.agentIds.filter((id): id is string => typeof id === 'string') : [])
@@ -339,7 +341,7 @@ export class SwarmCards {
   }
 
   /**
-   * The dial's alerts (design 2026-10-28 §2): each project's Lead conversation and Chat with PM, by the `lastMessageSequence`
+   * The dial's alerts (design 2026-10-28 §2): each project's Lead conversation and the reader's Buddy chat, by the `lastMessageSequence`
    * the tab reads already carry. A conversation first seen sets the baseline and is not read; one that moved past it has its
    * newest page read once, under the recaps' limit, and the newest message its Lead wrote after the baseline becomes the
    * Lead's notice. Two messages between two reads make one notice, for the newest. The baseline moves only after a read

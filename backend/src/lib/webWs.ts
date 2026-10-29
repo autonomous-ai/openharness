@@ -28,7 +28,7 @@ import { touchDeviceKey } from './deviceKeyLog.js'
 import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeMachineShareChanged } from './bus.js'
 import { sharedMachineAccess } from './machineAccess.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
-import { DAEMONS, env } from '../config/env.js'
+import { DAEMONS } from '../config/env.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
 import { authenticateAccessToken, SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { Frame } from './tunnel.js'
@@ -83,7 +83,7 @@ const WATCH_DEBOUNCE_MS = 250
  *  re-dialled offline machines every few seconds, 68% of 1,884 selects in 10 minutes (prod, 2026-10-27, #314). The
  *  Desktop's own longest reconnect backoff, so a machine coming back is seen no later than it was. */
 export const OFFLINE_RETRY_AFTER_MS = 30_000
-/** Sockets that never read the account's feeds unless they ask, with WEB_WS_LAZY_FEEDS on: a daemon's relay, `harness
+/** Sockets that never read the account's feeds unless they ask: a daemon's relay, `harness
  *  link`'s one-shot socket and the apps' trust-group sync (`?client=`). Prod, 2026-10-29: about 121 connects a minute
  *  living a median 0.4 s, nearly all relays, each reading the account's machines and devices and subscribing five
  *  channels it never read (WebSocket roadmap Phase 1 item 4). A socket that declares nothing may be an older app. */
@@ -144,7 +144,7 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       // A Mac's team account (lib/teamSession.ts) never selects or attaches to a machine here: refused for good,
       // not an expired sign-in to refresh and retry.
       const team = err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED'
-      if (invalid && env.WEB_WS_AUTH_HTTP_401 && query.get('auth') === 'http') {
+      if (invalid && query.get('auth') === 'http') {
         try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
         socket.destroy()
         return
@@ -206,7 +206,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // sweeps couldn't race; the hub now tracks the socket itself, which is one sweep for both states.
   const releaseLiveness = trackSocketLiveness(ws, 'web')
   // A relay, a link or a group sync starts the feeds below only when it asks (ON_DEMAND_FEED_CLIENTS).
-  const feedsOnDemand = env.WEB_WS_LAZY_FEEDS === 'on' && ON_DEMAND_FEED_CLIENTS.has(declared.client)
+  const feedsOnDemand = ON_DEMAND_FEED_CLIENTS.has(declared.client)
 
   // ── Live Machines-list feed ──────────────────────────────────────────────────────────────────
   // Subscribe node_status for EVERY agent the user owns and forward it tagged with the machineId (the

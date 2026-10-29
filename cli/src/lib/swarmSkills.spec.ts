@@ -68,11 +68,11 @@ describe('built-in Swarm skills', () => {
   // The plan line (Lead's brief for v2 M, 2026-10-27; docs/plans/2026-10-27-swarm-scheduler.md): the Lead's alone, in both modes.
   const plan = '- With 3 or more groups waiting, run plan first: it places them all at once on the best machines and models. Then route each group in the plan\'s order and start the plan\'s pick, with overrideReason "scheduler plan" when the route picks otherwise. If plan cannot run here, route as usual.\n'
   // The decision lines (Lead's brief for v2 decisions, 2026-10-27): the Lead's and the Builder's alone, in both modes.
-  const decision = '- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.\n'
+  const decision = '- Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: to tell one person something directly, send person.tell; it lands in their Buddy chat, which you cannot read. Project members watching your terminal see what you send. Put nothing there you wouldn\'t say in the project chat.\n'
   const ask = '- When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.\n'
   // The requests section (Lead's ruling for v2 G, the human leaderboard, 2026-10-27): the Lead's alone, in both modes, in a
   // section of its own so other groups' edits to the Lead text merge cleanly.
-  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or in their Chat with PM, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
+  const requests = '## Requests and Done\n- When you open a group for a person\'s request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.\n- Right after you merge a group\'s pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.\n\n'
   // Last in the Default Lead text, which has no red flags: after a blank line, ending the text.
   const requestsLast = `\n${requests.trimEnd()}\n`
   // The shared-machine rules (Ken, 2026-10-28): the Builder's and the Reviewer's alone, in both modes, in a section of their
@@ -120,9 +120,27 @@ describe('built-in Swarm skills', () => {
     ['default', 'dev', `${toolCheck}- If the brief needs a person, check they are available; if not, post a "Needs:" line and do the parts that don't depend on it.\n`,
       '- If the brief needs a machine, device or person, check it is available; if not, post a "Needs:" line and do the parts that don\'t depend on it.\n'],
   ]
+  // The Swarm wakes the Lead when a task stalls (Ken, 2026-10-29; liveness.ts recordTaskStates): each Lead's 6-hour rule gives
+  // way to acting on that wake within minutes. [mode, role, new text, approved text].
+  const stallWake: Array<['orchestration' | 'default', 'lead', string, string]> = [
+    ['orchestration', 'lead', 'when the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits; ',
+      'reassign work that has not moved for 6 hours; '],
+    ['default', 'lead', '- When the Swarm tells you a task stalled (quiet or orphaned), act on it within minutes: nudge its agent, reassign it, or post in its chat why it waits.\n',
+      '- Work with no progress for 6 hours goes back to you: reassign it or cut it smaller.\n'],
+  ]
   // By role too: the Builder's and the Reviewer's tool-check line is the same, and only the Builder's replaced an approved one.
   const approved = (text: string, mode: 'orchestration' | 'default', role: 'lead' | 'dev' | 'review') =>
-    [...autoReview, ...failFast].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
+    [...autoReview, ...failFast, ...stallWake].filter(([m, r]) => m === mode && r === role).reduce((t, [, , line, before]) => t.replace(line, before), text)
+  it('tells each Lead to act within minutes on the Swarm\'s stall wake-up, in place of the 6-hour rule, and no other role', () => {
+    for (const [mode, , line, before] of stallWake) {
+      expect(readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode }).file, 'utf8').split(line), mode).toHaveLength(2)
+      for (const role of ['lead', 'dev', 'review'] as const) {
+        const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
+        expect(text, `${mode} ${role}`).not.toContain(before)
+        if (role !== 'lead') expect(text, `${mode} ${role}`).not.toContain('a task stalled')
+      }
+    }
+  })
   it('tells each Lead the Swarm opens reviews by itself, and each Builder to hand off with a pull request link', () => {
     for (const [mode, role, line, before] of autoReview) {
       const text = readFileSync(prepareSwarmSkill(fixture(), { role, key: 'session', mode }).file, 'utf8')
@@ -170,9 +188,9 @@ describe('built-in Swarm skills', () => {
         .replace(missingStop, '').replace(reviewCheck, '').replace(moveMissing, '').replace(thread, ''))).toBe(sha256)
     }
   })
-  it('adds the 2-hour line to section 7 right after the 6-hour rule', () => {
+  it('adds the 2-hour line to section 7 right after the stall rule', () => {
     const text = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
-    expect(text).toContain(`reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
+    expect(text).toContain(`post in its chat why it waits; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.\n${twoHours}`)
   })
   it('adds the failed-start line right after each Lead skill\'s local models line, and to no other role', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
@@ -239,7 +257,7 @@ describe('built-in Swarm skills', () => {
     const orchestration = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session' }).file, 'utf8')
     expect(orchestration).toContain(`${twoHours}${lost}`)
     const plain = readFileSync(prepareSwarmSkill(fixture(), { role: 'lead', key: 'session', mode: 'default' }).file, 'utf8')
-    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- Work with no progress`)
+    expect(plain).toContain(`assign it to another agent with what the first one left (branch, last revision, last report).\n${lost}${limit}${digest}- When the Swarm tells you a task stalled`)
   })
   it('adds the thread line right after each Lead skill\'s write-like-a-colleague line', () => {
     for (const mode of ['orchestration', 'default'] as const) {
@@ -567,6 +585,8 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     expect(text).toContain('Only when your owner asks')
     expect(text).toContain('harness super-tab --tab TAB propose OPERATION_ID')
     expect(text).toContain('Never assign work, start agents, change code or open pull requests')
+    // Buddies replaced Chat with PM (Ken, 10-29): the PM's private lines to the owner land in the Buddy's chat, and are not its orders.
+    expect(text).toContain('The PM\'s private lines to your owner land in your chat too')
     expect(text).toBe(readFileSync(prepareSwarmSkill(fixture(), { role: 'buddy', key: 'other', mode: 'default' }).file, 'utf8'))
   })
 })

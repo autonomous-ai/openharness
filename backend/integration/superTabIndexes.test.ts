@@ -305,8 +305,13 @@ describe('terminal context revoke', () => {
     await db.superTabNativeContext.createMany({ data: [{ ...context('peer-worker', open, peer.userId), agentId: worker },
       { ...context('outsider-worker', open, outsider.userId), agentId: worker }, { ...context('owner-worker', open, s.state.ownerId), agentId: worker }] })
     const before = structuredClone(s.state) as SuperTabState
-    const chat = s.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: [peer.userId] } }, peer).conversationId as string
-    s.edit(state => { state.conversations.find(c => c.id === chat)!.agentIds.push(worker) })
+    // A private conversation now is a Buddy chat (buddies.ts), which only its owner's Buddy joins: written here as that join leaves it.
+    s.edit(state => {
+      const generation = state.people.find(p => p.id === peer.userId)!.generation
+      state.conversations.push({ id: 'peer-buddy', kind: 'buddy', projectId: state.conversations.find(c => c.id === open)!.projectId, title: 'Peer\'s Buddy',
+        leadId: null, agentIds: [worker], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+        audience: { people: [{ id: peer.userId, generation }] } })
+    })
     await revokeNativeContexts(db, before, s.state)
     expect(await revoked()).toEqual(['outsider-worker', 'owner-worker'])
   })

@@ -163,7 +163,13 @@ class SuperTabConversation {
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       assignment = row['assignment'] == null
           ? null
-          : Map.unmodifiable(superTabMap(row['assignment']));
+          : Map.unmodifiable(superTabMap(row['assignment'])),
+      liveness = row['liveness'] is Map
+          ? Map.unmodifiable(superTabMap(row['liveness']))
+          : null,
+      leadAction = row['leadAction'] is Map
+          ? Map.unmodifiable(superTabMap(row['leadAction']))
+          : null;
   final String id, projectId, title, brief;
 
   /// What the backend calls it apart from a workgroup: `leads` for the Product
@@ -201,6 +207,14 @@ class SuperTabConversation {
   /// conversation's first message since.
   final int? lastMainSequence;
   final Map<String, dynamic>? assignment;
+
+  /// Whether its task waits on purpose or is stuck, as the server last found
+  /// it (`state`, `why`, `since`, `personId`); absent while it is working,
+  /// and from older backends (task_status.dart).
+  final Map<String, dynamic>? liveness;
+
+  /// The Product Manager's last action on its task (`kind`, `at`).
+  final Map<String, dynamic>? leadAction;
 }
 
 class SuperTabRole {
@@ -286,7 +300,6 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
-      buddiesEnabled = row['buddies'] == true,
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -316,10 +329,6 @@ class SuperTabSnapshot {
   final String id, name, ownerId;
   final Map<String, dynamic>? project;
   final bool paused;
-
-  /// The Swarm's Buddies setting: off unless its owner turned it on, and off
-  /// from a backend before Buddies.
-  final bool buddiesEnabled;
 
   /// The starts of Buddies, oldest first: a Buddy's add is under way while
   /// its start has neither a harness nor an error.
