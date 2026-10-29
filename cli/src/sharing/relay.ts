@@ -17,16 +17,27 @@ export interface SharedMachineReference {
 
 export class SharingEndedError extends Error {}
 
+/** How long the account's list of shares answers which windows may open before it is read again. Every window opened
+ *  on a shared harness read the whole list first (WebSocket roadmap Phase 1 item 5). A share the list does not hold,
+ *  or holds expired, is read again at once, and so is the list after any window failed to open: a new invitation
+ *  opens at once, and the backend checks the share on every connect whatever the list said. */
+const SHARES_LIST_MS = 60_000
+
 /** One invitation per connection. Never promoted into a full machine link or a shared connection pool. */
 export class HarnessShareRelay {
   private sessions = new Set<() => void>()
+  private listed: { at: number; account: string; machines: SharedMachineReference[] } | null = null
+  private reading: { account: string; machines: Promise<SharedMachineReference[]> } | null = null
+  /** `account` names the sign-in the list is read for: a list read for another one answers nothing. */
   constructor(private readonly auth: Pick<AuthSessionManager, 'accessToken'>, private readonly backendWsBase: string,
-    private readonly environment: string, private readonly discover: () => Promise<SharedMachineReference[]>) {}
+    private readonly environment: string, private readonly discover: () => Promise<SharedMachineReference[]>,
+    private readonly account: () => string) {}
   async acquire(machineId: string, shareId: string, sink: LocalClientSink,
     onClosed: (code: number, reason: string) => void): Promise<RelaySession> {
-    const machines = await this.discover()
-    const machine = machines.find(m => m.machineId === machineId)
-    const share = machine?.shares.find(s => s.id === shareId)
+    const listed = this.listed && this.listed.account === this.account() && Date.now() - this.listed.at < SHARES_LIST_MS
+      ? this.listed.machines : null
+    const kept = this.find(listed, machineId, shareId)
+    const share = kept && Date.parse(kept.expiresAt) > Date.now() ? kept : this.find(await this.read(), machineId, shareId)
     if (!share) throw new SharingEndedError('Sharing ended or invitation expired')
     const token = await this.auth.accessToken()
     const url = `${this.backendWsBase.replace(/\/$/, '')}/api/observer-ws?share=${encodeURIComponent(shareId)}&autonomousEnv=${encodeURIComponent(this.environment)}`
@@ -36,6 +47,7 @@ export class HarnessShareRelay {
     let cipher: ObserverCipher | null = null, detached = false, settled = false
     let heartbeat: ReturnType<typeof watchSocketLiveness> | null = null
     const detach = () => { detached = true; heartbeat?.stop(); this.sessions.delete(detach); ws.terminate() }
+    const failed = () => { this.listed = null }
     this.sessions.add(detach)
     try {
       await new Promise<void>((resolve, reject) => {
@@ -48,6 +60,8 @@ export class HarnessShareRelay {
         ws.on('error', () => { if (!settled) { clearTimeout(timeout); reject(new Error('Could not connect to the shared harness.')) } })
         ws.on('close', (code, reason) => {
           clearTimeout(timeout); heartbeat?.stop(); this.sessions.delete(detach)
+          // Not opened, or no longer shared: whatever the list said of this share is in doubt.
+          if (!settled || code === 4403) failed()
           if (!settled) reject(new Error(reason.toString() || 'The owner’s machine is offline.'))
           if (!detached) onClosed(code === 4403 ? 4403 : 1012, reason.toString() || 'Owner disconnected')
         })
@@ -67,6 +81,7 @@ export class HarnessShareRelay {
               cipher = recipientHandshake(ephemeral, machineId, shareId, share.ownerPublicKey, frame.payload)
               ready()
             } else if (frame.type === 'observer_closed') {
+              failed()
               onClosed(frame.payload?.retry === true ? 1012 : 4403, String(frame.payload?.reason || 'Sharing ended'))
               if (!settled) { clearTimeout(timeout); reject(new Error('Sharing ended')) }
               detach()
@@ -79,7 +94,7 @@ export class HarnessShareRelay {
               } else if (!(typeof clear.type === 'string' && DAEMON_LOCAL_ONLY_TYPES.has(clear.type))) sink.sendFrame(clear)
             }
           } catch {
-            clearTimeout(timeout)
+            clearTimeout(timeout); failed()
             if (settled) onClosed(1011, 'The shared harness identity could not be verified.')
             reject(new Error('The shared harness identity could not be verified.')); detach()
           }
@@ -104,4 +119,23 @@ export class HarnessShareRelay {
     }
   }
   close(): void { for (const stop of [...this.sessions]) stop() }
+
+  /** The share in `machines`, if it holds it. A kept list's share past its expiry is read again; a list just read is
+   *  the backend's word, whatever this computer's clock says. */
+  private find(machines: SharedMachineReference[] | null, machineId: string, shareId: string): SharedHarnessReference | undefined {
+    return machines?.find(m => m.machineId === machineId)?.shares.find(s => s.id === shareId)
+  }
+
+  /** The list read now, once for every window of the same sign-in asking at the same time. A failed read is not
+   *  kept, nor one that ends after the sign-in changed. */
+  private read(): Promise<SharedMachineReference[]> {
+    const account = this.account()
+    if (this.reading?.account === account) return this.reading.machines
+    const machines = this.discover().then((list) => {
+      if (this.account() === account) this.listed = { at: Date.now(), account, machines: list }
+      return list
+    }).finally(() => { if (this.reading?.machines === machines) this.reading = null })
+    this.reading = { account, machines }
+    return machines
+  }
 }
