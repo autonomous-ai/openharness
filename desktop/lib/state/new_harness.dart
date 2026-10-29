@@ -4161,6 +4161,7 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     if (isCloud) return _createCloud();
+    if (leadThroughSwarm) return _startInSwarm();
     if (!checking) {
       _syncGitProject();
       if (gitError != null) retryGitProject();
@@ -4487,6 +4488,46 @@ class NewHarnessController extends ChangeNotifier {
 
   /// A cloud harness: made by the cloud service on this machine (CLI
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
+  /// New Project's Product Manager the Swarm starts
+  /// ([HarnessLaunchIntegration.startInSwarm]): on [leadSwarmMachine], or on
+  /// the first machine that frees up.
+  Future<NewHarnessOutcome> _startInSwarm() async {
+    final start = integration?.startInSwarm;
+    if (start == null) {
+      return _fail(
+        'Update Harness to start a Product Manager on another machine.',
+      );
+    }
+    if (leadBlocked case final why?) return _fail(why);
+    busy = true;
+    error = null;
+    status = leadQueued
+        ? 'Asking the Swarm to start the Product Manager…'
+        : 'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
+    notifyListeners();
+    try {
+      await start(
+        LeadSwarmStart(
+          machineId: _swarmLeadMachine,
+          engine: _engine,
+          repositoryUrl: leadRepositoryUrl,
+          title: _leadRepositoryName,
+          task: task.trim(),
+          files: attachments?.files ?? const [],
+        ),
+      );
+    } catch (failure) {
+      return _fail(failure.toString());
+    }
+    integration?.completed = true;
+    if (_disposed) return NewHarnessOutcome.created;
+    busy = false;
+    status = null;
+    attachments?.clear();
+    notifyListeners();
+    return NewHarnessOutcome.created;
+  }
+
   Future<NewHarnessOutcome> _createCloud() async {
     busy = true;
     error = null;

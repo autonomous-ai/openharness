@@ -697,28 +697,37 @@ void main() {
     },
   );
 
-  test('New Project refuses a machine its list cannot start', () async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.state['machines'] = [
-      {
-        'machineId': 'm',
-        'name': 'Mac Studio',
-        'contributorId': 'owner',
-        'maxAgents': 2,
-        'paused': false,
-        'observation': {
-          'receivedAt': DateTime.now().millisecondsSinceEpoch,
-          'runningHarnessIds': ['a', 'b'],
+  test(
+    'with its only machine full, New Project queues, and needs a remote',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Mac Studio',
+          'contributorId': 'owner',
+          'maxAgents': 2,
+          'paused': false,
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'runningHarnessIds': ['a', 'b'],
+          },
         },
-      },
-    ];
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    final box = await f.box(newProject: true);
-    expect(box.integration!.leadMachines!.single.startable, isFalse);
-    expect(await box.create(), NewHarnessOutcome.failed);
-    expect(box.error, 'Mac Studio has no free agents. Choose another machine.');
-    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
-  });
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      expect(box.integration!.leadMachines!.single.startable, isFalse);
+      expect(box.leadQueued, isTrue);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      // The Swarm clones the repo wherever it starts the PM.
+      expect(
+        box.error,
+        'Choose a repo with a remote, so the Swarm can clone it for the Product Manager.',
+      );
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      expect(f.connection.server.posts, isEmpty);
+    },
+  );
 
   Map<String, dynamic> studioPool({
     int available = 3,
@@ -879,6 +888,155 @@ void main() {
     expect((far.native, far.startable, far.team), (false, true, false));
     final old = machines.where((m) => m.id == 'old').single;
     expect(old.unavailable, 'Not connected to this computer');
+  });
+
+  /// Your machine knows the project folder's remote: an agent ran there.
+  void knownRepo(SuperTabLaunchFixture f) =>
+      f.app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'earlier',
+          name: 'Earlier',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'project',
+            cwd: '/work/project',
+            root: '/work/project',
+            remote: 'git@github.com:autonomous-ai/lamp-os.git',
+          ),
+        ),
+      ];
+
+  List<Map> commandsOf(SuperTabLaunchFixture f, String type) => [
+    for (final post in f.connection.server.posts)
+      if ((post['command'] as Map)['type'] == type) post['command'] as Map,
+  ];
+
+  test(
+    'New Project asks the Swarm to start the PM in a teammate’s Team account',
+    () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.leadThroughSwarm, isTrue);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final project = commandsOf(f, 'project.create').single;
+      expect(project['brief'], 'Discuss the architecture.');
+      final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+      // The PM the Swarm starts reads its request in its project's chat.
+      final task = commandsOf(f, 'message.send').single;
+      expect(task['conversationId'], created.leadConversationId);
+      expect(task['text'], 'Discuss the architecture.');
+      final start = commandsOf(f, 'lead.start').single;
+      expect(start, {
+        'type': 'lead.start',
+        'projectId': created.id,
+        'machineId': 'diego-mac',
+        'engine': 'codex',
+        'repositoryUrl': 'git@github.com:autonomous-ai/lamp-os.git',
+      });
+      expect(created.name, 'project');
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      expect(
+        f.app.superTabs.peek(tabId)!.selectedId,
+        created.leadConversationId,
+      );
+    },
+  );
+
+  test('with no machine free New Project queues the PM', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.leadQueued, isTrue);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final start = commandsOf(f, 'lead.start').single;
+    expect(start['machineId'], isNull);
+    expect(start.containsKey('machineId'), isTrue);
+    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+  });
+
+  test(
+    'a refused Swarm start says why, and a retry posts the task once',
+    () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.connection.server.leadRefusal = {
+        'code': 'TEAM_ACCOUNT_REQUIRED',
+        'message': 'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+      );
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(commandsOf(f, 'project.create'), hasLength(1));
+      expect(commandsOf(f, 'message.send'), hasLength(1));
+      final starts = [
+        for (final post in f.connection.server.posts)
+          if ((post['command'] as Map)['type'] == 'lead.start')
+            post['operationId'],
+      ];
+      expect(starts, hasLength(2));
+      expect(starts.toSet(), hasLength(2), reason: 'a refusal wrote nothing');
+    },
+  );
+
+  test('files go to the PM’s chat with the task', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
+    ];
+    SuperTabLaunch.uploadForTest = f.connection.server.upload;
+    addTearDown(() => SuperTabLaunch.uploadForTest = null);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final files = HarnessAttachments()
+      ..add([
+        HarnessAttachment('plan.md', Uint8List.fromList([1, 2, 3])),
+      ]);
+    final box = await f.box(newProject: true, attachments: files);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+    expect(
+      f.connection.server.uploads.single['conversationId'],
+      created.leadConversationId,
+    );
+    expect(commandsOf(f, 'message.send').single['attachmentIds'], [
+      'attachment-1',
+    ]);
   });
 
   test('free agents are the server’s count, not slots minus running', () async {
