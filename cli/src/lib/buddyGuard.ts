@@ -307,10 +307,20 @@ process.stdin.on('end', () => {
  *  could put one. */
 const listsDir = () => join(env.ADAPTER_DATA_DIR, 'buddy-reads')
 
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex')
+
 /** The list for one Buddy session, by its Swarm skill's key. */
 export function buddyReadsOf(key: string): BuddyReads {
-  return { file: join(listsDir(), `${createHash('sha256').update(key).digest('hex')}.json`), drops: PASTE_DROPS_DIR }
+  return { file: join(listsDir(), `${sha256(key)}.json`), drops: PASTE_DROPS_DIR }
 }
+
+/**
+ * The mark beside [list] that [session] listed in it: an empty file, read by its name alone. The end of a session finds its
+ * own lists by these even where a list cannot be read, and so leaves every other session's alone. Follow-up to #2248 (Lead,
+ * 10-30): whose a list was that could not be read could not be told, so it held back the end of every Buddy on the machine.
+ */
+const markOf = (list: string, session: string) => `${list.replace(/\.json$/, '')}.${sha256(session)}.owner`
+const MARK = /\.[0-9a-f]{64}\.owner$/
 
 /** A message holds at most ten files (superTabs/attachments.ts): ten messages' worth, and as many links. */
 const MAX_FILES = 100
@@ -385,12 +395,16 @@ function listedFile(path: string, at: number): ListedFile | null {
 }
 
 /** Best-effort, as the downloads' own prune is (lib/pasteDropFiles.ts): the lists of Buddy sessions nothing has written to
- *  for a day, ended or quiet, hold nothing the guard would still allow. */
+ *  for a day, ended or quiet, hold nothing the guard would still allow. A mark goes once its list has, and not before,
+ *  however old: its session's end still finds the list by it. */
 function sweep(dir: string, now: number): void {
   try {
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue
-      try { if (now - statSync(join(dir, name)).mtimeMs >= KEPT_MS) rmSync(join(dir, name), { force: true }) } catch { /* raced: ignore */ }
+    const names = readdirSync(dir), present = new Set(names)
+    for (const name of names) {
+      try {
+        if (MARK.test(name)) { if (!present.has(name.replace(MARK, '.json'))) rmSync(join(dir, name), { force: true }) }
+        else if ((name.endsWith('.json') || name.endsWith('.tmp')) && now - statSync(join(dir, name)).mtimeMs >= KEPT_MS) rmSync(join(dir, name), { force: true })
+      } catch { /* raced: ignore */ }
     }
   } catch { /* unreadable: nothing to sweep */ }
 }
@@ -413,6 +427,8 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
   const dir = dirname(reads.file)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   sweep(dir, now)
+  // Whose the list is, before the list says so; a mark it cannot write lists nothing.
+  writeFileSync(markOf(reads.file, sent.session), '', { mode: 0o600 })
   const held = heldList(reads.file, sent.session)
   const fresh = <T extends { at: number }>(entries: T[]) => entries.filter(entry => now - entry.at < KEPT_MS)
   const list: List = { version: 1, session: sent.session,
@@ -430,17 +446,18 @@ export function allowBuddyReads(reads: BuddyReads, sent: { session: string; file
 
 /**
  * Deletes the lists of [session], once the Swarm has ended it: its Buddy removed, its person gone from the Swarm, or its
- * chat purged with its project (Lead, 10-30). Each list names its session, so a session no longer running here is found
- * too, and another session's list stays. One that names no session goes as well, since whose it is cannot be told: not
- * JSON, not a list, or a list from before lists named their session, which still allows its links. Deleting one of those
- * only ever refuses.
+ * chat purged with its project (Lead, 10-30). A session no longer running here is found too. Its own lists are those its
+ * mark is beside (`markOf`), unless another session has listed under the same key since, and, beside no mark of its own,
+ * those that name it (a list written before lists were marked). Nothing else is touched or holds its end back: another
+ * session's list, or one that names no session beside no mark, which the host never writes and the day's sweep removes.
+ * Follow-up to #2248 (Lead, 10-30): one list that could not be read held back the end of every Buddy on the machine. So
+ * a list is read only for the session it names: one that cannot be read names none. Its own is removed unread, by its
+ * mark; another session's is skipped, and is that session's to remove.
  *
- * Anything it cannot finish throws, so the host tries again and does not acknowledge the end meanwhile (re-checks of
- * #2248): a list it cannot read (re-check 1 of 116fa43a1: it was skipped, and allowed again once it could be read), which
- * it keeps, as it may be another session's and the failure may pass (too many open files, say); and one it cannot delete
- * (a folder it cannot write to), which it empties in place where it can, needing only the file, so the guard allows
- * nothing meanwhile, keeping its session so the next try finds it. A list that went between the folder's read and its own
- * counts too: the next try no longer finds it.
+ * What it cannot finish throws, so the host tries again and does not acknowledge the end meanwhile (re-check 2 of #2248):
+ * an own list it cannot delete (a folder it cannot write to), which it empties in place where it can, needing only the
+ * file, so the guard allows nothing meanwhile, keeping that list's mark and its session so the next try finds it; and a
+ * mark it cannot delete. A list that went between the folder's read and its own counts as gone.
  */
 export function forgetBuddyReads(session: string, dir = listsDir()): void {
   let names: string[]
@@ -448,24 +465,27 @@ export function forgetBuddyReads(session: string, dir = listsDir()): void {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
+  const own = `.${sha256(session)}.owner`
+  const marked = new Set(names.filter(name => name.endsWith(own)).map(name => `${name.slice(0, -own.length)}.json`))
+  const kept = new Set<string>()
   let failed: unknown
   // Only a list's own name: a .tmp is a write not yet renamed, which no guard reads.
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     const file = join(dir, name)
-    let text: string
-    try { text = readFileSync(file, 'utf8') } catch (error) {
-      failed ??= error
-      continue
-    }
     let named: unknown
-    try { named = (JSON.parse(text) as { session?: unknown } | null)?.session } catch { /* not JSON: it names no session */ }
-    if (typeof named === 'string' && named !== session) continue
+    try { named = (JSON.parse(readFileSync(file, 'utf8')) as { session?: unknown } | null)?.session } catch { /* unreadable, or not JSON: it names no session */ }
+    if (marked.has(name) ? typeof named === 'string' && named !== session : named !== session) continue
     try { rmSync(file, { force: true }) } catch (error) {
       const empty: List = { version: 1, session, files: [], links: [] }
       try { writeFileSync(file, `${JSON.stringify(empty)}\n`) } catch { /* neither: the host's next try is all that is left */ }
+      kept.add(name)
       failed ??= error
     }
+  }
+  for (const name of names) {
+    if (!name.endsWith(own) || kept.has(`${name.slice(0, -own.length)}.json`)) continue
+    try { rmSync(join(dir, name), { force: true }) } catch (error) { failed ??= error }
   }
   if (failed) throw failed
 }

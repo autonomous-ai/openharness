@@ -1,8 +1,8 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { prepareSwarmSkill } from '../lib/swarmSkills.js'
 import { allowBuddyReads, buddyGuardSource, buddyReadsOf } from '../lib/buddyGuard.js'
 import { PASTE_DROPS_DIR } from '../lib/pasteDropFiles.js'
@@ -2525,39 +2525,78 @@ describe('closing the sessions the backend ends', () => {
     rmSync(shot)
   })
 
-  // Re-check 1 of 116fa43a1: a list that could not be read was skipped, the end acknowledged, and once the list could be
-  // read again it allowed its file again.
-  it('acknowledges a Buddy session\'s end only once a list it could not read is removed, and its guard allows nothing meanwhile', async () => {
-    const t = lifeFixture([leadRow({ lead: false })])
-    mkdirSync(PASTE_DROPS_DIR, { recursive: true })
-    const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
-    writeFileSync(shot, 'png')
-    const reads = buddyReadsOf('unreadable-buddy')
-    allowBuddyReads(reads, { session: 'harness', files: [shot], links: [] })
-    const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
-    const guard = join(folder, 'buddy-guard.mjs')
-    writeFileSync(guard, buddyGuardSource(folder, reads))
-    expect(guardReads(guard, folder, shot)).toBe('allow')
-    await t.poll()
-    // The list cannot be read for a while; its folder can.
-    chmodSync(reads.file, 0o000)
-    try {
-      expect(guardReads(guard, folder, shot)).toBe('deny')
-      t.rows.splice(0, 1, ended())
+  // Follow-up to #2248 (Lead, 10-30): one list the host could not read or remove held back the end of every Buddy session on
+  // the machine, as whose it was could not be told. Each end now waits on its own session's lists alone.
+  describe('two Buddies the Swarm ends together', () => {
+    const second = { id: 'agent-2', harnessId: 'harness-2', machineId: 'machine-1' }
+    const closed = (agentId: string, harnessId: string) => ({ operationId: `session-closed-${agentId}-${harnessId}`,
+      command: { type: 'agent.sessionClosed', agentId, harnessId } })
+    const twoBuddies = () => {
+      const t = lifeFixture([leadRow({ lead: false }), leadRow({ lead: false, agent: second })])
+      mkdirSync(PASTE_DROPS_DIR, { recursive: true })
+      const shot = join(PASTE_DROPS_DIR, `${randomUUID().slice(0, 8)}-screen.png`)
+      writeFileSync(shot, 'png')
+      const healthy = buddyReadsOf(`healthy-${randomUUID()}`), broken = buddyReadsOf(`broken-${randomUUID()}`)
+      allowBuddyReads(healthy, { session: 'harness', files: [shot], links: [] })
+      allowBuddyReads(broken, { session: 'harness-2', files: [shot], links: [] })
+      const folder = mkdtempSync(join(tmpdir(), 'buddy-folder-')); roots.push(folder)
+      const guard = join(folder, 'buddy-guard.mjs')
+      writeFileSync(guard, buddyGuardSource(folder, broken))
+      expect(guardReads(guard, folder, shot)).toBe('allow')
+      const end = () => t.rows.splice(0, 2, ended(), ended({ agent: second }))
+      // Every file either list left in the folder of lists, by its name: a list or the mark beside it.
+      const left = () => readdirSync(dirname(healthy.file)).filter(name => [healthy, broken].some(reads => name.startsWith(basename(reads.file, '.json'))))
+      return { t, shot, healthy, broken, guard, folder, end, left }
+    }
+
+    it('acknowledges one Buddy session\'s end while the other\'s list cannot be removed, holds only that one, and its guard allows nothing', async () => {
+      const { t, shot, healthy, broken, guard, folder, end, left } = twoBuddies()
       await t.poll()
-      await vi.waitFor(() => expect(t.closeMember).toHaveBeenCalledTimes(1))
-      for (let i = 0; i < 3; i++) await t.poll(60_000)
-      expect(t.commands).toEqual([])
-      expect(existsSync(reads.file)).toBe(true)
+      // The second Buddy's list can be neither removed, nor written over, nor read for a while: a folder stands in its place,
+      // as a file the system will not let go of would (one held open, on Windows).
+      rmSync(broken.file); mkdirSync(join(broken.file, 'held'), { recursive: true })
+      try {
+        expect(guardReads(guard, folder, shot)).toBe('deny')
+        end()
+        await t.poll()
+        await vi.waitFor(() => expect(t.commands).toEqual([closed('agent', 'harness')]))
+        expect(existsSync(healthy.file)).toBe(false)
+        for (let i = 0; i < 3; i++) await t.poll(60_000)
+        expect(t.commands).toEqual([closed('agent', 'harness')])
+        expect(t.closeMember).toHaveBeenCalledTimes(2)
+        expect(guardReads(guard, folder, shot)).toBe('deny')
+        expect(t.log).toHaveBeenCalledWith(expect.stringContaining('session harness-\'s person sent it, so its end is not acknowledged yet'))
+        expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('session harness\'s person'))
+      } finally { rmSync(broken.file, { recursive: true, force: true }) }
+      await t.poll()
+      await vi.waitFor(() => expect(t.commands).toEqual([closed('agent', 'harness'), closed('agent-2', 'harness-2')]))
+      expect(left()).toEqual([])
       expect(guardReads(guard, folder, shot)).toBe('deny')
-      expect(t.log).toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
-    } finally { if (existsSync(reads.file)) chmodSync(reads.file, 0o600) }
-    await t.poll()
-    await vi.waitFor(() => expect(t.commands).toHaveLength(1))
-    expect(t.commands[0]).toMatchObject({ command: { type: 'agent.sessionClosed', agentId: 'agent', harnessId: 'harness' } })
-    expect(existsSync(reads.file)).toBe(false)
-    expect(guardReads(guard, folder, shot)).toBe('deny')
-    rmSync(shot)
+      expect(t.closeMember).toHaveBeenCalledTimes(2)
+      rmSync(shot)
+    })
+
+    // Re-check 1 of 116fa43a1: a list that could not be read was skipped, the end acknowledged, and once the list could be
+    // read again it allowed its file again. Its mark says whose it is without reading it, so it goes unread.
+    it('acknowledges both ends while one list cannot be read, removing that list unread, and its guard allows nothing at any point', async () => {
+      const { t, shot, broken, guard, folder, end, left } = twoBuddies()
+      await t.poll()
+      // The second Buddy's list cannot be read for a while; its folder can be written to.
+      chmodSync(broken.file, 0o000)
+      try {
+        expect(guardReads(guard, folder, shot)).toBe('deny')
+        end()
+        await t.poll()
+        await vi.waitFor(() => expect(t.commands).toEqual([closed('agent', 'harness'), closed('agent-2', 'harness-2')]))
+        expect(left()).toEqual([])
+        expect(guardReads(guard, folder, shot)).toBe('deny')
+        expect(t.log).not.toHaveBeenCalledWith(expect.stringContaining('so its end is not acknowledged yet'))
+      } finally { if (existsSync(broken.file)) chmodSync(broken.file, 0o600) }
+      for (let i = 0; i < 3; i++) await t.poll(60_000)
+      expect(t.commands).toHaveLength(2)
+      expect(guardReads(guard, folder, shot)).toBe('deny')
+      rmSync(shot)
+    })
   })
 
   it('closes after a host restart a member the last roster named, and retries a lost acknowledgement without closing twice', async () => {
