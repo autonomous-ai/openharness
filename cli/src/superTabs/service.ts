@@ -494,13 +494,13 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         if (payload.action === 'routeHistory') {
           // The one group by id, active or dormant (design 4.5): a group that left the active set still has its history, and
           // a group this agent cannot read answers 404, refused like one it does not lead (review round 1).
-          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${payload.conversationId}?${identity}`)
+          const group = identifier(payload.conversationId) ? object(object(await backend(core, 'GET', `${path}/groups/${encodeURIComponent(String(payload.conversationId))}?${identity}`)
             .catch(error => { if (error instanceof SuperTabHostError && [403, 404].includes(error.status)) return null; throw error })).group).data : null
           if (!group || object(group).leadId !== agentId) return { error: 'LEAD_REQUIRED', detail: 'The coordinating Lead of this group owns routing.', status: 403 }
           const [logged, tried] = await Promise.all([
             within(backend(core, 'GET', `${path}/route-decisions?${identity}`)),
             // An older backend has no such route: its 404 is unreadable like any other failure.
-            within(backend(core, 'GET', `${path}/conversations/${payload.conversationId}/attempts?${identity}`)),
+            within(backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/attempts?${identity}`)),
           ])
           // The log's records carry every candidate's line; the route needs only who was picked and how it went, and the account and expected spend of what actually runs, which an open pick still holds: after an override
           // that is the person's chosen candidate, and a Lead's own choice outside the list has no known account.
@@ -528,18 +528,18 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const paged = payload.before !== undefined || payload.beforeId !== undefined
           if (paged && !(Number.isSafeInteger(payload.before) && Number(payload.before) >= 0 && identifier(payload.beforeId))) return { error: 'INVALID_REQUEST' }
           const before = paged ? `&before=${payload.before}&beforeId=${payload.beforeId}` : ''
-          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}${before}`)
+          const page = await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}${before}`)
           return { ok: true, value: markAnswered(page, [], agentId) }
         }
         if (payload.action === 'message' && identifier(payload.conversationId) && identifier(payload.messageId)) {
-          const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${payload.messageId}`)
+          const page = await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&messageId=${payload.messageId}`)
           // One exact message cannot show its own answer, so what came after it is read, but only for a question put to
           // this agent. If that read fails the message is still returned, just without a verdict.
           const sent = object(list(object(page).messages)[0])
           const asked = Array.isArray(sent.recipientIds) && sent.recipientIds.includes(agentId) && object(sent.author).id !== agentId
           if (!asked || !Number.isInteger(Number(sent.sequence))) return { ok: true, value: page }
           try {
-            const later = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&after=${sent.sequence}`)).messages
+            const later = object(await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&after=${sent.sequence}`)).messages
             return { ok: true, value: markAnswered(page, list(later), agentId) }
           } catch { return { ok: true, value: page } }
         }
@@ -579,7 +579,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         }
         // `post --attach` asks first whether this post already went out with its files.
         if (payload.action === 'attachment' && identifier(payload.conversationId) && payload.step === 'sent' && identifier(payload.operationId)) {
-          const sent = object(await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}&messageId=${messageIdOf(payload.tabId, agentId, payload.operationId)}`))
+          const sent = object(await backend(core, 'GET', `${path}/conversations/${encodeURIComponent(String(payload.conversationId))}/messages?${identity}&messageId=${messageIdOf(payload.tabId, agentId, payload.operationId)}`))
           const earlier = object(list(sent.messages)[0])
           // The agent's id goes back too: the files are uploaded as this agent, through the daemon's local upload route.
           return { ok: true, value: { agentId, attachmentIds: Array.isArray(earlier.attachments) ? list(earlier.attachments).map(a => String(a.id)) : null } }

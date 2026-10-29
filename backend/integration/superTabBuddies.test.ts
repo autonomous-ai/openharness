@@ -135,6 +135,15 @@ describe('a Buddy through the store', () => {
     expect(read.agents.map(a => a.data.name)).toContain('Builder')
     expect(read.groups.map(g => g.key)).not.toContain(owners)
     expect([read.machines, read.starts]).toEqual([[], []])
+    // No machine or terminal id on any agent or assignment, in the first load or in what changed since (review 1, item 3).
+    expect(read.agents.map(a => [a.data.machineId, a.data.harnessId])).toEqual(read.agents.map(() => ['', '']))
+    expect(task.assignment).toMatchObject({ execution: { machineId: '', harnessId: '' } })
+    await f.execute({ type: 'message.send', conversationId: group, text: 'Still waiting.', replyTo: null, recipientIds: [] }, owner, builder)
+    const changed = await new SwarmReads(f.store).changes(peer, f.tab, read.cursor, agentId)
+    expect('reload' in changed && changed.reload).toBe(false)
+    const again = (changed as { groups: Array<{ key: string; data?: { assignment?: unknown } }> }).groups.find(g => g.key === group)
+    expect(again?.data?.assignment).toMatchObject({ execution: { machineId: '', harnessId: '' } })
+    expect(JSON.stringify([read, changed])).not.toContain('owner-mac')
     const messages = await f.store.messages(peer, f.tab, group, {}, agentId)
     expect(messages.messages.map(m => m.text)).toContain('Opened https://github.com/acme/app/pull/12')
     const decisions = await f.store.decisions(peer, f.tab, 'open', agentId)
@@ -199,5 +208,36 @@ describe('a Buddy through the store', () => {
     const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
     expect(read.groups.find(g => g.key === group)?.data).toMatchObject({ archived: true })
     expect(read.groups.find(g => g.key === group)?.data.dormant).toBeUndefined()
+  })
+  it('reads a lost task without the machine it ran on, in its messages, its task and its agent (security re-check 2 of #2115)', async () => {
+    const f = await swarm()
+    const { agentId } = await buddy(f)
+    await f.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Kens-MacBook-Pro.local', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 })
+    const generation = (await poolRows(f.store, owner, 'owner-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    const report = (stoppedHarnessIds: string[]) => f.store.observeMachine(owner, f.tab, 'owner-mac', { generation, resources: { cpuPercent: 10,
+      memoryTotalBytes: 32e9, memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop',
+      chip: 'Fixture', os: 'macOS', gpuPercent: null }, quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds })
+    await report([])
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Keep edits.',
+      checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
+    const harnessId = randomUUID()
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId, name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })
+    await report([harnessId])
+
+    const lost = (await f.store.messages(owner, f.tab, group, {}, f.lead)).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
+    expect(lost.length).toBeGreaterThan(0)
+    expect(lost.every(m => m.text.includes('its session on Kens-MacBook-Pro.local stopped'))).toBe(true)
+    const pmRead = await new SwarmReads(f.store).firstLoad(owner, f.tab, f.lead)
+    expect(pmRead.groups.find(g => g.key === group)!.data.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its session on Kens-MacBook-Pro.local stopped' } })
+
+    const seen = (await f.store.messages(peer, f.tab, group, {}, agentId)).messages.filter(m => (m.source as { kind?: string } | null)?.kind === 'work-lost')
+    expect(seen.map(m => m.id).sort()).toEqual(lost.map(m => m.id).sort())
+    expect(seen.every(m => m.text.includes('its session stopped'))).toBe(true)
+    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    expect(read.groups.find(g => g.key === group)!.data.assignment).toMatchObject({ status: 'lost', lost: { reason: 'its session stopped' } })
+    expect(read.agents.find(a => a.key === builder)!.data.lostTask).toMatchObject({ reason: 'its session stopped' })
+    expect(JSON.stringify([seen, read])).not.toContain('Kens-MacBook-Pro')
   })
 })

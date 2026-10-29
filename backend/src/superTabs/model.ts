@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { withAvatarView } from './profile.js'
@@ -334,6 +335,20 @@ export interface MessageDraft {
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
 export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
+/** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
+/** A lost task's reason without the machine it ran on (lostReason.ts). */
+export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harnessId' | 'replacement' | 'lostTask'>>(target: T): T => {
+  const { replacement: _replacement, ...rest } = target
+  return { ...rest, machineId: '', harnessId: '',
+    ...(target.lostTask ? { lostTask: { ...target.lostTask, reason: lostReasonWithoutMachine(target.lostTask.reason) } } : {}) } as T
+}
+export const groupWithoutMachines = <T extends Pick<Conversation, 'assignment' | 'lostAttempt'>>(group: T): T => {
+  const assignment = group.assignment && { ...group.assignment,
+    ...(group.assignment.execution ? { execution: { ...group.assignment.execution, machineId: '', harnessId: '' } } : {}),
+    ...(group.assignment.lost ? { lost: { ...group.assignment.lost, reason: lostReasonWithoutMachine(group.assignment.lost.reason) } } : {}) }
+  return { ...group, ...(assignment ? { assignment } : {}),
+    ...(group.lostAttempt ? { lostAttempt: { id: group.lostAttempt.id, agentId: group.lostAttempt.agentId } } : {}) }
+}
 export interface CommandEffects {
   state: SuperTabState
   messages: MessageDraft[]
@@ -590,6 +605,8 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   if (actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && a.buddyOf)) {
     visible.machines = []
     visible.starts = []
+    visible.agents = visible.agents.map(agentWithoutMachine)
+    visible.conversations = visible.conversations.map(groupWithoutMachines)
     // A project's repository names the machine and folder it was made from; the address is all a Buddy needs (security
     // review 2 of #2115).
     for (const project of visible.projects ?? []) if (project.repository) project.repository = { repositoryUrl: project.repository.repositoryUrl } as typeof project.repository

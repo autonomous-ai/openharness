@@ -20,7 +20,8 @@ import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
-import { readsNoRouting, refuseBuddyRouting, routingRow } from './buddies.js'
+import { isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
+import { lostReasonWithoutMachine } from './lostReason.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
@@ -333,6 +334,14 @@ export class GrantReads {
 /** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
+
+/** A lost task's row without the machine its session ran on: the reason in its text and in its source (liveness.ts loseTask). */
+function withoutLostMachine(m: SuperTabMessage): SuperTabMessage {
+  const source = m.source as { kind?: unknown; reason?: unknown } | null
+  if (source?.kind !== 'work-lost' || typeof source.reason !== 'string') return m
+  const reason = lostReasonWithoutMachine(source.reason)
+  return reason === source.reason ? m : { ...m, text: m.text.split(source.reason).join(reason), source: { ...source, reason } as SuperTabMessage['source'] }
+}
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
@@ -1766,7 +1775,7 @@ export class SuperTabStore {
     const group = readConversation(state, actor, conversationId)
     // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
     // and why others could not (security review 2 of #2115). Left out like an agent-only notice, so no page is shorter.
-    const buddy = readsNoRouting(state, actor)
+    const buddy = isBuddyReader(state, actor)
     const forward = cursor.after !== undefined
     const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
       : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
@@ -1791,7 +1800,9 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
-    return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    // A lost task's rows name the machine it ran on; a Buddy reads them without it (security re-check 2 of #2115).
+    const shown = buddy ? page.map(withoutLostMachine) : page
+    return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }

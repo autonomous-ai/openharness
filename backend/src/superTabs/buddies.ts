@@ -22,11 +22,11 @@ export function buddyReads(buddy: Agent, group: Conversation, leadConversationId
 const ROUTING_ROWS: ReadonlySet<string> = new Set(['route', 'route-override', 'rule'])
 export const routingRow = (source: unknown): boolean => ROUTING_ROWS.has(String((source as { kind?: unknown } | null | undefined)?.kind))
 
-/** Whether [actor] is a Buddy, which reads no routing: no route rows, routing decisions or routing policy. */
-export const readsNoRouting = (state: SuperTabState, actor: Actor): boolean =>
+/** Whether [actor] is a Buddy, which reads no routing (no route rows, routing decisions, policy or costs) and no machines. */
+export const isBuddyReader = (state: SuperTabState, actor: Actor): boolean =>
   actor.kind === 'agent' && state.agents.some(a => a.id === actor.agentId && isBuddy(a))
 export function refuseBuddyRouting(state: SuperTabState, actor: Actor): void {
-  if (readsNoRouting(state, actor)) fail('BUDDY_FORBIDDEN', 'A Buddy reads no routing.', 403)
+  if (isBuddyReader(state, actor)) fail('BUDDY_FORBIDDEN', 'A Buddy reads no routing.', 403)
 }
 
 /** A person's Buddy chat in a project, the same each time they add a Buddy there; a new membership opens a new one, as a

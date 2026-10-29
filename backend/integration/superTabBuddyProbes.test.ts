@@ -121,8 +121,8 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
       await expect(reads.group(peer,f.tab,id,agentId)).rejects.toThrow('unavailable')
     }
     const cursor=Buffer.from(JSON.stringify({la:Date.now()+86400000,k:privateChat})).toString('base64url')
-    const page=await reads.dormant(peer,f.tab,{projectId:web.projectId,before:cursor},agentId)
-    expect(page.groups).toEqual([])
+    // Another project's archived list is refused outright, before any read (security re-check 2 of #2115).
+    await expect(reads.dormant(peer,f.tab,{projectId:web.projectId,before:cursor},agentId)).rejects.toThrow('unavailable')
   })
 
   it('reloads cached group access after loss of private-project membership and denies all group reads',async()=>{

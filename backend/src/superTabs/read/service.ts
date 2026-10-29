@@ -5,7 +5,7 @@
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
-import { author, fail, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
+import { author, fail, groupWithoutMachines, isLeads, seenMachineIds, visibleState, type Actor, type AgentStart, type SuperTabState } from '../model.js'
 import { waitingMentions } from '../mentions.js'
 import { decisionsWaiting } from '../decisions.js'
 import type { SuperTabStore } from '../store.js'
@@ -16,6 +16,7 @@ import { migrateSwarm } from '../migration/migrate.js'
 import * as parts from '../parts/index.js'
 import type { GroupData, Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup, readProject } from '../projects.js'
+import { isBuddyReader } from '../buddies.js'
 import { workspacesRequired } from '../workspaceStore.js'
 import type { Leaderboard } from '../leaderboard/contract.js'
 import { profileNames, readableWeek, recentDormantGroups } from '../leaderboard/read.js'
@@ -94,6 +95,8 @@ export class SwarmReads {
       const state = parts.reassemble(await readParts(tx, cached, tabId), { share: true })
       const actor = await this.store.actor(tx, user, state, asAgentId)
       author(state, actor)
+      // A project the reader cannot read is refused before any read, or the pager reads on through all of it for nothing.
+      if (page.projectId) readProject(state, actor, page.projectId)
       // A group the reader may not see never shortens a page, and the cursor names the last group it returns: one built
       // from a hidden row handed out that private chat's id and time (security review 2 of #2115). Each batch reads on from
       // the last row of the one before, by its index, as messages() does, until a page of 50 or the end.
@@ -110,7 +113,8 @@ export class SwarmReads {
         before = { lastActivityAt: Date.parse(last.data!.lastActivityAt!), key: last.key }
       }
       const seen = readable.some(p => p.data!.task?.requires) ? seenMachineIds(visibleState(state, actor, this.now())) : new Set<string>()
-      return { groups: readable.map(p => envelope(p, groupView({ ...p.data!, dormant: true }, seen))),
+      const buddy = isBuddyReader(state, actor)
+      return { groups: readable.map(p => envelope(p, groupView({ ...buddy ? groupWithoutMachines(p.data!) : p.data!, dormant: true }, seen))),
         next: more ? encodeDormantPage(readable.at(-1)!) : null }
     })
   }
@@ -124,7 +128,8 @@ export class SwarmReads {
       // A dormant group is in no whole-Swarm view; it passes the same read check as on the dormant list.
       const dormant = loaded.groups.find(g => g.key === conversationId && g.dormant)
       if (dormant && canReadGroup(view.state, actor, dormant.data!)) {
-        return { group: envelope(dormant, groupView({ ...dormant.data!, dormant: true }, seenIn(view.parts))) }
+        const data = isBuddyReader(view.state, actor) ? groupWithoutMachines(dormant.data!) : dormant.data!
+        return { group: envelope(dormant, groupView({ ...data, dormant: true }, seenIn(view.parts))) }
       }
       return fail('NOT_FOUND', 'This conversation is unavailable.', 404)
     })
