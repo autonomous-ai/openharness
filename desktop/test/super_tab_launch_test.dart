@@ -1048,6 +1048,81 @@ void main() {
     },
   };
 
+  // Combination review of batch #2239: New Project names computers as Add
+  // machine and the Buddy picker do (superTabMachineName), so "Studio.local"
+  // is "Studio" in the chip and in every menu row.
+  testWidgets('New Project names a machine without its .local suffix, in the '
+      'chip and the menu', (tester) async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Studio.local', contributor: 'owner'),
+      machineRow('diego-mac', 'Diego-MacBook.local', lead: true),
+    ];
+    // This computer's other machine, not in the Swarm's list: its name comes
+    // from this Desktop, not the Swarm (re-check of #2237).
+    const laptop = Machine(
+      machineId: 'laptop',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken-MacBook.local',
+    );
+    f.app.machines = [...f.app.machines, laptop];
+    f.app.machineStates['laptop'] = MachineState(laptop)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = (await tester.runAsync(() => f.box(newProject: true)))!;
+    final unlisted = box.integration!.leadMachines!.singleWhere(
+      (m) => m.id == 'laptop',
+    );
+    expect(unlisted.inSwarm, isFalse);
+    expect(
+      box.integration!.leadMachines!.map((m) => m.name),
+      containsAll(['Studio', 'Diego-MacBook', 'Ken-MacBook']),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final chip = find.byKey(const ValueKey('new-harness-field-machine'));
+    expect(
+      find.descendant(of: chip, matching: find.text('Studio')),
+      findsOneWidget,
+    );
+    await tester.tap(chip);
+    await tester.pump();
+    for (final (id, name) in [
+      ('m', 'Studio'),
+      ('diego-mac', 'Diego-MacBook'),
+      ('laptop', 'Ken-MacBook'),
+    ]) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('new-harness-lead-machine-$id')),
+          matching: find.text(name),
+        ),
+        findsOneWidget,
+        reason: id,
+      );
+    }
+    expect(find.textContaining('.local'), findsNothing);
+  });
+
   // Security reviews 1 and 2 of #2228: the server decides where a teammate's
   // Mac runs the PM, by engine (backend leadStart.ts leadChoices), and New
   // Project shows that rather than working it out from the readings.
@@ -1268,7 +1343,7 @@ void main() {
     expect(await box.create(), NewHarnessOutcome.failed);
   });
 
-  test('an engine chosen under Advanced that the chosen machine cannot run '
+  test('an engine chosen that the chosen machine cannot run '
       'says why, and the machine stays', () async {
     final f = SuperTabLaunchFixture();
     noLocalEngines(f);
@@ -1290,7 +1365,7 @@ void main() {
     expect(
       box.leadBlocked,
       '2x 4090 Rig can’t run Claude Code: Claude Code isn’t offered here. '
-      'Choose another engine under Advanced.',
+      'Choose another engine.',
     );
   });
 
@@ -1309,7 +1384,7 @@ void main() {
       ['claude'],
       <Map<String, dynamic>>[],
       '2x 4090 Rig can’t run Codex: Codex isn’t offered here. Choose another '
-          'engine under Advanced.',
+          'engine.',
     ),
   ]) {
     test(
@@ -1369,7 +1444,7 @@ void main() {
     expect(
       box.error,
       'Mac Studio can’t run Codex: Codex isn’t signed in. Choose another '
-      'engine under Advanced.',
+      'engine.',
     );
     expect(commandsOf(f, 'project.create'), isEmpty);
     expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
