@@ -77,9 +77,11 @@ export function answerMachineAddonsQuery(core: Pick<CoreApi, 'daemon'>, service:
 export async function answerExperimentQuery(core: Core, experiments: ReadonlySet<string>, service: string, query: string, payload: Payload): Promise<Payload | null> {
   if (!QUERIES.has(query)) return null
   // `account` is also what models asks for the account's grid name, of its own link (core/modelsLink.ts): only
-  // Share's is answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so the
-  // backend's grid name never reached it, and the picker said "Sign in to find models" to a signed-in person.
-  if (query === 'account' && service !== 'sharing') return null
+  // Share's and the Swarm's are answered here. Seen 2026-10-18: since #1376 models got NOT_AN_EXPERIMENT back instead, so
+  // the backend's grid name never reached it, and the picker said "Sign in to find models" to a signed-in person. The
+  // Swarm's round dial cards need the reader to find their own Buddy: answered nothing, the dial said "No Buddy here
+  // yet" to a person with one (Diego's dial, 2026-10-29).
+  if (query === 'account' && service !== 'sharing' && service !== 'superTabs') return null
   if (!experiments.has(service)) return { error: 'NOT_AN_EXPERIMENT' }
   switch (query) {
     case 'shown':
