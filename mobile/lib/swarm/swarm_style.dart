@@ -121,12 +121,22 @@ class SwarmTopBar extends StatelessWidget {
 
 /// A caption over a card, in sentence case, with maybe a count at its right.
 class SwarmCaption extends StatelessWidget {
-  const SwarmCaption(this.text, {super.key, this.count, this.first = false});
+  const SwarmCaption(
+    this.text, {
+    super.key,
+    this.count,
+    this.countColor,
+    this.countKey = const ValueKey('swarm-needs-count'),
+    this.first = false,
+  });
 
   final String text;
 
-  /// What waits on the person, in the warning colour; null shows none.
+  /// How many there are: what waits on the person, in the warning colour
+  /// unless [countColor] says otherwise; null shows none.
   final int? count;
+  final Color? countColor;
+  final Key countKey;
 
   /// The first thing on the screen: less room above it.
   final bool first;
@@ -161,9 +171,9 @@ class SwarmCaption extends StatelessWidget {
           if (count case final count? when count > 0)
             Text(
               '$count',
-              key: const ValueKey('swarm-needs-count'),
+              key: countKey,
               style: tty
-                  .style(size: 12.5, color: AppColors.warning)
+                  .style(size: 12.5, color: countColor ?? AppColors.warning)
                   .copyWith(height: 1),
             ),
         ],

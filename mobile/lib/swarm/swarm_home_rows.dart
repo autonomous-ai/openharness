@@ -24,8 +24,8 @@ import 'team_glance.dart';
 
 /// A team in a line of coloured dots, as B1 draws it: "● 4 working ● 1
 /// waiting", each dot in its state's colour ([swarmStateColor]), who is down
-/// in red words too. With nobody counted, the team's line in words ("No
-/// agents yet", "All idle").
+/// in red words too, and heard as words alone. With nobody counted, the
+/// team's line in words ("No agents yet", "All idle").
 class SwarmTeamDots extends StatelessWidget {
   const SwarmTeamDots(this.glance, {super.key, this.lead});
 
@@ -42,29 +42,35 @@ class SwarmTeamDots extends StatelessWidget {
       height: 1.35,
     );
     final parts = glance.parts;
-    return Text.rich(
-      TextSpan(
-        children: [
-          if (lead case final lead?) TextSpan(text: '$lead · '),
-          if (parts.isEmpty) TextSpan(text: glance.line),
-          for (final (i, part) in parts.indexed) ...[
-            if (i > 0) const TextSpan(text: '  '),
-            TextSpan(
-              text: '● ',
-              style: TextStyle(color: swarmStateColor(part.state)),
-            ),
-            TextSpan(
-              text: part.text,
-              style: part.state == SwarmAgentState.down
-                  ? TextStyle(color: AppColors.danger)
-                  : null,
-            ),
+    // Heard in words: "1 working · 1 waiting", never the dots.
+    final heard = [?lead, glance.line].join(' · ');
+    return Semantics(
+      label: heard,
+      excludeSemantics: true,
+      child: Text.rich(
+        TextSpan(
+          children: [
+            if (lead case final lead?) TextSpan(text: '$lead · '),
+            if (parts.isEmpty) TextSpan(text: glance.line),
+            for (final (i, part) in parts.indexed) ...[
+              if (i > 0) const TextSpan(text: '  '),
+              TextSpan(
+                text: '● ',
+                style: TextStyle(color: swarmStateColor(part.state)),
+              ),
+              TextSpan(
+                text: part.text,
+                style: part.state == SwarmAgentState.down
+                    ? TextStyle(color: AppColors.danger)
+                    : null,
+              ),
+            ],
           ],
-        ],
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: quiet,
       ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: quiet,
     );
   }
 }
@@ -236,7 +242,9 @@ class SwarmHomeProjectRow extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Semantics(
-                      label: bright && news.tags == 0 ? 'Unread messages' : null,
+                      label: bright && news.tags == 0
+                          ? 'Unread messages'
+                          : null,
                       child: Text(
                         project.project.name,
                         maxLines: 1,
@@ -335,9 +343,7 @@ class SwarmOtherProjectsRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Icon(
-                  open
-                      ? LucideIcons.chevronUp300
-                      : LucideIcons.chevronDown300,
+                  open ? LucideIcons.chevronUp300 : LucideIcons.chevronDown300,
                   size: 18,
                   color: AppPalette.textFaint,
                 ),

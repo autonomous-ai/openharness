@@ -391,8 +391,8 @@ void main() {
       stopReads(host);
     },
   );
-  testWidgets("a project opened from the Home kept: its menu's status reads "
-      'Updating… until its Swarm is read again', (tester) async {
+  testWidgets("a project opened from the Home kept: its header's team line "
+      'reads Updating… until its Swarm is read again', (tester) async {
     final (:host, :fake) = await coldStart(tester);
     final read = Completer<void>();
     fake.routes['/api/super-tabs/$tab/parts'] = (_) async {
@@ -402,11 +402,8 @@ void main() {
     await tester.tap(key('swarm-project-$tab-$project'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
-    await tester.tap(key('swarm-project-menu'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
 
-    final line = key('swarm-project-menu-status');
+    final line = key('swarm-project-team-line');
     Finder inLine(Finder matching) =>
         find.descendant(of: line, matching: matching);
     // Kept: Nova waiting on the person in Fix login.
