@@ -15,7 +15,7 @@
  * and the backend holds a Buddy to its own commands (backend buddies.ts BUDDY_COMMANDS). So it lives in the person's Codex
  * home, one file per Swarm, and is removed with Harness's other files (engines/removeHooks.ts).
  */
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { harnessRules } from '../engines/kit/hookSettings.js'
 import { BUDDY_SUPER_TAB_ACTIONS } from './buddyCommands.js'
@@ -23,8 +23,15 @@ import { BUDDY_SUPER_TAB_ACTIONS } from './buddyCommands.js'
 /** A Swarm id, as the backend makes them: only its own words reach the rule. */
 export const isSwarmId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value)
 
-/** The name Harness gives a Buddy's rules file, and how removal finds them. */
-export const BUDDY_CODEX_RULES = /^harness-buddy-[A-Za-z0-9_-]{1,64}\.rules$/
+/** How a Buddy's rules file begins, and so how removal knows one is Harness's (engines/removeHooks.ts). */
+export const BUDDY_RULES_HEADER = '# Written by Harness, which rewrites it: do not edit. A Buddy in this Swarm reads and posts in its own chats\n'
+
+/** Every Buddy's rules file in the Codex home [home]: Harness's by name and first line, a person's own file left alone. */
+export function buddyCodexRulesFiles(home: string): string[] {
+  let names: string[]
+  try { names = readdirSync(join(home, 'rules')) } catch { return [] }
+  return names.filter(name => /^harness-buddy-[A-Za-z0-9_-]{1,64}\.rules$/.test(name)).map(name => join(home, 'rules', name))
+}
 
 /** Where the rule of [tabId]'s Buddies lives in the Codex home [home]. */
 export const buddyCodexRulesFile = (home: string, tabId: string): string => join(home, 'rules', `harness-buddy-${tabId}.rules`)
@@ -35,7 +42,7 @@ function rulesText(tabId: string): string {
     'host_executable(name="harness", paths=["{launcher}"])',
     `prefix_rule(pattern=["harness", "super-tab", "--tab", ${JSON.stringify(tabId)}, [${actions}]], decision="allow")`,
   ], path => JSON.stringify(path).slice(1, -1))
-  return '# Written by Harness, which rewrites it: do not edit. A Buddy in this Swarm reads and posts in its own chats\n'
+  return BUDDY_RULES_HEADER
     + "# without asking: those commands need Harness's daemon, which Codex's sandbox cannot reach (cli/src/lib/buddyCodexRules.ts).\n"
     + `${rules!.join('\n')}\n`
 }
