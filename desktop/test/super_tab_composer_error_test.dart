@@ -56,6 +56,40 @@ void main() {
       expect(c.composerError('lead'), 'The file is too large.');
     });
 
+    Future<void> refuseFile() async {
+      server.failUpload = 'a.png';
+      c.attachments('lead').add([HarnessAttachment('a.png', _png)]);
+      await c.send();
+      expect(c.composerError('lead'), 'The file is too large.');
+    }
+
+    test('taking the file off clears the refusal', () async {
+      await refuseFile();
+      c.attachments('lead').clear();
+      expect(c.composerError('lead'), isNull);
+    });
+
+    test(
+      'a text-only send that goes through clears a resolved refusal',
+      () async {
+        await refuseFile();
+        c.attachments('lead').clear();
+        c.setDraft('lead', 'Send without the file');
+        expect(await c.send(), isNotNull);
+        expect(server.posts, isNotEmpty);
+        expect(c.composerError('lead'), isNull);
+      },
+    );
+
+    test('a send blocked afterwards says why, over the old refusal', () async {
+      await refuseFile();
+      c.attachments('lead').clear();
+      c.setDraft('lead', 'Hello');
+      await c.send(recipients: ['no-longer-present']);
+      expect(c.operationError, contains('mentioned agent'));
+      expect(c.composerError('lead'), c.operationError);
+    });
+
     test('an upload still running at a switch fails into its own '
         'conversation, not the one now shown', () async {
       final gate = Completer<Map<String, dynamic>>();
