@@ -704,6 +704,178 @@ void main() {
     expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
   });
 
+  Map<String, dynamic> studioPool({
+    int available = 3,
+    int max = 8,
+    int running = 2,
+    int age = 0,
+  }) => {
+    'machineId': 'm',
+    'name': 'Mac Studio',
+    'cwd': '/swarm/m',
+    'contributorId': 'owner',
+    'maxAgents': max,
+    'availableSlots': available,
+    'paused': false,
+    'observation': {
+      'receivedAt': DateTime.now().millisecondsSinceEpoch - age,
+      'runningHarnessIds': [for (var i = 0; i < running; i++) 'h$i'],
+    },
+  };
+
+  test('free agents are the server’s count, not slots minus running', () async {
+    final f = SuperTabLaunchFixture();
+    // Eight slots and two running, but the server counts one free: its count
+    // includes starts still pending and the Team account sharing the Mac.
+    f.connection.server.state['machines'] = [studioPool(available: 1)];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.integration!.leadMachines!.single.freeAgents, 1);
+  });
+
+  for (final (change, message) in [
+    ('fills up', 'Mac Studio has no free agents. Choose another machine.'),
+    ('goes offline', 'Mac Studio is offline. Choose another machine.'),
+  ]) {
+    test(
+      'a machine that $change after the form opened is refused at submit',
+      () async {
+        final f = SuperTabLaunchFixture();
+        f.connection.server.state['machines'] = [studioPool()];
+        f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+        final box = await f.box(newProject: true);
+        expect(box.integration!.leadMachines!.single.startable, isTrue);
+        f.connection.server.state['machines'] = [
+          change == 'fills up'
+              ? studioPool(available: 0)
+              : studioPool(age: 10 * 60 * 1000),
+        ];
+        expect(await box.create(), NewHarnessOutcome.failed);
+        expect(box.error, message);
+        expect(
+          f.connection.calls.where((c) => c.$1 == 'agent_create'),
+          isEmpty,
+        );
+      },
+    );
+  }
+
+  test('a paused Swarm lists no machine as taking work', () async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [studioPool()];
+    f.connection.server.state['paused'] = true;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    for (final machine in box.integration!.leadMachines!) {
+      expect(machine.startable, isFalse, reason: machine.id);
+      expect(machine.unavailable, 'New work is paused in this Swarm');
+    }
+  });
+
+  test(
+    'New Project reads the open Swarm instead of loading it again',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [studioPool()];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      await (await f.app.superTabs.open(tabId)).refresh();
+      int partsReads() => f.connection.calls
+          .where((c) => '${c.$2['path']}'.endsWith('/parts'))
+          .length;
+      final before = partsReads();
+      final box = await f.box(newProject: true);
+      expect(box.integration!.leadMachines!.first.id, 'm');
+      expect(partsReads(), before);
+    },
+  );
+
+  test(
+    'the rules that bind the new project and the Swarm’s model list apply',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [studioPool()];
+      f.connection.server.state['rules'] = [
+        // From before rules were per project: it binds every project.
+        {
+          'id': 'r1',
+          'rule': {
+            'kind': 'preferEngine',
+            'taskKind': null,
+            'engine': 'claude',
+          },
+          'text': 'Claude for everything.',
+        },
+        {
+          'id': 'r2',
+          'projectId': 'another-project',
+          'rule': {'kind': 'forbidModel', 'model': 'opus'},
+          'text': 'No Opus there.',
+        },
+        {
+          'id': 'r3',
+          'rule': {'kind': 'forbidModel', 'engine': 'claude', 'model': 'haiku'},
+          'text': 'No Haiku.',
+        },
+      ];
+      f.connection.server.routingPolicy = {
+        'policy': {
+          'models': [
+            {
+              'engine': 'codex',
+              'model': 'default',
+              'effort': 'default',
+              'quality': 3,
+              'cost': 2,
+              'enabled': false,
+            },
+            {
+              'engine': 'claude',
+              'model': 'default',
+              'effort': 'default',
+              'quality': 4,
+              'cost': 3,
+              'enabled': true,
+            },
+          ],
+          'floor': {'low': 1, 'medium': 2, 'high': 3},
+          'quotaReserve': 10,
+          'notes': '',
+          'localModels': {'quality': 2, 'enabled': false},
+        },
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final rules = box.integration!.leadRules!;
+      expect(rules.engine, 'claude');
+      expect(rules.engineText, 'Claude for everything.');
+      expect(rules.refusal('claude', null), isNull);
+      expect(
+        rules.refusal('claude', 'opus'),
+        isNull,
+        reason: 'another project’s rule',
+      );
+      expect(
+        rules.refusal('claude', 'claude-haiku-4-5'),
+        'Swarm rule: No Haiku.',
+      );
+      expect(
+        rules.refusal('codex', null),
+        'The Swarm’s model list has no enabled Codex model.',
+      );
+      expect(rules.gridModels, isFalse);
+    },
+  );
+
+  test('with no rule and no model list nothing is ruled out', () async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final rules = box.integration!.leadRules!;
+    expect(rules.engine, isNull);
+    expect(rules.refusal('codex', null), isNull);
+    expect(rules.gridModels, isTrue);
+  });
+
   test('a new Swarm keeps choosing among the person’s own machines', () async {
     final f = SuperTabLaunchFixture();
     final box = await f.box();

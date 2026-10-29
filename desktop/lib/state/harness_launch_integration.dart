@@ -62,6 +62,9 @@ class HarnessLaunchIntegration {
   /// visibility, with the machine on a "Product Manager:" line. Null keeps
   /// the ordinary machine, agent and folder controls.
   List<LeadMachine>? leadMachines;
+
+  /// With [leadMachines]: the Swarm's rules for its engine and model.
+  LeadRules? leadRules;
   final Future<String> Function(String machineId, String task) prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;

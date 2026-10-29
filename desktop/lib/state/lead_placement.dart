@@ -114,3 +114,78 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
     if (free > 0 && machine.maySleep) 'May sleep',
   ].join(' · ');
 }
+
+/// A Swarm rule ruling out a model, in its owner's words.
+class LeadForbidden {
+  const LeadForbidden(this.model, {this.engine, required this.text});
+  final String model, text;
+
+  /// Null for every engine.
+  final String? engine;
+}
+
+/// What the Swarm decides about a new project's Product Manager: the rules
+/// that will bind the project (backend superTabs/rules.ts) and the Swarm's
+/// model list (its routing policy). Empty, it rules nothing out.
+class LeadRules {
+  const LeadRules({
+    this.engine,
+    this.engineText,
+    this.forbidden = const [],
+    this.disabledEngines = const {},
+    this.disabledModels = const {},
+    this.gridModels = true,
+  });
+
+  /// The engine a Swarm rule prefers, and that rule's words.
+  final String? engine, engineText;
+  final List<LeadForbidden> forbidden;
+
+  /// Engines the model list has no enabled model of.
+  final Set<String> disabledEngines;
+
+  /// Models the list turns off at every effort, as (engine, model).
+  final Set<(String, String)> disabledModels;
+
+  /// Whether the list lets work run on models served on the Swarm's grid.
+  final bool gridModels;
+
+  /// Why the model list rules [engine] out, or null.
+  String? engineRefusal(String engine) => disabledEngines.contains(engine)
+      ? 'The Swarm’s model list has no enabled ${_engineName(engine)} model.'
+      : null;
+
+  /// Why [engine] running [model] (null for its default) is ruled out, or
+  /// null.
+  String? refusal(String engine, String? model) {
+    if (engineRefusal(engine) case final why?) return why;
+    if (disabledModels.contains((engine, model ?? 'default'))) {
+      return 'The Swarm’s model list turns off ${_engineName(engine)} '
+          '${model ?? 'default model'}.';
+    }
+    for (final rule in forbidden) {
+      if ((rule.engine == null || rule.engine == engine) &&
+          leadModelMatches(rule.model, model)) {
+        return 'Swarm rule: ${rule.text}';
+      }
+    }
+    return null;
+  }
+}
+
+String _engineName(String engine) =>
+    const {'claude': 'Claude', 'codex': 'Codex'}[engine] ?? engine;
+
+final _family = RegExp('haiku|sonnet|opus|fable');
+
+/// A rule names a model as its owner said it, matched as the server does
+/// (backend superTabs/rules.ts modelMatches): `haiku` matches every Haiku id,
+/// and an engine's default model is not known, so nothing matches it.
+bool leadModelMatches(String ruleModel, String? model) {
+  final rule = ruleModel.toLowerCase();
+  final target = (model ?? 'default').toLowerCase();
+  return target != 'default' &&
+      (target.contains(rule) ||
+          (_family.firstMatch(target)?[0] == target &&
+              _family.firstMatch(rule)?[0] == target));
+}

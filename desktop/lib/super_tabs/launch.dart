@@ -74,11 +74,18 @@ class SuperTabLaunch {
       }
     }
     // A project's Product Manager starts on one of the Swarm's machines.
-    final leadMachines = saved['newProject'] == true && tab.superTabId != null
-        ? launch.leadMachinesOf(
-            await app.superTabs.readSnapshot(tab.superTabId!),
-          )
-        : null;
+    // Read from the open Swarm when there is one; each submit reads afresh.
+    List<LeadMachine>? leadMachines;
+    LeadRules? leadRules;
+    if (saved['newProject'] == true && tab.superTabId != null) {
+      final id = tab.superTabId!;
+      final policy = launch.readRoutingPolicy(id);
+      final snapshot =
+          app.superTabs.peek(id)?.snapshot ??
+          await app.superTabs.readSnapshot(id);
+      leadMachines = launch.leadMachinesOf(snapshot);
+      leadRules = launch.leadRulesOf(snapshot, await policy);
+    }
     final selectedRole =
         roles?.where((role) => role.id == saved['roleId']).firstOrNull ??
         roles?.where((role) => role.kind == 'builder').firstOrNull ??
@@ -111,8 +118,16 @@ class SuperTabLaunch {
                 saved['projectPrepared'] == true ||
                 saved['creationRequest'] != null,
             prepare: (machine, task) async {
-              if (integration.leadMachines case final machines?) {
-                launch.checkLeadMachine(machines, machine);
+              if (integration.leadMachines != null) {
+                // The list from when the form opened may be stale by now. An
+                // unreadable Swarm keeps it: creating then fails with the
+                // Swarm's own answer, and the server still decides the start.
+                try {
+                  integration.leadMachines = launch.leadMachinesOf(
+                    await app.superTabs.readSnapshot(tab.superTabId!),
+                  );
+                } catch (_) {}
+                launch.checkLeadMachine(integration.leadMachines!, machine);
               }
               if (integration.roles != null) {
                 final chosen = integration.roles!
@@ -208,7 +223,8 @@ class SuperTabLaunch {
                 : null,
           )
           ..pending = recovering
-          ..leadMachines = leadMachines;
+          ..leadMachines = leadMachines
+          ..leadRules = leadRules;
     if (recovering) {
       integration
         ..machineId = saved['machineId'] as String?
@@ -268,11 +284,16 @@ class SuperTabLaunch {
         id: id,
         name: pool['name'] as String? ?? id,
         online: online,
-        freeAgents: math.max(
-          0,
-          (max is num ? max.toInt() : 0) -
-              (running is List ? running.length : 0),
-        ),
+        // The server's count: it also holds pending starts and the Team
+        // account sharing a Mac. A backend without it: slots minus running.
+        freeAgents: switch (reading['availableSlots']) {
+          final num slots => math.max(0, slots.toInt()),
+          _ => math.max(
+            0,
+            (max is num ? max.toInt() : 0) -
+                (running is List ? running.length : 0),
+          ),
+        },
         repositories: {
           if (checkouts is List)
             for (final checkout in checkouts)
@@ -302,7 +323,9 @@ class SuperTabLaunch {
         maySleep:
             superTabMachineSymbol(device is String ? device : null) ==
             'laptopcomputer',
-        unavailable: pool['contributorId'] != accountId
+        unavailable: snapshot.paused
+            ? 'New work is paused in this Swarm'
+            : pool['contributorId'] != accountId
             ? 'Another person’s machine'
             : app.stateOf(id) == null
             ? 'Not connected to this computer'
@@ -331,8 +354,82 @@ class SuperTabLaunch {
             online: !state.needsLink && !state.isOffline,
             freeAgents: null,
             inSwarm: false,
+            unavailable: snapshot.paused
+                ? 'New work is paused in this Swarm'
+                : null,
           ),
     ], null);
+  }
+
+  /// The Swarm's routing policy, or null when it cannot be read: nothing is
+  /// then ruled out by it.
+  Future<Map<String, dynamic>?> readRoutingPolicy(String tabId) async {
+    try {
+      final answer = await app.superTabs.map(
+        'GET',
+        '/api/super-tabs/$tabId/routing-policy',
+      );
+      return answer['policy'] is Map ? superTabMap(answer['policy']) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// The rules that will bind the new project (older Swarm-wide ones, and
+  /// its own on a retry; never another project's, which the server would
+  /// not apply) and the Swarm's model list ([policy]).
+  LeadRules leadRulesOf(
+    SuperTabSnapshot snapshot,
+    Map<String, dynamic>? policy,
+  ) {
+    final projectId = saved['projectId'];
+    String? engine, engineText;
+    final forbidden = <LeadForbidden>[];
+    for (final row in snapshot.rules) {
+      if (row['projectId'] != null && row['projectId'] != projectId) continue;
+      final rule = row['rule'] is Map ? superTabMap(row['rule']) : const {};
+      final text = row['text'] as String? ?? '';
+      switch (rule) {
+        case {'kind': 'preferEngine', 'engine': final String preferred}
+            when rule['taskKind'] == null || rule['taskKind'] == 'lead':
+          engine ??= preferred;
+          engineText ??= text;
+        case {'kind': 'forbidModel', 'model': final String model}:
+          forbidden.add(
+            LeadForbidden(model, engine: rule['engine'] as String?, text: text),
+          );
+      }
+    }
+    final byModel = <(String, String), bool>{};
+    final byEngine = <String, bool>{};
+    for (final row in policy?['models'] as List? ?? const []) {
+      if (row case {
+        'engine': final String engine,
+        'model': final String model,
+        'enabled': final bool enabled,
+      }) {
+        byModel[(engine, model)] =
+            (byModel[(engine, model)] ?? false) || enabled;
+        byEngine[engine] = (byEngine[engine] ?? false) || enabled;
+      }
+    }
+    return LeadRules(
+      engine: engine,
+      engineText: engineText,
+      forbidden: forbidden,
+      disabledEngines: {
+        for (final MapEntry(:key, :value) in byEngine.entries)
+          if (!value) key,
+      },
+      disabledModels: {
+        for (final MapEntry(:key, :value) in byModel.entries)
+          if (!value) key,
+      },
+      gridModels: switch (policy?['localModels']) {
+        {'enabled': false} => false,
+        _ => true,
+      },
+    );
   }
 
   /// Refuses a machine the list cannot start the Product Manager on now.

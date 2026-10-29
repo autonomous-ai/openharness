@@ -56,6 +56,7 @@ void main() {
     bool visibilityLocked = false,
     bool otherRequest = false,
     List<LeadMachine>? leadMachines,
+    LeadRules? leadRules,
     void Function(SuperTabLaunchFixture f)? setup,
   }) async {
     final oldBrightness = grid.AppTheme.brightness.value;
@@ -78,15 +79,18 @@ void main() {
       engine: 'codex',
       folder: '/work/lamp-os',
       attachments: files,
-      integration: HarnessLaunchIntegration(
-        creationId: 'swarm-form-fixture',
-        actionLabel: 'New Project',
-        projectVisibility: 'public',
-        projectVisibilityLocked: visibilityLocked,
-        prepare: (_, task) async => task,
-        beforeSubmit: (_, _) async {},
-        complete: (_, _) async {},
-      )..leadMachines = leadMachines,
+      integration:
+          HarnessLaunchIntegration(
+              creationId: 'swarm-form-fixture',
+              actionLabel: 'New Project',
+              projectVisibility: 'public',
+              projectVisibilityLocked: visibilityLocked,
+              prepare: (_, task) async => task,
+              beforeSubmit: (_, _) async {},
+              complete: (_, _) async {},
+            )
+            ..leadMachines = leadMachines
+            ..leadRules = leadRules,
     )..linkingProfile = otherRequest;
     addTearDown(box.dispose);
     final boundary = GlobalKey();
@@ -599,7 +603,9 @@ void main() {
     ),
   ];
 
-  testWidgets('The line names the model the engine runs there', (tester) async {
+  testWidgets('The line never guesses the model from other agents', (
+    tester,
+  ) async {
     await mount(
       tester,
       leadMachines: [studio],
@@ -608,8 +614,172 @@ void main() {
     final line = find.descendant(of: leadLine, matching: find.byType(Text));
     expect(
       tester.widget<Text>(line.first).data,
-      'Product Manager: Mac Studio · Codex · GPT-5.5',
+      'Product Manager: Mac Studio · Codex · Default model',
     );
+    await unmount(tester);
+  });
+
+  testWidgets('A saved “no worktree” still gives the PM its own worktree', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio],
+      setup: (f) {
+        f.app.agentPreference.successfulWorktree = false;
+        f.app.gitProjectReaderForTest = (_, _) async => {
+          'isGit': true,
+          'branch': 'main',
+          'branches': [
+            {'ref': 'refs/heads/main', 'name': 'main'},
+          ],
+        };
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(box.isGitProject, isTrue);
+    expect(box.worktree, isTrue);
+    await unmount(tester);
+  });
+
+  testWidgets('Moving the PM reads the new machine’s branches', (tester) async {
+    final reads = <(String, String)>[];
+    final (box, _) = await mount(
+      tester,
+      setup: (f) {
+        addLaptop(f);
+        agentIn(f);
+        f.app.gitProjectReaderForTest = (machine, folder) async {
+          reads.add((machine, folder));
+          return {
+            'isGit': true,
+            'branch': 'main',
+            'branches': [
+              {'ref': 'refs/heads/main', 'name': 'main'},
+              {'ref': 'refs/heads/$machine-only', 'name': '$machine-only'},
+            ],
+          };
+        };
+      },
+      leadMachines: [
+        studio,
+        const LeadMachine(
+          id: 'laptop',
+          name: 'Ken MacBook',
+          online: true,
+          freeAgents: 2,
+          maySleep: true,
+          folders: {
+            'github.com/autonomous-ai/lamp-os': '/Users/ken/swarm/lamp-os',
+          },
+        ),
+      ],
+    );
+    await tester.pumpAndSettle();
+    box.focusField(NewHarnessField.branch);
+    box.accept(box.options.firstWhere((o) => o.id == 'refs/heads/m-only'));
+    expect(box.branchRef, 'refs/heads/m-only');
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-laptop')),
+    );
+    await tester.pumpAndSettle();
+    expect(reads.last, ('laptop', '/Users/ken/swarm/lamp-os'));
+    expect(box.branchRef, isNot('refs/heads/m-only'));
+    await unmount(tester);
+  });
+
+  testWidgets('Moving the PM drops a branch of the old machine, repo unknown', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      setup: (f) {
+        addLaptop(f);
+        f.app.gitProjectReaderForTest = (machine, folder) async => {
+          'isGit': true,
+          'branch': 'main',
+          'branches': [
+            {'ref': 'refs/heads/main', 'name': 'main'},
+            {'ref': 'refs/heads/$machine-only', 'name': '$machine-only'},
+          ],
+        };
+      },
+      leadMachines: [studio, laptop],
+    );
+    await tester.pumpAndSettle();
+    box.focusField(NewHarnessField.branch);
+    box.accept(box.options.firstWhere((o) => o.id == 'refs/heads/m-only'));
+    expect(box.branchRef, 'refs/heads/m-only');
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-laptop')),
+    );
+    await tester.pumpAndSettle();
+    expect(box.machineId, 'laptop');
+    expect(box.branchRef, isNot('refs/heads/m-only'));
+    await unmount(tester);
+  });
+
+  testWidgets('A Swarm rule picks the engine and says so in Advanced', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio],
+      leadRules: const LeadRules(
+        engine: 'claude',
+        engineText: 'Claude for everything.',
+        disabledEngines: {'codex'},
+      ),
+    );
+    expect(box.engine, 'claude');
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('new-harness-lead-advanced')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('new-harness-field-agent')),
+        matching: find.text('Swarm rule: ${box.agentLabel}'),
+      ),
+      findsOneWidget,
+    );
+    box.focusField(NewHarnessField.agent);
+    final codex = box.options.where((o) => o.id == 'codex').single;
+    expect(codex.enabled, isFalse);
+    expect(codex.why, 'The Swarm’s model list has no enabled Codex model.');
+    await unmount(tester);
+  });
+
+  testWidgets('A ruled-out engine keeps New Project waiting with the rule', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio],
+      leadRules: const LeadRules(disabledEngines: {'codex'}),
+    );
+    expect(box.engine, 'codex');
+    expect(
+      box.leadBlocked,
+      'The Swarm’s model list has no enabled Codex model. Choose another engine under Advanced.',
+    );
+    expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+    await unmount(tester);
+  });
+
+  testWidgets('With no rule Advanced shows today’s default without a label', (
+    tester,
+  ) async {
+    await mount(tester, leadMachines: [studio]);
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('new-harness-lead-advanced')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Swarm rule'), findsNothing);
     await unmount(tester);
   });
 

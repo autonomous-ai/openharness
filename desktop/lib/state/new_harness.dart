@@ -1229,6 +1229,8 @@ class NewHarnessController extends ChangeNotifier {
           group: 'Subscription',
           engine: _engine,
           machineId: _machineId,
+          enabled: _leadModelRefusal(null) == null,
+          why: _leadModelRefusal(null),
         ),
       ]),
       if (catalog?.supportsModelLaunch == true &&
@@ -1256,6 +1258,8 @@ class NewHarnessController extends ChangeNotifier {
                   grid: section.name,
                 ),
                 machineId: _machineId,
+                enabled: _leadModelRefusal(model.id, grid: true) == null,
+                why: _leadModelRefusal(model.id, grid: true),
               ),
           ]),
       NewHarnessOption(
@@ -1572,7 +1576,8 @@ class NewHarnessController extends ChangeNotifier {
   /// Why New Project cannot start its Product Manager now, or null.
   String? get leadBlocked {
     final machines = integration?.leadMachines;
-    if (machines == null || leadMachine?.startable == true) return null;
+    if (machines == null) return null;
+    if (leadMachine?.startable == true) return _leadRuleRefusal;
     if (bestLeadMachine(machines, cloudRepository) == null) {
       return 'No machine of yours in this Swarm is free. New Project can start once one is.';
     }
@@ -1585,6 +1590,12 @@ class NewHarnessController extends ChangeNotifier {
   void placeLead() {
     final machines = integration?.leadMachines;
     if (machines == null || locked) return;
+    // The engine a Swarm rule prefers, over the last one used.
+    if (integration?.leadRules?.engine case final engine?
+        when engine != _engine && compatibleEngines.contains(engine)) {
+      _selectEngine(engine);
+      notifyListeners();
+    }
     final best = bestLeadMachine(machines, cloudRepository);
     if (best == null || best.id == _machineId) return;
     chooseLeadMachine(best.id);
@@ -1613,19 +1624,39 @@ class NewHarnessController extends ChangeNotifier {
     final remote = _remoteOf(_machineId, _project);
     _selectMachine(id);
     if (remote != null) _keepRepository(id, remote, listed.name);
+    // That machine's branches: a branch chosen on the other one is not here.
+    if (_desktopChoices) _syncGitProject();
     notifyListeners();
   }
 
-  /// The model the Product Manager runs: the one chosen, else the one this
-  /// engine's agents on that machine last reported.
-  String get leadModelLabel {
-    if (_model != null) return modelLabel;
-    return _machine?.agents
-            .where((a) => a.engine == _engine)
-            .map((a) => a.modelName)
-            .nonNulls
-            .lastOrNull ??
-        'Default model';
+  /// The model the Product Manager runs: the one chosen, else its engine's
+  /// default, which nothing knows before it starts.
+  String get leadModelLabel => _model != null ? modelLabel : 'Default model';
+
+  /// Why the Swarm's rules rule out [model] (null for the engine's default)
+  /// for a new project's Product Manager, or null.
+  String? _leadModelRefusal(String? model, {bool grid = false}) {
+    final rules = integration?.leadRules;
+    if (!placesLead || rules == null) return null;
+    if (grid && !rules.gridModels) {
+      return 'The Swarm’s model list turns off models on its grid.';
+    }
+    return rules.refusal(_engine, model);
+  }
+
+  /// The engine a Swarm rule chose, when the Product Manager runs it.
+  bool get leadEngineByRule =>
+      placesLead && integration?.leadRules?.engine == _engine;
+
+  /// Why the Swarm's rules rule out the engine or model chosen, or null.
+  String? get _leadRuleRefusal {
+    final rules = integration?.leadRules;
+    if (!placesLead || rules == null) return null;
+    if (rules.engineRefusal(_engine) case final why?) {
+      return '$why Choose another engine under Advanced.';
+    }
+    final why = _leadModelRefusal(_model?.id, grid: _model != null);
+    return why == null ? null : '$why Choose another model under Advanced.';
   }
 
   /// The repo the Product Manager starts in is cloned on its machine first:
@@ -1686,7 +1717,6 @@ class NewHarnessController extends ChangeNotifier {
       warn('$machineName has no copy of $remote. Choose its folder there.');
       return;
     }
-    if (_desktopChoices) _syncGitProject();
   }
 
   /// The GitHub repository a cloud coding agent works on: the one chosen to
@@ -3377,12 +3407,15 @@ class NewHarnessController extends ChangeNotifier {
   /// machine its row says so instead of opening.
   NewHarnessOption _engineOption(String id) {
     final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
+    final ruledOut = placesLead
+        ? integration?.leadRules?.engineRefusal(id)
+        : null;
     return NewHarnessOption(
       id: id,
       title: labelOf(id),
       engine: id,
-      enabled: !finderElsewhere,
-      why: finderElsewhere ? kFinderElsewhere : null,
+      enabled: !finderElsewhere && ruledOut == null,
+      why: finderElsewhere ? kFinderElsewhere : ruledOut,
     );
   }
 
