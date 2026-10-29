@@ -13,9 +13,9 @@ import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
-import '../swarm/swarm_page.dart';
 import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_session.dart';
+import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
@@ -24,7 +24,7 @@ import 'exit_app.dart';
 import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
-import 'settings_page.dart' show openPhoneSettings;
+import 'settings_page.dart' show SettingsPage, openPhoneSettings;
 import 'voice_input_controller.dart';
 import 'voice_input_scope.dart';
 import 'welcome/connect_code.dart';
@@ -536,7 +536,9 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               openMachineId: _linkedMachineId,
               openAgent: _openAgentRequest,
             ),
-            swarm: (_) => SwarmPage(
+            swarm: (_) => SwarmTabsPage(
+              // The phone's Settings, as the You tab.
+              settings: (_) => SettingsPage(notifier: widget.notifier),
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier),
             ),

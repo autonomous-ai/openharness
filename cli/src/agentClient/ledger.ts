@@ -190,6 +190,12 @@ export class Ledger {
     return this.read().told.findLast((row) => same(row.by, by) && same(row.told, m)) ?? null
   }
 
+  /** The last words [by] gave any harness on [machineId] (`harness reply`, `harness route --send`), or null. This
+   *  machine's ledger holds only its own callers' lines, so another computer's follow-up never steers this one's. */
+  lastToldBy(by: LedgerMember, machineId: string): Told | null {
+    return this.read().told.findLast((row) => same(row.by, by) && row.told.machineId === machineId) ?? null
+  }
+
   /** 0 for a harness the person started. */
   depthOf(m: LedgerMember): number {
     return this.parentOf(m)?.depth ?? 0

@@ -105,31 +105,11 @@ class _SwarmHomeRootState extends State<SwarmHomeRoot> {
           // and draws it once shown (xterm's own `renderingEnabled`, off with
           // the tickers).
           if (_harnessShown case final harness?)
-            _Kept(key: _harness, hidden: swarm, child: harness),
+            KeptOutOfSight(key: _harness, hidden: swarm, child: harness),
           if (_swarmShown case final home?)
-            _Kept(key: _swarm, hidden: !swarm, child: home),
+            KeptOutOfSight(key: _swarm, hidden: !swarm, child: home),
         ],
       );
     },
-  );
-}
-
-/// [child] at the root, or kept out of sight while [hidden].
-class _Kept extends StatelessWidget {
-  const _Kept({super.key, required this.hidden, required this.child});
-
-  final bool hidden;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Offstage(
-    offstage: hidden,
-    child: TickerMode(
-      enabled: !hidden,
-      child: ExcludeFocus(
-        excluding: hidden,
-        child: OutOfSight(hidden: hidden, child: child),
-      ),
-    ),
   );
 }
