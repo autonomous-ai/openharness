@@ -29,6 +29,15 @@ Pomicons 1.001
   License: SIL OFL 1.1 (OFL.txt)
   Source: https://github.com/gabrielelana/pomicons
 
-The other sets (Devicons, Font Awesome Extension, Octicons, Seti UI,
-Powerline Symbols, Powerline Extra Symbols, IEC Power Symbols) are under the
-MIT license; Font Logos is unlicensed.
+Devicons, Font Awesome Extension, Octicons, Seti UI, Powerline Symbols,
+Powerline Extra Symbols, and IEC Power Symbols are under the MIT license.
+Their original copyright notices, full license texts, and pinned source URLs
+are included in LICENSE alongside Nerd Fonts' own license.
+
+Hack extra glyphs (extraglyphs.sfd)
+  Copyright (c) 2018 Source Foundry Authors
+  Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved.
+  License: MIT and inherited Bitstream Vera terms (both preserved in LICENSE)
+  Source: https://github.com/ryanoasis/nerd-fonts/blob/v3.5.1/src/glyphs/extraglyphs.sfd
+
+Font Logos is unlicensed.
