@@ -652,6 +652,19 @@ describe('the Lead\'s last action on a task', () => {
     expect(task().liveness).toBeUndefined()
   })
 
+  it('keeps whom its agent asked on the task while it waits, in the status write, and forgets it once it moves on', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    f.invite()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 2000 }).result.assignmentId as string
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Flag or not?',
+      ask: { personId: 'peer', options: ['Flag', 'Ship'], recommended: 0, unblocks: 'The release' } }, f.workerActor, { now: 3000 })
+    expect(task().assignment!.askedOf).toBe('peer')
+    expect(task().liveness).toMatchObject({ state: 'waiting', why: 'person', personId: 'peer' })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Flag it' }, f.workerActor, { now: 4000 })
+    expect(task().assignment!.askedOf).toBeUndefined()
+  })
+
   it('leaves a task whose start failed orphaned, so it stays so once the failed start is no longer loaded', () => {
     const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
     f.define(group)

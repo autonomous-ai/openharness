@@ -1951,6 +1951,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
+      if (command.ask) assignment.askedOf = command.ask.personId
+      else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
       // Finished work shows the worker recovered from a task it lost before.

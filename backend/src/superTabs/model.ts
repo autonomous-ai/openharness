@@ -148,6 +148,8 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
+  /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
+  askedOf?: string
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
