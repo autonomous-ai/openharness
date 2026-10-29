@@ -298,9 +298,10 @@ them their due without disturbing the work.
 
 **Two registers.** Instrument surfaces (terminals, panes, tabs, pickers,
 dialogs, the footer, Settings) stay calm: everything above applies unchanged
-and nothing there celebrates. Team surfaces (the leaderboard, profiles and the
-project chat) are where people appear, and they may be warm: they may name a
-moment, carry a mark and smile in their words.
+and nothing there celebrates. Emoji are not icons and do not appear there.
+Team surfaces (the leaderboard, profiles and the project chat) are where people
+appear, and they may be warm: they may name a moment, carry a mark and smile in
+their words.
 
 **Earned, not ambient.** One real event earns one moment: a person ships,
 unblocks a teammate or takes #1. Harness notices it once, where the team
@@ -340,12 +341,12 @@ leaderboard) share four rules.
   unread project or group shows its name in bold, with no dot beside it.
 - **Mentions.** Goal: tell "something changed" apart from "someone needs
   you". A conversation that mentions you is bold and adds an `@N` count of
-  those mentions at its trailing edge.
+  those mentions at its trailing edge, just before the status column.
 - **Status column.** Goal: compare status down the list at a glance. Status
   marks use the shared activity vocabulary (see the
   [icon design system](icon-design-system.md#deliberate-exceptions)) and sit
-  in a fixed trailing column, so names and marks keep their positions as
-  status changes.
+  in a fixed trailing column, last in the row; a mention's `@N` sits just
+  before it. Names and marks keep their positions as status changes.
 - **Names.** Goal: recognize teammates the way they know each other. People
   show as usernames, by default the prefix of their email address
   (`mai@example.com` shows as `mai`); full identity stays available to
@@ -638,8 +639,9 @@ UI checklist (desktop/design/desktop-design-system.md)
       AppIcons); scripts/check-ui-style.py passes and its allowlist only shrank
 - [ ] Numbers follow Numbers and rankings: tabular, right-aligned, one
       emphasized number, zeros hidden, a place is its numeral
-- [ ] Celebration follows Team and celebration: team surfaces only, one real
-      event, named person and thing, marks with accessible words
+- [ ] Celebration follows Team and celebration: team surfaces only, no emoji
+      on instrument surfaces, one real event, named person and thing, marks
+      with accessible words
 - [ ] Color is never the only signal; a trend or state also has a shape or words
 - [ ] Light and dark, 160–200% text, long and missing names, empty, loading and
       error states, with screenshots
