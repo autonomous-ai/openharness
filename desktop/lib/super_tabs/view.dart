@@ -2725,12 +2725,15 @@ class _SuperTabViewState extends State<SuperTabView>
         .outgoing(c.selectedId)
         .where((sent) => sent.inMainStream)
         .toList();
-    // A failed message says so in its own row, with what can be done.
+    // A failed message says so in its own row, with what can be done. Only
+    // this conversation's own error is said there; another's never hides it.
+    final composerError = c.composerError(c.selectedId);
     final errorInRow = outgoing.any(
       (sent) => switch (sent.state) {
         SuperTabOutgoingState.sending => false,
         SuperTabOutgoingState.unconfirmed => c.hasPendingAction,
-        SuperTabOutgoingState.refused => sent.error == c.operationError,
+        SuperTabOutgoingState.refused =>
+          composerError != null && sent.error == composerError,
       },
     );
     final finding = _finding?.conversationId == c.selectedId ? _finding : null;
@@ -2991,14 +2994,14 @@ class _SuperTabViewState extends State<SuperTabView>
                   ],
                 ),
         ),
-        if (c.composerError(c.selectedId) != null && !errorInRow)
+        if (composerError != null && !errorInRow)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    c.composerError(c.selectedId)!,
+                    composerError,
                     style: DesktopChrome.control(),
                   ),
                 ),

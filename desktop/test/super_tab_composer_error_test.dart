@@ -90,6 +90,63 @@ void main() {
       expect(c.composerError('lead'), c.operationError);
     });
 
+    test('a refused send shows only under its own conversation, and the '
+        'other keeps its upload error', () async {
+      await c.select('offline');
+      server.failUpload = 'a.png';
+      c.attachments('offline').add([HarnessAttachment('a.png', _png)]);
+      await c.send();
+      expect(c.composerError('offline'), 'The file is too large.');
+
+      await c.select('lead');
+      server.failUpload = null;
+      server.reject = true;
+      c.setDraft('lead', 'Hello');
+      expect(await c.send(), isNull);
+      expect(c.hasPendingAction, isFalse);
+      expect(c.composerError('lead'), 'Choose an agent in this conversation.');
+
+      await c.select('offline');
+      expect(c.composerError('offline'), 'The file is too large.');
+
+      await c.select('lead');
+      expect(c.composerError('lead'), 'Choose an agent in this conversation.');
+    });
+
+    test('a mention that is gone says so only in its own conversation',
+        () async {
+      c.setDraft('lead', 'Hello');
+      await c.send(recipients: ['no-longer-present']);
+      expect(c.composerError('lead'), contains('mentioned agent'));
+
+      await c.select('offline');
+      expect(c.composerError('offline'), isNull);
+    });
+
+    test('a send still unconfirmed blocks every composer, so each says why',
+        () async {
+      server.loseReply = true;
+      c.setDraft('lead', 'Hello');
+      expect(await c.send(), isNull);
+      expect(c.hasPendingAction, isTrue);
+
+      await c.select('offline');
+      expect(
+        c.composerError('offline'),
+        'The action is not confirmed. Retry to check it.',
+      );
+    });
+
+    test('a refusal outside any conversation still shows where the person '
+        'is', () async {
+      server.refuse = {'code': 'NOPE', 'message': 'Not allowed.'};
+      expect(
+        await c.command({'type': 'agent.release', 'agentId': 'a'}),
+        isNull,
+      );
+      expect(c.composerError('lead'), 'Not allowed.');
+    });
+
     test('an upload still running at a switch fails into its own '
         'conversation, not the one now shown', () async {
       final gate = Completer<Map<String, dynamic>>();

@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/harness_attachments.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -268,6 +270,34 @@ void main() {
       containsPair('replyTo', 'message-1'),
     ]);
     composerKeepsKeyboard(tester);
+    await tester.pump(const Duration(seconds: 1));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('another conversation\'s refusal never hides this one\'s '
+      'upload error, even with the same words in a row here', (tester) async {
+    final server = ConversationServer();
+    final c = await show(tester, server);
+    // This conversation: a refused message, then its own refused file.
+    await c.select('offline');
+    server.reject = true;
+    c.setDraft('offline', 'First');
+    await c.send();
+    server.reject = false;
+    server.failUpload = 'a.png';
+    c.attachments('offline').add([
+      HarnessAttachment('a.png', Uint8List.fromList([1, 2, 3])),
+    ]);
+    await c.send();
+    // Another conversation is refused with the same words.
+    await c.select('lead');
+    server.failUpload = null;
+    server.reject = true;
+    c.setDraft('lead', 'Second');
+    await c.send();
+
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    expect(find.text('The file is too large.'), findsOneWidget);
     await tester.pump(const Duration(seconds: 1));
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
