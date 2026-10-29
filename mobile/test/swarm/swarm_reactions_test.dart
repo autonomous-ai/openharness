@@ -1,0 +1,264 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
+import 'package:harness_mobile/swarm/model.dart';
+import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_reactions.dart';
+
+import 'swarm_fixture.dart';
+import '../theme/sheet_shape.dart';
+
+/// Emoji reactions on a Swarm message, as Desktop draws them (backend
+/// reactions.ts): the counts under it, the reader's own marked, and the six
+/// a long-press offers.
+void main() {
+  group('the reaction counter', () {
+    SuperTabConversation g1(Map<String, dynamic> extra) =>
+        SuperTabSnapshot.fromJson(
+          SuperTabParts.firstLoad(
+            firstLoad(
+              groups: [
+                {...groupData('g1', title: 'Fix login'), ...extra},
+              ],
+            ),
+          ).state,
+        ).conversation('g1')!;
+
+    test('a conversation carries the counter its read sends', () {
+      expect(g1({'reactionSeq': 7}).reactionSeq, 7);
+    });
+
+    test('a conversation nobody reacted in counts none', () {
+      expect(g1(const {}).reactionSeq, 0);
+    });
+  });
+
+  List<SuperTabReactionCount> counts(Map<String, List<(String, String)>> by) =>
+      SuperTabReactionCount.listFromJson([
+        for (final MapEntry(key: emoji, value: who) in by.entries)
+          {
+            'emoji': emoji,
+            'count': who.length,
+            'by': [
+              for (final (kind, id) in who) {'kind': kind, 'id': id},
+            ],
+          },
+      ]);
+
+  Future<void> show(WidgetTester tester, Widget child) => tester.pumpWidget(
+    MaterialApp(
+      theme: grid.buildAppTheme(brightness: Brightness.dark),
+      home: Scaffold(body: Center(child: child)),
+    ),
+  );
+
+  String nameOf(String kind, String id) => switch (id) {
+    me => 'You',
+    'agent-lead' => 'River',
+    _ => 'Ann',
+  };
+
+  Finder chip(SuperTabReactionEmoji emoji) =>
+      find.byKey(ValueKey('swarm-reaction-m1-${emoji.key}'));
+
+  group('the reaction bar', () {
+    testWidgets("shows each emoji with its count, the reader's own marked", (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      await show(
+        tester,
+        SwarmReactionBar(
+          messageId: 'm1',
+          reactions: counts({
+            'tada': [('agent', 'agent-lead'), ('person', me)],
+            'eyes': [('person', 'person-ann')],
+          }),
+          readerId: me,
+          nameOf: nameOf,
+          onReact: (_) {},
+        ),
+      );
+
+      expect(
+        tester.getSemantics(chip(SuperTabReactionEmoji.tada)),
+        isSemantics(
+          label: '🎉 2, River and You',
+          isButton: true,
+          isEnabled: true,
+          isSelected: true,
+          hasTapAction: true,
+        ),
+      );
+      expect(
+        tester.getSemantics(chip(SuperTabReactionEmoji.eyes)),
+        isSemantics(
+          label: '👀 1, Ann',
+          isButton: true,
+          isEnabled: true,
+          isSelected: false,
+          hasTapAction: true,
+        ),
+      );
+      semantics.dispose();
+    });
+
+    testWidgets('a tap on a count reacts with its emoji; each is a '
+        "finger's size", (tester) async {
+      final picked = <SuperTabReactionEmoji>[];
+      await show(
+        tester,
+        SwarmReactionBar(
+          messageId: 'm1',
+          reactions: counts({
+            'rocket': [('person', 'person-ann')],
+          }),
+          readerId: me,
+          nameOf: nameOf,
+          onReact: picked.add,
+        ),
+      );
+
+      await tester.tap(chip(SuperTabReactionEmoji.rocket));
+
+      expect(picked, [SuperTabReactionEmoji.rocket]);
+      final size = tester.getSize(chip(SuperTabReactionEmoji.rocket));
+      expect(size.height, greaterThanOrEqualTo(44));
+      expect(size.width, greaterThanOrEqualTo(44));
+    });
+
+    testWidgets('holding a count names who gave it', (tester) async {
+      await show(
+        tester,
+        SwarmReactionBar(
+          messageId: 'm1',
+          reactions: counts({
+            'heart': [('agent', 'agent-lead'), ('person', 'person-ann')],
+          }),
+          readerId: me,
+          nameOf: nameOf,
+          onReact: (_) {},
+        ),
+      );
+
+      await tester.longPress(chip(SuperTabReactionEmoji.heart));
+      await tester.pump();
+
+      expect(find.text('River and Ann'), findsOneWidget);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+    });
+
+    testWidgets('a message with no reactions draws nothing', (tester) async {
+      await show(
+        tester,
+        SwarmReactionBar(
+          messageId: 'm1',
+          reactions: const [],
+          readerId: me,
+          nameOf: nameOf,
+          onReact: (_) {},
+        ),
+      );
+
+      expect(tester.getSize(find.byType(SwarmReactionBar)), Size.zero);
+    });
+  });
+
+  group('the reaction picker', () {
+    late List<String> haptics;
+
+    setUp(() {
+      haptics = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'HapticFeedback.vibrate') {
+              haptics.add(call.arguments as String? ?? call.method);
+            }
+            return null;
+          });
+    });
+    tearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    Future<Future<SuperTabReactionEmoji?>> open(
+      WidgetTester tester,
+      List<SuperTabReactionCount> reactions,
+    ) async {
+      late BuildContext context;
+      await show(
+        tester,
+        Builder(
+          builder: (c) {
+            context = c;
+            return const SizedBox();
+          },
+        ),
+      );
+      final picked = showSwarmReactionPicker(
+        context,
+        reactions: reactions,
+        readerId: me,
+      );
+      await tester.pumpAndSettle();
+      expect(sheetTopRadius(tester), 12);
+      return picked;
+    }
+
+    testWidgets("offers Desktop's six emoji with a light tap of the phone, "
+        "each a finger's size, and answers the one picked", (tester) async {
+      final picked = await open(tester, const []);
+
+      expect(haptics, ['HapticFeedbackType.lightImpact']);
+      for (final emoji in SuperTabReactionEmoji.values) {
+        final option = find.byKey(ValueKey('swarm-react-${emoji.key}'));
+        expect(option, findsOneWidget);
+        expect(tester.getSize(option).height, greaterThanOrEqualTo(44));
+        expect(tester.getSize(option).width, greaterThanOrEqualTo(44));
+      }
+      await tester.tap(find.byKey(const ValueKey('swarm-react-rocket')));
+      await tester.pumpAndSettle();
+
+      expect(await picked, SuperTabReactionEmoji.rocket);
+      expect(find.byKey(const ValueKey('swarm-react-rocket')), findsNothing);
+    });
+
+    testWidgets("marks the reader's own, and closes with none picked", (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+      final picked = await open(
+        tester,
+        counts({
+          'heart': [('person', me)],
+          'eyes': [('person', 'person-ann')],
+        }),
+      );
+
+      expect(
+        tester.getSemantics(find.byKey(const ValueKey('swarm-react-heart'))),
+        isSemantics(
+          label: 'heart, yours',
+          isButton: true,
+          isSelected: true,
+          hasTapAction: true,
+        ),
+      );
+      expect(
+        tester.getSemantics(find.byKey(const ValueKey('swarm-react-eyes'))),
+        isSemantics(
+          label: 'eyes',
+          isButton: true,
+          isSelected: false,
+          hasTapAction: true,
+        ),
+      );
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+      expect(await picked, isNull);
+      semantics.dispose();
+    });
+  });
+}
