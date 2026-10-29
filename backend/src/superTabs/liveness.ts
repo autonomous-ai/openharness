@@ -4,6 +4,7 @@ import { agentDisplayName } from './agentNames.js'
 import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
+import { LEAD_NAME, leadStartFailed } from './leadStart.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -186,10 +187,15 @@ export const BUDDY_PICKUP_MS = 5 * 60_000
 
 function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
   return (state.starts ?? []).flatMap(start => {
-    if (start.request.buddyOf && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
+    if ((start.request.buddyOf || start.request.leadFor) && !start.dispatched && !start.harnessId && !start.error && start.requestedAt !== undefined
       && now - start.requestedAt > BUDDY_PICKUP_MS) {
       const report = state.machines?.find(m => m.machineId === start.request.machineId)?.observation
       if (!report || now - report.receivedAt > MACHINE_FRESH_MS) return []
+      if (start.request.leadFor) {
+        start.error = `${machineName(state, start.request.machineId)} did not start this ${LEAD_NAME}. Update Harness on it, then start it again.`
+        leadStartFailed(state, start, start.error)
+        return []
+      }
       start.error = `${machineName(state, start.request.machineId)} did not start this Buddy. Update Harness on it, then add the Buddy again.`
       return buddyNotice(state, start)
     }
@@ -201,6 +207,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
+    leadStartFailed(state, start, start.error)
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)

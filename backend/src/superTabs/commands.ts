@@ -27,7 +27,7 @@ import { openReview, openReviewOf, projectPullRequest, verdictPending } from './
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
-import { LEAD_NAME, leadStarting, placeLead } from './leadStart.js'
+import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -1469,7 +1469,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.type === 'agent.startSettled') {
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
-        if (!start.poolSettled) message(start.request.conversationId, command.warning
+        // A Product Manager is never assigned work: its conversation already said where it started.
+        if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
           : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
         start.poolSettled = true
@@ -1478,6 +1479,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
         start.error = command.error
+        leadStartFailed(state, start, command.error)
         // The Lead is woken, so it starts the work elsewhere once or reports it (cli superTabs/start.ts): written in its own
         // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
@@ -1505,8 +1507,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
       result.agentId = agentId
+      if (start.request.leadFor) {
+        // Taking over from a Lead that left, as agent.add does.
+        if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
+        message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
+      }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
-      if (!start.request.buddyOf) message(group.id, start.poolGeneration
+      else if (!start.request.buddyOf) message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
         : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
       break

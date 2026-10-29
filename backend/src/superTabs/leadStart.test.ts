@@ -137,3 +137,44 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(commandSchema.safeParse({ type: 'agent.start', request: { ...request, leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } }).success).toBe(false)
   })
 })
+
+describe('a Product Manager\'s start, once its host reports it', () => {
+  /** The host of [machineId] acting for the start's requester, as the store's host route does (store.ts poolHostActor). */
+  const hosted = (f: ReturnType<typeof swarm>, machineId: string) => ({ contribution: { machineOwnerId: f.machine(machineId).contributorId,
+    contributorId: f.machine(machineId).contributorId, hostGrant: null } })
+  const messages = (effects: ReturnType<ReturnType<typeof swarm>['run']>, conversationId: string) =>
+    effects.messages.filter(m => m.conversationId === conversationId).map(m => m.text)
+
+  it('running, becomes the project\'s Lead and says on which machine', () => {
+    const f = swarm()
+    const startId = f.lead('mate-mac').result.startId as string
+    const joined = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, hosted(f, 'mate-team'))
+    const agentId = joined.result.agentId as string
+    const home = f.state.conversations.find(c => c.id === f.app.conversationId)!
+    expect(home).toMatchObject({ leadId: agentId, agentIds: [agentId] })
+    expect(f.state.agents.find(a => a.id === agentId)).toMatchObject({ machineId: 'mate-team', machineOwnerId: 'mate', projectId: f.app.projectId })
+    expect(messages(joined, f.app.conversationId)).toEqual(['Product Manager started on MacBook Pro.'])
+    expect(f.project().lead).toMatchObject({ status: 'started', machineId: 'mate-team', machineName: 'MacBook Pro' })
+    // Settling it does not call the Product Manager ready for an assignment.
+    const settled = f.run({ type: 'agent.startSettled', startId, warning: null }, owner, hosted(f, 'mate-team'))
+    expect(messages(settled, f.app.conversationId)).toEqual([])
+  })
+
+  it('failed on the machine the person chose, says why and waits for them', () => {
+    const f = swarm()
+    const startId = f.lead('mate-mac').result.startId as string
+    f.run({ type: 'agent.startFailed', startId, error: 'Could not clone the repository.' }, owner, hosted(f, 'mate-team'))
+    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'Could not clone the repository.' })
+    // They can start it again.
+    expect(f.lead('owner-mac').result.machineId).toBe('owner-mac')
+  })
+
+  it('never taken by its machine, fails as a Buddy\'s does', async () => {
+    const { sweepLiveness, BUDDY_PICKUP_MS } = await import('./liveness.js')
+    const f = swarm()
+    f.lead('mate-mac')
+    f.machine('mate-team').observation = { ...f.machine('mate-team').observation!, receivedAt: NOW + BUDDY_PICKUP_MS + MINUTE }
+    sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + MINUTE)
+    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'MacBook Pro did not start this Product Manager. Update Harness on it, then start it again.' })
+  })
+})

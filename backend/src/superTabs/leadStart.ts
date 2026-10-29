@@ -5,8 +5,8 @@
  *  one. Desktop's own-machine flow (project.create, a local start, agent.add) is unchanged. */
 import { admitMachineStart, failTeamWork, machineContribution, projectFolder, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
   type ContributedMachine } from './machines.js'
-import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Person, type SuperTabState } from './model.js'
-import type { SwarmProject } from './projects.js'
+import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
+import { projectsOf, type SwarmProject } from './projects.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
@@ -26,6 +26,8 @@ export interface LeadPlacement {
   machineName?: string
   startId?: string
   reason?: string
+  /** Machines a start from the queue already failed on, tried again only once no other is free. */
+  skipped?: string[]
 }
 /** `repositoryUrl`: the address its folder is cloned from, recorded for a project that has none yet. */
 export interface LeadRequest { engine: string; model?: string; effort?: string; branchRef?: string; repositoryUrl?: string }
@@ -86,3 +88,31 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
 /** A start of [project]'s Product Manager not yet running or failed. */
 export const leadStarting = (state: SuperTabState, projectId: string): AgentStart | undefined =>
   state.starts?.find(s => s.request.leadFor?.projectId === projectId && !s.harnessId && !s.error)
+
+const placementOf = (state: SuperTabState, start: AgentStart): LeadPlacement | undefined => {
+  const lead = start.request.leadFor && projectsOf(state).find(p => p.id === start.request.leadFor!.projectId)?.lead
+  return lead?.startId === start.id ? lead : undefined
+}
+
+/** Its agent [agentId] joined the project's Lead conversation [home]: it leads it, unless a Lead was added there by hand
+ *  meanwhile, which stays. The line its conversation shows. */
+export function leadJoined(state: SuperTabState, start: AgentStart, home: Conversation, agentId: string): string {
+  if (!home.leadId || !home.agentIds.includes(home.leadId)) home.leadId = agentId
+  const placement = placementOf(state, start)
+  if (placement) placement.status = 'started'
+  return `${LEAD_NAME} started on ${placement?.machineName ?? state.machines?.find(m => m.machineId === start.request.machineId)?.name ?? 'its machine'}.`
+}
+
+/** Its start failed with [reason]: on the machine its person chose, the project says why and waits for them; placed from
+ *  the queue, it waits for another machine. */
+export function leadStartFailed(state: SuperTabState, start: AgentStart, reason: string): void {
+  const placement = placementOf(state, start)
+  if (!placement) return
+  delete placement.startId
+  if (placement.chosen !== null) Object.assign(placement, { status: 'failed', reason })
+  else {
+    Object.assign(placement, { status: 'waiting', reason, skipped: [...new Set([...placement.skipped ?? [], start.request.machineId])].slice(-16) })
+    delete placement.machineId
+    delete placement.machineName
+  }
+}
