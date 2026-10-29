@@ -2163,20 +2163,12 @@ class NewHarnessFormState extends State<NewHarnessForm> {
   /// New Project waits.
   Widget _desktopLeadLine() {
     final blocked = box.leadBlocked;
-    final machine = box.leadMachine?.name ?? box.machineLabel;
     return Row(
       key: const ValueKey('new-harness-lead-line'),
       children: [
         Flexible(
           child: Text(
-            blocked ??
-                [
-                  'Product Manager: $machine',
-                  box.agentLabel,
-                  box.leadModelLabel,
-                  if (box.leadClones)
-                    '${box.project.repository!.name} will be cloned there',
-                ].join(' · '),
+            blocked ?? box.leadLine,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),
@@ -2281,7 +2273,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     child: _desktopChoiceButton(_Row.model, AppIcons.brain),
                   ),
                 ),
-              if (box.usesProfile)
+              // Your machine's account and branches say nothing about a
+              // machine the Swarm starts it on.
+              if (box.usesProfile && !box.leadThroughSwarm)
                 setting(
                   'Account',
                   _desktopField(
@@ -2290,7 +2284,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     child: _desktopChoiceButton(_Row.profile, AppIcons.user),
                   ),
                 ),
-              if (box.isGitProject || box.checkingGit || box.gitError != null)
+              if (!box.leadThroughSwarm &&
+                  (box.isGitProject || box.checkingGit || box.gitError != null))
                 setting(
                   'Start from',
                   _desktopField(
@@ -2318,7 +2313,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     String? repository,
     double order,
   ) {
-    final chosen = machine.id == box.machineId;
+    final chosen = machine.id == box.leadMachine?.id && !box.leadQueued;
     final enabled = machine.startable && !box.locked;
     final detail = leadMachineDetail(machine, repository);
     return KeyedSubtree(

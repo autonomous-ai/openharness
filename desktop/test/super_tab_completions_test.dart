@@ -155,19 +155,20 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
     await tester.pump(const Duration(milliseconds: 250));
-    expect(c.draft('lead'), '#off');
+    // The box writes the line itself; the open reference is not accepted.
+    expect(c.draft('lead'), '#off\n');
     expect(server.posts, isEmpty);
-    // The native text-input client delivers the newline separately from its
-    // key event. The completion handler must leave that edit untouched.
+    // A newline the native text-input client delivers is another edit the
+    // completion handler must leave untouched.
     await tester.showKeyboard(composer);
     tester.testTextInput.updateEditingValue(
       const TextEditingValue(
-        text: '#off\n',
-        selection: TextSelection.collapsed(offset: 5),
+        text: '#off\nmore',
+        selection: TextSelection.collapsed(offset: 9),
       ),
     );
     await tester.pump(const Duration(milliseconds: 250));
-    expect(c.draft('lead'), '#off\n');
+    expect(c.draft('lead'), '#off\nmore');
     expect(server.posts, isEmpty);
     expect(picker, findsNothing);
   });
