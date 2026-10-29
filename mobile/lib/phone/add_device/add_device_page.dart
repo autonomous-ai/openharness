@@ -56,20 +56,20 @@ class _Steps extends StatelessWidget {
 
   static const steps = [
     (
-      'Turn the computer on',
+      'Turn Intern 3 on',
       'Plug it in and switch it on. In about a minute it opens a Wi-Fi named "Harness-…".',
     ),
     (
       'Find it',
-      'This phone looks for that Wi-Fi and joins it. Stay close to the computer.',
+      'This phone looks for that Wi-Fi and joins it. Stay close to Intern 3.',
     ),
     (
       'Its password',
-      'If it asks: the computer\'s password, the one set when it was installed.',
+      'If it asks: Intern 3\'s password, the one set when it was installed.',
     ),
     (
       'Its Wi-Fi',
-      'Choose the Wi-Fi the computer should use, and type its password.',
+      'Choose the Wi-Fi Intern 3 should use, and type its password.',
     ),
     (
       'Online',
@@ -361,7 +361,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
       if (joined.state == 'unavailable') {
         _show(
           _Step.join,
-          error: 'No device was chosen. Check it is plugged in and nearby: its Wi-Fi is named "Harness-…".',
+          error: 'Intern 3 was not chosen. Check it is plugged in and nearby: its Wi-Fi is named "Harness-…".',
         );
         return;
       }
@@ -461,7 +461,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
   Future<void> _unlock() async {
     final secret = _secret.text;
     if (secret.isEmpty) {
-      _show(_Step.unlock, error: 'Enter the computer\'s password.');
+      _show(_Step.unlock, error: 'Enter Intern 3\'s password.');
       return;
     }
     setState(() => _busy = true);
@@ -782,7 +782,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         _show(
           _Step.waiting,
           error:
-              'The device did not come online on "$ssid". If its hotspot is back, it tells why: '
+              'Intern 3 did not come online on "$ssid". If its hotspot is back, it tells why: '
               'join it again.',
         );
       }
@@ -856,17 +856,17 @@ class _AddDevicePageState extends State<AddDevicePage> {
       case _Step.start:
         return [
           if (_begun)
-            say('Getting ready to sign the computer in…')
+            say('Getting ready to sign Intern 3 in…')
           else
             say(
-              'When the computer is on and its Wi-Fi "Harness-…" is up, tap Find the device.',
+              'When Intern 3 is on and its Wi-Fi "Harness-…" is up, tap Find Intern 3.',
             ),
         ];
       case _Step.join:
         return [
           if (SetupHotspot.joinsByItself)
             say(
-              'Choose the device, "Harness-…", from the Wi-Fi list. Then wait here.',
+              'Choose Intern 3, "Harness-…", from the Wi-Fi list. Then wait here.',
             )
           else
             say(
@@ -875,7 +875,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           if (_retrying) ...[
             const SizedBox(height: 12),
             say(
-              'The device is still trying the Wi-Fi. Its hotspot comes back within a minute.',
+              'Intern 3 is still trying the Wi-Fi. Its hotspot comes back within a minute.',
             ),
           ],
           if (_unlocked) ...[
@@ -890,7 +890,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           _Line(
             done: _progress.index > _Progress.choosing.index,
             text: _progress.index > _Progress.choosing.index
-                ? 'Joined the device\'s Wi-Fi${_address == null ? '' : ' · address $_address'}'
+                ? 'Joined Intern 3\'s Wi-Fi${_address == null ? '' : ' · address $_address'}'
                 : SetupHotspot.joinsByItself
                 ? 'Choose "Harness-…" from the list…'
                 : 'Waiting for this phone to join "Harness-…"…',
@@ -899,32 +899,29 @@ class _AddDevicePageState extends State<AddDevicePage> {
             _Line(
               done: _progress.index > _Progress.talking.index,
               text: _progress.index > _Progress.talking.index
-                  ? 'The device answered'
-                  : 'Talking to the device…',
+                  ? 'Intern 3 answered'
+                  : 'Talking to Intern 3…',
             ),
           if (_progress == _Progress.reading)
-            const _Line(
-              done: false,
-              text: 'Reading the Wi-Fi the device sees…',
-            ),
+            const _Line(done: false, text: 'Reading the Wi-Fi Intern 3 sees…'),
         ];
       case _Step.unlock:
         return [
           say(
             _checkFirst
-                ? '$name is locked. Enter the computer\'s password — the one set when it was '
+                ? '$name is locked. Enter Intern 3\'s password — the one set when it was '
                       'installed. It is checked first; then you choose its Wi-Fi.'
                 : _lockedSetup
-                ? 'Last, the computer\'s password — the one set when it was installed. $name '
+                ? 'Last, Intern 3\'s password — the one set when it was installed. $name '
                       'starts with it, joins "${_ssid.text.trim()}" and signs in to your account.'
-                : '$name is locked. Enter the computer\'s password — the one set when it was '
+                : '$name is locked. Enter Intern 3\'s password — the one set when it was '
                       'installed — to start it.',
           ),
           const SizedBox(height: 8),
           TtyField(
             key: const Key('add-device-unlock-password'),
             controller: _secret,
-            hint: 'Computer password',
+            hint: 'Intern 3 password',
             autofocus: true,
             keyboardType: TextInputType.visiblePassword,
             obscure: !_reveal,
@@ -943,9 +940,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         ];
       case _Step.networks:
         return [
-          say(
-            'Choose the Wi-Fi for the device. It is the list the device sees.',
-          ),
+          say('Choose the Wi-Fi for Intern 3. It is the list Intern 3 sees.'),
           const SizedBox(height: 12),
           SettingsGroup(
             children: [
@@ -1058,7 +1053,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
         return [
           TtyPrimaryButton(
             key: const Key('add-device-continue'),
-            label: _begun ? 'Try again' : 'Find the device',
+            label: _begun ? 'Try again' : 'Find Intern 3',
             busy: _busy,
             busyLabel: 'Preparing…',
             onPressed: () => unawaited(_start()),
@@ -1135,7 +1130,7 @@ class _AddDevicePageState extends State<AddDevicePage> {
           if (_error.isNotEmpty)
             TtyPrimaryButton(
               key: const Key('add-device-rejoin'),
-              label: 'Join the device again',
+              label: 'Join Intern 3 again',
               onPressed: () => unawaited(_join()),
             )
           else ...[

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { inConversationOrder, pageDeliveries, pageReactions } from '../src/superTabs/pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from '../src/superTabs/pageReads.js'
 import { costRows } from '../src/superTabs/costs/read.js'
 import { recentDecisions } from '../src/superTabs/routeDecisions.js'
 import { settleStuckDeliveries } from '../src/superTabs/deliverySettle.js'
@@ -97,6 +97,28 @@ describe('message page reads', () => {
     const [rows, profile] = await profiled('SuperTabDelivery', () => pageDeliveries(db, 'A', PAGE))
     expect(rows).toHaveLength(1001)
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, messageId: 1 }'], docsExamined: 1001, returned: 1001 })
+  })
+
+  it('reads a page\'s threads through the tabId+conversationId+thread index, examining only their messages', async () => {
+    // 300 top-level messages in one conversation, every tenth with three replies, beside another conversation's.
+    const rows = []
+    for (const conversationId of ['t0', 't1']) {
+      for (let m = 0; m < 300; m++) {
+        const root = `${conversationId}-m${pad(m)}`
+        rows.push({ id: root, thread: root, sequence: m * 4 })
+        if (m % 10 === 0) for (let r = 1; r <= 3; r++) rows.push({ id: `${root}-r${r}`, thread: root, sequence: m * 4 + r })
+      }
+    }
+    await db.superTabMessage.createMany({ data: rows.map(row => ({ ...row, tabId: 'T', conversationId: row.id.slice(0, 2), text: 'x',
+      author: { kind: 'person', id: 'owner', name: 'owner', membershipGeneration: 'gen' }, recipientIds: [], mentions: [],
+      createdAt: new Date(T0 + row.sequence * 1000) })) })
+    const roots = Array.from({ length: 100 }, (_, i) => `t0-m${pad(100 + i)}`)
+    const [threads, profile] = await profiled('SuperTabMessage', () => pageThreads(db, 'T', 't0', roots))
+    expect(threads).toHaveLength(130)
+    expect(threads.filter(row => row.id !== row.thread).map(row => row.id).slice(0, 3)).toEqual(['t0-m100-r1', 't0-m100-r2', 't0-m100-r3'])
+    expect(threads[0]).toEqual({ thread: 't0-m100', id: 't0-m100', author: expect.objectContaining({ id: 'owner' }), mentions: [],
+      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false })
+    expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 130, returned: 130 })
   })
 
   it('reads a page of reactions through the tabId+messageId index, examining only the reactions it returns', async () => {
@@ -283,8 +305,13 @@ describe('terminal context revoke', () => {
     await db.superTabNativeContext.createMany({ data: [{ ...context('peer-worker', open, peer.userId), agentId: worker },
       { ...context('outsider-worker', open, outsider.userId), agentId: worker }, { ...context('owner-worker', open, s.state.ownerId), agentId: worker }] })
     const before = structuredClone(s.state) as SuperTabState
-    const chat = s.run({ type: 'conversation.create', title: 'Private', brief: '', checks: [], audience: { personIds: [peer.userId] } }, peer).conversationId as string
-    s.edit(state => { state.conversations.find(c => c.id === chat)!.agentIds.push(worker) })
+    // A private conversation now is a Buddy chat (buddies.ts), which only its owner's Buddy joins: written here as that join leaves it.
+    s.edit(state => {
+      const generation = state.people.find(p => p.id === peer.userId)!.generation
+      state.conversations.push({ id: 'peer-buddy', kind: 'buddy', projectId: state.conversations.find(c => c.id === open)!.projectId, title: 'Peer\'s Buddy',
+        leadId: null, agentIds: [worker], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+        audience: { people: [{ id: peer.userId, generation }] } })
+    })
     await revokeNativeContexts(db, before, s.state)
     expect(await revoked()).toEqual(['outsider-worker', 'owner-worker'])
   })

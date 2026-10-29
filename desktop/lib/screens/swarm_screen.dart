@@ -75,10 +75,11 @@ import '../state/harness_placement.dart';
 import '../state/new_harness.dart';
 import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
-import '../super_tabs/pm_chat.dart' show countText;
-import '../super_tabs/pm_chat_shortcut.dart';
+import '../super_tabs/buddy_chat.dart' show countText;
+import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
+import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
@@ -540,7 +541,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                             onRetry: app.firstArrival.canRetry
                                 ? _retryFirstArrival
                                 : null,
-                            onStartNew: app.firstArrival.canRetry &&
+                            onStartNew:
+                                app.firstArrival.canRetry &&
                                     !app.firstArrival.checkingStatus
                                 ? _startFreshAfterArrival
                                 : null,
@@ -610,8 +612,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final tab = app.activeSwarmId;
     final work = app.firstArrival.retry(
       app,
-      stillCurrent: () => mounted && app.activeSwarmId == tab &&
-          _newHarness == null && _search == null && !_pickingFolder,
+      stillCurrent: () =>
+          mounted &&
+          app.activeSwarmId == tab &&
+          _newHarness == null &&
+          _search == null &&
+          !_pickingFolder,
     );
     setState(() {});
     await work;
@@ -623,12 +629,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     final session = arrival.selectedSession;
     final engine = arrival.selectedEngine;
     arrival.dismiss();
-    unawaited(_newAgent(
-      machineId: app.localMachineState?.machine.machineId,
-      folder: session?.cwd,
-      engine: engine,
-      task: session == null ? FirstArrival.starterTask : null,
-    ));
+    unawaited(
+      _newAgent(
+        machineId: app.localMachineState?.machine.machineId,
+        folder: session?.cwd,
+        engine: engine,
+        task: session == null ? FirstArrival.starterTask : null,
+      ),
+    );
   }
 
   void _scheduleWelcomeComposer() {
@@ -2248,13 +2256,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
             'iconAsset': swarm.isStore
                 ? kStoreMarkAsset
                 : engineIdentity(_tabEngine(swarm)).asset,
-            'attention': swarm.panes
-                .where(
-                  (p) =>
-                      p.agentId != null &&
-                      app.questionFor(p.machineId, p.agentId!) != null,
-                )
-                .length +
+            'attention':
+                swarm.panes
+                    .where(
+                      (p) =>
+                          p.agentId != null &&
+                          app.questionFor(p.machineId, p.agentId!) != null,
+                    )
+                    .length +
                 tabWaiting(app, swarm),
             if (tabActivity(app, swarm) case final activity?)
               'activity': nativeActivityPayload(
@@ -2451,6 +2460,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _actOnNative(MethodCall call) async {
+    if (mounted && call.method == 'keymapCommand') {
+      final command = (call.arguments as Map?)?['command'];
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) return;
+    }
+
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -6328,6 +6342,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   ? 'Starts in ${groupTitle ?? 'Lead'}. Only members of ${contributionProject!.name} can access it.'
                   : 'Starts in ${groupTitle ?? 'Lead'}.',
               action: 'Add agent',
+              hidden: (row) =>
+                  app.superTabs
+                      .peek(superTabTarget.tabId)
+                      ?.snapshot
+                      ?.agents
+                      .any(
+                        (agent) =>
+                            agent.isBuddy &&
+                            agent.machineId == row.machineId &&
+                            agent.harnessId == row.agentId,
+                      ) ==
+                  true,
               unavailable: (row) {
                 final shared = app.superTabs
                     .peek(superTabTarget.tabId)
@@ -6352,6 +6378,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
                   return 'Only Claude Code or Codex can join this Swarm.';
                 }
                 if (agent != null) {
+                  // Buddies are personal; the picker does not list them either.
+                  if (agent.isBuddy) return 'Choose a running agent.';
                   if (agent.projectId != contributionProject?.id) {
                     return 'This agent belongs to another project. Create a new agent here.';
                   }
@@ -6374,7 +6402,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       additionalDestinations: [
         if (superTabTarget != null)
           for (final agent
-              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.agents ??
+              in app.superTabs.peek(superTabTarget.tabId)?.snapshot?.teamAgents ??
                   [])
             SwarmDestination(
               id: agentDestinationId(agent.machineId, agent.harnessId),
@@ -7493,7 +7521,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
   Widget? _asleepBand() => _showsAsleepBand
       ? _AsleepBand(
           names: [
-            for (final machine in app.asleepComputers) machine.machine.displayName,
+            for (final machine in app.asleepComputers)
+              machine.machine.displayName,
           ],
         )
       : null;
@@ -7649,7 +7678,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     for (var i = 1; i <= 9; i++)
       'pane.focus_$i': () => app.focusPaneByIndex(i - 1),
     'navigation.commands': _showSearchCommands,
-    'swarm.chat_with_pm': () => unawaited(openActivePmChat(app)),
+    'swarm.chat_with_pm': () => unawaited(openActiveBuddyChat(app)),
     'agent_messages.show': () => _showAgentMessages(app.activeSwarmId),
     'agent_messages.activity': _toggleTabActivity,
     'agent_messages.make_leader': _toggleFocusedLeader,
@@ -8091,7 +8120,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               for (final id in _commands.keys) id: () => _runShortcut(id),
             },
             onPending: (keys) => setState(() => _pendingKeys = keys),
-            child: Focus(
+            child: SuperTabQuickSwitcherScope(
+              app: app,
               focusNode: _shellFocus,
               autofocus: app.panes.isNotEmpty,
               child: Scaffold(

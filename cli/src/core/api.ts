@@ -1223,13 +1223,13 @@ export interface SwarmLead { id: string; projectId: string; project: string; eng
 export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face. */
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string }
-/** A project's three places to chat (design 2026-10-28-round-dial-swarm-chat): its Lead conversation, the reader's Chat
- *  with PM, and a group. */
+/** A project's three places to chat (design 2026-10-28-round-dial-swarm-chat): its Lead conversation, the reader's private
+ *  chat (`pm`: their Buddy chat, where the PM's private lines land since Buddies replaced Chat with PM), and a group. */
 export type ChatKind = 'lead' | 'pm' | 'group'
 /** The chat on a project's face on the round dial: the Lead's, unless the window has the project's PM chat or a group
  *  open. `working` only for a working group, `since` from one of its agents' turn here. */
 export interface SwarmChat { kind: ChatKind; id: string; name: string; working: boolean; since?: number }
-/** The newest message the project's Lead wrote in its Lead conversation or Chat with PM since the baseline: the dial's alert. */
+/** The newest message the project's Lead wrote in its Lead conversation or the reader's Buddy chat since the baseline: the dial's alert. */
 export interface LeadNotice { chat: 'lead' | 'pm'; chatId: string; id: string; text: string; at: number }
 /** The conversation the window has open in a Swarm tab. */
 export interface CardFocus { tabId: string; conversationId: string }
@@ -1490,6 +1490,26 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
 
 /** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
 export type RemoteRole = 'web' | 'device'
+
+/**
+ * What the account's own apps away from this desk may ask of this machine and hear from it, beyond what an owner may
+ * (backendSocket.ts `remoteAppPolicy`). Set only on a Harness Team daemon, by the Swarm (superTabs/inCore/teamApps.ts):
+ * there the account is the Mac's owner's, and another person's Product Manager may run, holding people's private chats.
+ */
+export interface RemoteAppPolicy {
+  /** Why a request is refused, or null to answer it as for any owner. */
+  refuse(type: string, payload: Record<string, unknown>): { error: string; message: string } | null
+  /** A reply's payload as the apps may see it. */
+  reply(type: string, payload: Record<string, unknown>): Record<string, unknown>
+  /** An up-frame as the apps may hear it, or null to withhold it. */
+  event<F extends { agentId?: unknown; payload?: unknown }>(frame: F): F | null
+  /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
+   *  (lib/terminalStreamManager.ts `watchOnly`). */
+  watchOnly(): boolean
+  /** Whether a session, by its agent id or its engine's session id, is closed to the apps: its open terminal streams close
+   *  (lib/terminalStreamManager.ts `closedTo`). */
+  isConfidential(id: string): boolean
+}
 
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its
  *  identity was paired under (null for none) for naming it to the person, its identity's public key (the

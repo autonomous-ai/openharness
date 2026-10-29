@@ -31,8 +31,8 @@ Future<void> shot(WidgetTester tester, String name) async {
   });
 }
 
-/// A Swarm whose reader is the peer, with the Lead and the peer's own Chat
-/// with PM in the first project.
+/// A Swarm whose reader is the peer, with the Lead and the peer's own Buddy
+/// chat in the first project, where the PM's private lines reach them.
 ConversationServer swarm() {
   final server = ConversationServer();
   server.state['projects'] = [projectFixture('lead', 'web-project', 'lead')];
@@ -43,13 +43,10 @@ ConversationServer swarm() {
   server.state['conversations'] = [
     conversationFixture('lead', 'Lead'),
     {
-      ...conversationFixture('pm-chat', 'ken.tran'),
+      ...conversationFixture('buddy-peer-lead', "ken.tran's Buddy"),
       'projectId': 'lead',
-      'audience': {
-        'people': [
-          {'id': 'peer', 'generation': 'g1'},
-        ],
-      },
+      'kind': 'buddy',
+      'buddyOwnerId': 'peer',
     },
   ];
   return server;
@@ -88,7 +85,7 @@ Future<SuperTabController> showView(
     ),
   );
   await tester.pumpAndSettle();
-  // The project's rows, Chat with PM among them, show once it is expanded.
+  // The project's rows show once it is expanded.
   if (!c.expandedProjects.contains('lead')) c.toggleProject('lead');
   await tester.pumpAndSettle();
   return c;
@@ -106,7 +103,7 @@ Finder inPanel(String text) =>
     find.descendant(of: pmPanel(), matching: find.text(text));
 
 Future<void> openPmChat(WidgetTester tester) async {
-  await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+  await tester.tap(find.byKey(const ValueKey('super-buddy-lead')));
   await tester.pumpAndSettle();
 }
 
@@ -271,18 +268,22 @@ void main() {
     testWidgets(
       'drops the decisions of a conversation the reader leaves at once, though another keeps the count',
       (tester) async {
-        final server = swarm()..ask(['Ship how?'], conversationId: 'pm-chat');
+        final server = swarm();
+        (server.state['conversations'] as List).add({
+          ...conversationFixture('plans', 'Plans'),
+          'projectId': 'lead',
+        });
+        server.ask(['Ship how?'], conversationId: 'plans');
         final c = await showView(tester, server);
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
         expect(find.text('Ship how?'), findsOneWidget);
 
-        // The reader leaves the private chat and the Lead asks elsewhere:
-        // still one waiting. The new list is slow to come.
-        final pmChat = (server.state['conversations'] as List)
-            .cast<Map<String, dynamic>>()
-            .firstWhere((g) => g['id'] == 'pm-chat');
-        pmChat['audience'] = {'people': <Object>[]};
+        // The reader loses the workgroup and the Lead asks elsewhere: still
+        // one waiting. The new list is slow to come.
+        (server.state['conversations'] as List).removeWhere(
+          (g) => (g as Map)['id'] == 'plans',
+        );
         server
           ..hideDecision('decision-1')
           ..ask(['Name it?']);
@@ -311,15 +312,15 @@ void main() {
     });
   });
 
-  group('Chat with PM', () {
+  group('the Buddy chat', () {
     testWidgets(
       'shows the reader\'s open decisions of that project above its messages',
       (tester) async {
         final server = swarm()
-          ..ask(['Ship how?'], conversationId: 'pm-chat')
+          ..ask(['Ship how?'])
           ..ask(['Elsewhere?'], projectId: 'other');
         await showView(tester, server);
-        await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+        await tester.tap(find.byKey(const ValueKey('super-buddy-lead')));
         await tester.pumpAndSettle();
         final panel = find.byKey(const ValueKey('super-pm-decisions'));
         expect(panel, findsOneWidget);
@@ -331,14 +332,14 @@ void main() {
           find.descendant(of: panel, matching: find.text('Elsewhere?')),
           findsNothing,
         );
-        // The list names the reader's own chat as the sidebar does.
+        // The list names where each was asked: the project chat, for both.
         await tester.tap(notificationsEntry());
         await tester.pumpAndSettle();
         expect(
-          find.text('Wren asked 1 question · web-project · Chat with PM'),
-          findsOneWidget,
+          find.text('Wren asked 1 question · web-project · Lead'),
+          findsNWidgets(2),
         );
-        await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+        await tester.tap(find.byKey(const ValueKey('super-buddy-lead')));
         await tester.pumpAndSettle();
 
         await tester.tap(option('decision-1', 0));
@@ -370,11 +371,11 @@ void main() {
     });
 
     testWidgets(
-      'Chat with PM offers Let PM decide and Not now on each card, and no Let PM decide without a recommended option',
+      'the Buddy chat offers Let PM decide and Not now on each card, and no Let PM decide without a recommended option',
       (tester) async {
         final server = swarm()
-          ..ask(['Ship how?'], conversationId: 'pm-chat')
-          ..ask(['Which colour?'], conversationId: 'pm-chat');
+          ..ask(['Ship how?'])
+          ..ask(['Which colour?']);
         server.decisions.last['recommended'] = null;
         await showView(tester, server);
         await openPmChat(tester);
@@ -404,7 +405,7 @@ void main() {
     testWidgets(
       'Not now folds the card into one line, still folded after a restart, until a new decision arrives',
       (tester) async {
-        final server = swarm()..ask(['Ship how?'], conversationId: 'pm-chat');
+        final server = swarm()..ask(['Ship how?']);
         await showView(tester, server);
         await openPmChat(tester);
 
@@ -433,7 +434,7 @@ void main() {
         expect(find.text('Ship how?'), findsOneWidget);
         expect(notNow('decision-1'), findsNothing);
 
-        server.ask(['Name it?'], conversationId: 'pm-chat');
+        server.ask(['Name it?']);
         await restarted.refresh();
         await openPmChat(tester);
         expect(inPanel('Decisions for you (2)'), findsOneWidget);
@@ -444,8 +445,8 @@ void main() {
 
     test('a decision set aside stays set aside while newer ones push it off the capped list, until it is answered', () async {
       final server = swarm()
-        ..ask(['Ship how?'], conversationId: 'pm-chat')
-        ..ask(['Name it?'], conversationId: 'pm-chat');
+        ..ask(['Ship how?'])
+        ..ask(['Name it?']);
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final decisions = SuperTabDecisions.of(controller);
@@ -457,7 +458,7 @@ void main() {
       // The list holds the newest two of three: the oldest is still open.
       server
         ..decisionPage = 2
-        ..ask(['Which colour?'], conversationId: 'pm-chat');
+        ..ask(['Which colour?']);
       await controller.refresh();
       await pumpEventQueue();
       expect(decisions.open.map((d) => d.id), ['decision-3', 'decision-2']);
@@ -484,7 +485,7 @@ void main() {
       () async {
         final server = swarm()
           ..decisionPage = 50
-          ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+          ..ask(['Ship how?', 'Name it?']);
         final controller = server.controller(account: 'peer');
         addTearDown(controller.dispose);
         final decisions = SuperTabDecisions.of(controller);
@@ -505,8 +506,7 @@ void main() {
     test('a list that does not say it holds every open one forgets nothing it left out', () async {
       // A backend from before the list said so: what is missing from it
       // may still be open.
-      final server = swarm()
-        ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+      final server = swarm()..ask(['Ship how?', 'Name it?']);
       final controller = server.controller(account: 'peer');
       addTearDown(controller.dispose);
       final decisions = SuperTabDecisions.of(controller);
@@ -538,10 +538,9 @@ void main() {
     });
 
     testWidgets(
-      'a refused Let PM decide shows on its card in Chat with PM, and Retry sends it again',
+      'a refused Let PM decide shows on its card in the Buddy chat, and Retry sends it again',
       (tester) async {
-        final server = swarm()
-          ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+        final server = swarm()..ask(['Ship how?', 'Name it?']);
         await showView(tester, server);
         await openPmChat(tester);
         // An older backend, or one that refuses: the card says so.
@@ -613,8 +612,7 @@ void main() {
     testWidgets('Hide folds the whole section, and Show opens it again', (
       tester,
     ) async {
-      final server = swarm()
-        ..ask(['Ship how?', 'Name it?'], conversationId: 'pm-chat');
+      final server = swarm()..ask(['Ship how?', 'Name it?']);
       await showView(tester, server);
       await openPmChat(tester);
 
@@ -654,7 +652,7 @@ void main() {
     await tester.tap(option('decision-1', 0));
     await tester.pumpAndSettle();
     await shot(tester, 'decisions-answered');
-    await tester.tap(find.byKey(const ValueKey('super-pm-chat-lead')));
+    await tester.tap(find.byKey(const ValueKey('super-buddy-lead')));
     await tester.pumpAndSettle();
     await shot(tester, 'chat-with-pm');
   }, skip: shots == null);
@@ -666,12 +664,8 @@ void main() {
         final server = swarm()
           ..ask([
             'For a Mac in a Swarm without the Desktop app, start agents with the CLI only?',
-          ], conversationId: 'pm-chat')
-          ..ask(
-            ['Which name for the setting?'],
-            conversationId: 'pm-chat',
-            recommended: 1,
-          );
+          ])
+          ..ask(['Which name for the setting?'], recommended: 1);
         server.decisions.first['options'] = ['Yes', 'No'];
         server.decisions.first['unblocks'] = 'Starting agents on that Mac';
         server.decisions.last['options'] = ['Offline mode', 'Work offline'];

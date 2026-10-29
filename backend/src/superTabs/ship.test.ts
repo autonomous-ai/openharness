@@ -89,8 +89,8 @@ describe('the ship moment', () => {
     f.run({ type: 'work.assign', conversationId: id, agentId: builder }, owner)
     const work = f.state.conversations.find(c => c.id === id)!
     f.run({ type: 'work.check', conversationId: id, assignmentId: work.assignment!.id, checkId: work.checks[0]!.id, passed: true, evidence: 'ok' }, f.as(builder))
-    // A private conversation is chat only today; were one ever to carry work, its celebration still says nothing of it.
-    f.state.conversations.find(c => c.id === id)!.audience = { people: [{ id: 'owner', generation: 'tab' }] }
+    // A private conversation (a Buddy chat) is chat only today; were one ever to carry work, its celebration still says nothing of it.
+    Object.assign(f.state.conversations.find(c => c.id === id)!, { kind: 'buddy', audience: { people: [{ id: 'owner', generation: 'tab' }] } })
     const done = f.run({ type: 'work.status', conversationId: id, assignmentId: work.assignment!.id, status: 'done', result: `Merged ${PR}` })
     expect(f.ships(done)).toEqual([])
     expect(JSON.stringify(done.messages.filter(m => m.conversationId !== id))).not.toContain('Secret plan')

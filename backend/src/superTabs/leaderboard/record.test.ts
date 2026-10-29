@@ -29,6 +29,12 @@ function fixture() {
   const create = (actor: Actor = owner, extra: Record<string, unknown> = {}) =>
     run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, ...extra }), actor).result.conversationId as string
   const group = (id: string): Conversation => state.conversations.find(c => c.id === id)!
+  /** The owner's Buddy chat in the Swarm's project, as adding a Buddy opens it: the one private chat (buddies.ts). */
+  const buddyChat = () => {
+    state.conversations.push({ id: 'owner-buddy', kind: 'buddy', title: 'Owner\'s Buddy', leadId: null, agentIds: [], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: state.people[0]!.generation }] } })
+    return 'owner-buddy'
+  }
   /** A worker on [id] with its task assigned, returning the assignment id. */
   const assign = (id: string, worker = add(`worker-${id}`, id)) => {
     run({ type: 'work.assign', conversationId: id, agentId: worker })
@@ -41,7 +47,7 @@ function fixture() {
   }
   const say = (id: string, actor: Actor, text = 'Go with the flag.', replyTo: string | null = null, reply?: CommandContext['reply']) =>
     run({ type: 'message.send', conversationId: id, text, replyTo, recipientIds: [] }, actor, reply ? { reply } : {})
-  return { run, invitePeer, add, asAgent, create, group, assign, status, passChecks, say,
+  return { run, invitePeer, add, asAgent, create, group, buddyChat, assign, status, passChecks, say,
     get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -89,9 +95,9 @@ describe('who asked for a group', () => {
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: null }, f.asAgent(worker))).toThrow('coordinating lead')
   })
 
-  it('opens a private conversation without a requester: private chats never count', () => {
+  it('never names a requester for a Buddy chat: private chats never count', () => {
     const f = fixture()
-    const id = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
+    const id = f.buddyChat()
     expect(f.group(id).requesterId).toBeUndefined()
     expect(f.group(id).ledger).toBeUndefined()
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: 'owner' })).toThrow('chat only')
@@ -274,8 +280,7 @@ describe('when the Lead records a merge', () => {
     const { f, lead, id } = setup()
     const review = f.create(lead, { reviewOf: id, title: 'Review', brief: 'Review it.' })
     expect(() => f.run(merged(review), lead)).toThrow('review group')
-    const chat = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
-    expect(() => f.run(merged(chat))).toThrow('chat only')
+    expect(() => f.run(merged(f.buddyChat()))).toThrow('chat only')
   })
 })
 
@@ -497,7 +502,7 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
 
   it('never credits a private conversation', () => {
     const f = fixture()
-    const chat = f.run({ type: 'conversation.create', title: 'Me and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    const chat = f.buddyChat()
     tagged(f, chat, 'Hi.', [{ messageId: 'tag', createdAt: 0 }])
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
@@ -602,33 +607,56 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     const reviewer = f.add('reviewer', id)
     f.state.agents.find(a => a.id === reviewer)!.configuration = { ...config, engine: 'codex', model: 'gpt-5.5', effort: 'medium' }
     verdict(f, id, assignmentId, false, true, f.asAgent(reviewer))
+    // The same check passed again on the same attempt is the same review (full review of #2097).
     verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
     // A person's verdict, and one on a check that is not a review, are no model's review.
     verdict(f, id, assignmentId, true)
     verdict(f, id, assignmentId, true, false, f.asAgent(reviewer))
     expect(f.group(id).ledger!.reviews).toEqual([
-      { week: weekStart(7_000), engine: 'codex', model: 'gpt-5.5', effort: 'medium', count: 2 },
+      { week: weekStart(7_000), engine: 'codex', model: 'gpt-5.5', effort: 'medium', count: 1 },
     ])
+    // A new attempt is reviewed anew.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    verdict(f, id, second.assignmentId, true, true, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews![0]!.count).toBe(2)
+  })
+
+  it('gives no model credit for verdicts on an attempt recorded before attempts were (review of #2128)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    // As an assignment from before attempts were recorded: no run, so no way to tell a repeat.
+    delete f.group(id).ledger!.runs
+    for (let i = 0; i < 3; i++) verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews).toBeUndefined()
   })
 
   it('counts every verdict exactly, however many a group gets in a week (review of #2097)', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })
-    const { assignmentId } = f.assign(id)
-    const reviewer = f.add('reviewer', id)
-    for (let i = 0; i < 45; i++) verdict(f, id, assignmentId, i % 2 === 0, true, f.asAgent(reviewer))
+    const worker = f.add('worker', id), reviewer = f.add('reviewer', id)
+    // 45 attempts, each reviewed once: more than the 20 attempts a group keeps.
+    for (let i = 0; i < 45; i++) {
+      const { assignmentId } = f.assign(id, worker)
+      verdict(f, id, assignmentId, i % 2 === 0, true, f.asAgent(reviewer))
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
     expect(f.group(id).ledger!.reviews).toEqual([{ week: weekStart(1_000), engine: 'claude', model: 'opus', effort: 'high', count: 45 }])
   })
 
   it('keeps review counts for the weeks the board reads, and drops older ones', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })
-    const { assignmentId } = f.assign(id)
-    const reviewer = f.add('reviewer', id)
+    const worker = f.add('worker', id), reviewer = f.add('reviewer', id)
     const start = weekStart(Date.UTC(2026, 9, 26))
+    // A new attempt reviewed each week.
     for (let back = 6; back >= 0; back--) {
       f.at(start - back * WEEK_MS + DAY_MS)
+      const { assignmentId } = f.assign(id, worker)
       verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
     }
     expect(f.group(id).ledger!.reviews!.map(r => (start - r.week) / WEEK_MS)).toEqual([4, 3, 2, 1, 0])
   })
@@ -645,6 +673,23 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
     expect(f.group(id).ledger!.runs).toHaveLength(20)
     expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
+  })
+
+  it('takes the asked time for a request recorded before the first assignment was kept, once its first attempt may have rolled off', () => {
+    const f = fixture()
+    f.at(1_000)
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    for (let i = 0; i < 21; i++) {
+      f.at(10_000 + i)
+      const { assignmentId } = f.assign(id, worker)
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    // As a group recorded before the time was kept: 20 attempts kept, the first rolled off.
+    delete f.group(id).ledger!.firstAssignedAt
+    f.at(20_000)
+    f.assign(id, worker)
+    expect(f.group(id).ledger!.firstAssignedAt).toBe(1_000)
   })
 
   it('takes the first assignment time from the kept attempts for a request recorded before it was kept (review of #2097)', () => {

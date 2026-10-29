@@ -143,4 +143,30 @@ void main() {
       );
     });
   });
+
+  group('capacity is what starts can use', () {
+    test("another person's machine shows why, never its free count", () {
+      final theirs = _machine(
+        'rig',
+        free: 3,
+        unavailable: 'Another person’s machine',
+      );
+      expect(leadMachineDetail(theirs, null), 'Another person’s machine');
+    });
+
+    test(
+      'your own machine shows the free count that starts are admitted by',
+      () {
+        expect(
+          leadMachineDetail(_machine('mac', free: 3), null),
+          'Online · 3 agents free',
+        );
+        expect(
+          leadMachineDetail(_machine('mac', free: 0), null),
+          'Online · No agents free',
+        );
+        expect(_machine('mac', free: 0).startable, isFalse);
+      },
+    );
+  });
 }

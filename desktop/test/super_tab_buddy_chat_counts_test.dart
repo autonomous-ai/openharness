@@ -17,11 +17,11 @@ import 'package:harness/shortcuts/keymap_edit.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/controller.dart';
-import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/machine_icon.dart';
 import 'package:harness/super_tabs/machines.dart';
-import 'package:harness/super_tabs/pm_chat.dart';
-import 'package:harness/super_tabs/pm_chat_shortcut.dart';
+import 'package:harness/super_tabs/buddy_chat.dart';
+import 'package:harness/super_tabs/buddy_chat_shortcut.dart';
+import 'package:harness/super_tabs/buddy_rows.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
 import 'package:harness/super_tabs/view.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
@@ -33,10 +33,11 @@ import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
 
 /// Set to a folder to write the PR's screenshots there.
-final shots = Platform.environment['SUPER_TAB_PM_CHAT_SHOTS'];
+final shots = Platform.environment['SUPER_TAB_BUDDY_CHAT_SHOTS'];
 
-/// Chat with PM pinned at the top of the Swarm sidebar, with its unread count
-/// on the row, the project and the Swarm tab, and a shortcut that opens it.
+/// The reader's Buddy chat, where the PM's private lines land since Buddies
+/// replaced Chat with PM (10-29): its unread count on the Swarm tab, its row
+/// in the sidebar, and a shortcut that opens it.
 void main() {
   setUpAll(() async {
     if (shots != null) await loadPreviewFonts();
@@ -51,8 +52,8 @@ void main() {
     final c = server.controller(account: account);
     addTearDown(c.dispose);
     await c.refresh();
-    await c.openPmChat('lead');
-    final chat = c.pmChat('lead')!.id;
+    await c.openBuddyChat('lead');
+    final chat = c.buddyChat('lead')!.id;
     await c.select('offline');
     await pumpEventQueue();
     return (c, chat);
@@ -99,8 +100,8 @@ void main() {
       await c.refresh();
       await pumpEventQueue();
 
-      expect(c.unreadCount(c.pmChat('lead')!), 3);
-      expect(c.pmUnread, 3);
+      expect(c.unreadCount(c.buddyChat('lead')!), 3);
+      expect(c.buddyUnread, 3);
     });
 
     test('ignores the reader\'s own messages and clears once read', () async {
@@ -115,14 +116,14 @@ void main() {
       };
       await c.refresh();
       await pumpEventQueue();
-      expect(c.unreadCount(c.pmChat('lead')!), 1);
+      expect(c.unreadCount(c.buddyChat('lead')!), 1);
 
       await c.select(chat);
       await pumpEventQueue();
       c.markRead(chat);
 
-      expect(c.unreadCount(c.pmChat('lead')!), 0);
-      expect(c.pmUnread, 0);
+      expect(c.unreadCount(c.buddyChat('lead')!), 0);
+      expect(c.buddyUnread, 0);
     });
 
     test(
@@ -162,7 +163,7 @@ void main() {
       await owner.refresh();
       await pumpEventQueue();
 
-      expect(owner.pmUnread, 0);
+      expect(owner.buddyUnread, 0);
       expect(reads.where((p) => p.contains(peerChat)), isEmpty);
     });
   });
@@ -207,13 +208,13 @@ void main() {
 
       await fresh.refresh();
       await pumpEventQueue(times: 100);
-      expect(fresh.unreadCount(fresh.pmChat('lead')!), 25);
+      expect(fresh.unreadCount(fresh.buddyChat('lead')!), 25);
       expect(reads, hasLength(3));
 
       reads.clear();
       await fresh.refresh();
       await pumpEventQueue(times: 100);
-      expect(fresh.unreadCount(fresh.pmChat('lead')!), 25);
+      expect(fresh.unreadCount(fresh.buddyChat('lead')!), 25);
       expect(reads, isEmpty);
     });
 
@@ -229,7 +230,7 @@ void main() {
 
         await c.refresh();
         await pumpEventQueue(times: 100);
-        expect(c.unreadCount(c.pmChat('lead')!), 25);
+        expect(c.unreadCount(c.buddyChat('lead')!), 25);
         // The page after the held tail says more than a page arrived: the
         // latest page replaces it, and two earlier pages reach the read mark.
         expect(reads, hasLength(4));
@@ -255,9 +256,9 @@ void main() {
 
       await fresh.refresh();
       await pumpEventQueue(times: 200);
-      final count = fresh.unreadCount(fresh.pmChat('lead')!);
+      final count = fresh.unreadCount(fresh.buddyChat('lead')!);
       expect(count, greaterThanOrEqualTo(100));
-      expect(pmUnreadLabel(count), '99+ new in Chat with PM');
+      expect(buddyUnreadLabel(count), '99+ new in your Buddy chat');
       expect(reads, hasLength(10));
 
       reads.clear();
@@ -289,10 +290,10 @@ void main() {
       await c.refresh();
       await c.select('mobile-lead');
 
-      expect(await c.openCurrentPmChat(), isTrue);
+      expect(await c.openCurrentBuddyChat(), isTrue);
 
-      expect(c.selectedId, c.pmChat('mobile')!.id);
-      expect(c.pmChat('lead'), isNull);
+      expect(c.selectedId, c.buddyChat('mobile')!.id);
+      expect(c.buddyChat('lead'), isNull);
     });
   });
 
@@ -330,57 +331,9 @@ void main() {
       c.dispose();
     }
 
-    final entry = find.byKey(const ValueKey('super-pm-chat-lead'));
+    final entry = find.byKey(const ValueKey('super-buddy-lead'));
     final sidebar = find.byType(ProjectSidebar);
     final projectRow = find.byKey(const ValueKey('super-group-lead'));
-
-    testWidgets(
-      'lists Chat with PM as a direct message below the projects, shown with the project and the list collapsed',
-      (tester) async {
-        final c = await show(tester, riverSwarm());
-        expect(c.expandedProjects, isNot(contains('lead')));
-        // Listed by the Product Manager's name and avatar, like a direct message.
-        expect(
-          find.descendant(of: entry, matching: find.text('River')),
-          findsOne,
-        );
-        expect(
-          find.descendant(of: entry, matching: find.byType(SuperTabAvatar)),
-          findsOne,
-        );
-        expect(
-          find.descendant(of: entry, matching: find.byTooltip('Chat with PM')),
-          findsOne,
-        );
-        expect(
-          tester.getTopLeft(find.text('Projects')).dy,
-          lessThan(tester.getTopLeft(find.text('Direct messages')).dy),
-        );
-        expect(
-          tester.getTopLeft(find.text('Direct messages')).dx,
-          tester.getTopLeft(find.text('Projects')).dx,
-        );
-        expect(
-          tester.getTopLeft(find.text('Direct messages')).dy,
-          lessThan(tester.getTopLeft(entry).dy),
-        );
-
-        c.toggleProjectsGroup();
-        await tester.pumpAndSettle();
-        expect(c.projectsGroupOpen, isFalse);
-        expect(entry, findsOneWidget);
-
-        // Opening the project does not list it a second time.
-        c.toggleProjectsGroup();
-        c.toggleProject('lead');
-        await tester.pumpAndSettle();
-        expect(
-          find.descendant(of: sidebar, matching: find.text('River')),
-          findsOneWidget,
-        );
-        await close(tester, c);
-      },
-    );
 
     testWidgets(
       'lists projects as channels: a # before the name, open or not',
@@ -446,13 +399,13 @@ void main() {
         Future<void> shortcutOverNotifications() async {
           await tester.tap(find.byKey(const ValueKey('super-notifications')));
           await tester.pumpAndSettle();
-          expect(find.text('Message River'), findsNothing);
-          // What ⇧⌘K runs (openActivePmChat).
-          expect(await c.openCurrentPmChat(), isTrue);
+          expect(find.text('Message your Buddy'), findsNothing);
+          // What ⇧⌘K runs (openActiveBuddyChat).
+          expect(await c.openCurrentBuddyChat(), isTrue);
           await tester.pumpAndSettle();
-          expect(c.selectedId, c.pmChat('lead')?.id);
-          // The composer names the direct message as its row does.
-          expect(find.text('Message River'), findsOneWidget);
+          expect(c.selectedId, c.buddyChat('lead')?.id);
+          // The composer names the Buddy chat as its row does.
+          expect(find.text('Message your Buddy'), findsOneWidget);
         }
 
         await shortcutOverNotifications();
@@ -482,30 +435,19 @@ void main() {
       },
     );
 
-    testWidgets('names the Product Manager role while a project has none', (
-      tester,
-    ) async {
-      final c = await show(tester, ConversationServer(), account: 'owner');
-      expect(
-        find.descendant(of: entry, matching: find.text('Product Manager')),
-        findsOne,
-      );
-      await close(tester, c);
-    });
-
     testWidgets('the first open leaves Notifications for the new chat', (
       tester,
     ) async {
       final c = await show(tester, pmChatSwarm());
       await tester.tap(find.byKey(const ValueKey('super-notifications')));
       await tester.pumpAndSettle();
-      expect(find.text('Message Lead'), findsNothing);
+      expect(find.text('Message your Buddy'), findsNothing);
 
       await tester.tap(entry);
       await tester.pumpAndSettle();
 
-      expect(c.selectedId, c.pmChat('lead')!.id);
-      expect(find.text('Message Lead'), findsOneWidget);
+      expect(c.selectedId, c.buddyChat('lead')!.id);
+      expect(find.text('Message your Buddy'), findsOneWidget);
       await close(tester, c);
     });
 
@@ -515,13 +457,13 @@ void main() {
       final server = riverSwarm();
       secondProject(server);
       final c = await show(tester, server);
-      final mobile = find.byKey(const ValueKey('super-pm-chat-mobile'));
+      final mobile = find.byKey(const ValueKey('super-buddy-mobile'));
 
-      for (final (row, pm, project) in [
-        (entry, 'River', 'Pilot'),
-        (mobile, 'Wren', 'Mobile'),
-      ]) {
-        expect(find.descendant(of: row, matching: find.text(pm)), findsOne);
+      for (final (row, project) in [(entry, 'Pilot'), (mobile, 'Mobile')]) {
+        expect(
+          find.descendant(of: row, matching: find.text('Buddy')),
+          findsOne,
+        );
         expect(
           find.descendant(of: row, matching: find.text('($project)')),
           findsOne,
@@ -529,26 +471,26 @@ void main() {
         expect(
           find.descendant(
             of: row,
-            matching: find.byTooltip('Chat with PM · $project'),
+            matching: find.byTooltip('Your Buddy · $project'),
           ),
           findsOne,
         );
       }
 
-      await tester.tap(find.byKey(const ValueKey('super-pm-chat-mobile')));
+      await tester.tap(find.byKey(const ValueKey('super-buddy-mobile')));
       await tester.pumpAndSettle();
-      expect(c.selectedId, c.pmChat('mobile')!.id);
+      expect(c.selectedId, c.buddyChat('mobile')!.id);
       await close(tester, c);
     });
 
     testWidgets(
-      "shows the count on the row and the project, and the project's count opens the chat",
+      "shows a Buddy chat's new lines as its own row in bold, with no count there or on the project",
       (tester) async {
         final server = pmChatSwarm();
         final c = await show(tester, server);
         await tester.tap(entry);
         await tester.pumpAndSettle();
-        final chat = c.pmChat('lead')!.id;
+        final chat = c.buddyChat('lead')!.id;
         await tester.tap(find.byKey(const ValueKey('super-group-lead')));
         await tester.pumpAndSettle();
 
@@ -557,24 +499,15 @@ void main() {
         await c.refresh();
         await tester.pumpAndSettle();
 
-        final projectCount = find.byKey(
-          const ValueKey('super-project-pm-unread-lead'),
-        );
-        expect(find.descendant(of: entry, matching: find.text('2')), findsOne);
-        expect(
-          find.descendant(of: projectCount, matching: find.text('2')),
-          findsOne,
-        );
-        expect(find.byTooltip('2 new in Chat with PM'), findsNWidgets(2));
-
-        await tester.tap(projectCount);
-        await tester.pumpAndSettle();
-        expect(c.selectedId, chat);
+        expect(tester.widget<SuperTabBuddyRow>(entry).unread, isTrue);
         expect(
           find.descendant(of: entry, matching: find.text('2')),
           findsNothing,
         );
-        expect(projectCount, findsNothing);
+        expect(
+          find.descendant(of: projectRow, matching: find.text('2')),
+          findsNothing,
+        );
         await close(tester, c);
       },
     );
@@ -585,19 +518,15 @@ void main() {
       final server = pmChatSwarm();
       final peer = server.controller(account: 'peer');
       await peer.refresh();
-      await peer.openPmChat('lead');
-      final peerChat = peer.pmChat('lead')!.id;
+      await peer.openBuddyChat('lead');
+      final peerChat = peer.buddyChat('lead')!.id;
       peer.dispose();
       pmReply(server, peerChat, 'Only for Ken.');
 
       final c = await show(tester, server, account: 'owner');
 
       expect(entry, findsOneWidget);
-      expect(c.pmChat('lead'), isNull);
-      expect(
-        find.byKey(const ValueKey('super-project-pm-unread-lead')),
-        findsNothing,
-      );
+      expect(c.buddyChat('lead'), isNull);
       expect(
         find.descendant(of: sidebar, matching: find.text('ken.tran')),
         findsNothing,
@@ -608,15 +537,15 @@ void main() {
 
   group('the Swarm tab', () {
     test(
-      'counts unread PM messages beside its tags, with its own label',
+      'counts unread Buddy chat lines beside its tags, with its own label',
       () async {
         final f = SuperTabLaunchFixture(local: true);
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
         final server = f.connection.server;
         final c = await f.app.superTabs.open(tabId);
         await c.refresh();
-        await c.openPmChat('lead');
-        final chat = c.pmChat('lead')!.id;
+        await c.openBuddyChat('lead');
+        final chat = c.buddyChat('lead')!.id;
         await c.select('lead');
         final tab = f.app.activeSwarm;
         expect(tabWaiting(f.app, tab), 0);
@@ -626,23 +555,23 @@ void main() {
         pmReply(server, chat, 'Shall I ship it?');
         await c.refresh();
         await pumpEventQueue();
-        expect(tabPmWaiting(f.app, tab), 2);
+        expect(tabBuddyWaiting(f.app, tab), 2);
         expect(tabWaiting(f.app, tab), 2);
-        expect(tabWaitingLabel(f.app, tab), '2 new in Chat with PM');
+        expect(tabWaitingLabel(f.app, tab), '2 new in your Buddy chat');
 
         server.tag('message-1');
         await c.refresh();
         expect(tabWaiting(f.app, tab), 3);
         expect(
           tabWaitingLabel(f.app, tab),
-          'Tagged in 1 message · 2 new in Chat with PM',
+          'Tagged in 1 message · 2 new in your Buddy chat',
         );
       },
     );
   });
 
   for (final native in [false, true]) {
-    testWidgets('a Swarm tab behind another counts unread PM messages '
+    testWidgets('a Swarm tab behind another counts unread Buddy chat lines '
         '(native=$native)', (tester) async {
       final updates = <Map>[];
       const channel = MethodChannel('harness/swarm_tabs');
@@ -663,8 +592,8 @@ void main() {
       final swarm = f.app.activeSwarm;
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
-      await c.openPmChat('lead');
-      final chat = c.pmChat('lead')!.id;
+      await c.openBuddyChat('lead');
+      final chat = c.buddyChat('lead')!.id;
       await c.select('lead');
       pmReply(f.connection.server, chat, 'Here is the plan.');
       pmReply(f.connection.server, chat, 'Shall I ship it?');
@@ -762,12 +691,12 @@ void main() {
     HarnessCommand command() =>
         harnessCommands.singleWhere((c) => c.id == 'swarm.chat_with_pm');
 
-    test('is ⇧⌘K, listed as Chat with PM in the shortcuts help', () {
-      expect(command().label, 'Chat with PM');
+    test('is ⇧⌘K, listed as Buddy chat in the shortcuts help', () {
+      expect(command().label, 'Buddy chat');
       expect(command().keys, ['cmd+shift+k']);
       final lesson = keyboardLessons(AppKeymap())
           .singleWhere((l) => l.command == 'swarm.chat_with_pm');
-      expect(lesson.label, 'Chat with PM');
+      expect(lesson.label, 'Buddy chat');
       expect(lesson.group, 'Workspace');
       expect(lesson.bindings.map((b) => b.sequence), ['cmd+shift+k']);
     });
@@ -799,15 +728,15 @@ void main() {
     test("opens the active Swarm tab's current project chat, and nothing elsewhere", () async {
       final f = SuperTabLaunchFixture(local: true);
       final plain = f.app.activeSwarmId;
-      expect(await openActivePmChat(f.app), isFalse);
+      expect(await openActiveBuddyChat(f.app), isFalse);
 
       f.app.bindSuperTab(plain, tabId, 'Pilot');
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
       await c.select('offline');
 
-      expect(await openActivePmChat(f.app), isTrue);
-      expect(c.selectedId, c.pmChat('lead')!.id);
+      expect(await openActiveBuddyChat(f.app), isTrue);
+      expect(c.selectedId, c.buddyChat('lead')!.id);
     });
   });
 
@@ -823,8 +752,8 @@ void main() {
       final c = server.controller(account: 'peer');
       addTearDown(c.dispose);
       await c.refresh();
-      await c.openPmChat('lead');
-      final chat = c.pmChat('lead')!.id;
+      await c.openBuddyChat('lead');
+      final chat = c.buddyChat('lead')!.id;
       await c.select('offline');
       pmReply(server, chat, 'Here is the plan.');
       pmReply(server, chat, 'Shall I ship it?');
@@ -858,7 +787,7 @@ void main() {
         final image = await boundary.toImage(pixelRatio: 1.5);
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         await Directory(shots!).create(recursive: true);
-        await File('$shots/pm-chat-$name-${brightness.name}.png')
+        await File('$shots/buddy-chat-$name-${brightness.name}.png')
             .writeAsBytes(bytes!.buffer.asUint8List());
         image.dispose();
       });

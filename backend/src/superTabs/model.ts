@@ -77,6 +77,9 @@ export interface Agent {
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
   buddyOf?: { personId: string; generation: string }
+  /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
+   *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
+  teamAccount?: true
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -99,6 +102,9 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
+  /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
+   *  agent becomes the Lead of the project's Lead conversation once it runs. */
+  leadFor?: { projectId: string; personId: string; generation: string }
 }
 export interface AgentStart {
   poolGeneration?: string
@@ -117,7 +123,8 @@ export interface AgentStart {
   /** When its host was asked to launch it; a start not running 3 minutes later fails, or 15 minutes later while its machine
    *  reports it preparing (liveness.ts). */
   dispatchedAt?: number
-  /** When a person asked for it: only a Buddy's start keeps it, which fails if its machine never takes it (liveness.ts). */
+  /** When it was asked for (absent on starts from before 2026-10-29): a Buddy's fails if its machine never takes it, and a
+   *  task's start never launched leaves the task orphaned (liveness.ts). */
   requestedAt?: number
   /** On reads only, never stored: its machine's fresh report says it is preparing (machines.ts startPreparing). */
   preparing?: true
@@ -147,6 +154,8 @@ export interface Assignment {
   leaseUntil?: number
   /** Its agent's last progress the lease saw, for the Lead's wake-up when it is lost. */
   progressAt?: number
+  /** While it needs a human: the person its agent asked (work.status with ask), whom its wait names (liveness.ts). */
+  askedOf?: string
   /** Why and when it was lost (status `lost`); after a usage limit whose screen gave a reset time, when its own agent may
    *  take it back (work.resume) unless it was handed on first. */
   lost?: { reason: string; at: number; resumeAt?: string }
@@ -199,6 +208,9 @@ export interface Conversation {
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
+  /** The sequence of its newest message in the main stream: a reply only in its thread leaves it (threads.ts). Absent until
+   *  this conversation's first message after threads; readers fall back to lastMessageSequence. */
+  lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -222,6 +234,20 @@ export interface Conversation {
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */
   ledger?: import('./leaderboard/record.js').GroupLedger
+  /** Whether its task is moving, waiting on purpose or stuck, as the time checks last found it (liveness.ts recordTaskStates). */
+  liveness?: TaskLiveness
+  /** The Lead's last action on its task: an assignment, route, start or post here (commands.ts). */
+  leadAction?: { kind: 'assign' | 'route' | 'start' | 'post'; at: number }
+}
+/** Absent while its task is working (its agent reported in the last 30 minutes; its last progress is its assignment's
+ *  `progressAt`) or there is none. `waiting`: on a person (`personId`), a review, its stated
+ *  blocker, the new revision of the build it reviews, or its agent's start. `quiet`: its agent has reported nothing for 30 minutes. `orphaned`: nobody holds it — its
+ *  agent was removed or lost it, or its start failed or never launched. `since`: when that began, as first recorded. */
+export interface TaskLiveness {
+  state: 'waiting' | 'quiet' | 'orphaned'
+  why: 'person' | 'review' | 'blocked' | 'revision' | 'queued' | 'starting' | 'silent' | 'removed' | 'lost' | 'start-failed' | 'unstarted'
+  since: number
+  personId?: string
 }
 
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
@@ -268,7 +294,8 @@ export interface SuperTabState {
   paused: boolean
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
-  /** Buddies (buddies.ts): on once the owner turns them on; absent is off. Turning them off removes every Buddy. */
+  /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
+   *  Buddies and show Chat with PM without it. A stored value from the old switch is ignored. */
   buddies?: true
   people: Person[]
   agents: Agent[]
@@ -283,7 +310,10 @@ export interface SuperTabState {
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
-  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+  /** `heldFor`: a confidential session in a Harness Team account, whose project the account keeps serving alone until its
+   *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
+   *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
@@ -330,6 +360,10 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
+  /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
+  thread?: string
+  /** A thread reply also shown in the conversation's main stream. */
+  alsoInChat?: true
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
@@ -524,6 +558,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     delete target.downNamed
     if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
+  visible.buddies = true
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses

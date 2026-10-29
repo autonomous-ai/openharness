@@ -96,6 +96,7 @@ export function numberMessages(state: SuperTabState, messages: MessageDraft[], n
     sequences.set(message.id, sequence)
     if (agentOnly(message.source)) continue
     group.lastMessageSequence = sequence
+    if (!message.thread || message.alsoInChat) group.lastMainSequence = sequence
     group.lastActivityAt = new Date(now).toISOString()
     delete group.dormant
   }

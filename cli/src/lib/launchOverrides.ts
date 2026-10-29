@@ -106,7 +106,8 @@ export interface LaunchOverridesDeps {
   readCodexConfig?: (path: string) => string | null
   /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
    *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
-  ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
+  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
+  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | { refused: string } | null>
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
   dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
@@ -303,8 +304,9 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
-    const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again. Never
+    // a Buddy's (core/agents/create.ts).
+    const machineMcp = source.swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
@@ -348,7 +350,11 @@ async function prepareBaseLaunchOverrides(
     // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
     // owner's relay, on every relaunch as on its first: Codex keeps the relay's provider per thread, so it is named again
     // here in place of its own login's (two `-c model_provider` would leave Codex to pick one).
-    const relay = await deps.ownerRelay?.(engine) ?? null
+    const offered = await (engine === 'codex' && source.codexHome ? deps.ownerRelay?.(engine, source.codexHome) : deps.ownerRelay?.(engine)) ?? null
+    // A Codex home of its own the relay cannot sign in (a Product Manager's, its relay not yet published after a reboot): held
+    // with why, as a launch that waits is, never relaunched signed out (team/relay.ts).
+    if (offered && 'refused' in offered) return { ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: offered.refused }
+    const relay = offered
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
     const provider = relay ? relay.args : ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
