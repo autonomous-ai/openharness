@@ -30,6 +30,7 @@ import 'model.dart';
 import 'pm_chat.dart';
 import 'workgroup_name.dart';
 import 'message_link.dart';
+import 'message_link_host.dart';
 import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
@@ -66,6 +67,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onChooseAgentTerminal,
+    this.linkSwarms,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -82,6 +84,10 @@ class SuperTabView extends StatefulWidget {
   final AppNotifier? app;
   final VoidCallback? onNewProject;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
+
+  /// How a message link reaches the account's other Swarms. Without it, and
+  /// without an [app], a link into another Swarm is not followed.
+  final SwarmLinkSwarms? linkSwarms;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -171,7 +177,7 @@ class _SuperTabViewState extends State<SuperTabView>
   String _shownAuthor(SuperTabController c, SuperTabMessage message) =>
       message.authorId == c.accountId && !message.fromAgent
       ? 'You'
-      : _authorName(message);
+      : c.snapshot?.authorName(message) ?? message.authorName;
 
   @override
   void initState() {
@@ -409,6 +415,9 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
+    for (final source in _linkSources) {
+      source.removeListener(_linkSourceChanged);
+    }
     if (c.pmChatOpener == _openPmChat) c.pmChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
@@ -1206,7 +1215,9 @@ class _SuperTabViewState extends State<SuperTabView>
     // reader may read it, and a refusal looks like a message that is gone.
     final readable = await c.loadGroup(id);
     if (!mounted || request != _jumpRequest || c.accessRevoked) return;
-    if (!readable) {
+    // The app may open another chat for it (an old Chat with PM, with Buddies
+    // on): that is not this message, so the reader stays where they are.
+    if (!readable || c.landsOn(id) != id) {
       say('Message unavailable');
       return;
     }
@@ -1250,15 +1261,65 @@ class _SuperTabViewState extends State<SuperTabView>
     _focus.requestFocus();
   }
 
-  /// What [link] points at for the preview under a message that says it.
+  /// The Swarms of the account a link may point into, besides this one.
+  late final SwarmLinkSwarms? _linkSwarms =
+      widget.linkSwarms ??
+      (widget.app == null ? null : AppLinkSwarms(widget.app!));
+
+  /// The other Swarms' controllers this view hears from, for their previews.
+  final _linkSources = <SuperTabController>{};
+
+  void _linkSourceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// The controller that reads [tabId]: this Swarm's, or another the account
+  /// lists. `controller` is null for one it does not list, or not loaded yet.
+  ({SuperTabController? controller, bool loading}) _linkSource(String tabId) {
+    if (tabId == c.tabId) return (controller: c, loading: false);
+    final source = _linkSwarms?.controllerFor(tabId, _linkSourceChanged);
+    if (source == null) return (controller: null, loading: false);
+    if (source.controller case final other? when _linkSources.add(other)) {
+      other.addListener(_linkSourceChanged);
+    }
+    return source;
+  }
+
+  /// What [link] points at for the preview under a message that says it. The
+  /// Swarm it names reads it with its own session, so the server decides.
   SuperTabLinkTarget _linkTarget(SwarmMessageLink link) {
-    final target = c.linkTarget(link);
+    final source = _linkSource(link.tabId);
+    final controller = source.controller;
+    if (controller == null) {
+      return source.loading
+          ? const SuperTabLinkTarget.loading()
+          : const SuperTabLinkTarget.unavailable();
+    }
+    final target = controller.linkTarget(link);
     if (target == null) return const SuperTabLinkTarget.unavailable();
     final message = target.message;
     if (message == null) return const SuperTabLinkTarget.loading();
     return SuperTabLinkTarget.message(
       message,
-      author: _shownAuthor(c, message),
+      author: _shownAuthor(controller, message),
+    );
+  }
+
+  /// Opens [link]: here, or in the other Swarm of the account it names.
+  void _openLink(SwarmMessageLink link) {
+    if (link.tabId == c.tabId) {
+      c.openMessageLink(link);
+      return;
+    }
+    final swarms = _linkSwarms;
+    final opened = swarms?.open(link) ?? Future.value(false);
+    unawaited(
+      opened.then((ok) {
+        if (ok || !mounted) return;
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
+      }),
     );
   }
 
@@ -2059,7 +2120,7 @@ class _SuperTabViewState extends State<SuperTabView>
         messageId: message.id,
       ),
       linkTarget: _linkTarget,
-      onOpenLink: c.openMessageLink,
+      onOpenLink: _openLink,
       onReply: c.canWrite && c.selected?.archived == false
           ? () {
               setState(() => _replies[c.selectedId] = message);

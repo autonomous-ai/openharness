@@ -355,9 +355,14 @@ class SuperTabController extends ChangeNotifier {
   final _messages = <String, List<SuperTabMessage>>{};
 
   /// Originals of replies quoted from outside the pages read, one message
-  /// each, never part of the list: null when it is gone. Asked for once.
+  /// each, never part of the list: null when it is gone or refused.
   final _quoted = <String, Map<String, SuperTabMessage?>>{};
-  final _quoting = <String, Set<String>>{};
+
+  /// The originals asked for, with how many reads of each failed (not refused).
+  final _quoting = <String, Map<String, int>>{};
+  final _quoteRetries = <Timer>{};
+  static const _quoteTries = 3;
+  static const _quoteRetryAfter = Duration(seconds: 3);
 
   /// Where each conversation's older history continues: the oldest message
   /// read, as the backend's page cursor names it (section 4.6). Null at the
@@ -571,11 +576,17 @@ class SuperTabController extends ChangeNotifier {
     if (known != null && known.containsKey(messageId)) {
       return (message: known[messageId]);
     }
-    if ((_quoting[id] ??= {}).add(messageId)) {
+    if (!(_quoting[id] ??= {}).containsKey(messageId)) {
+      _quoting[id]![messageId] = 0;
       scheduleMicrotask(() => _readQuoted(id, messageId));
     }
     return null;
   }
+
+  /// Whether the original [messageId] of [id] could not be read after every
+  /// try, so it is told apart from one still being read.
+  bool quoteGaveUp(String id, String messageId) =>
+      (_quoting[id]?[messageId] ?? 0) >= _quoteTries;
 
   /// What the backend last said of each project's GitHub access (backend github/projectAccess.ts), and when.
   final Map<String, ({SuperTabProjectGitHub value, DateTime at})> _github = {};
@@ -662,10 +673,14 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Reads one message of [id] only: the backend checks the reader may read
-  /// that conversation, as for its pages. A failed read leaves the quote
-  /// saying the original isn't loaded.
+  /// that conversation, as for its pages. A refusal is recorded as the message
+  /// being gone; any other failure is read again after 3 s and 6 s, then left
+  /// ([quoteGaveUp]).
   Future<void> _readQuoted(String id, String messageId) async {
-    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+    if (_disposed ||
+        accessRevoked ||
+        snapshot?.conversation(id) == null ||
+        _quoting[id]?.containsKey(messageId) != true) {
       return;
     }
     try {
@@ -676,7 +691,7 @@ class SuperTabController extends ChangeNotifier {
       if (_disposed ||
           accessRevoked ||
           snapshot?.conversation(id) == null ||
-          _quoting[id]?.contains(messageId) != true) {
+          _quoting[id]?.containsKey(messageId) != true) {
         return;
       }
       final rows = (answer['messages'] as List)
@@ -689,7 +704,31 @@ class SuperTabController extends ChangeNotifier {
       // A row the list never lists is no original to quote either.
       (_quoted[id] ??= {})[messageId] = rows.where(_listed).firstOrNull;
       _changed();
-    } catch (_) {}
+    } catch (failure) {
+      _quoteFailed(id, messageId, failure);
+    }
+  }
+
+  void _quoteFailed(String id, String messageId, Object failure) {
+    final asked = _quoting[id];
+    if (_disposed || asked == null || !asked.containsKey(messageId)) return;
+    if (failure is SuperTabFailure &&
+        const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+      (_quoted[id] ??= {})[messageId] = null;
+      _changed();
+      return;
+    }
+    final tries = asked[messageId] = asked[messageId]! + 1;
+    if (tries >= _quoteTries) {
+      _changed();
+      return;
+    }
+    late final Timer retry;
+    retry = Timer(_quoteRetryAfter * tries, () {
+      _quoteRetries.remove(retry);
+      unawaited(_readQuoted(id, messageId));
+    });
+    _quoteRetries.add(retry);
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -1314,6 +1353,9 @@ class SuperTabController extends ChangeNotifier {
   bool hiddenByBuddies(SuperTabConversation group) =>
       buddiesOn && group.audience != null && !group.isBuddyChat;
 
+  /// Where opening conversation [id] lands: itself, unless the app hides it.
+  String landsOn(String id) => _shownFor(id);
+
   /// Where conversation [id] opens: a chat [hiddenByBuddies] opens its
   /// project's chat, where the PM is talked to; any other opens itself.
   String _shownFor(String id) {
@@ -1481,10 +1523,15 @@ class SuperTabController extends ChangeNotifier {
       );
       return (message: null);
     }
+    // A chat the app hides (an old Chat with PM, with Buddies on) is not one
+    // a link can open, so it is not previewed either.
+    if (landsOn(id) != id) return null;
     final held = messages(id).where((m) => m.id == link.messageId).firstOrNull;
     final read = held != null ? (message: held) : quoted(id, link.messageId);
-    // Not asked before: it is being read.
-    if (read == null) return (message: null);
+    // Still being read, unless every try failed.
+    if (read == null) {
+      return quoteGaveUp(id, link.messageId) ? null : (message: null);
+    }
     final message = read.message;
     // A waiting notice is never announced, so it is not previewed either.
     return message == null || message.source['kind'] == 'delivery-hold'
@@ -2647,6 +2694,9 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();
+    for (final retry in _quoteRetries) {
+      retry.cancel();
+    }
     for (final files in _attachments.values) {
       files.dispose();
     }

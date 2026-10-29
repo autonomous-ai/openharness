@@ -46,22 +46,19 @@ class SuperTabMessageLinkPreviews extends StatelessWidget {
     final links = SwarmMessageLink.allIn(text);
     if (links.isEmpty) return const SizedBox.shrink();
     grid.AppTheme.watch(context);
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          for (final link in links)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: _Preview(
-                key: ValueKey('super-message-link-preview-${link.messageId}'),
-                target: resolve(link),
-                onOpen: () => onOpen(link),
-              ),
-            ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: grid.AppDesktop.controlGap,
+      children: [
+        // The gap above the first quote is the column's own spacing.
+        const SizedBox.shrink(),
+        for (final link in links)
+          _Preview(
+            key: ValueKey('super-message-link-preview-${link.messageId}'),
+            target: resolve(link),
+            onOpen: () => onOpen(link),
+          ),
+      ],
     );
   }
 }
@@ -76,35 +73,15 @@ class _Preview extends StatelessWidget {
     final message = target.message;
     final quote = Container(
       constraints: const BoxConstraints(maxWidth: 560),
-      padding: const EdgeInsets.only(left: 10),
       decoration: BoxDecoration(
         border: Border(left: BorderSide(color: DesktopChrome.muted, width: 2)),
       ),
-      child: message == null
-          ? Text(
-              target.isLoading ? 'Loading message…' : 'Message unavailable',
-              style: DesktopChrome.metadata(),
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  target.author!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.control(medium: true),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  message.text.trim().isEmpty
-                      ? 'Attachment'
-                      : message.text.replaceAll(RegExp(r'\s+'), ' '),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
-            ),
+      child: Row(
+        children: [
+          const SizedBox(width: grid.AppDesktop.controlGap),
+          Flexible(child: _body(message)),
+        ],
+      ),
     );
     if (message == null) return quote;
     return Semantics(
@@ -112,6 +89,35 @@ class _Preview extends StatelessWidget {
       button: true,
       hint: 'Go to message',
       child: InkWell(onTap: onOpen, child: quote),
+    );
+  }
+
+  Widget _body(SuperTabMessage? message) {
+    if (message == null) {
+      return Text(
+        target.isLoading ? 'Loading message…' : 'Message unavailable',
+        style: DesktopChrome.metadata(),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          target.author!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.control(medium: true),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          message.text.trim().isEmpty
+              ? 'Attachment'
+              : message.text.replaceAll(RegExp(r'\s+'), ' '),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: DesktopChrome.metadata(),
+        ),
+      ],
     );
   }
 }

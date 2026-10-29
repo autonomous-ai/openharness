@@ -86,6 +86,22 @@ void main() {
     );
   });
 
+  group('AppLinkSwarms', () {
+    test('lists the Swarms the account has, and no others', () {
+      final app = appInSwarm();
+      expect(swarmListed(app, 'tab'), isTrue);
+      expect(swarmListed(app, 'someone-elses'), isFalse);
+    });
+
+    test('a Swarm the account does not list is neither loaded nor loading', () {
+      final app = appInSwarm();
+      final swarms = AppLinkSwarms(app);
+      final source = swarms.controllerFor('someone-elses', () {});
+      expect(source.controller, isNull);
+      expect(source.loading, isFalse);
+    });
+  });
+
   group('SwarmMessageLinkHost', () {
     tearDown(() {
       for (final pending in swarmMessageLinkInbox.pending) {

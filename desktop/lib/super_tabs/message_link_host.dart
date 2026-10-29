@@ -6,6 +6,58 @@ import '../state/app_state.dart';
 import 'controller.dart';
 import 'message_link.dart';
 
+/// How a message link reaches the other Swarms of the account: the controller
+/// of one the account lists, and the way to open a link there.
+abstract interface class SwarmLinkSwarms {
+  /// [tabId]'s controller once it is loaded, else null: [loading] while a
+  /// Swarm the account lists is being loaded ([onLoaded] says when it is), not
+  /// while it is one the account does not list.
+  ({SuperTabController? controller, bool loading}) controllerFor(
+    String tabId,
+    VoidCallback onLoaded,
+  );
+
+  /// Opens [link]'s Swarm and asks it for the message; false when it cannot.
+  Future<bool> open(SwarmMessageLink link);
+}
+
+/// The account's Swarms as the app lists them.
+class AppLinkSwarms implements SwarmLinkSwarms {
+  AppLinkSwarms(this.app);
+  final AppNotifier app;
+  final _loading = <String>{};
+
+  @override
+  ({SuperTabController? controller, bool loading}) controllerFor(
+    String tabId,
+    VoidCallback onLoaded,
+  ) {
+    final loaded = app.superTabs.peek(tabId);
+    if (loaded != null) return (controller: loaded, loading: false);
+    if (!swarmListed(app, tabId)) return (controller: null, loading: false);
+    if (_loading.add(tabId)) {
+      unawaited(
+        app.superTabs
+            .open(tabId)
+            .then((_) {}, onError: (Object _) {})
+            .whenComplete(() {
+              _loading.remove(tabId);
+              onLoaded();
+            }),
+      );
+    }
+    return (controller: null, loading: true);
+  }
+
+  @override
+  Future<bool> open(SwarmMessageLink link) => openSwarmMessageLink(app, link);
+}
+
+/// Whether the account lists the Swarm [tabId], open or closed here.
+bool swarmListed(AppNotifier app, String tabId) =>
+    app.swarms.any((s) => s.superTabId == tabId) ||
+    app.closedSuperTabs.any((s) => s.id == tabId);
+
 /// Brings the Swarm [link] names to the front and asks it to open the message.
 /// False when the reader is not in that Swarm (or it cannot be read now): the
 /// caller says only that the message is unavailable. A Swarm is opened only if
