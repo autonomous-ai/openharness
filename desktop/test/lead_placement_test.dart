@@ -73,7 +73,6 @@ void main() {
         'teammate',
         'offline',
       ]);
-      expect(bestLeadMachine(ranked, _repo)?.id, 'studio');
     });
 
     test('more free agents wins among otherwise equal machines', () {
@@ -99,19 +98,7 @@ void main() {
       ], _repo);
       expect(ranked.map((m) => m.id), ['laptop', 'mine']);
       expect(outside.startable, isTrue);
-      expect(bestLeadMachine([outside], _repo)?.id, 'mine');
       expect(leadMachineDetail(outside, _repo), 'Online · Not in this Swarm');
-    });
-
-    test('no machine is best when none is online, free and allowed', () {
-      expect(
-        bestLeadMachine([
-          _machine('offline', online: false),
-          _machine('full', free: 0),
-          _machine('teammate', unavailable: 'Not yours'),
-        ], _repo),
-        isNull,
-      );
     });
   });
 

@@ -164,7 +164,6 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       box.useDesktopChoices(widget.desktop);
-      box.placeLead();
       if (box.checking) _row = _Row.start;
       _syncField();
       // Restoring the successful agent can replace an unfocusable Terminal
@@ -2185,7 +2184,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               onPressed: box.locked
                   ? null
                   : () => setState(() => _leadOpen = !_leadOpen),
-              child: const Text('Change'),
+              child: Text(box.leadPicked ? 'Change' : 'Choose'),
             ),
           ),
         ),
@@ -2313,7 +2312,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     String? repository,
     double order,
   ) {
-    final chosen = machine.id == box.leadMachine?.id && !box.leadQueued;
+    final chosen = machine.id == box.leadMachine?.id;
     final enabled = machine.startable && !box.locked;
     final detail = leadMachineDetail(machine, repository);
     return KeyedSubtree(

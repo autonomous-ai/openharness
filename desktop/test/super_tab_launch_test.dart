@@ -12,7 +12,6 @@ import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
-import 'package:harness/state/lead_placement.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/super_tabs/launch.dart';
 import 'package:harness/super_tabs/client.dart';
@@ -433,6 +432,9 @@ class SuperTabLaunchFixture {
     bool newProject = false,
     String? task = 'Discuss the architecture.',
     String? harnessId,
+    // The machine its person chooses for New Project's Product Manager, when
+    // the list can start it there.
+    String? lead = 'm',
   }) async {
     final integration = await SuperTabLaunch.open(
       app,
@@ -452,6 +454,10 @@ class SuperTabLaunchFixture {
     );
     addTearDown(box.dispose);
     await Future<void>.delayed(Duration.zero);
+    if (integration.leadMachines?.any((m) => m.id == lead && m.startable) ??
+        false) {
+      box.chooseLeadMachine(lead!);
+    }
     return box;
   }
 }
@@ -703,12 +709,11 @@ void main() {
         'Update Harness on 2x 4090 Rig to run a Product Manager there.',
       );
       expect(machines[3].online, isFalse);
-      expect(bestLeadMachine(machines, null)?.id, 'm');
     },
   );
 
   test(
-    'with its only machine full, New Project queues, and needs a remote',
+    'with its only machine full, New Project starts nothing and says so',
     () async {
       final f = SuperTabLaunchFixture();
       f.connection.server.state['machines'] = [
@@ -727,13 +732,11 @@ void main() {
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
       expect(box.integration!.leadMachines!.single.startable, isFalse);
-      expect(box.leadQueued, isTrue);
+      // The full machine cannot be chosen, and nothing is chosen for them.
       expect(await box.create(), NewHarnessOutcome.failed);
-      // The Swarm clones the repo wherever it starts the PM.
-      expect(
-        box.error,
-        'Choose a repo with a remote, so the Swarm can clone it for the Product Manager.',
-      );
+      expect(box.error, 'Choose the machine the Product Manager runs on.');
+      box.chooseLeadMachine('m');
+      expect(box.leadPicked, isFalse);
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
       expect(f.connection.server.posts, isEmpty);
     },
@@ -820,11 +823,48 @@ void main() {
     expect(diego.team, isTrue);
   });
 
+  for (final (what, rows) in [
+    ('has no Team account', [machineRow('rig', '2x 4090 Rig', lead: true)]),
+    (
+      'has a Team account that cannot take it now',
+      [
+        machineRow('rig', '2x 4090 Rig', lead: true),
+        machineRow(
+          'rig-team',
+          '2x 4090 Rig',
+          host: 'rig',
+          kind: 'team',
+          available: 1,
+          lead: true,
+          teamWork: {
+            'allowed': false,
+            'code': 'PRIVACY_CHECK_FAILED',
+            'reason': 'The Harness Team account on 2x 4090 Rig is not private (sharing), so it runs only its owner’s projects.',
+          },
+        ),
+      ],
+    ),
+  ]) {
+    test('a teammate’s Mac that $what takes the PM itself', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final rig = box.integration!.leadMachines!.where((m) => !m.own).single;
+      expect(rig.unavailable, isNull);
+      expect(rig.startable, isTrue);
+      // The Mac's own room, not its Team account's.
+      expect(rig.freeAgents, 4);
+      expect((rig.team, rig.native), (false, false));
+    });
+  }
+
   for (final (what, rows, reason) in [
     (
-      'has no Team account',
-      [machineRow('rig', '2x 4090 Rig', lead: true)],
-      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+      'has no Team account and runs an older Harness',
+      [machineRow('rig', '2x 4090 Rig')],
+      'Update Harness on 2x 4090 Rig to run a Product Manager there.',
     ),
     (
       'fails its Team account’s privacy check',
@@ -967,21 +1007,27 @@ void main() {
     },
   );
 
-  test('with no machine free New Project queues the PM', () async {
-    final f = SuperTabLaunchFixture();
-    knownRepo(f);
-    f.connection.server.state['machines'] = [
-      machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
-    ];
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    final box = await f.box(newProject: true);
-    expect(box.leadQueued, isTrue);
-    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
-    final start = commandsOf(f, 'lead.start').single;
-    expect(start['machineId'], isNull);
-    expect(start.containsKey('machineId'), isTrue);
-    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
-  });
+  test(
+    'New Project starts the PM only once its person chose the machine',
+    () async {
+      final f = SuperTabLaunchFixture();
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('m', 'Mac Studio', contributor: 'owner', available: 3),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, lead: null);
+      expect(box.leadPicked, isFalse);
+      expect(box.leadMachine, isNull);
+      expect(
+        box.leadBlocked,
+        'Choose the machine the Product Manager runs on.',
+      );
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(f.connection.server.posts, isEmpty);
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+    },
+  );
 
   test(
     'a refused Swarm start says why, and a retry posts the task once',
@@ -1029,6 +1075,8 @@ void main() {
     knownRepo(f);
     f.connection.server.state['machines'] = [
       machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
+      // Yours, but this Desktop has no connection to it: the Swarm starts it.
+      machineRow('far', 'Office Mini', contributor: 'owner', lead: true),
     ];
     SuperTabLaunch.uploadForTest = f.connection.server.upload;
     addTearDown(() => SuperTabLaunch.uploadForTest = null);
@@ -1037,7 +1085,7 @@ void main() {
       ..add([
         HarnessAttachment('plan.md', Uint8List.fromList([1, 2, 3])),
       ]);
-    final box = await f.box(newProject: true, attachments: files);
+    final box = await f.box(newProject: true, attachments: files, lead: 'far');
     expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
     final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
     expect(

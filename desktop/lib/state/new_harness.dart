@@ -1581,34 +1581,30 @@ class NewHarnessController extends ChangeNotifier {
   /// Desktop: a teammate's Team account, or a machine of the person's this
   /// Desktop is not connected to. The repo stays the one chosen on
   /// [machineId]; that machine clones it. Null when this Desktop starts it on
-  /// [machineId], or when it waits ([leadQueued]).
+  /// [machineId].
   String? _swarmLeadMachine;
   String? get leadSwarmMachine => _swarmLeadMachine;
 
-  /// The machine the Product Manager starts on, as the Swarm lists it.
-  LeadMachine? get leadMachine => integration?.leadMachines
-      ?.where((m) => m.id == (_swarmLeadMachine ?? _machineId))
-      .firstOrNull;
+  /// The person chose the Product Manager's machine: none is chosen for them,
+  /// since only they know which one stays on (Ken, 10-29).
+  bool _leadPicked = false;
+  bool get leadPicked => _leadPicked;
+
+  /// The machine the Product Manager starts on, as the Swarm lists it; null
+  /// until the person chooses one.
+  LeadMachine? get leadMachine => !_leadPicked
+      ? null
+      : integration?.leadMachines
+            ?.where((m) => m.id == (_swarmLeadMachine ?? _machineId))
+            .firstOrNull;
 
   bool _paused(List<LeadMachine> machines) =>
       machines.isNotEmpty &&
       machines.every((m) => m.unavailable == kLeadSwarmPaused);
 
-  /// No machine can take the Product Manager now: New Project asks the
-  /// Swarm to start it on the first one that frees up.
-  bool get leadQueued {
-    final machines = integration?.leadMachines;
-    return machines != null &&
-        _swarmLeadMachine == null &&
-        leadMachine?.startable != true &&
-        !_paused(machines) &&
-        bestLeadMachine(machines, cloudRepository) == null;
-  }
-
-  /// The Swarm starts the Product Manager, on [leadSwarmMachine] or the first
-  /// free machine; this Desktop does not.
-  bool get leadThroughSwarm =>
-      placesLead && (_swarmLeadMachine != null || leadQueued);
+  /// The Swarm starts the Product Manager, on [leadSwarmMachine]; this
+  /// Desktop does not.
+  bool get leadThroughSwarm => placesLead && _swarmLeadMachine != null;
 
   /// The address the Swarm clones the chosen repo from, or null when it is
   /// not known.
@@ -1628,10 +1624,6 @@ class NewHarnessController extends ChangeNotifier {
   /// The Product Manager line: where it starts, its engine and model, and a
   /// repo cloned there first.
   String get leadLine {
-    if (leadQueued) {
-      return 'All Swarm machines are busy. The project starts on the first '
-          'one that frees up.';
-    }
     final target = leadMachine;
     final name = target == null
         ? machineLabel
@@ -1657,7 +1649,8 @@ class NewHarnessController extends ChangeNotifier {
     if (_paused(machines)) {
       return '$kLeadSwarmPaused. New Project can start once it resumes.';
     }
-    if (leadMachine?.startable != true && !leadQueued) {
+    if (!_leadPicked) return 'Choose the machine the Product Manager runs on.';
+    if (leadMachine?.startable != true) {
       final name = leadMachine?.name ?? machineLabel;
       return '$name cannot start the Product Manager. Choose another machine.';
     }
@@ -1674,16 +1667,6 @@ class NewHarnessController extends ChangeNotifier {
     return _leadModelListRefusal;
   }
 
-  /// Moves the Product Manager to the best machine the Swarm lists, unless
-  /// it is already there; with none free, it waits ([leadQueued]).
-  void placeLead() {
-    final machines = integration?.leadMachines;
-    if (machines == null || locked) return;
-    final best = bestLeadMachine(machines, cloudRepository);
-    if (best == null || best.id == leadMachine?.id) return;
-    chooseLeadMachine(best.id);
-  }
-
   /// Starts the Product Manager on [id], a machine the list can start it on
   /// now: this Desktop starts it on one of the person's it is connected to,
   /// the Swarm on any other. Anything else is refused with its reason.
@@ -1695,6 +1678,7 @@ class NewHarnessController extends ChangeNotifier {
     if (listed != null && listed.startable && !listed.native) {
       error = null;
       _swarmLeadMachine = id;
+      _leadPicked = true;
       notifyListeners();
       return;
     }
@@ -1712,6 +1696,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     error = null;
     _swarmLeadMachine = null;
+    _leadPicked = true;
     final remote = _remoteOf(_machineId, _project);
     _selectMachine(id);
     if (remote != null) _keepRepository(id, remote, listed.name);
@@ -4161,6 +4146,9 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     if (isCloud) return _createCloud();
+    if (placesLead) {
+      if (leadBlocked case final why?) return _fail(why);
+    }
     if (leadThroughSwarm) return _startInSwarm();
     if (!checking) {
       _syncGitProject();
@@ -4489,8 +4477,7 @@ class NewHarnessController extends ChangeNotifier {
   /// A cloud harness: made by the cloud service on this machine (CLI
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
   /// New Project's Product Manager the Swarm starts
-  /// ([HarnessLaunchIntegration.startInSwarm]): on [leadSwarmMachine], or on
-  /// the first machine that frees up.
+  /// ([HarnessLaunchIntegration.startInSwarm]) on [leadSwarmMachine].
   Future<NewHarnessOutcome> _startInSwarm() async {
     final start = integration?.startInSwarm;
     if (start == null) {
@@ -4501,14 +4488,13 @@ class NewHarnessController extends ChangeNotifier {
     if (leadBlocked case final why?) return _fail(why);
     busy = true;
     error = null;
-    status = leadQueued
-        ? 'Asking the Swarm to start the Product Manager…'
-        : 'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
+    status =
+        'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
     notifyListeners();
     try {
       await start(
         LeadSwarmStart(
-          machineId: _swarmLeadMachine,
+          machineId: _swarmLeadMachine!,
           engine: _engine,
           repositoryUrl: leadRepositoryUrl,
           title: _leadRepositoryName,

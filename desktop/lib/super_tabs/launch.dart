@@ -109,9 +109,11 @@ class SuperTabLaunch {
                       // A start already sent is repeated as it is: the server may
                       // have committed it and taken the machine's last slot, so
                       // its answer decides, not a fresh check.
-                      if (start.machineId case final machine?
-                          when saved['leadStartRequest'] == null) {
-                        await launch.recheckLeadMachine(integration, machine);
+                      if (saved['leadStartRequest'] == null) {
+                        await launch.recheckLeadMachine(
+                          integration,
+                          start.machineId,
+                        );
                       }
                       await launch.startInSwarm(start);
                     } on SuperTabFailure catch (failure) {
@@ -293,10 +295,9 @@ class SuperTabLaunch {
   }
 
   /// The Swarm's machines, one row per computer, then the person's others,
-  /// best first. A new project's Product Manager starts only on one of the
-  /// person's own, connected to this Desktop: it runs on its owner's machine,
-  /// in their account (Ken, 10-28; docs/swarms.md), so teammates' rows only
-  /// say why not.
+  /// best first. A new project's Product Manager starts on any of them (Ken,
+  /// 10-29): a teammate's Mac runs it in its Harness Team account when that
+  /// takes it now, else itself, as its owner (backend leadStart.ts).
   List<LeadMachine> leadMachinesOf(SuperTabSnapshot snapshot, {DateTime? now}) {
     final at = (now ?? DateTime.now()).millisecondsSinceEpoch;
     // A machine reports readiness and resources only once it has them.
@@ -311,17 +312,35 @@ class SuperTabLaunch {
       // Its host says it can start a Product Manager (backend leadStart.ts).
       final capable =
           (observation['capabilities'] as List?)?.contains('leadStart') == true;
-      // Another person's Mac runs one only in its Harness Team account.
-      final team =
+      // Another person's Mac runs one in its Harness Team account when that
+      // takes it now, else itself; a Team account listed as its own machine
+      // only in itself.
+      final teamReading =
           !own &&
           (reading['hostMachineId'] != null ||
               observation['sessionKind'] == 'team');
+      final teamRefusal = !teamReading
+          ? null
+          : switch (reading['teamWork']) {
+              {'allowed': false, 'reason': final String reason} => reason,
+              _ when !capable =>
+                'Update Harness on $name to run a Product Manager there.',
+              _ => null,
+            };
+      final team = teamReading && teamRefusal == null;
+      final mac = part(pool['observation']);
+      final macTakes =
+          pool['hostMachineId'] == null &&
+          mac['sessionKind'] != 'team' &&
+          (mac['capabilities'] as List?)?.contains('leadStart') == true;
+      // Where it would run: the Mac itself when its Team account cannot.
+      final host = teamReading && !team ? pool : reading;
       final received = observation['receivedAt'];
       final online =
           received is num &&
           at - received < kSuperTabMachineOfflineAfter.inMilliseconds;
-      final running = observation['runningHarnessIds'];
-      final max = reading['maxAgents'];
+      final running = part(host['observation'])['runningHarnessIds'];
+      final max = host['maxAgents'];
       final checkouts = part(observation['readiness'])['checkouts'];
       final device = part(observation['resources'])['deviceType'];
       return LeadMachine(
@@ -330,7 +349,7 @@ class SuperTabLaunch {
         online: online,
         // The server's count: it also holds pending starts and the Team
         // account sharing a Mac. A backend without it: slots minus running.
-        freeAgents: switch (reading['availableSlots']) {
+        freeAgents: switch (host['availableSlots']) {
           final num slots => math.max(0, slots.toInt()),
           _ => math.max(
             0,
@@ -378,15 +397,10 @@ class SuperTabLaunch {
                   : capable
                   ? null
                   : 'Not connected to this computer')
-            : !team
-            ? '$name has no Harness Team account yet, so it runs only its '
-                  'owner’s projects.'
-            : switch (reading['teamWork']) {
-                {'allowed': false, 'reason': final String reason} => reason,
-                _ when !capable =>
+            : team || macTakes
+            ? null
+            : teamRefusal ??
                   'Update Harness on $name to run a Product Manager there.',
-                _ => null,
-              },
       );
     }
 
@@ -470,9 +484,8 @@ class SuperTabLaunch {
   /// New Project's Product Manager started by the Swarm, not this Desktop
   /// (backend leadStart.ts): creates the project, posts the task and files
   /// to its chat, where such a Product Manager reads its request, and asks
-  /// the Swarm to start it on [LeadSwarmStart.machineId], or on the first
-  /// free machine. Each step keeps its receipt in the journal, so a retry
-  /// repeats none of them.
+  /// the Swarm to start it on [LeadSwarmStart.machineId]. Each step keeps
+  /// its receipt in the journal, so a retry repeats none of them.
   Future<void> startInSwarm(LeadSwarmStart start) async {
     checkAccount();
     saved['initialMessage'] = start.task;

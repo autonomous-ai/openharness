@@ -542,8 +542,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
   }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
-  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
-  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
+  // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

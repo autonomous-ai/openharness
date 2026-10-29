@@ -109,16 +109,6 @@ List<LeadMachine> rankLeadMachines(
   );
 }
 
-/// Where the Swarm places the Product Manager, or null when no machine can
-/// take it now.
-LeadMachine? bestLeadMachine(
-  Iterable<LeadMachine> machines,
-  String? repository,
-) => rankLeadMachines(
-  machines,
-  repository,
-).where((m) => m.startable).firstOrNull;
-
 /// A machine's row detail, in words, so colour is never the only signal.
 String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;
