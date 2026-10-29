@@ -1703,10 +1703,12 @@ class AppNotifier extends ChangeNotifier {
       final target = sharedTabsTarget;
       if (target == null) {
         return Future.error(
-          const WsRequestFailure(
+          WsRequestFailure(
             responseType: 'agent_messages_result',
             code: 'MACHINE_AWAY',
-            detail: 'No computer of yours is online.',
+            detail: _teamComputer
+                ? teamComputerSwarmMessage
+                : 'No computer of yours is online.',
           ),
         );
       }
@@ -1732,6 +1734,19 @@ class AppNotifier extends ChangeNotifier {
   /// `tab_activity` on the computer [sharedTabs] asks: every harness of a desk
   /// tab with its state and summary.
   late final tabActivity = TabActivityReader(request: sharedTabs.request);
+
+  /// Natively, this computer switched to a Harness Team account (`harness team
+  /// on`): its daemon signs in as the team, which the server never lets act as
+  /// the person, so none of the person's Swarm requests, files or profile
+  /// pictures go out here.
+  bool get _teamComputer =>
+      viewer == null && localMachineState?.machine.isTeamAccount == true;
+
+  /// What the person is told when [_teamComputer] stops a Swarm request.
+  static const teamComputerSwarmMessage =
+      'This computer runs Swarm agents for a Harness Team account, so it '
+      'cannot send your own Swarm messages. Open Swarm on another of your '
+      'machines.';
 
   /// The machine [sharedTabs] asks: this computer natively; on the web one of
   /// the account's own online machines, never a shared one. Never a Harness
@@ -1769,8 +1784,39 @@ class AppNotifier extends ChangeNotifier {
   late final superTabs = SuperTabClient(
     storage: localStore ?? HarnessFileStore.shared,
     viewStorage: swarmViewStore(beside: localStore),
-    upload: uploadWith(() => api),
-    avatarUpload: uploadAvatarWith(() => api),
+    upload:
+        ({
+          required tabId,
+          required conversationId,
+          required name,
+          required mime,
+          required bytes,
+          required cancel,
+          required onProgress,
+        }) => _teamComputer
+        ? Future.error(
+            const SuperTabFailure(
+              'MACHINE_UNAVAILABLE',
+              teamComputerSwarmMessage,
+            ),
+          )
+        : uploadWith(() => api)(
+            tabId: tabId,
+            conversationId: conversationId,
+            name: name,
+            mime: mime,
+            bytes: bytes,
+            cancel: cancel,
+            onProgress: onProgress,
+          ),
+    avatarUpload: ({required tabId, required png}) => _teamComputer
+        ? Future.error(
+            const SuperTabFailure(
+              'MACHINE_UNAVAILABLE',
+              teamComputerSwarmMessage,
+            ),
+          )
+        : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,
@@ -1855,13 +1901,10 @@ class AppNotifier extends ChangeNotifier {
     transport: (method, path, {body}) async {
       final target = sharedTabsTarget;
       if (target == null) {
-        if (viewer == null &&
-            localMachineState?.machine.isTeamAccount == true) {
+        if (_teamComputer) {
           throw const SuperTabFailure(
             'MACHINE_UNAVAILABLE',
-            'This computer runs Swarm agents for a Harness Team account, so '
-                'it cannot send your own Swarm messages. Open Swarm on another '
-                'of your machines.',
+            teamComputerSwarmMessage,
           );
         }
         throw const SuperTabFailure(
