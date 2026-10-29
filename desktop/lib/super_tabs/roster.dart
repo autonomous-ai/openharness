@@ -27,6 +27,7 @@ import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
 import 'leaderboard/tabs.dart';
 import 'leaderboard/waiting_line.dart';
+import 'leaderboard/week_summary.dart';
 import 'leaderboard/worker_rows.dart';
 import 'model.dart';
 import 'profile_sheet.dart';
@@ -534,6 +535,15 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
         : LeaderboardColumns.of(context, board.people);
     final week = weekName(_board.week, current);
     return [
+      // This week above the people and agents (Dee, 2026-10-29), from the
+      // same read as the board.
+      if (board != null && board.weeks.isNotEmpty) ...[
+        LeaderboardWeekSummary(
+          weeks: board.weeks,
+          weekNames: [for (final w in board.weeks) weekName(w.week, current)],
+        ),
+        const SizedBox(height: DesktopChrome.groupGap),
+      ],
       LeaderboardHeader(
         selected: _tab,
         onSelect: (tab) => setState(() => _tab = tab),

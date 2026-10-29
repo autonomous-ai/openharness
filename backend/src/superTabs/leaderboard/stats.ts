@@ -8,9 +8,9 @@ import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
-import { DAY_MS, WEEK_MS } from './week.js'
-import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
+import { LEDGER_WEEKS, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
+import { DAY_MS, WEEK_MS, weekStart } from './week.js'
+import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, TeamWeek, WeekGoal } from './contract.js'
 
 export const SHIPPED_POINTS = 3
 /** A reviewer model's point for each review verdict it gave (Lead, 2026-10-29). */
@@ -100,7 +100,26 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
     agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
     byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
+    // Only weeks whose history is loaded: the read keeps the last LEDGER_WEEKS, so an older picked week shows fewer weeks
+    // rather than missing ones as empty (review of #2117).
+    weeks: [0, 1, 2, 3].map(back => week - back * WEEK_MS).filter(start => start >= weekStart(now) - (LEDGER_WEEKS - 1) * WEEK_MS)
+      .map(start => teamWeek(requests, shippedRequests, start)),
   }
+}
+
+/** The team's week starting [start]: its shipped requests' median time from first assignment to shipping, and how many of
+ *  its attempts with a first review on record passed it. Read from the same groups as the board. */
+function teamWeek(requests: Conversation[], shippedRequests: Conversation[], start: number): TeamWeek {
+  const inWeek = (at: number) => at >= start && at < start + WEEK_MS
+  const shipped = shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))
+  const requestMs = shipped.flatMap(g => {
+    const first = g.ledger!.firstAssignedAt ?? g.ledger!.runs?.[0]?.at
+    // Merged before its first attempt: shipped at once, never in negative time.
+    return first == null ? [] : [Math.max(0, g.ledger!.shippedAt! - first)]
+  })
+  const reviewed = requests.flatMap(g => g.ledger?.runs ?? []).filter(r => inWeek(r.at) && r.firstReview !== undefined)
+  return { week: start, shipped: shipped.length, medianRequestMs: median(requestMs),
+    firstReview: { reviewed: reviewed.length, passed: reviewed.filter(r => r.firstReview).length } }
 }
 
 /** The project's PM and Buddies with the requests each shipped this week: the PM by the groups it led, a Buddy by the groups
