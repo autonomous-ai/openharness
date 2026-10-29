@@ -8,7 +8,7 @@ import type { TeamConfig } from './config.js'
 import {
   publishTeamRelay, publishWindowsTeamRelay, readTeamRelay, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
   teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
-  CODEX_CLIENT_VERSION_FALLBACK, dropUnofferedModel, offeredCodexModels, codexModelNotOffered,
+  CODEX_CLIENT_VERSION_FALLBACK, settleCodexModel, offeredCodexModels, codexModelNotOffered,
   type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
@@ -347,26 +347,43 @@ describe('Codex\'s home for the relay', () => {
 
   // 2026-10-29: a /model switch saved gpt-5.5 in Mac Auto's Team account, and Codex 0.164 then opened on "Meet GPT-6 Sol"
   // before its session started, so every Codex start there failed at 3 minutes.
-  it('takes out a saved default model the owner is not offered, once the owner\'s list is read', async () => {
+  it('sets the owner\'s first listed model where a saved one is not offered, once the owner\'s list is read', async () => {
     const dir = join(home(), '.codex')
     mkdirSync(dir)
     const config = join(dir, 'config.toml')
     writeFileSync(config, 'model = "gpt-5.5"\nmodel_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
     await prepareCodexHome(dir, grant, { fetch: answer() as never, version: () => null, now: () => 0 })
-    expect(readFileSync(config, 'utf8')).toBe('model_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
-    // An offered one stays; nothing is taken out without a list, or from a table.
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\n\n[tui]\nmodel = "kept"\n')
+    // An offered one stays; nothing is touched without a list, or in a table.
     writeFileSync(config, "model = 'gpt-6-astra' # chosen\n")
-    expect(dropUnofferedModel(config, new Set(['gpt-6-astra']))).toBe(false)
+    expect(settleCodexModel(config, new Set(['gpt-6-astra']), 'gpt-6.1-sol')).toBe(false)
     writeFileSync(config, 'model = "gpt-5.5"\n')
     await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
     expect(readFileSync(config, 'utf8')).toBe('model = "gpt-5.5"\n')
-    expect(dropUnofferedModel(config, new Set())).toBe(false)
-    writeFileSync(config, '[profiles.x]\nmodel = "gpt-5.5"\n')
-    expect(dropUnofferedModel(config, new Set(['gpt-6.1-sol']))).toBe(false)
-    expect(dropUnofferedModel(join(dir, 'missing.toml'), new Set(['gpt-6.1-sol']))).toBe(false)
-    writeFileSync(config, 'model = "gpt-5.5"\n')
-    expect(dropUnofferedModel(config, new Set(['gpt-6.1-sol']))).toBe(true)
+    expect(settleCodexModel(config, new Set(), 'gpt-6.1-sol')).toBe(false)
+    // No listed model to fall back on: the unoffered one is taken out, as before.
+    expect(settleCodexModel(config, new Set(['gpt-reserve']), null)).toBe(true)
+    expect(readFileSync(config, 'utf8')).toBe('')
     expect(statSync(config).mode & 0o777).toBe(0o600)
+  })
+
+  // 2026-10-29: with no model saved, Codex opened on its own default, gpt-6.1-sol, which Mac Auto's owner is not offered, and
+  // the agent's first message was refused before the start's model was switched in.
+  it('pins a model the owner is offered where none is saved, and writes the file when there is none', async () => {
+    const dir = join(home(), '.codex')
+    mkdirSync(dir)
+    const config = join(dir, 'config.toml')
+    await prepareCodexHome(dir, grant, { fetch: answer(200, { models: [{ slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-6-luna', visibility: 'list' }] }) as never,
+      version: () => null, now: () => 0 })
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-6-luna"\n')
+    writeFileSync(config, '[tui]\nscreen_reader_detection_done = true\n[profiles.x]\nmodel = "gpt-5.5"\n')
+    expect(settleCodexModel(config, new Set(['gpt-6-luna']), 'gpt-6-luna')).toBe(true)
+    expect(readFileSync(config, 'utf8')).toBe('model = "gpt-6-luna"\n[tui]\nscreen_reader_detection_done = true\n[profiles.x]\nmodel = "gpt-5.5"\n')
+    // A model name that could break the file is never written: the unoffered line is only taken out.
+    expect(settleCodexModel(join(dir, 'config.toml'), new Set(['x']), 'bad"name')).toBe(true)
+    expect(readFileSync(config, 'utf8')).not.toContain('bad')
+    // Nothing is written into a folder that is not there.
+    expect(settleCodexModel(join(dir, 'no', 'config.toml'), new Set(['x']), 'gpt-6-luna')).toBe(false)
   })
 
   it('reads the relay\'s left-over sign-in as Codex not signed in', async () => {
