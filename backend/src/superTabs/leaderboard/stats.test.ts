@@ -430,6 +430,23 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     expect(board(state, [], LAST).agents.map(a => a.agentId)).toEqual(['river'])
   })
 
+  it('never shows who a former agent is now when it was re-added in another project (privacy, review of #2128)', () => {
+    const state = agents(swarm())
+    // The same terminals, removed here and added again in a private project, under new names and owners.
+    const river = state.agents.find(a => a.id === 'river')!
+    state.agents.push({ ...river, id: 'old-pm', projectId: 'secret', displayName: 'Hidden', machineId: 'mac-secret' },
+      { ...river, id: 'old-buddy', projectId: 'secret', displayName: 'Whisper', machineId: 'mac-secret', buddyOf: { personId: 'tony', generation: 'g' } })
+    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, ...extra })
+    const view = board(state, [
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'old-buddy', messageId: 'm1' } }) }),
+    ])
+    const former = view.agents.filter(a => a.agentId.startsWith('old-')).map(a => [a.agentId, a.displayName, a.kind, a.personId, a.machineId])
+    expect(former).toEqual([['old-pm', 'Former PM', 'pm', null, ''], ['old-buddy', 'Former Buddy', 'buddy', null, '']])
+    // Nowhere in the board: the private registration's names and machine (its Buddy's owner is checked above).
+    expect(JSON.stringify(view)).not.toMatch(/Hidden|Whisper|mac-secret/)
+  })
+
   it('gives a Buddy 3 points per group opened from its proposal that shipped this week', () => {
     const fromProposal = { askedAt: WEEK, shippedAt: WEEK + HOUR, proposal: { buddyId: 'sparky', messageId: 'm1' } }
     const view = board(agents(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { ledger: fromProposal }), shipped('dee', WEEK, WEEK + HOUR)])

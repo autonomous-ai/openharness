@@ -617,6 +617,17 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(f.group(id).ledger!.reviews![0]!.count).toBe(2)
   })
 
+  it('gives no model credit for verdicts on an attempt recorded before attempts were (review of #2128)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    // As an assignment from before attempts were recorded: no run, so no way to tell a repeat.
+    delete f.group(id).ledger!.runs
+    for (let i = 0; i < 3; i++) verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews).toBeUndefined()
+  })
+
   it('counts every verdict exactly, however many a group gets in a week (review of #2097)', () => {
     const f = fixture()
     const id = f.create(owner, { checks: independent })

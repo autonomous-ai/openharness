@@ -125,7 +125,9 @@ function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: C
     if (g.ledger?.proposal) credit(g.ledger.proposal.buddyId, 'buddy')
   }
   const scored = [...shipped].map(([agentId, { kind, count }]) => {
-    const a = state.agents.find(agent => agent.id === agentId)
+    // Who it is now only while it is this project's: an agent id stays the same when its terminal is added again
+    // elsewhere, and a private project's names and owners are not this board's to show (review of #2128).
+    const a = state.agents.find(agent => agent.id === agentId && agentProjectId(state, agent) === projectId)
     return { agentId, displayName: a ? a.displayName ?? a.name : kind === 'pm' ? 'Former PM' : 'Former Buddy', kind,
       personId: a?.buddyOf?.personId ?? null, machineId: a?.machineId ?? '', points: count * SHIPPED_POINTS, shipped: count }
   }).sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
