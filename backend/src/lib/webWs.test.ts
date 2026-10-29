@@ -16,7 +16,7 @@ describe('frames a web client may never forge', () => {
     // desk_changed / zoo_changed / machines_changed / connectors_changed make every window re-read from the backend:
     // forged in a loop, that is request amplification against our own API. device_keys_changed makes the
     // daemon re-read its device key log; devlog_append_result is the backend's answer to its own append.
-    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['connectors_changed', 'desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'zoo_changed'])
+    expect([...BACKEND_ONLY_DOWN_TYPES].sort()).toEqual(['connectors_changed', 'desk_changed', 'device_keys_changed', 'devlog_append_result', 'machine_meta', 'machine_revoked', 'machines_changed', 'swarm_changed', 'swarm_host_changed', 'zoo_changed'])
   })
 
   it('covers only frames that are NOT already caught by the `__` rule', () => {

@@ -98,6 +98,20 @@ class SuperTabOutgoing {
 
 /// Personal navigation/drafts live on this client. Membership, work and messages
 /// live on the backend; refreshing never selects another person's conversation.
+/// WS roadmap Phase 2a: a server that pushes Swarm changes (backend
+/// lib/swarmClientPushes.ts) says so every 4 minutes. Without that word for
+/// this long (an older server, a rollback, Redis down) a Swarm polls as
+/// before.
+const kSwarmPushLease = Duration(minutes: 5);
+
+/// While the server pushes, a Swarm nothing was said of is still read this
+/// often: the safety net for a push lost on the way.
+const kSwarmPushSafetyNet = Duration(seconds: 60);
+
+/// While the server pushes, which Swarms the account is in is still read this
+/// often; a change to one asks for a read at once (`SuperTabClient`).
+const kSwarmDiscoverySafetyNet = Duration(minutes: 2);
+
 class SuperTabController extends ChangeNotifier {
   SuperTabController({
     required this.tabId,
@@ -280,6 +294,117 @@ class SuperTabController extends ChangeNotifier {
 
   SuperTabReading _policy;
   DateTime? _startedAt, _lastFullRead;
+
+  /// Until when the server is known to push this Swarm's changes
+  /// ([kSwarmPushLease]); set by [SuperTabClient] as it hears the server.
+  DateTime? pushUntil;
+
+  /// Told of a change since the last read began: one of its main parts, or a
+  /// machine's reading alone; and the change times told lately, to know a
+  /// push heard again ([_kToldTimes] of them).
+  bool _toldMain = false, _toldMachine = false;
+  final _toldTimes = <int>{};
+  static const _kToldTimes = 64;
+
+  bool get _pushing {
+    final until = pushUntil;
+    return until != null && clock.now().isBefore(until);
+  }
+
+  /// The server said this Swarm changed, at [at] when it names the commit's
+  /// time. Only an exact repeat is dropped: a time already told, or the one
+  /// the last read returned. A phone hears each push once per machine socket
+  /// (review of #2121). An older time is not a repeat: each server stamps a
+  /// commit from its own clock as the command starts, so a later commit can
+  /// carry an earlier time (re-check of #2121). The rest is read on the next allowed read: now if the old poll
+  /// would have read by now, else on the tick that would ([_readGap]), so a
+  /// busy Swarm reads no more often than before pushes. A machine's reading
+  /// alone always waits for the tick. Not on screen while the reading pauses,
+  /// nothing is read until it is shown again, which reads at once.
+  void told({required bool main, int? at}) {
+    if (_disposed || accessRevoked || updateRequired) return;
+    if (main && at != null) {
+      if (at == lastChangedAt || !_toldTimes.add(at)) return;
+      if (_toldTimes.length > _kToldTimes) _toldTimes.remove(_toldTimes.first);
+    }
+    if (main) {
+      _toldMain = true;
+    } else {
+      _toldMachine = true;
+    }
+    _readWhenAllowed();
+  }
+
+  /// One read at the next allowed moment for what it was told: now if the
+  /// gap since the last read has passed, else when it does; after a read
+  /// under way, for a change heard while it was out.
+  Timer? _toldRead;
+  void _readWhenAllowed() {
+    if (_toldRead != null || _disposed || !(_toldMain || _toldMachine)) return;
+    if (_policy.pausesAway && _away) return;
+    // A read under way reads again, if it must, once it ends (refresh).
+    if (_refreshing != null) return;
+    final last = _lastFullRead;
+    final wait = last == null
+        ? Duration.zero
+        : _readGap - clock.now().difference(last);
+    if (wait <= Duration.zero) {
+      unawaited(refresh());
+      return;
+    }
+    _toldRead = Timer(wait, () {
+      _toldRead = null;
+      if (_disposed || accessRevoked || updateRequired) return;
+      if (!(_toldMain || _toldMachine) || (_policy.pausesAway && _away)) {
+        return;
+      }
+      if (_refreshing == null) unawaited(refresh());
+    });
+  }
+
+  /// How often the poll read before pushes: every [pollInterval], or
+  /// [SuperTabReading.quietPoll] once the person has been quiet a while.
+  Duration get _readGap {
+    final quiet = _policy.quietPoll;
+    if (quiet != null &&
+        clock.now().difference(_lastActivity) >= _policy.quietAfter) {
+      return quiet;
+    }
+    return pollInterval;
+  }
+
+  bool get _gapPassed {
+    final last = _lastFullRead;
+    return last == null || clock.now().difference(last) >= _readGap;
+  }
+
+  /// Whether this poll reads. Always, unless the server pushes: then only when
+  /// told and the old poll would have read by now, when the safety net is
+  /// due, or while the person's own message in the open conversation waits
+  /// for its receipt, which no push names.
+  bool get _pollDue {
+    if (!_pushing || _receiptOpen(selectedId)) return true;
+    if ((_toldMain || _toldMachine) && _gapPassed) return true;
+    final last = _lastFullRead;
+    return last == null || clock.now().difference(last) >= kSwarmPushSafetyNet;
+  }
+
+  /// The person's latest message in [id] still has a delivery in hand.
+  bool _receiptOpen(String id) {
+    SuperTabMessage? own;
+    for (final m in _messages[id] ?? const <SuperTabMessage>[]) {
+      if (m.fromAgent || m.fromTerminal || m.authorId != accountId) continue;
+      if (own == null || m.sequence > own.sequence) own = m;
+    }
+    return own != null &&
+        own.deliveries.any(
+          (d) => !const {
+            'answered',
+            'cancelled',
+            'superseded',
+          }.contains(d['status']),
+        );
+  }
 
   /// When the parts held were last read: how old a [savedView] of them is.
   DateTime? _partsReadAt;
@@ -1198,7 +1323,9 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     if (_disposed || updateRequired || pollInterval <= Duration.zero) return;
     if (!_policy.adapts) {
-      _poll = Timer.periodic(pollInterval, (_) => unawaited(refresh()));
+      _poll = Timer.periodic(pollInterval, (_) {
+        if (_pollDue) unawaited(refresh());
+      });
       return;
     }
     if (accessRevoked || (_policy.pausesAway && _away)) return;
@@ -1214,7 +1341,12 @@ class SuperTabController extends ChangeNotifier {
   /// comes a poll after this one began, however long its answer took.
   Future<void> _tick() async {
     final began = clock.now();
-    await (_fullReadDue ? refresh() : _readMessages(selectedId, light: true));
+    if (_pollDue) {
+      // Told of a change: the whole Swarm, not only the open conversation.
+      await (_fullReadDue || _toldMain || _toldMachine
+          ? refresh()
+          : _readMessages(selectedId, light: true));
+    }
     _schedule(pollInterval - clock.now().difference(began));
   }
 
@@ -1970,7 +2102,11 @@ class SuperTabController extends ChangeNotifier {
 
   Future<void> refresh() {
     if (_disposed || accessRevoked || updateRequired) return Future.value();
-    return _refreshing ??= _read().whenComplete(() => _refreshing = null);
+    return _refreshing ??= _read().whenComplete(() {
+      _refreshing = null;
+      // A change heard while it was out: read on the next allowed read.
+      if (_pushing) _readWhenAllowed();
+    });
   }
 
   Future<void> _read() async {
@@ -1982,6 +2118,9 @@ class SuperTabController extends ChangeNotifier {
     loading = snapshot == null;
     if (!quiet) _changed();
     _lastFullRead = clock.now();
+    // Taken as the read starts: a push heard while it is out reads once more,
+    // on the next allowed read, unless it repeats a time already told.
+    _toldMain = _toldMachine = false;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
     // ([SuperTabReading.messagesWithState]); dropped if the state moves the
@@ -3048,6 +3187,7 @@ class SuperTabController extends ChangeNotifier {
     _disposed = true;
     _serverMarks.dispose();
     _poll?.cancel();
+    _toldRead?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();
     for (final retry in _quoteRetries) {

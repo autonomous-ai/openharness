@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness_mobile/api/api_client.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/auth/cli_link.dart';
@@ -182,6 +183,27 @@ class FakeApi extends ApiClient {
   ) async {
     usageReports.add(jsonDecode(jsonEncode(report)) as Map<String, dynamic>);
     return {'accepted': true};
+  }
+
+  /// Answers each Swarm chat file sent; records what was sent, by
+  /// `tab/conversation/name`. Never the network.
+  final List<String> swarmUploads = [];
+  Future<Map<String, dynamic>> Function() onSwarmUpload = () async => {
+    'attachment': <String, dynamic>{'id': 'att'},
+  };
+
+  @override
+  Future<Map<String, dynamic>> uploadSwarmAttachment({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) {
+    swarmUploads.add('$tabId/$conversationId/$name');
+    return onSwarmUpload();
   }
 
   /// Answers `/api/auth/me` in place of [profile] when set — held open, or

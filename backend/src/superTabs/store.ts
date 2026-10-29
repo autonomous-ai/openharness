@@ -23,6 +23,8 @@ import { placeWaitingLeads } from './leadStart.js'
 import { buddyChatId } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, onTeamAccount, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
+import { isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
+import { lostReasonWithoutMachine } from './lostReason.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
@@ -266,7 +268,19 @@ export interface SuperTabStoreHooks {
   /** A delivery now waits for this agent, committed: its machine's daemon socket tells its host to read it at once
    *  (lib/swarmDeliveryPushes.ts). Called after the write commits; it must not throw. */
   deliveriesWaiting?: (waiting: DeliveriesWaiting) => void
+  /** A commit changed what these machines' hosts read (parts/commit.ts hostsToTell): each machine's daemon socket tells its
+   *  host to read its Swarm changes now (lib/swarmHostPushes.ts). Called after the write commits; it must not throw. */
+  hostsChanged?: (change: HostsChanged) => void
+  /** A commit changed a Swarm these people are in, or were in before it: each one's apps read it again
+   *  (lib/swarmClientPushes.ts). Called after the write commits; it must not throw. */
+  swarmChanged?: (change: SwarmChanged) => void
 }
+
+/** Which people's apps should read a Swarm again, the commit's time, and which of its stamps moved. */
+export interface SwarmChanged { tabId: string; userIds: string[]; lastChangedAt: number; parts: Array<'main' | 'machine'> }
+
+/** Which machines' hosts should read a Swarm's changes, and the commit's time. */
+export interface HostsChanged { tabId: string; machineIds: string[]; lastChangedAt: number }
 
 /** Which agent, of which Swarm, on which machine, has a delivery to read. */
 export interface DeliveriesWaiting { machineId: string; tabId: string; agentId: string }
@@ -346,6 +360,22 @@ export class GrantReads {
 /** Another Swarm too busy to say whether a shared session is confidential there: the list hides those shares and lists the rest,
  *  as a busy load of a share's own Swarm hides its shares (Lead, review of #1973), rather than failing every share. */
 const busyListing = (tabId: string) => logger.warn('[super-tab] shares list: a busy Swarm hid the shares it could not answer for', { tabId })
+
+/** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
+ *  its source (liveness.ts loseTask), and a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine). */
+function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
+  const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown } | null
+  if (source?.kind === 'work-lost' && typeof source.reason === 'string') {
+    const reason = lostReasonWithoutMachine(source.reason)
+    return reason === source.reason ? m : { ...m, text: m.text.split(source.reason).join(reason), source: { ...source, reason } as SuperTabMessage['source'] }
+  }
+  if ((source?.kind === 'machine-left' || source?.kind === 'machine-removed') && typeof source.machine === 'string' && source.machine) {
+    const { machine, ...rest } = source
+    const text = m.text.startsWith(machine) ? `A machine${m.text.slice(machine.length)}` : m.text
+    return { ...m, text: text.split(machine).join('a machine'), source: rest as SuperTabMessage['source'] }
+  }
+  return m
+}
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore
@@ -513,7 +543,9 @@ export class SuperTabStore {
   async tabPolicy(user: AuthUser, tabId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
-      author(state, await this.actor(tx, user, state, asAgentId))
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      refuseBuddyRouting(state, actor)
       const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
       // The owner's account policy alone, so a field reset to "use account default" can show its value.
       return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
@@ -615,8 +647,13 @@ export class SuperTabStore {
   }
 
   /** Writes what changed between the loaded state and `next`, and touches the parts the change relied on. */
-  private save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[] = []) {
-    return commitParts(tx, loaded, next, { stamp, touches })
+  private async save(tx: Transaction, loaded: Loaded, next: SuperTabState, stamp: number, touches: Touch[] = []) {
+    const committed = await commitParts(tx, loaded, next, { stamp, touches })
+    const told = this.hooks.hostsChanged
+    if (told && committed.hosts.length) afterCommit(tx, () => told({ tabId: loaded.parts.tabId, machineIds: committed.hosts, lastChangedAt: stamp }))
+    const { userIds, parts } = committed.members, changed = this.hooks.swarmChanged
+    if (changed && userIds.length) afterCommit(tx, () => changed({ tabId: loaded.parts.tabId, userIds, lastChangedAt: stamp, parts }))
+    return committed
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
@@ -1842,6 +1879,9 @@ export class SuperTabStore {
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
+    // A Buddy reads its project's workgroups but never how work is routed: a route row names the machines that could run it
+    // and why others could not (security review 2 of #2115). Left out like an agent-only notice, so no page is shorter.
+    const buddy = isBuddyReader(state, actor)
     const forward = cursor.after !== undefined
     // One thread: its root (its own thread) and its replies.
     const at = { tabId, conversationId, messageId: cursor.messageId, thread: cursor.thread }
@@ -1853,7 +1893,8 @@ export class SuperTabStore {
     const rows: SuperTabMessage[] = []
     for (let edge = start; rows.length <= 100;) {
       const batch = await messagesPast(tx, at, edge, forward, 101)
-      rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
+      rows.push(...batch.filter(m => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
+        && !(buddy && routingRow(m.source))))
       if (batch.length < 101) break
       edge = { sequence: batch.at(-1)!.sequence, id: batch.at(-1)!.id }
     }
@@ -1862,10 +1903,12 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
+    // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
+    const shown = buddy ? page.map(withoutMachineNames) : page
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
     const threads = roots.length ? threadSummaries(state, group, await pageThreads(tx, tabId, conversationId, roots)) : []
-    return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
@@ -1914,6 +1957,7 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId, { allGroups: true })
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
+      refuseBuddyRouting(state, actor)
       // Dormant conversations count too: their decisions stay readable (the list loads every group for this).
       const groups = state.conversations.filter(c => canReadGroup(state, actor, c)).map(c => c.id)
       return (await recentDecisions(tx, tabId, groups)).map(timedDecisionOf)
@@ -1929,6 +1973,8 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
+      // What routed attempts cost, by engine, model and spend, is how work is routed: never a Buddy's (review of #2115).
+      refuseBuddyRouting(state, actor)
       const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
       return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
     })
@@ -1940,6 +1986,7 @@ export class SuperTabStore {
       const { state } = await this.load(tx, user, tabId, { groupIds: row ? [row.conversationId] : [] })
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
+      refuseBuddyRouting(state, actor)
       const decision = await tx.superTabRouteDecision.findFirst({ where: { id: decisionId, tabId } })
       if (decision) readConversation(state, actor, decision.conversationId)
       return decision ? timedDecisionOf(decision) : fail('NOT_FOUND', 'This routing decision is unavailable.', 404)
