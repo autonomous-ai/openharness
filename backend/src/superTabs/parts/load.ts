@@ -155,7 +155,7 @@ const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgen
 /** What a changed part is made of: its other fields are indexed copies of its data. */
 const CHANGED_FIELDS = { tabId: 1, key: 1, version: 1, changedAt: 1, deleted: 1, ordinal: 1, data: 1, dormant: 1, readAt: 1 }
 
-const DORMANT_PAGE = 50
+export const DORMANT_PAGE = 50
 
 /** Dormant groups the caller pages through, newest activity first, 50 at a time. A project's go through its index in that
  *  order. A later page is two reads that index bounds: the rest of its cursor's moment by key, then what is older. The

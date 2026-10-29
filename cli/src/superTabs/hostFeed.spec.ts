@@ -154,3 +154,104 @@ describe('the host form of a machine\'s Swarms', () => {
     await expect(feed.refresh()).rejects.toMatchObject({ code: 'UPDATE_REQUIRED', status: 426 })
   })
 })
+
+// WS roadmap Phase 2a: a server that pushes (backend lib/swarmHostPushes.ts) tells the host when a commit changed what it
+// reads; until then, and once its word is too old, the host reads its changes each second as before.
+describe('reading only when told', () => {
+  const quietFeed = () => feedOf([ok(readFixture('host-full')), ok(readFixture('host-quiet'))])
+  const pushes = { type: 'swarm_host_changed' as const }
+  const changed = { type: 'swarm_host_changed' as const, tabId: T, lastChangedAt: 1 }
+
+  it('reads each second while no server has said it pushes, as after a reconnect', async () => {
+    const { feed, paths, later } = quietFeed()
+    await feed.due()
+    later(1_000)
+    await feed.due()
+    expect(paths()).toHaveLength(2)
+    expect(feed.pushing).toBe(false)
+  })
+
+  it('reads on the next tick when the server says it pushes, then only when told, and in full once a minute', async () => {
+    const { feed, paths, later } = quietFeed()
+    await feed.due()
+    feed.heard(pushes)
+    expect(feed.pushing).toBe(true)
+    later(1_000)
+    await feed.due()
+    expect(paths()).toHaveLength(2)
+    for (let i = 0; i < 5; i++) { later(1_000); await feed.due() }
+    expect(paths()).toHaveLength(2)
+    feed.heard(changed)
+    await feed.due()
+    expect(paths()).toHaveLength(3)
+    expect(paths()[2]).toMatch(/^POST since /)
+    // The safety net: a full read a minute after the last one.
+    later(53_999)
+    await feed.due()
+    expect(paths()).toHaveLength(3)
+    later(1)
+    await feed.due()
+    expect(paths().slice(3)).toEqual([FULL_HELD])
+  })
+
+  it('reads at most once a second however often it is told', async () => {
+    const { feed, paths, later } = quietFeed()
+    feed.heard(pushes)
+    await feed.due()
+    feed.heard(changed)
+    feed.heard(changed)
+    await feed.due()
+    expect(paths()).toHaveLength(1)
+    later(999)
+    await feed.due()
+    expect(paths()).toHaveLength(1)
+    later(1)
+    await feed.due()
+    await feed.due()
+    expect(paths()).toHaveLength(2)
+  })
+
+  it('reads again after a read that was already out when it was told', async () => {
+    const { feed, paths, later } = quietFeed()
+    feed.heard(pushes)
+    const out = feed.due()
+    feed.heard(changed)
+    await out
+    later(1_000)
+    await feed.due()
+    expect(paths()).toHaveLength(2)
+  })
+
+  it('goes back to reading each second when the server\'s 4-minute word is more than 5 minutes old', async () => {
+    const { feed, paths, later } = quietFeed()
+    feed.heard(pushes)
+    await feed.due()
+    later(4 * 60_000)
+    feed.heard(pushes)
+    await feed.due()
+    const told = paths().length
+    later(5 * 60_000 - 1)
+    expect(feed.pushing).toBe(true)
+    later(1)
+    expect(feed.pushing).toBe(false)
+    await feed.due()
+    later(1_000)
+    await feed.due()
+    expect(paths()).toHaveLength(told + 2)
+  })
+
+  it('answers other readers from the last read for up to a minute while untold, and reads for them once told', async () => {
+    const { feed, paths, later } = quietFeed()
+    feed.heard(pushes)
+    await feed.due()
+    later(30_000)
+    await feed.current(2_000)
+    expect(paths()).toHaveLength(1)
+    feed.heard(changed)
+    await feed.current(2_000)
+    expect(paths()).toHaveLength(2)
+    later(60_000)
+    await feed.current(2_000)
+    expect(paths()).toHaveLength(3)
+  })
+})
