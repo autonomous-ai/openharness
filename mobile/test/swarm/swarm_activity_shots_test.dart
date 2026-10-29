@@ -10,9 +10,8 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
-import 'package:harness_mobile/swarm/swarm_activity_page.dart';
-import 'package:harness_mobile/swarm/swarm_buddies_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_tabs.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -20,7 +19,8 @@ import 'swarm_fixture.dart';
 /// Review screenshots of Activity and Buddies, direction C, as Tony's
 /// prototype C2 and C3 draw them (2026-10-30) — each filter of Activity,
 /// Approve's confirm and its Undo, a need opened, the handled row, and
-/// Buddies — with their touch targets outlined and measured, in both phone
+/// Buddies, over the Swarm tab bar — with their touch targets outlined and
+/// measured, in both phone
 /// themes, from made-up Swarm data only, to the folder
 /// `SWARM_ACTIVITY_SHOTS` names.
 final shots = Platform.environment['SWARM_ACTIVITY_SHOTS'];
@@ -415,7 +415,6 @@ void main() {
       )..foreground = false;
       final boundary = GlobalKey();
       final targets = ValueNotifier<List<Rect>>(const []);
-      final screen = ValueNotifier<Widget>(const SwarmActivityView());
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
@@ -423,16 +422,13 @@ void main() {
             textDirection: TextDirection.ltr,
             child: Stack(
               children: [
-                ValueListenableBuilder<Widget>(
-                  valueListenable: screen,
-                  builder: (_, home, _) => MaterialApp(
-                    key: ValueKey(home.runtimeType),
-                    debugShowCheckedModeBanner: false,
-                    theme: buildAppTheme(brightness: brightness),
-                    builder: (_, child) =>
-                        SwarmScope(notifier: host, child: child!),
-                    home: home,
-                  ),
+                MaterialApp(
+                  debugShowCheckedModeBanner: false,
+                  theme: buildAppTheme(brightness: brightness),
+                  builder: (_, child) =>
+                      SwarmScope(notifier: host, child: child!),
+                  // The Swarm tabs, as the phone's root has them.
+                  home: SwarmTabsPage(settings: (_) => const SizedBox()),
                 ),
                 Positioned.fill(
                   child: IgnorePointer(
@@ -487,8 +483,21 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      Future<void> openTab(String name) async {
+        await tester.tap(find.byKey(ValueKey('swarm-tab-$name')));
+        await tester.pumpAndSettle();
+      }
+
+      const tabs = [
+        'swarm-tab-home',
+        'swarm-tab-buddies',
+        'swarm-tab-activity',
+        'swarm-tab-you',
+      ];
+      await openTab('activity');
       await capture('needs');
       await captureTargets('needs-targets', [
+        ...tabs,
         'swarm-activity-filter-',
         'swarm-activity-approve-',
         'swarm-activity-reply-',
@@ -526,16 +535,14 @@ void main() {
         'swarm-activity-reply-',
       ]);
 
-      screen.value = const SwarmBuddiesView();
-      await tester.pumpAndSettle();
+      await openTab('buddies');
       await capture('buddies');
-      await captureTargets('buddies-targets', ['swarm-buddies-row-']);
+      await captureTargets('buddies-targets', [...tabs, 'swarm-buddies-row-']);
 
       await tester.pumpWidget(const SizedBox());
       host.dispose();
       account.dispose();
       targets.dispose();
-      screen.dispose();
     }
     AppTheme.palette.value = HarnessPalette.graphite;
     AppTheme.brightness.value = Brightness.dark;
