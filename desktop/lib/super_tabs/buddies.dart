@@ -55,17 +55,23 @@ String buddyPersonName(SuperTabController c, String personId) {
 }
 
 /// The machine [machineId]'s name as the dialog and the chat show it.
-String buddyMachineName(SuperTabController c, String machineId) {
+String buddyMachineName(
+  SuperTabController c,
+  String machineId, {
+  AppNotifier? app,
+}) {
   final row = c.snapshot?.pool(machineId);
-  final name = row?['name'];
+  // A machine of the reader's own outside the Swarm is in no Swarm list
+  // (backend buddyOnly): their account names it.
+  final name = row?['name'] ?? app?.stateOf(machineId)?.machine.displayName;
   return name is String && name.isNotEmpty
       ? superTabMachineName(name)
       : 'another machine';
 }
 
 /// Add a Buddy: project, one of the reader's own machines, and engine. With
-/// [app], this computer is offered first, even before it is in the Swarm: Add
-/// Buddy then adds it.
+/// [app], every machine of their account is offered, this computer first; one
+/// outside the Swarm stays out of it (buddyMachines).
 Future<void> showAddBuddy(
   BuildContext context,
   SuperTabController c, {
@@ -403,7 +409,7 @@ class SuperTabBuddyBar extends StatelessWidget {
               error is String
                   ? "Couldn't start: $error"
                   : 'Starting ${buddyEngineName(engine)} on '
-                        '${buddyMachineName(c, machineId)}…',
+                        '${buddyMachineName(c, machineId, app: app)}…',
               style: DesktopChrome.control(),
             ),
           ),
@@ -432,7 +438,7 @@ class SuperTabBuddyBar extends StatelessWidget {
     final agent = c.buddy(chat.projectId);
     if (agent == null) return _starting(c);
     final name = c.snapshot!.agentName(agent.id, fallback: agent.name);
-    final machine = buddyMachineName(c, agent.machineId);
+    final machine = buddyMachineName(c, agent.machineId, app: app);
     final project = c.snapshot!.projects
         .where((p) => p.id == chat.projectId)
         .firstOrNull;
