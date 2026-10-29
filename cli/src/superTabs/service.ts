@@ -13,7 +13,7 @@ import { START_REQUIREMENTS } from './capacity.js'
 import { CapacityReservations, type ReservationBook } from './reservations.js'
 import { ContributionPreparations, ownerRequest, prepareContribution, setMachineAgents } from './contribution.js'
 import { messageIdOf } from './attach.js'
-import { cardId, SwarmCards } from './cards.js'
+import { cardId, SwarmCards, type CardChat } from './cards.js'
 import { GitHubTokenRefresher, githubToken } from './github.js'
 import { teamEngineReporter, type TeamEngineReporter } from '../team/engines.js'
 import { AUTO_SETUP_REASONS, realTeamAutoSetup, type AutoSetupReason, type TeamAutoSetup } from '../team/autoSetup.js'
@@ -391,10 +391,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The devices' (core/devicesLink.ts): a Harness Pro that shows the Swarm cards is attached or gone, wants a Lead's recap, or
         // has one open. They read the account's Swarms as the person, and need no agent.
         // Only this computer's own devices ask: an account owner on another machine does not make this one read the Swarms.
-        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker') {
+        if (payload.action === 'cardsWanted' || payload.action === 'cardRecap' || payload.action === 'cardOpen' || payload.action === 'cardSay' || payload.action === 'cardWorker' || payload.action === 'cardSide') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
-          // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat).
-          const chat = payload.chat === true
+          // A round dial that speaks swarmChat asks for the chat on its face (design 2026-10-28-round-dial-swarm-chat), and one
+          // that speaks swarmBuddy for the face on the side it keeps ('buddy', spec 2026-10-29-round-dial-pm-buddy).
+          const chat: CardChat = payload.chat === 'buddy' ? 'buddy' : payload.chat === true
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
@@ -409,6 +410,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           // A card's failure from another computer: whether its agent is a Swarm's Builder or Reviewer, from the Swarms read last.
           if (payload.action === 'cardWorker' && identifier(payload.machineId) && identifier(payload.harnessId)) {
             return { ok: true, worker: cards().worker(payload.machineId, payload.harnessId) }
+          }
+          if (payload.action === 'cardSide' && cardId(payload.tabId) && (payload.side === 'pm' || payload.side === 'buddy')) {
+            cards().side(payload.tabId, payload.side)
+            return { ok: true }
           }
           if (payload.action === 'cardOpen' && cardId(payload.session) && cardId(payload.tabId) && (payload.leadId === null || cardId(payload.leadId))) {
             cards().open(payload.session, payload.tabId, payload.leadId, chat)

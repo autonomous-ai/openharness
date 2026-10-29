@@ -13,7 +13,7 @@
  * whether a capable Pro is attached and which Swarms the desktop has tabs for (`want`), and the core says it to the Super Tab
  * service, again whenever that service (re)connects (`serviceUp`), and takes it back when the devices go (`devicesGone`).
  */
-import type { LeadNotice, LeadRecap, SwarmCard, SwarmChat, SwarmLead } from '../../core/api.js'
+import type { LeadNotice, LeadRecap, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../../core/api.js'
 
 export interface SuperTabCardsDeps {
   /** The devices' door for the list (`ports.devices.swarmCards`). */
@@ -27,8 +27,14 @@ export interface SuperTabCardsDeps {
 
 const MAX_CARDS = 16, MAX_LEADS = 12, NAME_BYTES = 48, ENGINE_BYTES = 16, RECAP_BYTES = 1500
 const STATES: ReadonlySet<string> = new Set(['ask', 'stuck', 'work', 'done'])
-const CHATS: ReadonlySet<string> = new Set(['lead', 'pm', 'group'])
+const CHATS: ReadonlySet<string> = new Set(['lead', 'pm', 'group', 'buddy'])
+/** The Lead's notice comes from its Lead or Buddy chat, the Buddy's quiet one from its chat alone: an older dial reads only
+ *  the first, so the Buddy's words never reach it. */
 const NOTICE_CHATS: ReadonlySet<string> = new Set(['lead', 'pm'])
+const BUDDY_NOTICE_CHATS: ReadonlySet<string> = new Set(['buddy'])
+/** Desktop's pattern is the 15 half bits of a 5×5 grid (superTabs/buddyAvatar.ts). */
+const MAX_CELLS = 0x7fff
+const COLOR = /^#[0-9a-f]{6}$/
 /** The Pro keeps an id in 48 bytes with its NUL. */
 const ID = /^[A-Za-z0-9_-]{1,47}$/
 const id = (value: unknown): value is string => typeof value === 'string' && ID.test(value)
@@ -54,11 +60,19 @@ function chatIn(value: unknown): SwarmChat | null {
   return { kind: chat.kind as SwarmChat['kind'], id: chat.id, name: cut(chat.name, NAME_BYTES), working: chat.working, ...(chat.since === undefined ? {} : { since: chat.since }) }
 }
 
-/** A Lead's notice, checked and cut; null when it is not one, and the Lead goes on without it. */
-function noticeIn(value: unknown): LeadNotice | null {
+/** A Lead's notice from one of `chats`, checked and cut; null when it is not one, and the Lead goes on without it. */
+function noticeIn(value: unknown, chats: ReadonlySet<string>): LeadNotice | null {
   const notice = object(value)
-  if (typeof notice.chat !== 'string' || !NOTICE_CHATS.has(notice.chat) || !id(notice.chatId) || !id(notice.id) || typeof notice.text !== 'string' || !whole(notice.at)) return null
+  if (typeof notice.chat !== 'string' || !chats.has(notice.chat) || !id(notice.chatId) || !id(notice.id) || typeof notice.text !== 'string' || !whole(notice.at)) return null
   return { chat: notice.chat as LeadNotice['chat'], chatId: notice.chatId, id: notice.id, text: cut(notice.text, RECAP_BYTES), at: notice.at }
+}
+
+/** The reader's Buddy on a Lead, checked and cut; null when it is not one. */
+function buddyIn(value: unknown): SwarmBuddy | null {
+  const buddy = object(value)
+  if (!id(buddy.chatId) || typeof buddy.name !== 'string' || typeof buddy.engine !== 'string' || typeof buddy.live !== 'boolean') return null
+  if (!whole(buddy.cells) || buddy.cells > MAX_CELLS || typeof buddy.color !== 'string' || !COLOR.test(buddy.color)) return null
+  return { chatId: buddy.chatId, name: cut(buddy.name, NAME_BYTES), engine: cut(buddy.engine, ENGINE_BYTES), cells: buddy.cells, color: buddy.color, live: buddy.live }
 }
 
 /** A Lead the service sent, checked and cut; null when it is not one. */
@@ -73,11 +87,17 @@ function leadIn(value: unknown): SwarmLead | null {
   if (!whole(lead.order)) return null
   // The round dial's chat and alert are additions: one that is not sound is left out, and the Lead is kept as today's.
   const chat = lead.chat === undefined ? null : chatIn(lead.chat)
-  const notice = lead.notice === undefined ? null : noticeIn(lead.notice)
+  const notice = lead.notice === undefined ? null : noticeIn(lead.notice, NOTICE_CHATS)
+  // And so are the Buddy screen's (spec 2026-10-29-round-dial-pm-buddy).
+  const sideChat = lead.sideChat === undefined ? null : chatIn(lead.sideChat)
+  const buddy = lead.buddy === undefined ? null : buddyIn(lead.buddy)
+  const buddyNotice = lead.buddyNotice === undefined ? null : noticeIn(lead.buddyNotice, BUDDY_NOTICE_CHATS)
   return {
     id: lead.id, projectId: lead.projectId, project: cut(lead.project, NAME_BYTES), engine: cut(lead.engine, ENGINE_BYTES),
     owner: cut(lead.owner, NAME_BYTES), local: lead.local, state: lead.state as SwarmLead['state'], order: lead.order,
     ...(lead.since === undefined ? {} : { since: lead.since }), ...(chat ? { chat } : {}), ...(notice ? { notice } : {}),
+    ...(sideChat ? { sideChat } : {}), ...(lead.buddies === true ? { buddies: true as const } : {}), ...(buddy ? { buddy } : {}),
+    ...(buddyNotice ? { buddyNotice } : {}),
   }
 }
 
@@ -100,7 +120,8 @@ function recapIn(value: unknown): LeadRecap | null {
   if (!id(recap.tabId) || !id(recap.leadId) || typeof recap.text !== 'string' || !whole(recap.at) || typeof recap.none !== 'boolean') return null
   // A chat's recap names its chat or is not one: a dial must never show it for another chat.
   if (recap.chatId !== undefined && !id(recap.chatId)) return null
-  return { tabId: recap.tabId, leadId: recap.leadId, text: cut(recap.text, RECAP_BYTES), at: recap.at, none: recap.none, ...(recap.chatId === undefined ? {} : { chatId: recap.chatId }) }
+  return { tabId: recap.tabId, leadId: recap.leadId, text: cut(recap.text, RECAP_BYTES), at: recap.at, none: recap.none, ...(recap.chatId === undefined ? {} : { chatId: recap.chatId }),
+    ...(recap.buddy === true ? { buddy: true as const } : {}) }
 }
 
 export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log = (line) => console.log(line) }: SuperTabCardsDeps) {
@@ -165,11 +186,16 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
       swarmCardRecap(recap)
     },
     /** What the devices may ask of the Super Tab service, and nothing else of it: `cardsWanted` is kept here, `cardRecap`,
-     *  `cardOpen`, `cardSay` and `cardWorker` go to the service; any other action is refused. */
+     *  `cardOpen`, `cardSay`, `cardSide` and `cardWorker` go to the service; any other action is refused. */
     ask(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
       if (payload.action === 'cardsWanted') { api.want(payload.on === true, payload.include, payload.focus); return Promise.resolve({ ok: true }) }
-      // A round dial that speaks swarmChat asks for the chat on its face; without the flag, the request is today's.
-      const chat = payload.chat === true ? { chat: true } : {}
+      // A round dial that speaks swarmChat asks for the chat on its face, and one that speaks swarmBuddy for the face on its
+      // side ('buddy'); without the flag, the request is today's.
+      const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
+      // The side a swarmBuddy dial swiped to.
+      if (payload.action === 'cardSide') {
+        return payload.side === 'pm' || payload.side === 'buddy' ? route({ action: 'cardSide', tabId: payload.tabId, side: payload.side }) : Promise.resolve({ error: 'INVALID_REQUEST' })
+      }
       if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
       if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat })
       if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })

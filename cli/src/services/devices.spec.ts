@@ -667,6 +667,25 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: null })
     })
 
+    it('asks for a swarmBuddy dial\'s face with the buddy flag, says so on its recap, and sends its side as cardSide', async () => {
+      const answers: Array<Record<string, unknown>> = [
+        { ok: true, text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true },
+        { ok: true, text: 'no chat named', at: 3, none: false, buddy: true },
+        { ok: true, said: true },
+      ]
+      const superTabRequest = vi.fn(async (_payload: Record<string, unknown>) => answers.shift() ?? { ok: true })
+      withRequest(superTabRequest)
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', 'buddy')).toEqual({ tabId: 'st1', leadId: 'lead1', text: 'from the Buddy', at: 3, none: false, chatId: 'b1', buddy: true })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardRecap', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
+      expect(await seen.host.swarmCardRecap!('st1', 'lead1', 'buddy')).toBeNull()
+      expect(await seen.host.swarmSay!('h1', 'ship it', 'buddy')).toBe(true)
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })
+      seen.host.swarmCardOpen!('c1', 'st1', 'lead1', 'buddy')
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardOpen', session: 'c1', tabId: 'st1', leadId: 'lead1', chat: 'buddy' })
+      seen.host.swarmCardSide!('st1', 'buddy')
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardSide', tabId: 'st1', side: 'buddy' })
+    })
+
     it('reads a recap through the service, cut to 1,500 bytes on a character; anything unusable is null', async () => {
       const answers: Array<Record<string, unknown> | 'throw'> = [
         { ok: true, tabId: 'st1', leadId: 'lead1', text: 'é'.repeat(1000), at: 1792560000, none: false },

@@ -359,7 +359,7 @@ export interface CoreApi {
   /** The Super Tab service's door into the core (superTabs/attention.ts): absent from a core or a process that offers it none. */
   superTabs?: SuperTabsCore
   /** The devices' way to the Super Tab service's `super_tabs` requests, for the Swarm cards alone (`cardsWanted`, `cardRecap`,
-   *  `cardOpen`; core/devicesLink.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
+   *  `cardOpen`, `cardSay`, `cardSide`, `cardWorker`; superTabs/inCore/cards.ts refuses any other action): its answer, or SERVICE_UNAVAILABLE. Absent from a core or a
    *  process that offers none. */
   superTabRequest?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>
   /** The Wi-Fi device's doors into the core (services/wifi.ts): each one call it made when it ran here. */

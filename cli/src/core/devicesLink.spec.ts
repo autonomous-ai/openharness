@@ -252,4 +252,14 @@ describe('the devices\' Swarm card requests to the Super Tab service', () => {
     expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'yes' })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1' })
     expect((await devices.answer('super_tabs', { action: 'cardsWanted', on: true, include: [] })).echoed).toEqual({ action: 'cardsWanted', on: true, include: [] })
   })
+
+  it('passes a swarmBuddy dial\'s buddy flag and its side (cardSide), as it passes the other card requests', async () => {
+    const superTabRequest = vi.fn(async (payload: Record<string, unknown>) => ({ ok: true, echoed: payload }))
+    const core = fakeCore()
+    core.superTabRequest = superTabRequest
+    const devices = createDevicesLink({ core, notify: () => true, call: vi.fn(), state: () => STATE })
+    expect((await devices.answer('super_tabs', { action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })).echoed).toEqual({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })
+    expect((await devices.answer('super_tabs', { action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })).echoed).toEqual({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })
+    expect((await devices.answer('super_tabs', { action: 'cardSide', tabId: 't1', side: 'buddy', leadId: 'l1', text: 'x' })).echoed).toEqual({ action: 'cardSide', tabId: 't1', side: 'buddy' })
+  })
 })
