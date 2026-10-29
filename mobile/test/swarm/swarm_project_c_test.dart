@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
+import 'package:harness_mobile/swarm/swarm_code_block.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
@@ -1040,6 +1041,208 @@ void main() {
 
       expect(onScreen(tester, find.text('Update 40.')), isFalse);
       expect(key('swarm-jump-latest'), findsNothing);
+    });
+  });
+
+  group('Chat, its messages', () {
+    const pr = 'https://github.com/example/app/pull/7';
+
+    /// A message of the project's chat; [thread] its own id by default.
+    Map<String, dynamic> said(
+      String id,
+      int sequence,
+      String text, {
+      String author = 'agent-lead',
+      Map<String, List<(String, String)>> reactions = const {},
+    }) => {
+      'id': id,
+      'conversationId': leadChat,
+      'text': text,
+      'sequence': sequence,
+      'thread': id,
+      'author': {
+        'kind': 'agent',
+        'id': author,
+        'name': author == 'agent-lead' ? 'River' : 'Nova',
+      },
+      'reactions': [
+        for (final MapEntry(key: emoji, value: by) in reactions.entries)
+          {
+            'emoji': emoji,
+            'count': by.length,
+            'by': [
+              for (final (kind, who) in by) {'kind': kind, 'id': who},
+            ],
+          },
+      ],
+      'createdAt': DateTime.utc(2026, 10, 29, 2, sequence).toIso8601String(),
+    };
+
+    /// The project's chat: River's brief, a task card; Nova's Opened, a PR
+    /// card; a code block; reactions 👀 ✅ 🚀; and a root with 3 replies.
+    FakeSwarm talk() {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        final lead = ((read['groups'] as List).first as Map)['data'] as Map;
+        lead
+          ..['lastMessageSequence'] = 5
+          ..['number'] = 12
+          ..['pullRequestUrls'] = [pr]
+          ..['cards'] = {
+            'task': 'm1',
+            'pullRequests': [
+              {'url': pr, 'messageId': 'm2'},
+            ],
+          };
+        return read;
+      };
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+          (_) => {
+            'messages': [
+              said('m1', 1, 'Brief: the project screen.'),
+              said('m2', 2, 'Opened $pr', author: 'agent-builder'),
+              said(
+                'm3',
+                3,
+                'Run this:\n```bash\nflutter test test/swarm\n```',
+                author: 'agent-builder',
+              ),
+              said(
+                'm4',
+                4,
+                'Shipped.',
+                reactions: {
+                  'eyes': [('person', me), ('person', 'diego')],
+                  'check': [('person', 'diego')],
+                  'rocket': [('agent', 'agent-builder')],
+                },
+              ),
+              said('m5', 5, 'Which header?'),
+            ],
+            'threads': [
+              {
+                'id': 'm5',
+                'replies': 3,
+                'lastSequence': 8,
+                'lastAt': DateTime.utc(2026, 10, 29, 2, 8).toIso8601String(),
+                'authors': [
+                  {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
+                ],
+                'people': <String>[],
+              },
+            ],
+            'next': null,
+          };
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) => {
+        'result': <String, dynamic>{},
+      };
+      return fake;
+    }
+
+    Finder inside(String k, Finder f) =>
+        find.descendant(of: key(k), matching: f);
+
+    testWidgets('a task card and a PR card, in place of their messages', (
+      tester,
+    ) async {
+      await pump(tester, talk(), page);
+
+      // The oldest, above the screen.
+      for (final card in ['swarm-card-m2', 'swarm-card-m1']) {
+        await tester.dragUntilVisible(
+          key(card),
+          key('swarm-messages'),
+          const Offset(0, 200),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(key('swarm-card-m1'), findsOneWidget, reason: 'the task card');
+      expect(key('swarm-card-m2'), findsOneWidget, reason: 'the PR card');
+      expect(
+        inside('swarm-card-m2', find.textContaining('#7', findRichText: true)),
+        findsWidgets,
+      );
+    });
+
+    testWidgets('a code block, with Copy', (tester) async {
+      await pump(tester, talk(), page);
+
+      expect(find.byType(SwarmCodeBlock), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(SwarmCodeBlock),
+          matching: find.textContaining('flutter test test/swarm'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.bySemanticsLabel(RegExp('Copy')), findsWidgets);
+    });
+
+    testWidgets('reactions 👀 ✅ 🚀, each a finger to tap, the add-reaction '
+        'chip after them, and a pick from it is sent', (tester) async {
+      final fake = talk();
+      await pump(tester, fake, page);
+
+      for (final (emoji, count) in [('eyes', 2), ('check', 1), ('rocket', 1)]) {
+        final chip = key('swarm-reaction-m4-$emoji');
+        expect(chip, findsOneWidget, reason: emoji);
+        final size = tester.getSize(chip);
+        expect(
+          size.height,
+          greaterThanOrEqualTo(minTouchTarget),
+          reason: emoji,
+        );
+        expect(size.width, greaterThanOrEqualTo(minTouchTarget), reason: emoji);
+        expect(
+          inside('swarm-reaction-m4-$emoji', find.text('$count')),
+          findsOneWidget,
+        );
+      }
+      expect(find.text('👍'), findsNothing);
+      final add = key('swarm-add-reaction-m4');
+      expect(add, findsOneWidget);
+      expect(tester.getSize(add).height, greaterThanOrEqualTo(minTouchTarget));
+      expect(tester.getSize(add).width, greaterThanOrEqualTo(minTouchTarget));
+      expect(tester.getSemantics(add).label, 'Add reaction');
+      expect(
+        tester.getTopLeft(add).dx,
+        greaterThan(tester.getTopLeft(key('swarm-reaction-m4-rocket')).dx),
+        reason: 'after the counts',
+      );
+      expect(
+        key('swarm-add-reaction-m1'),
+        findsNothing,
+        reason: 'only where there are reactions',
+      );
+
+      await tester.tap(add);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-react-tada'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.where((c) => c['type'] == 'message.react').single, {
+        'type': 'message.react',
+        'conversationId': leadChat,
+        'messageId': 'm4',
+        'emoji': 'tada',
+        'on': true,
+      });
+    });
+
+    testWidgets("a root's replies in one row, which opens its thread", (
+      tester,
+    ) async {
+      await pump(tester, talk(), page);
+
+      final line = key('swarm-thread-line-m5');
+      expect(
+        inside('swarm-thread-line-m5', find.text('3 replies')),
+        findsOneWidget,
+      );
+      expect(tester.getSize(line).height, greaterThanOrEqualTo(minTouchTarget));
+      expect(key('swarm-thread-line-m4'), findsNothing, reason: 'no replies');
     });
   });
 }

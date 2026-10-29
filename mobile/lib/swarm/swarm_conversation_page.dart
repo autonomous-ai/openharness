@@ -1368,6 +1368,9 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                 onReact: view.canPost
                     ? (emoji) => unawaited(c.react(m, emoji))
                     : null,
+                onAdd: widget.homeC && view.canPost
+                    ? () => unawaited(_pickReaction(c, m.id))
+                    : null,
               ),
               onLongPress: view.canPost
                   ? () => unawaited(_pickReaction(c, m.id))
