@@ -168,7 +168,13 @@ class SuperTabConversation {
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
-          : Map.unmodifiable(superTabMap(row['assignment']));
+          : Map.unmodifiable(superTabMap(row['assignment'])),
+      liveness = row['liveness'] is Map
+          ? Map.unmodifiable(superTabMap(row['liveness']))
+          : null,
+      leadAction = row['leadAction'] is Map
+          ? Map.unmodifiable(superTabMap(row['leadAction']))
+          : null;
   final String id, projectId, title, brief;
 
   /// What the backend calls it apart from a workgroup: `leads` for the Product
@@ -205,6 +211,16 @@ class SuperTabConversation {
   /// reactions.ts): the messages shown are read again for their counts.
   final int reactionSeq;
   final Map<String, dynamic>? assignment;
+
+  /// Whether its task waits on purpose or is stuck, as the server last found
+  /// it (`state`, `why`, `since`, `personId`); absent while it is working,
+  /// and from older backends. Read as the desktop's model reads it
+  /// (desktop_parity_test); the phone shows none of it yet.
+  final Map<String, dynamic>? liveness;
+
+  /// The Product Manager's last action on its task (`kind`, `at`); read as
+  /// [liveness] is.
+  final Map<String, dynamic>? leadAction;
 }
 
 class SuperTabRole {
