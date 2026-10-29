@@ -11,40 +11,6 @@ import 'support/super_tab_fixture.dart';
 /// whose work reviewers approved most often on first review in the week the
 /// right pane shows, as a bare percentage, the counts in words on hover and
 /// for a screen reader. A model needs 3 first reviews to be listed.
-Map<String, dynamic> model(
-  String engine,
-  String? model,
-  String? effort, {
-  required int reviewed,
-  required int passed,
-}) => {
-  'engine': engine,
-  'model': model,
-  'effort': effort,
-  'grid': false,
-  'points': 0,
-  'rank': 1,
-  'shipped': {'count': 0, 'medianAttemptMs': null, 'medianRequestMs': null},
-  'firstReview': {'reviewed': reviewed, 'passed': passed},
-  'reviews': 0,
-};
-
-ConversationServer modelsSwarm() {
-  final server = humansSwarm();
-  server.leaderboard!['agents'] = <Object>[];
-  server.leaderboard!['byModel'] = [
-    // One model at two efforts is one row: 11 of 12.
-    model('claude', 'claude-opus-5-5', 'high', reviewed: 10, passed: 9),
-    model('claude', 'claude-opus-5-5', 'xhigh', reviewed: 2, passed: 2),
-    model('codex', 'gpt-6.1-sol', null, reviewed: 16, passed: 13),
-    model('claude', 'claude-sonnet-5-5', 'medium', reviewed: 10, passed: 7),
-    model('claude', 'claude-haiku-5-5', 'low', reviewed: 4, passed: 2),
-    // Too few first reviews to say anything, however good.
-    model('codex', 'gpt-6.1-luna', null, reviewed: 2, passed: 2),
-  ];
-  return server;
-}
-
 void main() {
   Future<SuperTabController> show(
     WidgetTester tester,
@@ -157,7 +123,7 @@ void main() {
     final server = modelsSwarm();
     final controller = await show(tester, server);
     server.leaderboard!['byModel'] = [
-      model('claude', 'claude-sonnet-5-5', 'high', reviewed: 4, passed: 4),
+      modelScore('claude', 'claude-sonnet-5-5', 'high', reviewed: 4, passed: 4),
     ];
     await tester.tap(find.byKey(const ValueKey('leaderboard-week')));
     await tester.pumpAndSettle();
@@ -178,7 +144,7 @@ void main() {
   ) async {
     final server = modelsSwarm();
     server.leaderboard!['byModel'] = [
-      model('claude', 'claude-opus-5-5', 'high', reviewed: 2, passed: 2),
+      modelScore('claude', 'claude-opus-5-5', 'high', reviewed: 2, passed: 2),
     ];
     final controller = await show(tester, server);
     expect(heading, findsNothing);

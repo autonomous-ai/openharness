@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -11,66 +12,6 @@ import 'support/super_tab_fixture.dart';
 /// carries the week, then the Agents with today's status line, a rank and the
 /// week's points. Only the agents the board scores (the PM, Buddies) are
 /// ranked; the others follow in today's order with no rank and no number.
-ConversationServer membersSwarm() {
-  final server = humansSwarm();
-  final agents = server.state['agents'] as List;
-  final lead = (agents.first as Map).cast<String, dynamic>()
-    ..['machineId'] = 'studio';
-  server.state['agents'] = <Object>[
-    lead,
-    {
-      ...lead,
-      'id': 'luna',
-      'harnessId': 'h-luna',
-      'name': 'Luna',
-      'displayName': 'Luna',
-      'projectId': 'lead',
-    },
-    {
-      ...lead,
-      'id': 'sparky',
-      'harnessId': 'h-sparky',
-      'name': 'Sparky',
-      'displayName': 'Sparky',
-      'buddyOf': {'personId': 'peer', 'generation': 'g'},
-    },
-  ];
-  server.leaderboard!['agents'] = [
-    {
-      'agentId': 'lead-agent',
-      'displayName': 'River',
-      'kind': 'pm',
-      'personId': null,
-      'machineId': 'studio',
-      'points': 212,
-      'rank': 1,
-      'shipped': 70,
-    },
-    {
-      'agentId': 'sparky',
-      'displayName': 'Sparky',
-      'kind': 'buddy',
-      'personId': 'peer',
-      'machineId': 'studio',
-      'points': 12,
-      'rank': 2,
-      'shipped': 4,
-    },
-    // Another agent named like one in the list is never taken for it.
-    {
-      'agentId': 'elsewhere',
-      'displayName': 'Luna',
-      'kind': 'buddy',
-      'personId': 'owner',
-      'machineId': 'studio',
-      'points': 88,
-      'rank': 3,
-      'shipped': 3,
-    },
-  ];
-  return server;
-}
-
 void main() {
   Future<SuperTabController> show(
     WidgetTester tester,
@@ -220,6 +161,66 @@ void main() {
     expect(points('lead-agent'), findsNothing);
     expect(find.text('212'), findsNothing);
     expect(find.byKey(const ValueKey('leaderboard-points-peer')), findsNothing);
+    await close(tester, controller);
+  });
+
+  testWidgets(
+    'reads a board without agents or models as people only, with no Models',
+    (tester) async {
+      final server = modelsSwarm(membersSwarm());
+      server.leaderboard!
+        ..remove('agents')
+        ..remove('byModel');
+      final controller = await show(tester, server);
+      expect(
+        find.byKey(const ValueKey('leaderboard-points-peer')),
+        findsOneWidget,
+      );
+      expect(points('lead-agent'), findsNothing);
+      expect(rank('lead-agent'), findsNothing);
+      expect(find.byKey(const ValueKey('super-models-heading')), findsNothing);
+      expect(find.textContaining('Loading'), findsNothing);
+      await close(tester, controller);
+    },
+  );
+
+  testWidgets('holds at 200% text: names give way, numbers stay whole', (
+    tester,
+  ) async {
+    // Both side panes show at this size only in a wide window.
+    await tester.binding.setSurfaceSize(const Size(2400, 1800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = modelsSwarm(membersSwarm()).controller(
+      account: 'peer',
+      initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
+    );
+    await controller.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context)
+              .copyWith(textScaler: const TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: SuperTabView(
+            controller: controller,
+            onInvite: () {},
+            onAddAgent: (_) {},
+            onOpenTerminal: (_) {},
+            machineName: (_) => 'Mac Studio',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    for (final number in ['212', '92%']) {
+      expect(find.text(number), findsOneWidget, reason: number);
+      final paragraph = tester.renderObject<RenderParagraph>(find.text(number));
+      expect(paragraph.didExceedMaxLines, isFalse, reason: number);
+    }
     await close(tester, controller);
   });
 }

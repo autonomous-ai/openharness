@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/runtime_model_name.dart';
+import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/engine_identity.dart';
 import '../section_heading.dart';
@@ -8,6 +9,10 @@ import 'format.dart';
 import 'model.dart';
 import 'person_row.dart';
 import 'reader.dart';
+
+/// The spacing scale's 8, and the sidebar rows' height.
+const _gap = DesktopChrome.controlGap;
+const _rowHeight = 36.0;
 
 /// Fewer first reviews than this say nothing about a model.
 const leaderboardModelMinReviewed = 3;
@@ -143,18 +148,18 @@ class _LeaderboardModelsSectionState extends State<LeaderboardModelsSection> {
         label: '${share.name}: $words',
         excludeSemantics: true,
         child: Padding(
-          padding: const EdgeInsets.only(bottom: 2),
+          padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 36),
+            constraints: const BoxConstraints(minHeight: _rowHeight),
             child: Padding(
               // The sidebar's rows: names after the icon column, the number
               // where their badges end.
               padding: EdgeInsets.fromLTRB(
                 SuperTabSectionHeading.indentFor(0) +
                     SuperTabSectionHeading.actionWidth,
-                8,
-                12,
-                8,
+                _gap,
+                _gap + _gap / 2,
+                _gap,
               ),
               child: Row(
                 children: [
