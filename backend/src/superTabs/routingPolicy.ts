@@ -2,6 +2,8 @@
  * The account default applies to every tab its owner creates; a tab owner may override single fields.
  * Every field has a built-in default so routing works before anyone opens the form. */
 import { z } from 'zod'
+import { BENCHMARK_PRIORS } from './benchmarkPriors/data.js'
+import { JOB_KINDS, priorLevel, type JobKind, type PriorsTable } from './benchmarkPriors/priors.js'
 
 const quality = z.number().int().min(1).max(3)
 const modelRow = z.object({
@@ -22,6 +24,9 @@ const fields = {
    * those named, first match first (gridQuality). Optional: policies saved before them still parse, and read the defaults. */
   localModels: z.object({ quality, enabled: z.boolean(),
     models: z.array(z.object({ model: z.string().trim().min(1).max(200), quality }).strict()).max(40).optional() }).strict().optional(),
+  /** The owner's own quality for a model and job kind, replacing its benchmark prior (benchmarkPriors/priors.ts): the first row
+   * whose every word is in the model's name wins, as in `localModels.models`. Optional: policies saved before it still parse. */
+  priorOverrides: z.array(z.object({ model: z.string().trim().min(1).max(200), kind: z.enum(JOB_KINDS), quality }).strict()).max(100).optional(),
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
@@ -75,4 +80,18 @@ export function gridQuality(policy: RoutingPolicy, model: string, label = ''): n
   const name = words(`${model} ${label}`).join('')
   const local = policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels!
   return local.models?.find(row => words(row.model).every(w => name.includes(w)))?.quality ?? local.quality
+}
+
+/** Where a starting quality came from: the owner's override, or the benchmark table (with the scores it rests on). */
+export type Prior = { quality: number; source: 'owner' } | { quality: number; source: 'benchmark'; ratio: number; sources: NonNullable<ReturnType<typeof priorLevel>>['sources'] }
+
+/** The starting quality of a model for a job kind: the owner's override first, else the benchmark prior, else undefined
+ * (the model keeps its hand rating). `model` is the id the Swarm runs it as; `label` the grid label. Pure: no records, no network. */
+export function priorFor(policy: RoutingPolicy, run: { engine: 'claude' | 'codex' | 'grid'; model: string; label?: string }, kind: JobKind,
+  table: PriorsTable = BENCHMARK_PRIORS): Prior | undefined {
+  const name = words(`${run.model} ${run.label ?? ''}`).join('')
+  const owner = policy.priorOverrides?.find(row => row.kind === kind && words(row.model).every(w => name.includes(w)))
+  if (owner) return { quality: owner.quality, source: 'owner' }
+  const level = priorLevel(table, run.engine, run.model, kind)
+  return level && { quality: level.quality, source: 'benchmark', ratio: level.ratio, sources: level.sources }
 }
