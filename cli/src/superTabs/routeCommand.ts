@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -404,9 +404,8 @@ export function localProbes(state: Json, policy: Policy, probes: Probe[], a: Ass
   // One base per machine and engine: the first new-agent row the policy offers there, which carries the machine's refusals.
   const bases = new Map<string, Probe>()
   for (const p of probes) if (p.kind === 'new' && !p.gridModel && !bases.has(`${p.machineId}\0${p.engine}`)) bases.set(`${p.machineId}\0${p.engine}`, p)
-  const quality = policy.localModels?.quality ?? 1
   return [...bases.values()].flatMap(base => [...served.values()].filter(m => !m.machines || m.machines.has(base.machineId))
-    .map((m): Probe => ({ ...base, model: 'default', effort: 'default', quality, cost: 1, quota: UNKNOWN_QUOTA, known: true,
+    .map((m): Probe => ({ ...base, model: 'default', effort: 'default', quality: gridQuality(policy, m.model, m.label), cost: 1, quota: UNKNOWN_QUOTA, known: true,
       refusals: base.refusals.filter(r => !SUBSCRIPTION.test(r)), gridModel: m.model, gridName: m.grid, gridLabel: m.label, gridKind: m.kind })))
 }
 

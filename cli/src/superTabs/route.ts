@@ -25,8 +25,9 @@ export type Rule =
 export interface SwarmRule { rule: Rule; text: string }
 export interface PolicyModel { engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number; enabled: boolean }
 export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string;
-  /** How strong a model served on the Swarm's grid counts; absent from a backend before it, which serves none. */
-  localModels?: { quality: number; enabled: boolean } }
+  /** How strong a model served on the Swarm's grid counts ([gridQuality]); absent from a backend before it, which serves
+   *  none, and `models` from one before per-model rows. */
+  localModels?: { quality: number; enabled: boolean; models?: Array<{ model: string; quality: number }> } }
 /** One usage window, named by the reader (`5-hour`, `weekly`); `leftPercent` is what remains of it. */
 export interface QuotaWindow { name: string | null; leftPercent: number; resetsAt: number | null }
 /** `leftPercent` and `resetsAt` are the tightest window's; `windows` is every window. `account` is the reading's hashed
@@ -214,6 +215,12 @@ export const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as con
 const runs = (p: Probe) => p.gridModel ? `${ENGINE[p.engine]} on ${p.gridLabel ?? p.gridModel} (${KIND_WORD[p.gridKind ?? 'local']})` : `${ENGINE[p.engine]} ${p.model} ${p.effort}`
 /** A name's words for matching: lowercase letters and digits, "4.1" read as "41". */
 const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)
+/** How strong a grid model counts: the first of the policy's named rows whose every word is in its id or label (Kimi K3
+ *  and DeepSeek v4.1 at 2 by default, backend superTabs/routingPolicy.ts gridQuality), else the policy's local quality. */
+export function gridQuality(policy: Policy, model: string, label = ''): number {
+  const name = words(`${model} ${label}`).join('')
+  return policy.localModels?.models?.find(row => words(row.model).every(w => name.includes(w)))?.quality ?? policy.localModels?.quality ?? 1
+}
 /** Whether [p] runs the model a person named: every word of theirs is in its model's name. */
 function runsNamed(p: Probe, named: string): boolean {
   const name = words([p.gridModel ?? p.model, p.gridLabel ?? '', ENGINE[p.engine]].join(' ')).join('')

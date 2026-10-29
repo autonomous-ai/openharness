@@ -2739,11 +2739,12 @@ describe('the Local models add-on', () => {
   })
 
   it('reads the policy\'s local quality, low by default, from policies saved before the add-on', () => {
-    expect(effectivePolicy(null, null).policy.localModels).toEqual({ quality: 1, enabled: true })
+    const builtIn = DEFAULT_ROUTING_POLICY.localModels!.models
+    expect(effectivePolicy(null, null).policy.localModels).toEqual({ quality: 1, enabled: true, models: builtIn })
     const saved = { ...DEFAULT_ROUTING_POLICY } as Record<string, unknown>
     delete saved.localModels
-    expect(effectivePolicy(saved, null).policy.localModels).toEqual({ quality: 1, enabled: true })
-    expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true } }).policy.localModels).toEqual({ quality: 2, enabled: true })
+    expect(effectivePolicy(saved, null).policy.localModels).toEqual({ quality: 1, enabled: true, models: builtIn })
+    expect(effectivePolicy(saved, { localModels: { quality: 2, enabled: true } }).policy.localModels).toEqual({ quality: 2, enabled: true, models: builtIn })
   })
 })
 

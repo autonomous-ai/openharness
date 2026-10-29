@@ -1195,6 +1195,13 @@ describe('local models on the Swarm\'s grid', () => {
     const unnamed = state({ machines: [served([{ grid: GRID, model: 'qwen3' }])] })
     expect(offered(unnamed)[0]).toMatchObject({ quality: 1, gridLabel: 'qwen3' })
   })
+  it('rates each served model by the policy\'s named rows: Kimi K3 and DeepSeek v4.1 at 2, a small Qwen at the local quality', () => {
+    const models = [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }]
+    const three = state({ machines: [served([{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }, { grid: GRID, model: 'deepseek/deepseek-v4.1-flash-1017', kind: 'api' },
+      { grid: GRID, model: 'qwen3:4b', name: 'Qwen 3 4B' }])] })
+    const rows = offered(three, { policy: { ...routing, localModels: { quality: 1, enabled: true, models } } })
+    expect(rows.map(r => [r.gridModel, r.quality])).toEqual([['moonshotai/kimi-k3', 2], ['deepseek/deepseek-v4.1-flash-1017', 2], ['qwen3:4b', 1]])
+  })
   it('offers nothing with the add-on off, for a review, or when the owner turned local models off and nobody asked for one', () => {
     expect(offered(state({ localModels: undefined }))).toEqual([])
     expect(offered(state({ localModels: { grid: GRID, enabled: false } }))).toEqual([])
