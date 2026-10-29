@@ -2212,10 +2212,13 @@ class _SuperTabViewState extends State<SuperTabView>
       'replyTo': sent.replyTo,
       'sequence': 0,
       'createdAt': sent.confirmedAt ?? DateTime.now().toUtc().toIso8601String(),
+      // As the backend writes the sender (model.ts author()), so the row
+      // groups the same before and after it is confirmed.
       'author': {
         'kind': 'person',
         'id': c.accountId,
         'name': person?.email ?? '',
+        'membershipGeneration': ?person?.generation,
       },
     });
   }
@@ -2223,9 +2226,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// Uses the transcript's own row identity before and after acknowledgement.
   Widget _outgoingRow(
     SuperTabOutgoing sent,
-    List<SuperTabMessage> messages,
-    Map<String, SuperTabMessage> byId,
-  ) {
+    Map<String, SuperTabMessage> byId, {
+    required bool grouped,
+  }) {
     final message = _outgoingMessage(sent);
     final person = c.snapshot?.people
         .where((p) => p.id == c.accountId)
@@ -2233,43 +2236,41 @@ class _SuperTabViewState extends State<SuperTabView>
     final reply = byId[sent.replyTo];
     return KeyedSubtree(
       key: const ValueKey('super-outgoing'),
-      child: Opacity(
-        opacity: sent.state == SuperTabOutgoingState.sending ? 0.6 : 1,
-        child: SuperTabMessageRow(
-          message: message,
-          author: _shownAuthor(c, message),
-          proposalOwner: _proposalOwner(message),
-          person: person,
-          grouped: false,
-          reply: reply,
-          replyAuthor: reply == null ? null : _shownAuthor(c, reply),
-          onReturnToComposer: _focus.requestFocus,
-          readerId: c.accountId,
-          headerStatus: sent.state == SuperTabOutgoingState.confirmed
-              ? null
-              : SuperTabOutgoingReceipt(
-                  inline: true,
-                  message: sent,
-                  // A refused message goes again only when nothing else is on
-                  // its way.
-                  onRetry:
-                      c.saving ||
-                          (sent.state == SuperTabOutgoingState.refused &&
-                              c.hasPendingAction)
-                      ? null
-                      : () {
-                          unawaited(c.retryOutgoing(sent));
-                          _focus.requestFocus();
-                        },
-                  // The click lands in the transcript; typing goes on in the
-                  // composer, as after Reply.
-                  onDelete: () {
-                    c.discardOutgoing(sent);
-                    _focus.requestFocus();
-                  },
-                ),
-          receipts: const [],
-        ),
+      child: SuperTabMessageRow(
+        message: message,
+        dimmed: sent.state == SuperTabOutgoingState.sending,
+        author: _shownAuthor(c, message),
+        proposalOwner: _proposalOwner(message),
+        person: person,
+        grouped: grouped,
+        reply: reply,
+        replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+        onReturnToComposer: _focus.requestFocus,
+        readerId: c.accountId,
+        headerStatus: sent.state == SuperTabOutgoingState.confirmed
+            ? null
+            : SuperTabOutgoingReceipt(
+                inline: true,
+                message: sent,
+                // A refused message goes again only when nothing else is on
+                // its way.
+                onRetry:
+                    c.saving ||
+                        (sent.state == SuperTabOutgoingState.refused &&
+                            c.hasPendingAction)
+                    ? null
+                    : () {
+                        unawaited(c.retryOutgoing(sent));
+                        _focus.requestFocus();
+                      },
+                // The click lands in the transcript; typing goes on in the
+                // composer, as after Reply.
+                onDelete: () {
+                  c.discardOutgoing(sent);
+                  _focus.requestFocus();
+                },
+              ),
+        receipts: const [],
       ),
     );
   }
@@ -2379,7 +2380,7 @@ class _SuperTabViewState extends State<SuperTabView>
       person: message.fromAgent ? null : _people[message.authorId],
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
-      grouped: grouped && !c.sentHere(message.id),
+      grouped: grouped,
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       replyGone: quoted != null && reply == null,
@@ -2458,7 +2459,8 @@ class _SuperTabViewState extends State<SuperTabView>
       root: open.root,
       row: (message, grouped) =>
           _message(message, grouped, byId, inThread: true),
-      outgoing: (sent) => _outgoingRow(sent, rows, byId),
+      // The thread panel groups its own rows; one on its way keeps its name.
+      outgoing: (sent) => _outgoingRow(sent, byId, grouped: false),
     );
   }
 
@@ -2719,7 +2721,17 @@ class _SuperTabViewState extends State<SuperTabView>
       c.selectedId,
       superTabTranscriptEntries(actualMessages),
     );
-    final grouped = _joined(actualMessages, _split[c.selectedId]);
+    // Rows on their way group by the same rule, so a quick line keeps the
+    // shape it will have once confirmed; one Not sent keeps its name and
+    // actions.
+    final grouped = _joined(messages, _split[c.selectedId])
+      ..removeWhere(
+        (id) => switch (pendingById[id]?.state) {
+          SuperTabOutgoingState.refused ||
+          SuperTabOutgoingState.unconfirmed => true,
+          _ => false,
+        },
+      );
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -2761,8 +2773,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 child: pendingById.containsKey(message.id)
                     ? _outgoingRow(
                         pendingById[message.id]!,
-                        actualMessages,
                         byId,
+                        grouped: grouped.contains(message.id),
                       )
                     : entry.interruptions > 0
                     ? SuperTabRecordingNotice(
@@ -2893,7 +2905,9 @@ class _SuperTabViewState extends State<SuperTabView>
                           _readEarlierNearTop(id, event.metrics);
                         }
                         if (atEnd) {
-                          final sequence = messages.lastOrNull?.sequence ?? 0;
+                          // A row still sending has no place in the transcript.
+                          final sequence =
+                              actualMessages.lastOrNull?.sequence ?? 0;
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             if (mounted && c.selectedId == id) {
                               _readToEnd(id, sequence);
@@ -3062,10 +3076,7 @@ class _SuperTabViewState extends State<SuperTabView>
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    composerError,
-                    style: DesktopChrome.control(),
-                  ),
+                  child: Text(composerError, style: DesktopChrome.control()),
                 ),
                 if (c.hasPendingAction)
                   TextButton(
