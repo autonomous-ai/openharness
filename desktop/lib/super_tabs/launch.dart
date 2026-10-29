@@ -18,6 +18,7 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'launch_prompt.dart';
+import 'identity.dart' show superTabMachineName;
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
@@ -311,7 +312,8 @@ class SuperTabLaunch {
     LeadMachine row(String id, Map<String, dynamic> pool) {
       final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
       final observation = part(reading['observation']);
-      final name = pool['name'] as String? ?? id;
+      // As Add machine and the Buddy picker name it ("Studio", not "Studio.local").
+      final name = superTabMachineName(pool['name'] as String? ?? id);
       final own = pool['contributorId'] == accountId;
       final connected = app.stateOf(id) != null;
       // Its host says it can start a Product Manager (backend leadStart.ts).
@@ -538,7 +540,7 @@ class SuperTabLaunch {
             !listed.any((m) => m.id == state.machine.machineId))
           LeadMachine(
             id: state.machine.machineId,
-            name: state.machine.displayName,
+            name: superTabMachineName(state.machine.displayName),
             online: !state.needsLink && !state.isOffline,
             freeAgents: null,
             inSwarm: false,

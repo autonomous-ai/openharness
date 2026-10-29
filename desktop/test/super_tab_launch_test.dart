@@ -1040,6 +1040,63 @@ void main() {
     },
   };
 
+  // Combination review of batch #2239: New Project names computers as Add
+  // machine and the Buddy picker do (superTabMachineName), so "Studio.local"
+  // is "Studio" in the chip and in every menu row.
+  testWidgets('New Project names a machine without its .local suffix, in the '
+      'chip and the menu', (tester) async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Studio.local', contributor: 'owner'),
+      machineRow('diego-mac', 'Diego-MacBook.local', lead: true),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = (await tester.runAsync(() => f.box(newProject: true)))!;
+    expect(
+      box.integration!.leadMachines!.map((m) => m.name),
+      containsAll(['Studio', 'Diego-MacBook']),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 1200,
+            height: 800,
+            child: NewHarnessForm(
+              controller: box,
+              desktop: true,
+              onClose: () {},
+              onCreated: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final chip = find.byKey(const ValueKey('new-harness-field-machine'));
+    expect(
+      find.descendant(of: chip, matching: find.text('Studio')),
+      findsOneWidget,
+    );
+    await tester.tap(chip);
+    await tester.pump();
+    for (final (id, name) in [
+      ('m', 'Studio'),
+      ('diego-mac', 'Diego-MacBook'),
+    ]) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('new-harness-lead-machine-$id')),
+          matching: find.text(name),
+        ),
+        findsOneWidget,
+        reason: id,
+      );
+    }
+    expect(find.textContaining('.local'), findsNothing);
+  });
+
   // Security reviews 1 and 2 of #2228: the server decides where a teammate's
   // Mac runs the PM, by engine (backend leadStart.ts leadChoices), and New
   // Project shows that rather than working it out from the readings.
