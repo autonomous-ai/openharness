@@ -342,7 +342,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _selected = id;
     setState(() {});
     final mark = c.readMark(id), shown = _shownMessages(id);
-    if (_unread.startHistory(
+    if (c.awaitsNewest(id)) {
+      // Held from an earlier visit: the line is placed, the end followed and
+      // anything marked read once the newest messages have landed.
+    } else if (_unread.startHistory(
       id,
       shown,
       mark,
@@ -445,6 +448,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _readToEnd(String id, int sequence) {
     final scroll = _scroll[id];
     if (c.selectedId != id ||
+        c.awaitsNewest(id) ||
         _unread.waitsForHistory(id) ||
         !_chatIsVisible ||
         scroll == null ||
