@@ -327,6 +327,8 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
+    // Recorded in this write: once the start has ended, no later poll loads it.
+    if (group) recordTaskState(state, group, now)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,

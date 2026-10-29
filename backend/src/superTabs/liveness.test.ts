@@ -299,6 +299,17 @@ describe('the state of each task, and the Lead woken when one stalls', () => {
     expect(wakes(sweepForLead(state, NOW + 2 * MINUTE))).toHaveLength(1)
   })
 
+  it('is orphaned when a machine\'s report times its start out, recorded in that report\'s write, since no later poll loads the start', () => {
+    const timedOut = starting({ dispatched: true, dispatchedAt: NOW - 4 * MINUTE })
+    // The report path: the time checks without the Lead's task states.
+    sweepLiveness(timedOut, NOW)
+    expect(timedOut.starts![0]!.error).toBe('Mac did not start it within 3 minutes')
+    expect(task(timedOut).liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: NOW })
+    timedOut.starts = []
+    expect(wakes(sweepForLead(timedOut, NOW + MINUTE))).toEqual([])
+    expect(task(timedOut).liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: NOW })
+  })
+
   it('stays orphaned after its failed start is no longer loaded, until it has work again', () => {
     const failed = starting({ dispatched: true, dispatchedAt: NOW - MINUTE, error: 'Mac could not prepare it' })
     sweepForLead(failed, NOW)
