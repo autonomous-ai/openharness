@@ -285,6 +285,22 @@ void main() {
       );
     });
 
+    testWidgets('its lines sit 12 in from the edge, the words 4 more', (
+      tester,
+    ) async {
+      await pump(tester, backend(), home: const SwarmModelsPage());
+
+      expect(tester.getTopLeft(key('swarm-models-none-$tab')).dx, 12);
+      expect(
+        tester
+            .getTopLeft(
+              find.text('No models are running for this Swarm right now.'),
+            )
+            .dx,
+        12 + 4,
+      );
+    });
+
     testWidgets('pulling down reads the Swarms again, as on Home', (
       tester,
     ) async {
@@ -430,6 +446,23 @@ void main() {
           matchRoot: true,
         ),
         findsNothing,
+      );
+    });
+
+    testWidgets('its lines sit 12 in from the edge, the words 4 more', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(),
+        home: const SwarmDevicesPage(),
+        computers: _Computers(const []),
+      );
+
+      expect(tester.getTopLeft(key('swarm-devices-none')).dx, 12);
+      expect(
+        tester.getTopLeft(find.text('No computers on your account yet.')).dx,
+        12 + 4,
       );
     });
 

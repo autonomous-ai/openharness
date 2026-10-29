@@ -4,7 +4,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../shared/theme/app_space.dart';
 import '../shared/theme/app_theme.dart';
+import '../shared/theme/app_type.dart';
 import '../theme/app_theme.dart' show AppColors;
 import 'swarm_asks.dart';
 import 'swarm_inbox.dart';
@@ -111,11 +113,7 @@ class SwarmNeedRow extends StatelessWidget {
             Text(
               failure,
               key: ValueKey('swarm-not-done-${mention.id}'),
-              style: TextStyle(
-                color: AppColors.danger,
-                fontSize: 13.5,
-                height: 1.35,
-              ),
+              style: AppType.caption(color: AppColors.danger, height: 1.35),
             ),
           ],
         ],
@@ -176,6 +174,9 @@ class SwarmNeedLine extends StatelessWidget {
   }
 }
 
+/// The line height of a need's title, which its glyph is centred on.
+const _titleHeight = 1.3;
+
 /// An open need: its glyph in the warning colour, who asks and where — a tap
 /// there opens where it was asked, when [onOpen] is given — then [body] and
 /// [actions].
@@ -204,32 +205,29 @@ class _NeedCard extends StatelessWidget {
           if (project.isNotEmpty)
             TextSpan(
               text: ' · $project',
-              style: TextStyle(
+              style: AppType.caption(
                 color: AppPalette.textSecondary,
-                fontSize: 13.5,
-                fontWeight: FontWeight.w400,
+                fontWeight: AppFont.regular,
               ),
             ),
         ],
       ),
-      style: TextStyle(
-        color: AppPalette.textPrimary,
-        fontSize: 16,
-        fontWeight: FontWeight.w500,
-        height: 1.3,
-      ),
+      style: AppType.label(color: AppPalette.textPrimary, height: _titleHeight),
     );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+      padding: const EdgeInsets.all(AppSpace.l),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 1),
-            child: Icon(
-              swarmNeedIcon(need),
-              size: 20,
-              color: AppColors.warning,
+          // As tall as the title's first line, the glyph centred in it.
+          SizedBox(
+            height: AppType.bodySize * _titleHeight,
+            child: Center(
+              child: Icon(
+                swarmNeedIcon(need),
+                size: 20,
+                color: AppColors.warning,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -250,9 +248,8 @@ class _NeedCard extends StatelessWidget {
                   const SizedBox(height: 6),
                   Text.rich(
                     _mentions(body),
-                    style: TextStyle(
+                    style: AppType.body(
                       color: AppPalette.textPrimary,
-                      fontSize: 16,
                       height: 1.4,
                     ),
                   ),
@@ -341,11 +338,7 @@ class SwarmDecisionAnswer extends StatelessWidget {
     final asks = session.inbox.asks(need.swarmId);
     final held = session.held(need);
     final sending = asks?.answering.contains(decision.id) ?? false;
-    final note = TextStyle(
-      color: AppColors.warning,
-      fontSize: 13.5,
-      height: 1.35,
-    );
+    final note = AppType.caption(color: AppColors.warning, height: 1.35);
     final Widget actions;
     if (held != null) {
       actions = _Held(
@@ -508,7 +501,7 @@ class _Held extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(AppControl.rowRadius),
       child: ColoredBox(
         color: AppPalette.swarmSearchSurface,
         child: Stack(
@@ -516,16 +509,20 @@ class _Held extends StatelessWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 48),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 2, 4, 5),
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.l,
+                  AppSpace.xs,
+                  AppSpace.xs,
+                  AppSpace.xs,
+                ),
                 child: Row(
                   children: [
                     Expanded(
                       child: Text(
                         label,
                         key: labelKey,
-                        style: TextStyle(
+                        style: AppType.body(
                           color: AppPalette.textPrimary,
-                          fontSize: 15,
                           height: 1.3,
                         ),
                       ),
