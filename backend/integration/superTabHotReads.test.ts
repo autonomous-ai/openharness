@@ -335,18 +335,36 @@ describe('the host poll\'s Swarm lookup', () => {
     const s = await scene(), also = await scene({ sharedMachine: s.machineId })
     // A Swarm that removed this machine still lists it for cleanup until its host has cleaned up.
     const cleanup = await scene()
-    await db.superTab.update({ where: { id: cleanup.tabId }, data: { machineIds: { set: [cleanup.machineId] }, cleanupMachineIds: { set: [s.machineId] } } })
-    await db.superTab.update({ where: { id: also.tabId }, data: { updatedAt: new Date(Date.now() + 60_000) } })
+    const at = Date.now()
+    await db.superTab.update({ where: { id: cleanup.tabId }, data: { machineIds: { set: [cleanup.machineId] }, cleanupMachineIds: { set: [s.machineId] },
+      updatedAt: new Date(at + 30_000) } })
+    await db.superTab.update({ where: { id: also.tabId }, data: { updatedAt: new Date(at + 60_000) } })
+    await db.superTab.update({ where: { id: s.tabId }, data: { updatedAt: new Date(at + 10_000) } })
     const hosts = new HostReads(store, { now: () => Date.now() })
     let tabs: string[] = []
     const entries = await profiled(async () => { tabs = (await hosts.changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId) })
-    expect(new Set(tabs)).toEqual(new Set([also.tabId, s.tabId, cleanup.tabId]))
+    // Newest write first, across both indexes: the cleanup Swarm sits between the two that list it as a machine.
+    expect(tabs).toEqual([also.tabId, cleanup.tabId, s.tabId])
     const lookups = entries.filter(e => e.ns.endsWith('.SuperTab')).filter(e => /machineIds|cleanupMachineIds/.test(JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})))
     expect(lookups.length, JSON.stringify(plan(lookups))).toBe(2)
     for (const lookup of lookups) {
       expect(lookup.docsExamined, JSON.stringify(plan(lookups))).toBeLessThanOrEqual(lookup.nreturned!)
       expect(lookup.command?.hint, `the lookup names its index: ${JSON.stringify(plan(lookups))}`).toBeTruthy()
     }
+  })
+
+  it('lists a Swarm found by both indexes once, and caps the merged list at the newest', async () => {
+    const s = await scene(), both = await scene({ sharedMachine: s.machineId }), cleanupOnly = await scene()
+    const at = Date.now()
+    await db.superTab.update({ where: { id: s.tabId }, data: { updatedAt: new Date(at + 10_000) } })
+    // Listed as a machine and for cleanup at once: found by both reads, returned once.
+    await db.superTab.update({ where: { id: both.tabId }, data: { cleanupMachineIds: { set: [s.machineId] }, updatedAt: new Date(at + 20_000) } })
+    await db.superTab.update({ where: { id: cleanupOnly.tabId }, data: { machineIds: { set: [cleanupOnly.machineId] },
+      cleanupMachineIds: { set: [s.machineId] }, updatedAt: new Date(at + 30_000) } })
+    expect(await machineSwarms(db, 'prod', s.machineId, 500)).toEqual([cleanupOnly.tabId, both.tabId, s.tabId])
+    // Capped after merging: the newest two of the three, though each read alone returns up to two.
+    expect(await machineSwarms(db, 'prod', s.machineId, 2)).toEqual([cleanupOnly.tabId, both.tabId])
+    expect(await machineSwarms(db, 'prod', s.machineId, 1)).toEqual([cleanupOnly.tabId])
   })
 
   it('never returns a Swarm of another environment, one that dropped the machine, or one not yet in parts', async () => {
