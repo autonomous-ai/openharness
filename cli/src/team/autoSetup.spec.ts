@@ -59,7 +59,7 @@ describe('the Harness Team account, set up on its own', () => {
 
   it('asks nothing off a Mac, signed out, on a computer that runs team work only, or where the account exists', async () => {
     const cases: Array<[Partial<AutoSetupDeps>, string]> = [
-      [{ platform: 'freebsd' }, 'unsupported'], [{ platform: 'win32' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
+      [{ platform: 'freebsd' }, 'unsupported'], [{ session: () => null }, 'signed-out'],
       [{ session: () => ({ ...session, kind: 'team' }) }, 'dedicated'], [{ readConfig: () => ({ user: 'harnessteam' }) as TeamConfig }, 'exists'],
       [{ accountExists: vi.fn(async () => true) }, 'exists'],
     ]
@@ -112,8 +112,13 @@ describe('the Harness Team account, set up on its own', () => {
     // Its log names the system that asks (the gridtest VM said "macOS" on Linux, 2026-10-28).
     expect(linux.log[0]).toBe('setting up the Harness Team account: the system asks for an administrator password')
     expect(await fake({ platform: 'linux', accountExists: vi.fn(async () => true) }).auto.offer('join')).toEqual({ state: 'exists' })
-    // Windows has its own plan, and nothing yet.
-    expect(await fake({ platform: 'win32' }).auto.offer('join', undefined, true)).toEqual({ state: 'unsupported' })
+    // Windows too: User Account Control can always show, while a person is at it (Desktop asks only then).
+    expect(await fake({ platform: 'win32', canPrompt: () => false }).auto.offer('join', undefined, true)).toEqual({ state: 'wanted' })
+    const windows = fake({ platform: 'win32' })
+    expect(await windows.auto.offer('join')).toEqual({ state: 'started' })
+    await windows.auto.settled()
+    expect(windows.log[0]).toBe('setting up the Harness Team account: Windows asks for permission (User Account Control)')
+    expect(await fake({ platform: 'win32', accountExists: vi.fn(async () => true) }).auto.offer('join')).toEqual({ state: 'exists' })
   })
 
   it('on Linux with no prompt it can show, answers no-prompt up front, runs nothing and remembers nothing', async () => {

@@ -1954,12 +1954,11 @@ class AppNotifier extends ChangeNotifier {
   bool? teamAccountHereForTest;
 
   /// The systems the Harness Team account is made on, by
-  /// [RuntimePlatform.operatingSystem]: a Mac and Linux
-  /// (cli/src/team/layout.ts); never a phone, a tablet or a browser. Windows
-  /// joins once its daemon sets the account up (the Windows plan's Task 4, which
-  /// waits for the Windows launchers to be signed); its dialog words are ready.
+  /// [RuntimePlatform.operatingSystem]: a Mac, Linux and Windows
+  /// (cli/src/team/layout.ts; Windows' daemon sets it up behind User Account
+  /// Control); never a phone, a tablet or a browser.
   static bool teamAccountOn(String operatingSystem) =>
-      const {'macos', 'linux'}.contains(operatingSystem);
+      const {'macos', 'linux', 'windows'}.contains(operatingSystem);
 
   bool get _teamAccountSystem =>
       teamAccountHereForTest ??

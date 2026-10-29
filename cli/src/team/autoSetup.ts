@@ -3,8 +3,9 @@
  * (docs/plans/2026-10-24-swarm-team-account.md, Task 3). The owner chose "no button, no setup screen": the only thing a
  * person sees is macOS's own administrator prompt, and it appears while they are at this Mac doing that. Desktop asks this
  * Mac's own daemon (super_tabs `teamSetup`, from the local owner only) right after a join or a contribution succeeds;
- * nothing asks from a background event, with nobody there, and nothing asks on Windows yet. On Linux the prompt is
- * polkit's, and with no desktop session to show it in the answer is NO_PROMPT: run `harness team setup` in a terminal.
+ * nothing asks from a background event, with nobody there. On Linux the prompt is polkit's, and with no desktop session to
+ * show it in the answer is NO_PROMPT: run `harness team setup` in a terminal. On Windows it is User Account Control's,
+ * which can always be shown while a person is at the computer, as Desktop asks only then.
  *
  * Macs that joined and were added before this release never pass through either moment, and routing now sends
  * teammates' work only to Team machines. So Desktop also asks once as it starts on a Mac (`startup`), with the person
@@ -82,7 +83,7 @@ export interface AutoSetupDeps {
 /** What a setup that made nothing answers: not cancelled, and not an account that exists but did not report in time.
  *  Linux's own: no systemd or no tmux every account can run (the script stopped first), and no prompt to show. */
 const MADE_NOTHING = new Set(['SETUP_FAILED', 'NOT_INSTALLED', 'NOT_SIGNED_IN', 'RUN_AS_YOURSELF', 'INVALID_INPUT', 'BACKEND', 'EXPIRED', 'NOT_TEAM',
-  'NO_SYSTEMD', 'NO_TMUX', 'NO_PROMPT'])
+  'NO_SYSTEMD', 'NO_TMUX', 'NO_PROMPT', 'NO_LOCAL_ACCOUNTS', 'NO_OWNER_SID'])
 
 export class TeamAutoSetup {
   private running: Promise<void> | null = null
@@ -103,8 +104,8 @@ export class TeamAutoSetup {
 
   private async decide(reason: AutoSetupReason, sharedSwarm: () => Promise<boolean>, check: boolean): Promise<AutoSetupState> {
     const { deps } = this
-    // A Mac and a Linux computer; Windows waits for its own plan (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md).
-    if (!teamLayout(deps.platform) || deps.platform === 'win32') return 'unsupported'
+    // A Mac, a Linux and a Windows computer (docs/superpowers/plans/2026-10-28-harness-team-account-windows.md).
+    if (!teamLayout(deps.platform)) return 'unsupported'
     const session = deps.session()
     if (!session) return 'signed-out'
     if (session.kind === 'team') return 'dedicated'
@@ -136,7 +137,8 @@ export class TeamAutoSetup {
 
   private async run(): Promise<void> {
     const { deps } = this
-    deps.log(`setting up the Harness Team account: ${deps.platform === 'darwin' ? 'macOS' : 'the system'} asks for an administrator password`)
+    deps.log(deps.platform === 'win32' ? 'setting up the Harness Team account: Windows asks for permission (User Account Control)'
+      : `setting up the Harness Team account: ${deps.platform === 'darwin' ? 'macOS' : 'the system'} asks for an administrator password`)
     let outcome: { code: number; result: Record<string, unknown> | null }
     try {
       outcome = await deps.setup()
