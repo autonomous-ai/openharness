@@ -23,10 +23,11 @@ export const OFFLINE = 'Machine is offline or unreachable.'
 const UNKNOWN_QUOTA: Probe['quota'] = { known: false, leftPercent: null, resetsAt: null }
 const UNKNOWN_LOAD: NonNullable<Probe['load']> = { agents: null, freeMemoryBytes: null, hasFolder: null }
 const EXHAUSTED_WINDOW = 'The subscription has an exhausted usage window. Wait for a fresh allowance reading or choose another account.'
-/** Temporary (Scholes, 2026-10-26): grid's CLI does not run on Windows yet, so a Swarm agent started there never comes up
- *  (WIN-DELL took starts that silently never ran). Lifting it is emptying this list. Compared with the OS every reading
- *  has (lib/machineHardware.ts names it `Windows`), so a host from before readiness is left out too. */
-export const NO_SWARM_AGENTS_ON: readonly string[] = ['Windows']
+/** The operating systems a Swarm agent is not started on, compared with the OS every reading has (lib/machineHardware.ts
+ *  names it `Windows`). Windows was here from 2026-10-26 (Scholes): grid's CLI did not run there, so WIN-DELL took starts
+ *  that silently never ran — a held start ran grid's installer every 2 seconds instead. Lifted once grid 0.3.61 and CLI
+ *  0.4.95 ran there: a Claude Code agent on a grid model started and answered on DESKTOP-0TFH0OJ (2026-10-28). */
+export const NO_SWARM_AGENTS_ON: readonly string[] = []
 const ENGINE_NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const NO_PUSH = "This machine's git login cannot push to the project repository. Its owner can sign in to GitHub there (gh auth login, then gh auth setup-git)."
 /** Said of a candidate where the task cannot be done: it never names the required machine, which the Lead may not see. */
