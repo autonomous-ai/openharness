@@ -167,6 +167,8 @@ class SwarmSession extends ChangeNotifier {
     if (inbox.loaded) {
       home.keepOnly({for (final swarm in inbox.swarms) swarm.id});
     }
+    // What was read of a Swarm off the list, or out of reach, leaves memory.
+    peeks.keepOnly([for (final swarm in inbox.swarms) ?inbox.reader(swarm.id)]);
     _announcer.settle(inbox.needs);
     // Answered somewhere else meanwhile, or out of the list while the Swarm
     // is read again: nothing is sent, and a card that comes back says so.

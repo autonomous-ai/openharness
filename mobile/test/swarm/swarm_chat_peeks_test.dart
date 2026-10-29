@@ -211,20 +211,52 @@ void main() {
     expect(p.of(r, 'a'), isNull);
   });
 
-  test('forgets a reader with everything read of it', () async {
+  test('keeps only what the listed readers hold: a reader off the list, '
+      'revoked or reading from nothing again takes its rows with it', () async {
     final fake = FakeSwarm();
     fake.routes[path('a')] = (_) => page('a', [1]);
+    fake.routes[path('b')] = (_) => page('b', [1]);
+    final kept = reader(fake), gone = reader(fake), revoked = reader(fake);
+    final p = peeks();
+    for (final r in [kept, gone, revoked]) {
+      p.want(r, 'a', counter: 1);
+      p.want(r, 'b', counter: 1);
+    }
+    await settle();
+    expect(p.held, 6);
+
+    revoked.revoke();
+    p.keepOnly([kept, revoked]);
+
+    expect(p.held, 2, reason: "only the listed, readable reader's rows");
+    expect(p.of(kept, 'a'), isNotNull);
+    expect(p.of(gone, 'a'), isNull);
+    p.want(gone, 'a', counter: 1);
+    await settle();
+    expect(reads(fake, 'a'), 4, reason: 'read again from nothing');
+  });
+
+  test('an answer for a reader taken off the list is dropped', () async {
+    final fake = FakeSwarm();
+    final gate = Completer<void>();
+    fake.routes[path('a')] = (_) async {
+      await gate.future;
+      return page('a', [1]);
+    };
     final r = reader(fake);
     final p = peeks();
+    var told = 0;
+    p.addListener(() => told++);
+
     p.want(r, 'a', counter: 1);
     await settle();
+    p.keepOnly(const []);
+    gate.complete();
+    await settle();
 
-    p.forget(r);
-
+    expect(p.held, 0);
     expect(p.of(r, 'a'), isNull);
-    p.want(r, 'a', counter: 1);
-    await settle();
-    expect(reads(fake, 'a'), 2);
+    expect(told, 0);
   });
 
   test('says while a chat is being read, and not once it answers', () async {

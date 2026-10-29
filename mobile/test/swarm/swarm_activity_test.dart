@@ -327,31 +327,31 @@ void main() {
       expect(activity.count(SwarmActivityFilter.reactions), 0);
     });
 
-    test(
-      'a Swarm that leaves the list takes its marks off the phone',
-      () async {
-        final store = MemoryKeyValueStore()
-          ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
-        final fake = backend(page: page);
-        final session = await start(fake, store: store);
-        final activity = session.activity..watch();
-        await settle();
-        activity.replied(activity.items(SwarmActivityFilter.threads).first);
-        await settle();
-        expect(store.values['swarm_activity.$me.$tab'], contains('root-1'));
+    test('a Swarm that leaves the list takes its marks, and what was read of '
+        'its chats, off the phone', () async {
+      final store = MemoryKeyValueStore()
+        ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
+      final fake = backend(page: page);
+      final session = await start(fake, store: store);
+      final activity = session.activity..watch();
+      await settle();
+      activity.replied(activity.items(SwarmActivityFilter.threads).first);
+      await settle();
+      expect(store.values['swarm_activity.$me.$tab'], contains('root-1'));
+      expect(session.peeks.held, 1);
 
-        fake.routes['/api/super-tabs/list'] = (_) => {
-          'tabs': <Object>[],
-          'next': null,
-        };
-        fake.routes['/api/super-tabs/invitations'] = (_) => <Object>[];
-        await session.inbox.refresh();
-        await settle();
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      fake.routes['/api/super-tabs/invitations'] = (_) => <Object>[];
+      await session.inbox.refresh();
+      await settle();
 
-        expect(store.values.containsKey('swarm_activity.$me.$tab'), isFalse);
-        expect(activity.items(SwarmActivityFilter.threads), isEmpty);
-      },
-    );
+      expect(store.values.containsKey('swarm_activity.$me.$tab'), isFalse);
+      expect(activity.items(SwarmActivityFilter.threads), isEmpty);
+      expect(session.peeks.held, 0, reason: 'no row of it left in memory');
+    });
 
     test('a chat that cannot be read says so, and leaves the rest', () async {
       final fake = backend();

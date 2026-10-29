@@ -114,11 +114,21 @@ class SwarmChatPeeks extends ChangeNotifier {
     _pump();
   }
 
-  /// Drops everything read of [reader]: it left the list.
-  void forget(SwarmReader reader) {
-    _entries.removeWhere((key, _) => key.$1 == reader);
-    _queue.removeWhere((key) => key.$1 == reader);
+  /// Keeps what [readers] hold now and drops the rest: what was read of a
+  /// Swarm off the list, of one whose access ended, or of one that reads
+  /// from nothing again ([SwarmReader.generation]) leaves memory, and an
+  /// answer still on its way for it is dropped.
+  void keepOnly(Iterable<SwarmReader> readers) {
+    final listed = readers.toSet();
+    bool gone((SwarmReader, String) key, _Entry entry) =>
+        !listed.contains(key.$1) || !_current(key.$1, entry);
+    _entries.removeWhere(gone);
+    _queue.removeWhere((key) => !_entries.containsKey(key));
   }
+
+  /// How many chats are held, read or being read.
+  @visibleForTesting
+  int get held => _entries.length;
 
   bool _current(SwarmReader reader, _Entry entry) =>
       !reader.accessRevoked && entry.generation == reader.generation;
