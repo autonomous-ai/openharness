@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/parts.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -44,8 +45,13 @@ void main() {
 
   test('a reply that lives only in its thread leaves the chat read; one also '
       'sent to the chat counts once', () async {
-    final server = ConversationServer();
+    final server = ConversationServer()..threads = true;
+    final lead = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == 'lead');
     fromLead(server, 'Root');
+    // As the threads backend keeps it: the newest message the chat shows.
+    lead['lastMainSequence'] = server.revision;
     final c = await open(server);
     await c.loadMessages('lead');
     c.markRead('lead', through: 1);
@@ -59,6 +65,7 @@ void main() {
     server.messages.last
       ..['thread'] = 'message-1'
       ..['alsoInChat'] = true;
+    lead['lastMainSequence'] = server.revision;
     await c.refresh();
     await c.loadMessages('lead');
     expect(c.unread(c.selected!), isTrue);
@@ -84,6 +91,36 @@ void main() {
       expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
     },
   );
+
+  test('a chat not loaded here stays unbolded for a reply only in its '
+      'thread, past the mark another device kept', () async {
+    final server = ConversationServer()..threads = true;
+    final offline = (server.state['conversations'] as List)
+        .cast<Map<String, dynamic>>()
+        .firstWhere((g) => g['id'] == 'offline');
+    server.append('Root', conversationId: 'offline');
+    offline['lastMainSequence'] = server.revision;
+    server.markReadElsewhere('offline', server.revision);
+    final c = await open(server);
+    // Its messages were never read on this device.
+    expect(c.messages('offline'), isEmpty);
+    server.append('Only in the thread.', conversationId: 'offline');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['author'] = {'kind': 'agent', 'id': 'lead-agent', 'name': 'Lead'};
+    await c.refresh();
+    SuperTabConversation group() => c.snapshot!.conversation('offline')!;
+    expect(c.messages('offline'), isEmpty);
+    expect(c.unread(group()), isFalse);
+    // A reply also sent to the chat makes it bold.
+    server.append('For everyone.', conversationId: 'offline');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['alsoInChat'] = true;
+    offline['lastMainSequence'] = server.revision;
+    await c.refresh();
+    expect(c.unread(group()), isTrue);
+  });
 
   test('reading sends the mark forward once, never a lower one', () async {
     final server = ConversationServer();

@@ -340,7 +340,7 @@ describe('reactions', () => {
     const tab = await swarm()
     const messageId = await post(tab)
     const poll = async () => (await read(tab, peer, 'conversations/lead/messages?after=1000000')).body.data as { messages: unknown[]; reactionSeq: number }
-    expect(await poll()).toEqual({ messages: [], next: null, reactionSeq: 0 })
+    expect(await poll()).toEqual({ messages: [], next: null, reactionSeq: 0, threads: [] })
     await react(tab, messageId, true)
     expect((await poll()).reactionSeq).toBe(1)
   })

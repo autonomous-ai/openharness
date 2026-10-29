@@ -67,7 +67,9 @@ const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() 
 const noQuery = z.object({}).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
-  before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional() })
+  before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
+  // One thread's root and replies, paged like the conversation.
+  thread: id.optional() })
   .refine(q => [q.after, q.before, q.messageId].filter(value => value !== undefined).length <= 1, 'Choose one message cursor or exact message.')
   .refine(q => (q.afterId === undefined || q.after !== undefined) && (q.beforeId === undefined || q.before !== undefined), 'Send afterId with after, beforeId with before.')
 const decisionParams = tabParams.extend({ decisionId: id })

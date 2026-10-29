@@ -133,9 +133,11 @@ void main() {
     threadReply(server, 'Thread-only reply');
     threadReply(server, 'Reply also in the chat', inChat: true);
     await show(tester, server);
+    // The chat no longer lists the thread's own reply (its thread does).
+    expect(find.text('Thread-only reply'), findsNothing);
     expect(
       tester.getTopLeft(find.byKey(_line)).dy,
-      greaterThan(tester.getTopLeft(find.text('Thread-only reply')).dy),
+      greaterThan(tester.getTopLeft(find.text('Update 30')).dy),
     );
     expect(
       tester.getTopLeft(find.byKey(_line)).dy,
