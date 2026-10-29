@@ -1652,6 +1652,97 @@ void main() {
   );
 
   testWidgets(
+    "a Team account's agents follow the Team account's own reports, not its Mac's",
+    (tester) async {
+      final f = await fixture(tester);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // The Mac and its Harness Team account report on their own; the Swarm
+      // shows them as one row, but each has its own heartbeat.
+      void reports({required int mac, required int team}) =>
+          f.server.state['machines'] = [
+            {
+              'machineId': 'mac',
+              'name': 'Mac Studio',
+              'contributorId': 'owner',
+              'observation': {'receivedAt': mac},
+            },
+            {
+              'machineId': 'team',
+              'name': 'Harness Team',
+              'contributorId': 'owner',
+              'hostMachineId': 'mac',
+              'observation': {'receivedAt': team},
+            },
+          ];
+      for (final agent in f.server.state['agents'] as List) {
+        (agent as Map)['machineId'] = 'team';
+      }
+      final silent = now - 10 * 60 * 1000;
+      reports(mac: silent, team: now);
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.lineText(tester, 1), startsWith('Idle · Mac Studio'));
+      expect(f.activity(tester, 1), HarnessActivity.idle);
+      reports(mac: now, team: silent);
+      await f.controller.refresh();
+      await f.show(tester);
+      expect(f.activity(tester, 1), HarnessActivity.offline);
+      expect(f.lineText(tester, 1), startsWith('Down'));
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
+    'a mark comes from any group the reader sees, never from a private or Buddy chat they cannot',
+    (tester) async {
+      final f = await fixture(tester);
+      (f.server.state['people'] as List).add({
+        'id': 'mira',
+        'email': 'mira@example.com',
+        'role': 'collaborator',
+      });
+      final conversations = f.server.state['conversations'] as List;
+      // Sage, an openharness agent, reused for autonomous-os work: one agent,
+      // one mark, from the group the reader can see.
+      conversations.add({
+        ...conversationFixture('os-task', 'OS task'),
+        'projectId': 'os',
+        'assignment': {'agentId': 'agent-1', 'status': 'working'},
+      });
+      // Finn's only questions are in Mira's private group and her Buddy chat.
+      final private = {
+        ...conversationFixture('private', 'Private plans'),
+        'audience': {
+          'people': [
+            {'id': 'mira'},
+          ],
+        },
+        'assignment': {'agentId': 'agent-3', 'status': 'needs_human'},
+      };
+      conversations.addAll(<Map<String, dynamic>>[
+        private,
+        {
+          ...conversationFixture('buddy', 'Mira and Sparky'),
+          'kind': 'buddy',
+          'buddyOwnerId': 'mira',
+          'assignment': {'agentId': 'agent-3', 'status': 'blocked'},
+        },
+      ]);
+      await f.controller.refresh();
+      await f.show(tester, nativeState: false);
+      expect(f.activity(tester, 1), HarnessActivity.working);
+      expect(f.activity(tester, 3), HarnessActivity.idle);
+      expect(find.text('Private plans'), findsNothing);
+      // The same group, once the reader is in it, does change the mark.
+      ((private['audience'] as Map)['people'] as List).add({'id': 'owner'});
+      await f.controller.refresh();
+      await f.show(tester, nativeState: false);
+      expect(f.activity(tester, 3), HarnessActivity.needsInput);
+      await f.close(tester);
+    },
+  );
+
+  testWidgets(
     'orders agents most urgent first, as the tabs do, and a lost task shows Offline',
     (tester) async {
       final f = await fixture(tester);

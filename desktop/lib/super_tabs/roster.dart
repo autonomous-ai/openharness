@@ -238,8 +238,9 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
   /// stopped; its start failed. Null when none is known. While the Swarm
   /// cannot be read, its computers are not called offline.
   HarnessActivity? _swarmDown(SuperTabAgent agent) {
-    final snapshot = c.snapshot;
-    final machine = snapshot?.pool(snapshot.placeOf(agent.machineId));
+    // The computer it runs on reports for itself: a Harness Team account
+    // shown as its Mac has its own heartbeat.
+    final machine = c.snapshot?.pool(agent.machineId);
     final at = switch (machine?['observation']) {
       {'receivedAt': final num at} => at.toInt(),
       _ => null,
