@@ -1654,9 +1654,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (state.conversations.some(c => c.leadId === target.id)) fail('LEAD_REQUIRED', 'Release workers only; keep the Lead running.')
       // Only its own active work holds a decision back, not the active work of a group it sits in (a Reviewer's).
       if (state.conversations.some(c => activeWork(c) && c.assignment?.agentId === target.id)) fail('WORK_ACTIVE', 'Finish active work before releasing this worker.')
-      // A Reviewer is never assigned work, so the Lead may keep or stop it at any time.
-      if (!target.workDecision && agentRole(target) !== 'reviewer' && !state.conversations.some(c => c.assignment?.agentId === target.id)) {
-        fail('WORK_REQUIRED', 'This worker has no finished assignment to release.')
+      // A Buddy is its owner's to stop (buddies.ts); it never had work, which was all that kept it from here before.
+      if (isBuddy(target)) fail('BUDDY_NOT_RELEASED', 'A Buddy is stopped by its owner, or by turning Buddies off, never released.')
+      // A Reviewer is never assigned work, so the Lead may keep or stop it at any time. Any other worker may be stopped with
+      // no assignment at all: one a person started by hand, or whose task went elsewhere, sat idle with nobody able to stop
+      // it but by hand (Swarm autonomous-harness, 2026-10-29). Keeping it still needs finished work to keep it for.
+      if (command.decision !== 'stop' && !target.workDecision && agentRole(target) !== 'reviewer'
+        && !state.conversations.some(c => c.assignment?.agentId === target.id)) {
+        fail('WORK_REQUIRED', 'This worker has no finished assignment to keep. Stop it instead.')
       }
       if (target.workDecision === 'stop' && command.decision !== 'stop') fail('STOP_REQUESTED', 'This worker is stopping. Wait for its execution host.')
       if (command.decision === 'stop' && target.workDecision !== 'stop') target.releaseId = operationId
