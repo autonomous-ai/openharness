@@ -8,7 +8,7 @@
  * UNREAD_SCAN rows past the mark in at most THREAD_CHATS chats, LATEST_SCAN rows per chat at its newest main message, and
  * the roots those replies name. `more` says a cap was reached. Apps call it when the change feed moves, never on a timer.
  */
-import type { PrismaClient } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../../lib/ssoAuth.js'
 import { isTeamSession, TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE } from '../../lib/teamSession.js'
 import { agentOnly, author, fail, SuperTabError, type Actor, type Author, type Conversation, type SuperTabState } from '../model.js'
@@ -46,13 +46,13 @@ export interface InboxThread {
 export interface InboxLatest { conversationId: string; message: InboxMessage }
 export interface Inbox { threads: InboxThread[]; latest: InboxLatest[]; more: boolean }
 
-interface Row { id: string; sequence: number; author: Author; text: string; createdAt: Date; attachments: number; thread: string | null
+interface Row { id: string; conversationId: string; sequence: number; author: Author; text: string; createdAt: Date; attachments: number; thread: string | null
   alsoInChat: boolean; source: unknown; recipientIds: string[] }
 
 const FIELDS = { sequence: 1, author: 1, text: 1, createdAt: 1, attachments: 1, thread: 1, alsoInChat: 1, source: 1, recipientIds: 1 }
 /** A scan for unread replies: what a reply is counted and named by, never its text. */
 const SCAN_FIELDS = { sequence: 1, author: 1, createdAt: 1, thread: 1, source: 1, recipientIds: 1 }
-const row = (raw: Record<string, unknown>): Row => ({ id: raw._id as string, sequence: raw.sequence as number, author: raw.author as Author,
+const row = (raw: Record<string, unknown>): Row => ({ id: raw._id as string, conversationId: raw.conversationId as string, sequence: raw.sequence as number, author: raw.author as Author,
   text: (raw.text ?? '') as string, createdAt: new Date(ms(raw.createdAt)), attachments: Array.isArray(raw.attachments) ? raw.attachments.length : 0,
   thread: (raw.thread ?? null) as string | null, alsoInChat: raw.alsoInChat === true, source: raw.source ?? null, recipientIds: (raw.recipientIds ?? []) as string[] })
 const preview = (m: Row): InboxMessage => ({ id: m.id, sequence: m.sequence, author: m.author, text: [...m.text].slice(0, PREVIEW_CHARS).join(''),
@@ -82,32 +82,65 @@ function readsChat(state: SuperTabState, actor: Actor, group: Conversation): boo
   }
 }
 
-/** The chat's newest main message the person reads: the row at its stored main sequence, read alone first; the few rows
- *  before it only when an older backend stored a hidden copy there. */
-async function latestIn(db: PrismaClient, tabId: string, group: Conversation): Promise<InboxLatest | null> {
-  const top = group.lastMainSequence ?? group.lastMessageSequence
-  if (!top) return null
-  const read = async (limit: number) => (await readBy(db, 'SuperTabMessage', 'sequence', [{ $match: { tabId, conversationId: group.id, sequence: { $lte: top } } },
-    { $sort: { sequence: -1, _id: -1 } }, { $limit: limit }, { $project: FIELDS }])).map(row)
-  const newest = (await readable(db, tabId, await read(1))).find(isMain) ?? (await readable(db, tabId, await read(LATEST_SCAN))).find(isMain)
-  return newest ? { conversationId: group.id, message: preview(newest) } : null
+/** Chats one read covers: each is a few stages of its pipeline, well under Mongo's limit on stages. */
+export const CHATS_PER_READ = 100
+
+/** Runs each chat's own pipeline inside one aggregate per CHATS_PER_READ chats ($unionWith), so the reads stay few whatever the
+ *  chat count, and each chat's rows are still bounded by its own index range and limit: one $in over every chat could not
+ *  bound each by its own read mark, and would walk a busy chat's history for a chat never opened. */
+async function perChat(db: PrismaClient, pipelines: Prisma.InputJsonValue[][]): Promise<Row[]> {
+  const rows: Row[] = []
+  for (let i = 0; i < pipelines.length; i += CHATS_PER_READ) {
+    const [first, ...rest] = pipelines.slice(i, i + CHATS_PER_READ)
+    const raw = await db.superTabMessage.aggregateRaw({ pipeline: [...first!,
+      ...rest.map(pipeline => ({ $unionWith: { coll: 'SuperTabMessage', pipeline } }))] }) as unknown as Array<Record<string, unknown>>
+    rows.push(...raw.map(row))
+  }
+  return rows
 }
 
-/** The threads of one chat with replies past `mark` by someone other than `personId`, from its newest UNREAD_SCAN rows. */
-async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, group: Conversation, personId: string, mark: number):
+/** Up to `limit` rows of one chat, newest first, in its (sequence, id) index range. */
+const newestIn = (tabId: string, conversationId: string, sequence: Record<string, number>, limit: number, fields: Record<string, number>): Prisma.InputJsonValue[] =>
+  [{ $match: { tabId, conversationId, sequence } }, { $sort: { sequence: -1, _id: -1 } }, { $limit: limit }, { $project: { ...fields, conversationId: 1 } }]
+
+/** Each chat's newest main message the person reads: the row at its stored main sequence, read alone; the few rows before it
+ *  only for a chat where an older backend stored a hidden copy there. */
+async function latestIn(db: PrismaClient, tabId: string, chats: Conversation[]): Promise<Map<string, Row>> {
+  const tops = chats.flatMap(g => { const top = g.lastMainSequence ?? g.lastMessageSequence; return top ? [{ id: g.id, top }] : [] })
+  const pick = async (rows: Row[]) => {
+    const shown = (await readable(db, tabId, rows)).filter(isMain)
+    const newest = new Map<string, Row>()
+    for (const m of shown) if (!newest.has(m.conversationId)) newest.set(m.conversationId, m)
+    return newest
+  }
+  const read = (of: typeof tops, limit: number) => perChat(db, of.map(c => newestIn(tabId, c.id, { $lte: c.top }, limit, FIELDS)))
+  const latest = await pick(await read(tops, 1))
+  const missing = tops.filter(c => !latest.has(c.id))
+  if (missing.length) for (const [id, m] of await pick(await read(missing, LATEST_SCAN))) latest.set(id, m)
+  return latest
+}
+
+/** The threads of `chats` with replies past the person's mark by someone else, from each chat's newest UNREAD_SCAN rows past it. */
+async function threadsIn(db: PrismaClient, tabId: string, state: SuperTabState, chats: Conversation[], personId: string, marks: Map<string, number>):
   Promise<{ threads: InboxThread[]; more: boolean }> {
-  const scanned = (await readBy(db, 'SuperTabMessage', 'sequence', [{ $match: { tabId, conversationId: group.id, sequence: { $gt: mark } } },
-    { $sort: { sequence: -1, _id: -1 } }, { $limit: UNREAD_SCAN + 1 }, { $project: SCAN_FIELDS }])).map(row)
-  const more = scanned.length > UNREAD_SCAN
-  const replies = (await readable(db, tabId, scanned.slice(0, UNREAD_SCAN).filter(isReply)))
+  if (!chats.length) return { threads: [], more: false }
+  const scanned = await perChat(db, chats.map(g => newestIn(tabId, g.id, { $gt: marks.get(g.id) ?? 0 }, UNREAD_SCAN + 1, SCAN_FIELDS)))
+  const byChat = new Map<string, Row[]>()
+  for (const m of scanned) byChat.set(m.conversationId, [...byChat.get(m.conversationId) ?? [], m])
+  const more = [...byChat.values()].some(rows => rows.length > UNREAD_SCAN)
+  const replies = await readable(db, tabId, [...byChat.values()].flatMap(rows => rows.slice(0, UNREAD_SCAN)).filter(isReply))
   const own = (m: Row) => m.author.kind === 'person' && m.author.id === personId
   const rootIds = [...new Set(replies.filter(m => !own(m)).map(m => m.thread!))]
   if (!rootIds.length) return { threads: [], more }
-  // Each root by its id, in this chat: one the person cannot read hides its thread, as on a page (review 2 of #2168).
-  const roots = await readable(db, tabId, (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: rootIds }, tabId, conversationId: group.id } },
-    { $project: FIELDS }])).map(row).filter(m => !isReply(m)))
+  // Every root by its id, in one read: one the person cannot read hides its thread, as on a page (review 2 of #2168), and a
+  // root counts only in the chat its replies are in.
+  const found = (await readBy(db, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: rootIds }, tabId } }, { $project: { ...FIELDS, conversationId: 1 } }])).map(row)
+  const roots = await readable(db, tabId, found.filter(m => !isReply(m)))
+  const groups = new Map(chats.map(g => [g.id, g]))
   const threads = roots.flatMap(root => {
-    const inThread = replies.filter(m => m.thread === root.id)
+    const inThread = replies.filter(m => m.thread === root.id && m.conversationId === root.conversationId)
+    const group = groups.get(root.conversationId)
+    if (!group || !inThread.some(m => !own(m))) return []
     // Named as a page's thread summary names them: only authors who can still read the chat (threads.ts).
     const rows: ThreadReply[] = [root, ...inThread.toReversed()].map(m => ({ thread: root.id, id: m.id, author: m.author, mentions: [],
       sequence: m.sequence, createdAt: m.createdAt, agentOnly: false, routing: false }))
@@ -131,12 +164,9 @@ export async function readInbox(store: SuperTabStore, user: AuthUser, tabId: str
   const marks = await readMarks(db, tabId, user.sub)
   const unread = chats.filter(g => g.lastMessageSequence > (marks.get(g.id) ?? 0))
     .sort((a, b) => Date.parse(b.lastActivityAt ?? '') - Date.parse(a.lastActivityAt ?? '') || (a.id < b.id ? -1 : 1))
-  const [latest, threaded] = await Promise.all([
-    Promise.all(chats.map(g => latestIn(db, tabId, g))),
-    Promise.all(unread.slice(0, THREAD_CHATS).map(g => threadsIn(db, tabId, state, g, user.sub, marks.get(g.id) ?? 0))),
-  ])
-  const threads = threaded.flatMap(t => t.threads)
-    .sort((a, b) => Date.parse(b.lastReplyAt) - Date.parse(a.lastReplyAt) || (a.rootId < b.rootId ? -1 : 1))
-  const more = unread.length > THREAD_CHATS || threaded.some(t => t.more) || threads.length > MAX_THREADS
-  return { threads: threads.slice(0, MAX_THREADS), latest: latest.filter(l => l !== null), more }
+  const [latest, threaded] = await Promise.all([latestIn(db, tabId, chats), threadsIn(db, tabId, state, unread.slice(0, THREAD_CHATS), user.sub, marks)])
+  const threads = threaded.threads.sort((a, b) => Date.parse(b.lastReplyAt) - Date.parse(a.lastReplyAt) || (a.rootId < b.rootId ? -1 : 1))
+  const more = unread.length > THREAD_CHATS || threaded.more || threads.length > MAX_THREADS
+  return { threads: threads.slice(0, MAX_THREADS), more,
+    latest: chats.flatMap(g => { const m = latest.get(g.id); return m ? [{ conversationId: g.id, message: preview(m) }] : [] }) }
 }

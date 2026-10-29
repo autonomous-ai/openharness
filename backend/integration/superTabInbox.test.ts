@@ -124,6 +124,7 @@ async function insert(tabId: string, conversationId: string, rows: Array<{ id?: 
       const hidden = !!row.source?.recipientsOnly
       if (!hidden) {
         data.lastMessageSequence = sequence
+        data.lastActivityAt = new Date().toISOString()
         if (!row.thread || row.thread === id) data.lastMainSequence = sequence
       }
       await tx.superTabMessage.create({ data: { id, tabId, conversationId, sequence, author: row.author as never, text: row.text,
@@ -340,14 +341,22 @@ describe('what the inbox costs the database', () => {
     const messages = rows.filter(r => r.ns.endsWith('.SuperTabMessage'))
     expect(rows.filter(r => r.planSummary === 'COLLSCAN')).toEqual([])
     for (const r of messages) expect(r.planSummary, JSON.stringify(r)).toMatch(/^IXSCAN/)
+    // A read's later batches (getmore) belong to that read.
+    const reads = rows.filter(r => r.op !== 'getmore')
+    const messageReads = messages.filter(r => r.op !== 'getmore')
     const docsExamined = rows.reduce((n, r) => n + (r.docsExamined ?? 0), 0)
     const messageDocs = messages.reduce((n, r) => n + (r.docsExamined ?? 0), 0)
     const replyBytes = JSON.stringify(reply.body.data).length
-    console.info(`inbox cost: ${CHATS + 4} active chats, ${messages.length} message reads, ${messageDocs} message docs examined, ` +
-      `${docsExamined} docs examined in all, ${bytesFromDatabase} bytes from the database, ${replyBytes} reply bytes`)
-    // The long chat is read only to its newest rows; no read walks it whole.
-    for (const r of messages) expect(r.docsExamined ?? 0, JSON.stringify(r)).toBeLessThanOrEqual(101)
-    expect(messageDocs).toBeLessThan(1500)
+    console.info(`inbox cost: ${CHATS + 4} active chats, ${reads.length} database reads (${messageReads.length} of messages), ` +
+      `${docsExamined} docs examined (${messageDocs} messages), ${bytesFromDatabase} bytes from the database, ${replyBytes} reply bytes\n` +
+      reads.map(r => `  ${r.ns.split('.').at(-1)} ${r.op} ${r.planSummary ?? ''} docs=${r.docsExamined ?? 0}`).join('\n'))
+    // A fixed few reads whatever the chat count: the latest rows, the unread rows, their roots (the read marks are another
+    // collection). Nothing new to check for delivered copies here, so no read for them.
+    expect(messageReads.length).toBeLessThanOrEqual(3)
+    expect(reads.length).toBeLessThanOrEqual(5)
+    // Bounded by the caps, never by history: the long chat's 3000 rows are read only to its newest UNREAD_SCAN + 1, so all
+    // the chats together examine about one row per chat for the latest, 30 chats' unread rows and their roots.
+    expect(messageDocs).toBeLessThan(600)
     expect(reply.body.data.latest).toHaveLength(CHATS + 1)
     // The long chat had more unread rows than one read takes: the reply says so.
     expect(reply.body.data.more).toBe(true)
