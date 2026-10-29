@@ -100,13 +100,6 @@ describe('a terminal observer of a Swarm agent', () => {
     expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
   })
 
-  it('closes within a second of the watched session turning confidential, here by becoming its project’s Lead', async () => {
-    const { tab, ws, builder } = await watching(false)
-    await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
-    expect(await until(() => ws.close.mock.calls.length > 0, 1_000)).toBe(true)
-    expect(ws.close).toHaveBeenCalledWith(4403, expect.any(String))
-  })
-
   it('closes a link\'s viewer within a second of the watched session turning confidential, here by becoming its project’s Lead', async () => {
     const { tab, builder, harnessId } = await watching(false)
     const link = await database.db.harnessLink.create({ data: { id: randomUUID(), ownerId: host.sub, machineId: 'test-host', agentId: harnessId,
@@ -123,10 +116,14 @@ describe('a terminal observer of a Swarm agent', () => {
     }
   })
 
-  it('stays open through a change that leaves its viewer allowed', async () => {
-    const { tab, ws } = await watching()
+  it('stays open through a change that leaves its viewer allowed, the watched agent becoming its project’s Lead included', async () => {
+    const { tab, ws, builder } = await watching(false)
     await run(tab, { type: 'conversation.create', title: 'Another task', brief: '', checks: [] })
     await run(tab, { type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [host.sub, peer.sub] })
+    // Every member watches the current Lead, view only (Ken, 2026-10-28).
+    await run(tab, { type: 'conversation.agent', conversationId: 'lead', agentId: builder, present: true, lead: true })
+    // Told to check again, it checks the Lead and stays.
+    await publishSwarmAccessChanged(tab)
     expect(await until(() => ws.close.mock.calls.length > 0, 500)).toBe(false)
   })
 })

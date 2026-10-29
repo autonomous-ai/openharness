@@ -2,10 +2,17 @@
 import { installDsh, resolveInstallSource } from './install.js'
 import { updateDsh } from './update.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
+import { DSH_SHELL_UNAVAILABLE, dshShellAvailable } from './shell.js'
 
 export const mutateDsh = async ({ id, url, ref, update }: { id?: string; url?: string; ref?: string; update?: boolean }, progress: (p: import('./install.js').DshInstallProgress) => void): Promise<{ ok: true; id: string } | { ok: false; error: string; detail: string }> => {
   const catalog = new Map((await refreshDshRegistry(update || (!!id && !catalogEntry(id)))).map(entry => [entry.id, entry]))
   if (!update && id && !catalog.has(id)) return { ok: false, error: 'INVALID_DSH', detail: `${id} is not in this machine's Store catalog` }
+  // From the catalog entry, before anything is downloaded: refused only after its download was placed, a Windows
+  // install left its files on disk (review of #2026, 2026-10-28). A package with no entry is checked once fetched.
+  const entry = !update && id ? catalog.get(id) : undefined
+  if (entry && !dshShellAvailable() && (entry.runsScripts || (entry.viewerUse && catalog.get(entry.viewerUse)?.runsScripts))) {
+    return { ok: false, error: 'SHELL_UNAVAILABLE', detail: DSH_SHELL_UNAVAILABLE }
+  }
   const resolved = update ? { source: '' } : id ? resolveInstallSource(id) : url ? { source: url, ref } : null
   if (!resolved) return { ok: false, error: 'INVALID_DSH', detail: `${id ?? url} is not a known harness` }
   // NARRATE THE LINES, NOT ONLY THE PHASES. A toolchain setup is minutes of npm and uv output, and

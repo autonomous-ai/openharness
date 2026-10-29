@@ -4,6 +4,8 @@ import 'package:harness/core/models.dart';
 import 'package:harness/notify/alert_sounds.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/state/session_activity.dart';
+import 'package:harness/state/session_content_search.dart';
+import 'package:harness/state/swarm_navigation.dart' show SwarmDestination;
 import 'package:harness/state/swarm_search.dart';
 import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
@@ -167,6 +169,66 @@ void main() {
       },
     );
   }
+
+  // 2026-10-28: one row like this, re-read every 5 seconds, was 2,225 failed
+  // history reads on its computer in an evening.
+  testWidgets(
+    'a conversation its computer no longer holds is not re-read until the list changes',
+    (tester) async {
+      final reads = <String>[];
+      final connection = TailConnection(
+        const {},
+        tail: (payload) {
+          final session = payload['sessionId'] as String;
+          reads.add(session);
+          return session == 'gone'
+              ? {'error': 'NOT_INDEXED', 'sessionId': session}
+              : {
+                  'lastAt': 0,
+                  'external': {'open': false},
+                  'rows': <Object>[],
+                  'total': 0,
+                  'hasMore': false,
+                };
+        },
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      SwarmDestination row(String session) {
+        final hit = SessionContentHit.fromJson('m', {
+          'agentId': '',
+          'sessionId': session,
+          'engine': 'claude',
+          'field': 'name',
+          'snippet': '',
+          'external': {'title': session, 'cwd': '/work/api'},
+        })!;
+        return externalSessionDestination(hit, hit.external!);
+      }
+
+      final gone = row('gone'), held = row('held');
+      final activity = SessionActivityController(app);
+      activity.watch([gone, held]);
+      await tester.pump();
+      expect(reads, ['gone', 'held']);
+
+      await tester.pump(const Duration(seconds: 30));
+      expect(reads.where((s) => s == 'gone'), hasLength(1));
+      expect(reads.where((s) => s == 'held'), hasLength(7));
+      expect(activity.read(gone).status, isNull);
+
+      // A changed list asks once more: a conversation that came back shows.
+      activity.watch([gone]);
+      await tester.pump();
+      expect(reads.where((s) => s == 'gone'), hasLength(2));
+      await tester.pump(const Duration(seconds: 30));
+      expect(reads.where((s) => s == 'gone'), hasLength(2));
+      activity.dispose();
+    },
+  );
 
   test('managed sessions read current activity independently of their ranking snapshot', () async {
     final app = createApp(connected: true);

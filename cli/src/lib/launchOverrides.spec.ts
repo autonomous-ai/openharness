@@ -225,6 +225,12 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
       .toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, extraArgs: [] } })
     expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
       .toMatchObject({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work', HARNESS_RELAY_TOKEN: 't' }, extraArgs: relay.args } })
+    // The relay readies, and asks about, that home: a Swarm Product Manager's own, whose sign-in and models are its own.
+    expect(ownerRelay).toHaveBeenLastCalledWith('codex', '/home/u/.codex-work')
+    // A relaunch (restart, resume, restore) the relay cannot sign in is held with why, as a launch that waits is: after a
+    // reboot the Team daemon may restore before the owner's relay is there.
+    expect(await buildLaunchOverrides(deps({ ownerRelay: vi.fn(async () => ({ refused: 'No relay here.' })) }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
+      .toEqual({ ok: false, error: 'OWNER_RELAY_UNAVAILABLE', unavailable: 'native', detail: 'No relay here.' })
     // A grid is its own provider: the relay is not asked.
     ownerRelay.mockClear()
     await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
@@ -425,6 +431,14 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     expect(JSON.stringify(codex)).not.toContain('approval_mode')
     const hermes = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'hermes', { startedBy: null, cwd: null }, 'a')
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
+  })
+
+  it('relaunches a Buddy with none of them: it starts no MCP server at all (review 3 of #2092)', async () => {
+    writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: [], projects: [] } })
+    const buddy = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+      { startedBy: null, cwd: mkdtempSync(join(tmpdir(), 'overrides-buddy-')), swarmSkill: { role: 'buddy', key: 'harness-claude-buddy' } }, 'a', () => true)
+    expect(buddy.ok).toBe(true)
+    expect(JSON.stringify(buddy)).not.toContain('lamp-mcp')
   })
 })
 

@@ -1,6 +1,7 @@
 import type { Prisma, SuperTabDelivery } from '@prisma/client'
 import { ms } from './parts/light.js'
 import type { ReactionRow } from './reactions.js'
+import { agentOnly, type Author } from './model.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -27,4 +28,44 @@ export async function pageDeliveries(tx: Transaction, tabId: string, messageIds:
   return rows.map(row => ({ id: row._id as string, messageId: row.messageId as string, agentId: row.agentId as string, status: row.status as string,
     receipt: (row.receipt ?? null) as string | null, holdReason: (row.holdReason ?? null) as string | null, holdSince: date(row.holdSince),
     deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
+}
+
+/** An agent's open deliveries, read by creation time, with each conversation's tied rows put in its message order. One
+ *  write's deliveries share a creation time, and Mongo breaks that tie by insertion order alone. Each conversation keeps its
+ *  places among the others; only tied rows have their messages' sequences read. */
+export async function inConversationOrder<T extends Pick<SuperTabDelivery, 'conversationId' | 'messageId' | 'createdAt'>>(
+  tx: Transaction, tabId: string, rows: T[]): Promise<T[]> {
+  const ties = new Map<string, number[]>()
+  rows.forEach((row, index) => {
+    const key = `${row.conversationId}\0${row.createdAt.getTime()}`
+    ties.set(key, [...ties.get(key) ?? [], index])
+  })
+  const tied = [...ties.values()].filter(places => places.length > 1)
+  if (!tied.length) return rows
+  // Matched by id alone: with tabId in the match, the planner can cover it from the tabId+conversationId+sequence index
+  // and walk every message key of the Swarm. The Swarm is checked here instead.
+  const found = await tx.superTabMessage.aggregateRaw({ pipeline: [
+    { $match: { _id: { $in: tied.flat().map(index => rows[index]!.messageId) } } }, { $project: { tabId: 1, sequence: 1 } }] }) as
+    unknown as Array<{ _id: string; tabId: string; sequence: number }>
+  const sequence = new Map(found.filter(message => message.tabId === tabId).map(message => [message._id, message.sequence]))
+  const ordered = [...rows]
+  for (const places of tied) {
+    const group = places.map(index => rows[index]!)
+      .sort((a, b) => (sequence.get(a.messageId) ?? Infinity) - (sequence.get(b.messageId) ?? Infinity))
+    places.forEach((index, at) => { ordered[index] = group[at]! })
+  }
+  return ordered
+}
+
+export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean }
+
+/** Every message of the threads rooted at `roots` in one conversation, roots included, oldest first: what the page's thread
+ *  summaries are counted from. Matched as the page reads are, so the tabId+conversationId+thread index bounds it. */
+export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
+  // Sorted here: a $sort in the pipeline makes the planner walk the conversation's sequence index instead.
+  const rows = await tx.superTabMessage.aggregateRaw({ pipeline: [{ $match: { tabId, conversationId, thread: { $in: roots } } },
+    { $project: { thread: 1, author: 1, mentions: 1, sequence: 1, createdAt: 1, source: 1 } }] }) as unknown as Array<Record<string, unknown>>
+  return rows.map(row => ({ thread: row.thread as string, id: row._id as string, author: row.author as Author,
+    mentions: (row.mentions ?? []) as string[], sequence: row.sequence as number, createdAt: new Date(ms(row.createdAt)),
+    agentOnly: agentOnly(row.source) })).sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
 }

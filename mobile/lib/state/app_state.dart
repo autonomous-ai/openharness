@@ -6160,8 +6160,8 @@ class AppNotifier extends ChangeNotifier {
       osStatus[machineId]?['harnessOs'] == true;
 
   /// What a Harness OS computer's daemon does for a phone beyond its update and Wi-Fi, as its status
-  /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`, `github`, `check_update`. An older
-  /// one says none.
+  /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`, `github`, `check_update`, and
+  /// `computer_use` on one that carries them. An older one says none.
   bool osFeature(String machineId, String feature) {
     final features = osStatus[machineId]?['features'];
     return features is List && features.contains(feature);
@@ -10334,9 +10334,20 @@ class AppNotifier extends ChangeNotifier {
         _wakeMachinesBackOnline(payload['statuses']);
         return;
       case 'machine_select_error':
-        _lastError =
-            'Machine selection failed: ${payload['error'] ?? 'unknown error'}';
-        _lastErrorRetryable = true;
+        if (payload['error'] == 'NOT_YOUR_MACHINE') {
+          // Removed from the account, or no longer shared with it: no redial brings it back, and
+          // its socket has stopped (WsConn._selectRefused). The account's list is read again so the
+          // machine leaves the list, its tabs and the cache it came from. Prod, 2026-10-28: a laptop
+          // removed in September was still selected every ~7 s.
+          _lastError =
+              '${machine.machine.displayName} is no longer on your account.';
+          _lastErrorRetryable = false;
+          unawaited(refreshMachines());
+        } else {
+          _lastError =
+              'Machine selection failed: ${payload['error'] ?? 'unknown error'}';
+          _lastErrorRetryable = true;
+        }
         machine.connectionStatus = ConnectionStatus.disconnected;
         break;
       case 'agent_synced':

@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -16,6 +15,7 @@ import 'package:harness/state/harness_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/swarm_catalog.dart';
 import 'package:harness/super_tabs/project_sidebar.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 import 'package:harness/widgets/new_harness_form.dart';
 import 'package:harness/widgets/swarm_switcher.dart';
 
@@ -38,6 +38,7 @@ void main() {
     Brightness brightness = Brightness.dark,
     double scale = 1,
     List<Agent> extraLocalAgents = const [],
+    List<Map<String, dynamic>> extraSharedAgents = const [],
   }) async {
     final oldEntry = newHarnessOpensInBox;
     newHarnessOpensInBox = true;
@@ -53,6 +54,7 @@ void main() {
         'contributorId': 'owner',
         'configuration': {'engine': 'claude'},
       },
+      ...extraSharedAgents,
     ];
     f.app.machineStates['m']!.agents = [
       const Agent(
@@ -222,7 +224,15 @@ void main() {
       final shared = f.app.activeSwarm;
       expect(find.text('Add agent to Pilot'), findsOneWidget);
       expect(find.text('Starts in Offline editing.'), findsOneWidget);
-      expect(find.text('Models'), findsNothing);
+      // The picker has no Models scope (the leaderboard's Models list sits
+      // behind it, outside the picker).
+      expect(
+        find.descendant(
+          of: find.byType(DesktopDialogSurface),
+          matching: find.text('Models'),
+        ),
+        findsNothing,
+      );
       expect(find.text('Store'), findsNothing);
       final search = tester
           .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
@@ -270,6 +280,57 @@ void main() {
       expect(ordinary.harnessContext, isNull);
       expect(ordinary.placement, HarnessPlacement.newTab);
       expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      await f.app.superTabs.peek(tabId)!.flush();
+      f.app.superTabs.dispose();
+    },
+  );
+
+  testWidgets(
+    'Add agent lists no Buddy: not a teammate\'s, and not the reader\'s own running here',
+    (tester) async {
+      Map<String, dynamic> buddy(String id, String person, String machine) => {
+        'id': id,
+        'name': 'Buddy $id',
+        'machineId': machine,
+        'harnessId': 'session-$id',
+        'contributorId': person,
+        'buddyOf': {'personId': person, 'generation': 'fixture'},
+        'configuration': {'engine': 'claude'},
+      };
+      final f = await open(
+        tester,
+        extraSharedAgents: [
+          buddy('theirs', 'teammate', 'teammate-machine'),
+          buddy('mine', 'owner', 'm'),
+        ],
+        extraLocalAgents: const [
+          Agent(
+            id: 'session-mine',
+            name: 'Buddy mine',
+            engine: 'claude',
+            terminalAvailable: true,
+          ),
+        ],
+      );
+      final search = tester
+          .widget<SwarmSearchResults>(find.byType(SwarmSearchResults))
+          .search;
+      final ids = search.rows.map((row) => row.agentId).toSet();
+      expect(ids, containsAll(['teammate-session', 'local-agent']));
+      expect(ids, isNot(contains('session-theirs')));
+      expect(ids, isNot(contains('session-mine')));
+      await tester.enterText(input, 'Buddy');
+      await tester.pumpAndSettle();
+      // The sidebar lists the reader's own Buddy; the picker must not.
+      final results = find.byType(SwarmSearchResults);
+      for (final name in ['Buddy theirs', 'Buddy mine']) {
+        expect(
+          find.descendant(of: results, matching: find.textContaining(name)),
+          findsNothing,
+          reason: name,
+        );
+      }
       await tester.pumpWidget(const SizedBox());
       await f.app.superTabs.peek(tabId)!.flush();
       f.app.superTabs.dispose();

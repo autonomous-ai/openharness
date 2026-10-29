@@ -309,6 +309,27 @@ void main() {
       await close(tester, controller);
     });
 
+    testWidgets('a failed upload says so under its own conversation only', (
+      tester,
+    ) async {
+      final (server, controller) = await open(tester);
+      server.failUpload = 'two.png';
+      controller.attachments('lead').add([HarnessAttachment('two.png', _png)]);
+      await tester.pump();
+      await tester.tap(send);
+      await tester.pumpAndSettle();
+      expect(find.text('The file is too large.'), findsOneWidget);
+
+      await controller.select('offline');
+      await tester.pumpAndSettle();
+      expect(find.text('The file is too large.'), findsNothing);
+
+      await controller.select('lead');
+      await tester.pumpAndSettle();
+      expect(find.text('The file is too large.'), findsOneWidget);
+      await close(tester, controller);
+    });
+
     testWidgets('a failed upload keeps the draft and the files, and a retry '
         'sends only the file that did not go up', (tester) async {
       final (server, controller) = await open(tester);
@@ -326,7 +347,7 @@ void main() {
       expect(server.posts, isEmpty);
       expect(controller.draft('lead'), 'Look');
       expect(names(controller), ['one.png', 'two.png']);
-      expect(controller.operationError, 'The file is too large.');
+      expect(controller.composerError('lead'), 'The file is too large.');
       expect(find.text('The file is too large.'), findsOneWidget);
       expect(controller.uploading, isFalse);
 
@@ -427,7 +448,7 @@ void main() {
         expect(token?.isCancelled, isTrue);
         expect(controller.uploading, isFalse);
         expect(
-          controller.operationError,
+          controller.composerError('lead'),
           'The upload stopped moving. Try again.',
         );
         expect(names(controller), ['a.png']);
@@ -477,7 +498,7 @@ void main() {
 
       expect(token?.isCancelled, isTrue);
       expect(controller.uploading, isFalse);
-      expect(controller.operationError, isNull);
+      expect(controller.composerError('lead'), isNull);
       expect(names(controller), ['b.png']);
       expect(server.posts, isEmpty);
       await close(tester, controller);

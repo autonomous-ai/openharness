@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -194,7 +194,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   const rules = (list(state.rules).filter(r => r.rule && typeof r.text === 'string' && (r.projectId === undefined || r.projectId === projectId)) as unknown as SwarmRule[])
     .map(r => r.rule.kind !== 'machines' ? r : { ...r, rule: { ...r.rule,
       machineIds: [...r.rule.machineIds, ...[...macOf].filter(([, mac]) => r.rule.kind === 'machines' && r.rule.machineIds.includes(mac)).map(([team]) => team)] } })
-  const members = agents.filter(a => !busy.has(String(a.id)) && (a.role === 'reviewer') === review && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
+  // A Buddy is a person's own, and is never assigned work (the backend refuses it too, backend buddies.ts).
+  const members = agents.filter(a => !busy.has(String(a.id)) && !a.buddyOf && (a.role === 'reviewer') === review
+    && ENGINES.includes(String(object(a.configuration).engine))).map(a => withLaunchEffort(a, list(state.starts)))
   // A new agent starts only on a machine in the Swarm's Machines list (the backend refuses any other): a contributed machine, or
   // one an agent of the Swarm runs on. The Lead runs here, so its own machine is always listed. Of the account's machines
   // only those count; the rest were never prepared with the project and would only be excluded for a missing folder
@@ -298,11 +300,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if ('error' in choice) return required.machines || required.devices.length ? { ...choice, waiting: true, detail: WAITING } : choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
-  const record = (v1: boolean) => scoped({ action: 'command', operationId,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, v1) } })
-  let recorded = await record(false)
-  // A backend from before phase 1 refuses the new fields as invalid; the decision is still worth keeping in the shape it knows.
-  if (recorded.error === 'VALIDATION_ERROR') recorded = await record(true)
+  const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, shape) } })
+  let recorded = await record('current')
+  // A backend from before kinds, or before phase 1, refuses the new fields as invalid; the decision is still worth keeping in
+  // the shape it knows. A task with no kind has nothing to leave out at the first step.
+  if (recorded.error === 'VALIDATION_ERROR' && assessment.kind) recorded = await record('unkinded')
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('v1')
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''

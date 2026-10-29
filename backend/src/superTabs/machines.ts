@@ -1,7 +1,9 @@
 import { z } from 'zod'
+import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
-import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, type SwarmProject } from './projects.js'
+import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
+export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
 
 /** An explicit grant for this tab and project. It never creates a MachineShare. */
@@ -32,10 +34,16 @@ export interface ContributedMachine {
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
 }
-/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll. */
-export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string }
+/** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
+ *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string }
 /** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
 export const REMOVAL_FALLBACK_MS = 30 * 60_000
+/** A cleanup that has waited REMOVAL_FALLBACK_MS since its removal, or one too old to say when: it no longer holds its
+ *  owner's add (commands.ts machine.contribute). Diego's Mac, 2026-10-28: its cleanup never finished, and adding it back
+ *  said 'still cleaning up' for good. */
+export const cleanupOverdue = (cleanup: MachineCleanup, now: number): boolean =>
+  !cleanup.requestedAt || now - Date.parse(cleanup.requestedAt) >= REMOVAL_FALLBACK_MS
 /** Why a removal ended: its host confirmed, it was offline, or it kept reporting without confirming for REMOVAL_FALLBACK_MS. */
 export type RemovalEnd = 'confirmed' | 'offline' | 'timedOut'
 /** Older contributions may name engines that Swarm no longer starts. Their fresh
@@ -93,6 +101,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
    *  (liveness.ts). Absent from hosts before it, whose agents renew by running alone. */
   harnessProgress: z.record(z.string().max(160), z.number().int().nonnegative()).refine(v => Object.keys(v).length <= 1000).optional(),
+  /** Each running Swarm agent's token counts by model, as its session totals (costs/tokens.ts). An attempt's tokens are the
+   *  difference between its start and its end (routeDecisions.ts). Absent from hosts before it, whose attempts record none. */
+  harnessTokens: z.record(z.string().max(160), tokensByModelSchema).refine(v => Object.keys(v).length <= MAX_HARNESSES).optional(),
   /** Whether each running Swarm session's folder has uncommitted changes (git status), for those its host could read.
    *  Only a session reported clean is ever stopped for being idle (tidy.ts). Absent from hosts before it. */
   harnessUncommitted: z.record(z.string().max(160), z.boolean()).refine(v => Object.keys(v).length <= 1000).optional(),
@@ -117,6 +128,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
    *  the store keeps only this machine's own launched starts. Absent from hosts before it, whose starts get 3 minutes. */
   preparingStartIds: z.array(z.string().min(1).max(160)).max(100).optional(),
+  /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
+   *  before it, which are never given one. */
+  capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 
@@ -205,6 +219,10 @@ export function teamAccountSwarm(state?: Pick<SuperTabState, 'ownerId' | 'people
  *  runs every teammate's work as one macOS user, so it serves one Workspace's teammates at a time (swarm-workspaces design). */
 export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow = false, required = teamAccountRequired(), otherWorkspace = false): TeamWorkRefusal | null {
   const reading = pool.observation, name = pool.name
+  // A Mac's Harness Team account whose machine is no longer a Team machine was removed (`harness team remove` deletes it).
+  // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
+  // named it (local Team account run, 2026-10-28).
+  if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
   if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
@@ -278,6 +296,26 @@ export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, 
   const subject = team ?? pool
   return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
 }
+
+/** The projects with work on [machineId]: its agents' and its pending starts'. */
+export function projectsOnMachine(state: SuperTabState, machineId: string): Set<string> {
+  const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error)
+    .map(s => s.request.leadFor?.projectId ?? groupProject(state, conversation(state, s.request.conversationId)).id)
+  return new Set([...state.agents.filter(a => a.machineId === machineId).map(a => agentProjectId(state, a)), ...pending])
+}
+
+/** The project whose Product Manager runs, or is starting, on [machineId]; null when none does. In a Harness Team account it
+ *  serves only that project: every agent there is one macOS user, which reads the others' files, the Product Manager's
+ *  saved sessions with people's private chats among them (#895). */
+export function productManagerOn(state: SuperTabState, machineId: string): string | null {
+  const led = state.agents.find(a => a.machineId === machineId && ledProject(state, a.id))
+  if (led) return ledProject(state, led.id)!.id
+  // One removed whose host has not yet confirmed its data there is deleted (commands.ts removeAgent).
+  const closing = state.closingSessions?.find(c => c.machineId === machineId && c.heldFor)
+  if (closing) return closing.heldFor!
+  return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
+}
+
 
 /** Where a new agent for [project] runs when a start names [machineId]: the Mac's team account when the project is not
  *  its contributor's own and the Mac has one in this Swarm, else the machine named. */
@@ -388,7 +426,8 @@ export function machineOffline(pool: ContributedMachine, now: number): boolean {
 /** A removal its host cannot acknowledge (offline) or has not acknowledged in REMOVAL_FALLBACK_MS: the machine's records go, and the
  *  cleanup waits for its host on its next connection. */
 export function expireRemoval(state: SuperTabState, pool: ContributedMachine, now: number): RemovalEnd {
-  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId })
+  (state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: pool.removal!.id, machineOwnerId: pool.contributorId,
+    requestedAt: pool.removal!.requestedAt })
   state.machines = state.machines!.filter(m => m !== pool)
   return machineOffline(pool, now) ? 'offline' : 'timedOut'
 }
@@ -490,8 +529,13 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
-  // Before the request's own fields: a machine that takes none of this project's work says so first.
-  requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
+  if (held && held !== project.id) {
+    fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
+  }
+  // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
+  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

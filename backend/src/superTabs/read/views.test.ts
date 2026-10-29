@@ -14,7 +14,7 @@ function scene() {
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const peerGeneration = state.people.find(p => p.id === peer.userId)!.generation
-    state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peer.userId, generation: peerGeneration }] }
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { kind: 'buddy', audience: { people: [{ id: peer.userId, generation: peerGeneration }] } })
     const worker = state.agents.find(a => a.id === s.worker)!
     worker.downNamed = 'named'
     worker.limitedUntil = new Date(NOW - MINUTE).toISOString()
@@ -52,15 +52,15 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     expect(keys(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups)).not.toContain(s.secretGroup)
   })
 
-  it('keeps a private conversation from every reader outside its audience, the Swarm owner included', () => {
+  it('keeps a Buddy chat from every reader but its owner, the Lead and the Swarm owner included, and a closed Chat with PM from all', () => {
     const { s, parts, privateId } = scene()
-    const groups = (actor: Actor) => keys(readerView(parts, actor, NOW, { teamMachines: [] }).parts.groups)
+    const groups = (actor: Actor, from = parts) => keys(readerView(from, actor, NOW, { teamMachines: [] }).parts.groups)
     expect(groups(peer)).toContain(privateId)
-    expect(groups(agentActor(s.lead))).toContain(privateId)
-    expect(groups(owner)).not.toContain(privateId)
-    expect(groups(outsider)).not.toContain(privateId)
-    expect(groups(agentActor(s.worker))).not.toContain(privateId)
-    expect(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups.find(g => g.key === privateId)!.data.audience).toBeDefined()
+    for (const reader of [agentActor(s.lead), owner, outsider, agentActor(s.worker)]) expect(groups(reader)).not.toContain(privateId)
+    expect(readerView(parts, peer, NOW, { teamMachines: [] }).parts.groups.find(g => g.key === privateId)!.data).toMatchObject({ buddyOwnerId: peer.userId })
+    s.edit(state => { delete state.conversations.find(c => c.id === privateId)!.kind })
+    const closed = store.split(s.state, { tabId: 'tab', version: R, now: NOW })
+    for (const reader of [peer, agentActor(s.lead), owner]) expect(groups(reader, closed)).not.toContain(privateId)
   })
 
   it('never names a private conversation to the Swarm owner through an invitation', () => {
@@ -108,7 +108,8 @@ describe('reader view of the parts (design 4.1, 4.3)', () => {
     const { s, parts } = scene()
     expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).derived).toHaveProperty('otherProjectsWork', [])
     expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [] }).derived).not.toHaveProperty('mentionsWaiting')
-    expect(readerView(parts, peer, NOW, { teamMachines: [], mentionsWaiting: 2 }).derived).toMatchObject({ mentionsWaiting: 2 })
+    expect(readerView(parts, peer, NOW, { teamMachines: [], mentionsWaiting: 2, mentionsDigest: 'd' }).derived).toMatchObject({ mentionsWaiting: 2, mentionsDigest: 'd' })
+    expect(readerView(parts, agentActor(s.lead), NOW, { teamMachines: [], mentionsWaiting: 2, mentionsDigest: 'd' }).derived).not.toHaveProperty('mentionsDigest')
     expect(readerView(parts, peer, NOW, { teamMachines: [] }).derived).not.toHaveProperty('otherProjectsWork')
   })
 

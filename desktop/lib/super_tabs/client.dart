@@ -79,9 +79,9 @@ class SuperTabClient {
   int waitingDecisions(String id) =>
       _loaded[id]?.snapshot?.decisionsWaiting ?? 0;
 
-  /// The unread messages in this account's own PM chats in a Swarm open
-  /// here ([SuperTabController.pmUnread]); none for one not open.
-  int waitingPm(String id) => _loaded[id]?.pmUnread ?? 0;
+  /// The unread messages in this account's own Buddy chats in a Swarm open
+  /// here ([SuperTabController.buddyUnread]); none for one not open.
+  int waitingBuddy(String id) => _loaded[id]?.buddyUnread ?? 0;
 
   /// Open here, but not polling: not on screen while the reading pauses.
   bool _paused(String id) =>
@@ -233,14 +233,19 @@ class SuperTabClient {
   Object? discoveryError;
   final _controllers = <String, Future<SuperTabController>>{};
   final _loaded = <String, SuperTabController>{};
+
+  /// The last state of each Swarm closed here ([release]): a closed view
+  /// still protects its Product Managers, without reading anything more.
+  final _closedSnapshots = <String, SuperTabSnapshot>{};
   SuperTabController? peek(String id) => _loaded[id];
   Iterable<SuperTabController> get loadedControllers => _loaded.values;
 
   /// Native close actions name the machine's harness id, not the Swarm agent id.
   String? leadProtectionReasonForHarness(String machineId, String harnessId) {
-    for (final controller in loadedControllers) {
-      final snapshot = controller.snapshot;
-      if (snapshot == null) continue;
+    for (final snapshot in [
+      for (final controller in loadedControllers) ?controller.snapshot,
+      ..._closedSnapshots.values,
+    ]) {
       for (final agent in snapshot.agents) {
         if (agent.machineId != machineId || agent.harnessId != harnessId) {
           continue;
@@ -294,6 +299,7 @@ class SuperTabClient {
     }
     _controllers.clear();
     _loaded.clear();
+    _closedSnapshots.clear();
     if (account != null &&
         onTabs != null &&
         discoveryInterval > Duration.zero) {
@@ -458,6 +464,29 @@ class SuperTabClient {
         });
       });
 
+  /// A tab closed here: its controller stops polling, notifying and saving,
+  /// and the next [open] reads the Swarm afresh. What changed since the last
+  /// view write is kept now, as when a tab goes away.
+  void release(String id) {
+    if (_viewSaves.containsKey(id)) _saveView(id);
+    final future = _controllers.remove(id);
+    final loaded = _loaded.remove(id);
+    if (loaded?.snapshot case final snapshot?) _closedSnapshots[id] = snapshot;
+    loaded?.dispose();
+    if (loaded != null) unawaited(loaded.flush().catchError((Object _) {}));
+    if (future == null || loaded != null) return;
+    // Still opening: it is stopped once it lands. An open since has its own.
+    unawaited(
+      future
+          .then((c) async {
+            if (identical(_loaded[id], c)) _loaded.remove(id);
+            c.dispose();
+            await c.flush();
+          })
+          .catchError((Object _) {}),
+    );
+  }
+
   Future<SuperTabController> _open(String id) async {
     final account = _account;
     final generation = _generation;
@@ -491,7 +520,7 @@ class SuperTabClient {
       lastChangedAt: -1,
       mentionsWaiting: -1,
       decisionsWaiting: -1,
-      pmUnread: -1,
+      buddyUnread: -1,
     );
     var seenSelected = controller.selectedId;
     controller.addListener(() {
@@ -516,7 +545,7 @@ class SuperTabClient {
           // What needs the person moves the Dock's badge.
           decisionsWaiting: snapshot.decisionsWaiting,
           // A read mark or a PM chat's messages move the Swarm badge too.
-          pmUnread: controller.pmUnread,
+          buddyUnread: controller.buddyUnread,
         );
         if (change != seenChange) {
           seenChange = change;
@@ -533,6 +562,7 @@ class SuperTabClient {
       SuperTabDecisions.of(controller).addListener(changed);
     }
     _tagCounts.remove(id);
+    _closedSnapshots.remove(id);
     _loaded[id] = controller;
     void drawSaved(Map<String, dynamic>? view) {
       if (view != null && generation == _generation) {

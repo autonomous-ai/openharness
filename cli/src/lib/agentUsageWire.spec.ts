@@ -38,3 +38,15 @@ it('copies aggregates only and rejects malformed or oversized values', () => {
     { ...value, work: { ...value.work, pullRequests: [{ url: 'file:///secret', cwd: null, at }] } },
     { ...value, work: { ...value.work, pullRequests: [{ url: value.work.pullRequests[0].url, cwd: 'relative', at }] } }]) expect(validUsage(bad)).toBe(false)
 })
+
+it('carries counts by model only, copied field by field, and refuses anything else under models', () => {
+  const opus = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 }
+  const value = { totalTokens: 10, updatedAt: at, models: { 'claude-opus-5-5': { ...opus, prompt: 'secret' } as typeof opus } }
+  expect(validUsage({ totalTokens: 10, updatedAt: at, models: { 'claude-opus-5-5': opus } })).toBe(true)
+  expect(usageSnapshot({ totalTokens: 10, updatedAt: at, models: { 'claude-opus-5-5': opus } })?.models).toEqual({ 'claude-opus-5-5': opus })
+  expect(validUsage(value)).toBe(false)
+  for (const models of [[], { 'two words': opus }, { m: { ...opus, input: -1 } }, { m: { ...opus, output: 1.5 } }, { m: { input: 1 } },
+    Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`model-${i}`, opus]))]) {
+    expect(validUsage({ totalTokens: 10, updatedAt: at, models }), JSON.stringify(models)).toBe(false)
+  }
+})

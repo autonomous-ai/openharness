@@ -167,13 +167,18 @@ export class CapacityReservations implements ReservationBook {
     }
   }
 
-  /** What a reservation still holds: all of it until its agent launched, then until its window closes or the agent measures
-   *  as much itself. A launched agent the core no longer lists is timed from its reservation. */
-  private held(row: Reservation, measured: Map<string, number> | null, now: number): number {
-    if (!row.harness_id) return row.memory_bytes
+  /** Whether a reservation is still in its start window: until its agent launched, then START_WINDOW_MS. A launched agent
+   *  the core no longer lists is timed from its reservation. */
+  private starting(row: Reservation, now: number): boolean {
+    if (!row.harness_id) return true
     const started = this.core.agents.byAgent(row.harness_id)?.registeredAt
-    if (now - (finite(started) ? started : row.created_at) >= START_WINDOW_MS) return 0
-    return (measured?.get(row.harness_id) ?? 0) >= row.memory_bytes ? 0 : row.memory_bytes
+    return now - (finite(started) ? started : row.created_at) < START_WINDOW_MS
+  }
+
+  /** What a reservation still holds of memory: all of it in its start window, unless the agent already measures as much itself. */
+  private held(row: Reservation, measured: Map<string, number> | null, now: number): number {
+    if (!this.starting(row, now)) return 0
+    return row.harness_id && (measured?.get(row.harness_id) ?? 0) >= row.memory_bytes ? 0 : row.memory_bytes
   }
 
   async observe(creationId: unknown, closed?: AbortSignal): Promise<Json> {
@@ -235,7 +240,9 @@ export class CapacityReservations implements ReservationBook {
       const active = this.rows()
       if (active.length >= MAX_ACTIVE) return unavailable('Reconcile pending starts on this machine before starting more agents.')
       const now = this.now(), memoryHeld = active.reduce((sum, row) => sum + this.held(row, measured, now), 0)
-      const diskHeld = active.filter(row => row.volume === destination.volume).reduce((sum, row) => sum + row.disk_bytes, 0)
+      // Free disk is measured too, so it already counts a settled agent's worktree. On Diego's Mac (2026-10-28) 15 settled
+      // agents held 150 GiB against 140 GiB free and every start was refused; only starts still in their window hold disk.
+      const diskHeld = active.filter(row => row.volume === destination.volume && this.starting(row, now)).reduce((sum, row) => sum + row.disk_bytes, 0)
       if (memory > 0 && !finite(freeMemory)) return unavailable('The free memory on this machine could not be read.')
       if (memory > 0 && memory > freeMemory! - memoryHeld) return unavailable(memoryShort(freeMemory! - memoryHeld, memory)
         + (memoryHeld > 0 ? ` ${gibibytes(memoryHeld)} more is set aside for agents still starting.` : ''))

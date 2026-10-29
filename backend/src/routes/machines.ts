@@ -7,7 +7,8 @@ import { validateBody, validateParams, validateQuery } from '../middlewares/vali
 import { isMachineId } from '../utils/slug.js'
 import { sendSuccess, sendCreated, sendError } from '../utils/response.js'
 import { logger } from '../utils/logger.js'
-import { bearerToken } from '../lib/ssoAuth.js'
+import { bearerToken, SsoAuthError, type AuthUser } from '../lib/ssoAuth.js'
+import { ssoAccessTokenFor } from '../lib/ssoSession.js'
 import { isHarnessAccessToken } from '../lib/harnessTokenFormat.js'
 import { AppError } from '../errors/index.js'
 import { requestedWebOrigin, resolveWebOrigin } from '../lib/sso.js'
@@ -61,13 +62,22 @@ const billingCompleteBody = z.object({
   referenceCode: z.string().trim().min(1).max(128).optional(),
 })
 
-function requestAccessToken(authorization: string | undefined): string {
-  const token = bearerToken(authorization)
+async function requestAccessToken(req: { headers: { authorization?: string }; user?: AuthUser }): Promise<string> {
+  const token = bearerToken(req.headers.authorization)
   if (!token) throw new Error('Authenticated request is missing its SSO access token')
   // Billing is the Autonomous account's own business, and the caller's token is forwarded there
-  // (lib/autonomousBff.ts). A session Harness issued itself — a phone, or a computer signed in by
+  // (lib/autonomousBff.ts). A session an SSO sign-in backs forwards the one the backend keeps for it
+  // (lib/ssoSession.ts). Any other session Harness issued itself — a phone, or a computer signed in by
   // scanning its QR — means nothing to that service: say what to do instead of a 502 from upstream.
   if (isHarnessAccessToken(token)) {
+    let kept: string | null = null
+    try {
+      kept = req.user?.harnessSessionId ? await ssoAccessTokenFor(req.user.harnessSessionId, req.user.sub) : null
+    } catch (err) {
+      if (err instanceof SsoAuthError) throw new AppError(err.message, 503, err.code)
+      throw err
+    }
+    if (kept) return kept
     throw new AppError('Billing needs your Autonomous sign-in. Sign in with Google or Apple on this device (harness login --force).', 403, 'NEEDS_AUTONOMOUS_SIGN_IN')
   }
   return token
@@ -169,7 +179,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
           agent.machineId,
           userId,
           req.user!.email,
-          requestAccessToken(req.headers.authorization),
+          await requestAccessToken(req),
           requestWebOrigin(req),
           req.user!.autonomousEnv,
         )
@@ -188,7 +198,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
         req.params.machineId,
         req.user!.sub,
         req.user!.email,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         requestWebOrigin(req),
         req.user!.autonomousEnv,
       )
@@ -206,7 +216,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
         req.params.machineId,
         req.user!.sub,
         req.user!.email,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         requestWebOrigin(req),
         req.body.sessionId,
         req.body.referenceCode,
@@ -226,7 +236,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
       const billing = await machineBillingService.getBilling(
         req.params.machineId,
         req.user!.sub,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         req.user!.autonomousEnv,
       )
       return sendSuccess(reply, { billing })
@@ -243,7 +253,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
         req.user!.sub,
         req.body.planId,
         req.user!.email,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         requestWebOrigin(req),
         req.user!.autonomousEnv,
       )
@@ -260,7 +270,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
       const billing = await machineBillingService.complete(
         req.params.machineId,
         req.user!.sub,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         req.body.operationId,
         req.body.outcome,
         req.user!.autonomousEnv,
@@ -276,7 +286,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
       const billing = await machineBillingService.cancel(
         req.params.machineId,
         req.user!.sub,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         req.user!.autonomousEnv,
       )
       return sendSuccess(reply, { billing })
@@ -290,7 +300,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
       const billing = await machineBillingService.renew(
         req.params.machineId,
         req.user!.sub,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
         req.user!.autonomousEnv,
       )
       return sendSuccess(reply, { billing })
@@ -400,7 +410,7 @@ export async function machineRoutes(app: FastifyInstance): Promise<void> {
       await machineService.destroy(
         req.params.machineId,
         req.user!,
-        requestAccessToken(req.headers.authorization),
+        await requestAccessToken(req),
       )
       return sendSuccess(reply, { deleted: true })
     },

@@ -92,7 +92,7 @@ private extension SwarmTitlebar {
     menuWillOpen(historyMenu)
     try checkHistory(historyMenu.item(withTitle: "No Recent Visits")?.isEnabled == false, "Empty history replaces stale rows")
     closeHistoryForCheck()
-    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": []]])!)
+    setKeymap(HarnessNativeKeymap(["version": 1, "contexts": ["workspace": [], "terminal": [], "picker": [], "project": [], "swarmChat": []]])!)
     updateHistory(recent)
     menuWillOpen(historyMenu)
     try checkHistory(historyMenu.items.allSatisfy { $0.keyEquivalent.isEmpty }, "Deferred rebuilding preserves effective shortcut unbindings")

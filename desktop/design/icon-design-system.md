@@ -103,8 +103,10 @@ These are content or identities, not a second action-icon library:
   same `activityColor`, including the monochrome preference. Do not substitute
   SF Symbols or add status pills to a different Harness surface. A notification
   mark describes its unread receipt; a tab/pane mark describes current activity.
-- Ranks are numerals, never medals, cups, trophies or emoji. A trend is
-  `AppIcons.arrowUp` or `arrowDown` with its number; see
+- A rank is its numeral. The #1 crown and badges are content artwork beside
+  it, never a replacement for it; see
+  [Team and celebration](desktop-design-system.md#team-and-celebration). A
+  trend is `AppIcons.arrowUp` or `arrowDown` with its number; see
   [Numbers and rankings](desktop-design-system.md#numbers-and-rankings).
 - QR codes, companion artwork, explanatory diagrams, wallpaper, terminal
   output and user-selected status/Powerline artwork are content. Keep their

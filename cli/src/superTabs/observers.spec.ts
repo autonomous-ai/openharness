@@ -100,6 +100,33 @@ it('refuses every share of a session a roster marks confidential, an ordinary on
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
+it('lets the members a roster lists watch its Swarm\'s current Lead through that Swarm\'s shares while it is in force, and nobody else', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'super-observer-'))
+  let now = 1_000_000
+  const source = observerSource(dir, () => 'machine', () => now)
+  // Confidential, as every Lead is marked; `membersWatch` while it is that Swarm's current Lead (Ken, 2026-10-28).
+  const row = (membersWatch?: boolean) => ({ tabId: 'tab', agent: { machineId: 'machine', harnessId: 'pm', name: 'PM', configuration: {} },
+    observers: [{ email: 'peer@example.com' }], confidential: true, ...(membersWatch === undefined ? {} : { membersWatch }) })
+  const grant = (tab: string | null, recipientEmail = 'peer@example.com') => ({ tab, agentId: 'pm', recipientEmail }) as never
+  const member = grant('super:tab'), unlisted = grant('super:tab', 'gone@example.com'), otherSwarm = grant('super:other'), ordinary = grant(null)
+  try {
+    publishObservers(dir, 'machine', [row(true)], now + OBSERVER_VALID_MS, () => true); now += 201
+    expect(source.allows(member)).toBe(true)
+    for (const refused of [unlisted, otherSwarm, ordinary]) expect(source.allows(refused)).toBe(false)
+    // The host restarts: the member's view waits for its next roster rather than ending.
+    now += OBSERVER_VALID_MS + 1
+    expect(source.allows(member)).toBe(false)
+    expect(source.paused(member)).toBe(true)
+    expect(source.paused(ordinary)).toBe(false)
+    // No longer the Lead, or a backend from before the rule: closed for good.
+    for (const closed of [row(false), row()]) {
+      publishObservers(dir, 'machine', [closed], now + OBSERVER_VALID_MS, () => true); now += 201
+      expect(source.allows(member)).toBe(false)
+      expect(source.paused(member)).toBe(false)
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
 it('tells a member to retry, not that sharing ended, while the roster has lapsed, and refuses for good otherwise', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'super-observer-')), key = newIdentity()
   const grants = new HarnessGrantStore(join(dir, 'grants.json'))

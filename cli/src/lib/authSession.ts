@@ -1,5 +1,5 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, hostname } from 'os'
 import { join } from 'path'
 import { randomBytes } from 'node:crypto'
 
@@ -46,7 +46,9 @@ export const knownSsoClientId = (raw: unknown): SsoClientId | undefined =>
   Object.values(SSO_CLIENT_IDS).find((id) => id === raw)
 
 export class AuthSessionError extends Error {
-  constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE') {
+  /** `SIGN_IN_AGAIN`: a Harness session SSO has not confirmed for longer than its grace (backend lib/ssoSession.ts). The
+   *  person is asked to sign in again; the session is kept, unmarked, so SSO coming back renews it. */
+  constructor(message: string, readonly code: 'MISSING' | 'INVALID_REFRESH' | 'UNAVAILABLE' | 'SIGN_IN_AGAIN') {
     super(message)
     this.name = 'AuthSessionError'
   }
@@ -294,6 +296,19 @@ async function withLock<T>(action: () => Promise<T>): Promise<T> {
 type RefreshResult = { token: string; refreshToken?: string; expiresIn?: number }
 
 /**
+ * What this computer asks the backend for in place of SSO tokens, when it signs in and when it renews an SSO sign-in:
+ * a Harness session of its own (backend lib/ssoSession.ts), so an ordinary request never waits on the account
+ * service. A backend from before it answers with the SSO tokens as ever, and those are kept.
+ */
+export const harnessSessionRequest = (): { kind: 'computer'; label: string } => ({ kind: 'computer', label: hostname().slice(0, 80) })
+
+/** Whether renewing [session] asks to move it to a Harness session: an SSO sign-in's does. One that is a Harness
+ *  session already (`hnr_`, `htr_`) renews as one, and a QR or team sign-in is a session of its own kind. */
+export function asksForHarnessSession(session: AuthSession): boolean {
+  return session.kind !== 'team' && session.method !== 'qr' && !/^(hnr|htr)_/.test(session.refreshToken ?? '')
+}
+
+/**
  * The sentence an `UNAVAILABLE` refresh failure carries — and why it names `harness login` even
  * though it is classified as a service problem.
  *
@@ -332,6 +347,7 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
         refreshToken: current.refreshToken,
         autonomousEnv: current.autonomousEnv,
         ...(current.clientId ? { clientId: current.clientId } : {}),
+        ...(asksForHarnessSession(current) ? { harnessSession: harnessSessionRequest() } : {}),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -343,6 +359,10 @@ async function refreshRequest(baseUrl: string, current: AuthSession, timeoutMs =
   }
   if (response.status === 401 || body.error?.code === 'REFRESH_TOKEN_INVALID') {
     throw new AuthSessionError('SSO refresh token is invalid. Run `harness login`.', 'INVALID_REFRESH')
+  }
+  if (body.error?.code === 'SIGN_IN_AGAIN') {
+    throw new AuthSessionError('Sign in again: this computer\'s sign-in could not be confirmed with your Autonomous account '
+      + 'for 7 days. Run `harness login`.', 'SIGN_IN_AGAIN')
   }
   if (!response.ok || body.success === false || typeof body.data?.token !== 'string' || !body.data.token) {
     throw new AuthSessionError(
