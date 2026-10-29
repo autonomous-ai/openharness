@@ -6,7 +6,10 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 
 import 'identity.dart';
 import 'model.dart';
@@ -53,6 +56,9 @@ class SwarmShip {
       ?id is String ? id : null,
   ]);
 }
+
+/// The avatars beside a ship's credits; their label's cell is as tall.
+const _creditAvatar = 22.0;
 
 /// How recent a ship still is: an older one in the history is still.
 const swarmShipFresh = Duration(minutes: 2);
@@ -161,11 +167,16 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
     final accent = AppPalette.accentOnSurface;
     final card = Container(
       key: ValueKey('swarm-ship-$id'),
-      margin: const EdgeInsets.fromLTRB(6, 8, 6, 8),
-      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      margin: const EdgeInsets.all(AppSpace.s),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpace.l,
+        AppSpace.m,
+        AppSpace.l,
+        AppSpace.l,
+      ),
       decoration: BoxDecoration(
         color: accent.withValues(alpha: .10),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(AppCard.radius),
         border: Border.all(color: accent.withValues(alpha: .4)),
       ),
       child: Column(
@@ -175,7 +186,13 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const ExcludeSemantics(
-                child: Text('🎉', style: TextStyle(fontSize: 20, height: 1.2)),
+                child: Text(
+                  '🎉',
+                  style: TextStyle(
+                    fontSize: AppIconSize.besideText,
+                    height: 1.2,
+                  ),
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -193,14 +210,20 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
           if (credits.isNotEmpty) const SizedBox(height: 10),
           for (final (label, people) in credits)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 3),
+              padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
-                    width: 104,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 2),
+                  // As tall as an avatar and centred in it, so a label sits level
+                  // with the first name beside it at any text size.
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      minWidth: 104,
+                      maxWidth: 104,
+                      minHeight: _creditAvatar,
+                    ),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
                       child: Text(
                         label,
                         style: swarmChatText(
@@ -219,7 +242,11 @@ class _SwarmShipRowState extends State<SwarmShipRow> {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              SwarmAvatar(id: personId, name: name, size: 22),
+                              SwarmAvatar(
+                                id: personId,
+                                name: name,
+                                size: _creditAvatar,
+                              ),
                               const SizedBox(width: 6),
                               Text(name, style: swarmChatText(15)),
                             ],
@@ -270,7 +297,7 @@ class _PullRequestButton extends StatelessWidget {
       child: Material(
         color: AppPalette.windowBg,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppControl.radius),
           side: BorderSide(color: AppGlass.hair),
         ),
         clipBehavior: Clip.antiAlias,
@@ -282,7 +309,7 @@ class _PullRequestButton extends StatelessWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 44),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -374,15 +401,6 @@ class _Piece {
   final double x, drift, lift, spin, size;
   final Color color;
 
-  static const _colors = [
-    Color(0xffff6b6b),
-    Color(0xffffc145),
-    Color(0xff4ecdc4),
-    Color(0xff5b8def),
-    Color(0xffb084f5),
-    Color(0xff6ad08a),
-  ];
-
   static List<_Piece> burst(int seed) {
     final random = Random(seed);
     return [
@@ -393,7 +411,7 @@ class _Piece {
           .4 + random.nextDouble() * .6,
           (random.nextDouble() - .5) * 12,
           4 + random.nextDouble() * 4,
-          _colors[i % _colors.length],
+          SwarmConfetti.colors[i % SwarmConfetti.colors.length],
         ),
     ];
   }
