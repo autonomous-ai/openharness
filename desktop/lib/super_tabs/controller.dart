@@ -1191,15 +1191,53 @@ class SuperTabController extends ChangeNotifier {
 
   /// The signed-in person's private chat with [projectId]'s Product Manager:
   /// that project's private conversation whose audience is them alone.
-  SuperTabConversation? pmChat(String projectId) => snapshot?.conversations
-      .where(
-        (g) =>
-            !g.isBuddyChat &&
-            g.projectId == projectId &&
-            g.audience?.length == 1 &&
-            g.audience!.single == accountId,
-      )
-      .firstOrNull;
+  SuperTabConversation? pmChat(String projectId) =>
+      _indexed()?.pmChats[projectId];
+
+  /// [projectId]'s conversations, open and closed, in the snapshot's order.
+  List<SuperTabConversation> projectConversations(String projectId) =>
+      _indexed()?.byProject[projectId] ?? const [];
+
+  /// [snapshot]'s conversations by project, and each project's [pmChat],
+  /// worked out once per snapshot: the sidebar asks for them on every
+  /// rebuild, and a snapshot is replaced, never changed, when the Swarm moves.
+  ({
+    SuperTabSnapshot of,
+    Map<String, List<SuperTabConversation>> byProject,
+    Map<String, SuperTabConversation> pmChats,
+  })?
+  _index;
+
+  ({
+    SuperTabSnapshot of,
+    Map<String, List<SuperTabConversation>> byProject,
+    Map<String, SuperTabConversation> pmChats,
+  })?
+  _indexed() {
+    final snapshot = this.snapshot;
+    if (snapshot == null) return null;
+    if (_index case final index? when identical(index.of, snapshot)) {
+      return index;
+    }
+    final byProject = <String, List<SuperTabConversation>>{};
+    final pmChats = <String, SuperTabConversation>{};
+    for (final g in snapshot.conversations) {
+      byProject.putIfAbsent(g.projectId, () => []).add(g);
+      if (!g.isBuddyChat &&
+          g.audience?.length == 1 &&
+          g.audience!.single == accountId) {
+        pmChats.putIfAbsent(g.projectId, () => g);
+      }
+    }
+    return _index = (
+      of: snapshot,
+      byProject: {
+        for (final MapEntry(:key, :value) in byProject.entries)
+          key: List.unmodifiable(value),
+      },
+      pmChats: pmChats,
+    );
+  }
 
   /// Whether the Swarm has Buddies on: each person's Buddy chats take Chat
   /// with PM's place (spec: Buddies, 10-28).
