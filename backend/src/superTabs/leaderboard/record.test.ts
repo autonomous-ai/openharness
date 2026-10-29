@@ -599,6 +599,41 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(g.group(both).ledger!.runs![0]).toMatchObject({ firstReview: true })
   })
 
+  // Evidence routing (Ken, 2026-10-29): a rework round is a re-review after a failed review in the same attempt.
+  it('counts each re-review after a failed verdict as a rework round of the attempt, a review of several checks once', () => {
+    const two = [{ description: 'Code review', independent: true }, { description: 'Security review', independent: true }, { description: 'Builder', independent: false }]
+    const f = fixture()
+    const id = f.create(owner, { checks: two })
+    const { assignmentId } = f.assign(id)
+    const [code, security, own] = f.group(id).checks
+    const run = () => f.group(id).ledger!.runs![0]!
+    const check = (checkId: string, passed: boolean) => f.run({ type: 'work.check', conversationId: id, assignmentId, checkId, passed, evidence: 'rev abc' })
+    check(code!.id, true)
+    check(own!.id, false)
+    check(own!.id, true)
+    expect(run().reworkRounds).toBeUndefined()
+    // Both reviews fail, then both pass: one round, not two.
+    check(code!.id, false)
+    check(security!.id, false)
+    expect(run().reworkRounds).toBe(0)
+    check(code!.id, true)
+    check(security!.id, true)
+    expect(run().reworkRounds).toBe(1)
+    // A verdict after a pass is not a re-review of a failure.
+    check(code!.id, true)
+    expect(run().reworkRounds).toBe(1)
+    check(security!.id, false)
+    check(security!.id, false)
+    check(security!.id, true)
+    expect(run().reworkRounds).toBe(3)
+    // A new attempt starts from none.
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    const second = f.assign(id)
+    f.run({ type: 'work.check', conversationId: id, assignmentId: second.assignmentId, checkId: code!.id, passed: true, evidence: 'rev def' })
+    expect(f.group(id).ledger!.runs![1]).toMatchObject({ assignmentId: second.assignmentId })
+    expect(f.group(id).ledger!.runs![1]!.reworkRounds).toBeUndefined()
+  })
+
   it('records each finished review verdict an agent gives, with the model it ran on, for the reviewer models\' points', () => {
     const f = fixture()
     f.at(7_000)

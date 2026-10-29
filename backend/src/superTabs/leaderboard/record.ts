@@ -22,7 +22,12 @@ export interface Run extends RanOn { assignmentId: string; at: number
   stepUp?: { attempt: number; reason: string }
   /** Its agent was launched on the engine's own model, which Codex reports by a slug the policy may not name: it is rated by
    *  the engine's `default` row (rules.ts policyQuality; review of ee4ee6c9a). */
-  engineDefault?: true }
+  engineDefault?: true
+  /** Re-reviews after a failed review during this attempt (evidence routing, Ken 2026-10-29): the most on any one independent
+   *  check, so a review that judges two checks counts once. Absent until a review fails; 0 while a failure waits for its
+   *  re-review. `reworks`: each check's last verdict and its re-reviews after a failure, by check id. */
+  reworkRounds?: number
+  reworks?: Record<string, { last: boolean; rounds: number }> }
 /** What an agent ran on: its engine, the model (a grid model's own name, `grid` set), and its effort when it names one;
  *  absent from attempts recorded before efforts were (Lead, 2026-10-29: never guessed afterwards). */
 export interface RanOn { engine: string; model: string | null; effort?: string; grid?: true }
@@ -102,7 +107,7 @@ function shipOn(group: Conversation, run?: Run): void {
 function shipAttempt(ledger: GroupLedger, run?: Run): void {
   const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1) ?? ledger.runs?.[0]
   if (!shipping) return
-  const { firstVerdicts: _verdicts, firstReview: _review, ...shippedBy } = shipping
+  const { firstVerdicts: _verdicts, firstReview: _review, reworkRounds: _rounds, reworks: _reworks, ...shippedBy } = shipping
   ledger.shippedBy = shippedBy
 }
 
@@ -263,7 +268,17 @@ export function recordReview(group: Conversation, check: Check, passed: boolean)
   if (!check.independent || !run) return
   const verdicts = run.firstVerdicts ??= {}
   verdicts[check.id] ??= passed
+  recordRework(run, check.id, passed)
   const firsts = group.checks.filter(c => c.independent).map(c => verdicts[c.id])
   if (firsts.includes(false)) run.firstReview = false
   else if (firsts.every(v => v === true)) run.firstReview = true
+}
+
+/** A verdict on a check whose last verdict in this attempt failed is a rework round. */
+function recordRework(run: Run, checkId: string, passed: boolean): void {
+  const trail = run.reworks?.[checkId]
+  if (!trail && passed) return
+  const reworks = run.reworks ??= {}
+  reworks[checkId] = { last: passed, rounds: (trail?.rounds ?? 0) + (trail && !trail.last ? 1 : 0) }
+  run.reworkRounds = Math.max(...Object.values(reworks).map(r => r.rounds))
 }
