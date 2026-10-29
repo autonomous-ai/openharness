@@ -2587,14 +2587,14 @@ class _SuperTabViewState extends State<SuperTabView>
                   ],
                 ),
         ),
-        if (c.operationError != null && !errorInRow)
+        if (c.composerError(c.selectedId) != null && !errorInRow)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    c.operationError!,
+                    c.composerError(c.selectedId)!,
                     style: DesktopChrome.control(),
                   ),
                 ),
