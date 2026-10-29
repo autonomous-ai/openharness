@@ -236,6 +236,17 @@ void main() {
     },
   );
 
+  test("a group's last change is its part's, active or dormant; none for a "
+      'group not held', () {
+    final parts = SuperTabParts.firstLoad(recorded('first_load'));
+    expect(parts.groupChangedAt('aeef'), 1793010101002);
+    expect(parts.groupChangedAt('lead5701'), 1793000000000);
+    expect(parts.groupChangedAt('9c1d'), isNull);
+
+    parts.addDormant(recorded('dormant_groups')['groups'] as List);
+    expect(parts.groupChangedAt('9c1d'), 1793010105000);
+  });
+
   test('a dormant list cannot replace a group held at a newer version', () {
     final parts = SuperTabParts.firstLoad(recorded('first_load'));
     final stale = {

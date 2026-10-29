@@ -115,6 +115,8 @@ describe.skipIf(!hasClaude).each([
     gitGrep: bash('git grep -n first'),
     ghIssueView: bash('gh issue view 7 --comments'),
     post: bash("harness super-tab --tab t post chat 'hello; nothing > here' op-1"),
+    // Reading its chat once: its owner's next message reaches it by itself (the skill's "Where you talk").
+    messages: bash('harness super-tab --tab t messages chat'),
     read: { name: 'Read', input: { file_path: '' } } as Call,
     // A Read under docs/, which would load that folder's CLAUDE.md as memory.
     readDocs: { name: 'Read', input: { file_path: '' } } as Call,
@@ -134,6 +136,12 @@ describe.skipIf(!hasClaude).each([
     curlPost: bash(''),
     joined: bash('git log && git push origin HEAD:main'),
     harnessNew: bash('harness new codex'),
+    // The waits Scholes's Buddy started for its chat, which stopped it at "Do you want to proceed?" (10-29): a Monitor
+    // polling it, the same loop in the shell, and a read left running in the background.
+    monitorLoop: { name: 'Monitor', input: { command: 'while true; do harness super-tab --tab t messages chat; sleep 30; done',
+      description: 'new messages in my chat', persistent: true } } as Call,
+    shellLoop: bash('while true; do harness super-tab --tab t messages chat; sleep 30; done'),
+    backgroundRead: { name: 'Bash', input: { command: 'harness super-tab --tab t messages chat', description: 'wait', run_in_background: true } } as Call,
     webFetch: { name: 'WebFetch', input: { url: '', prompt: 'read it' } } as Call,
     // Links out of the folder that arrive after launch, as a pull could bring them (review 3 of #2092).
     lateLink: bash('cat late-link'),
@@ -282,7 +290,7 @@ describe.skipIf(!hasClaude).each([
     else expect(screens.filter((screen) => /Do you want to proceed\?/.test(screen))).toEqual([])
   })
 
-  it.skipIf(skip)('runs git log, git grep, gh issue view, its Super Tab post and Read', () => {
+  it.skipIf(skip)('runs git log, git grep, gh issue view, its Super Tab post and read, and Read', () => {
     expect(api.results.get(api.id(allowed.gitLog))).toEqual({ is_error: false, content: expect.stringContaining('first commit') })
     expect(api.results.get(api.id(allowed.gitGrep))).toEqual({ is_error: false, content: expect.stringContaining('notes.txt:1:first') })
     expect(api.results.get(api.id(allowed.ghIssueView))).toEqual({ is_error: false, content: expect.stringContaining('gh-ran') })
@@ -290,7 +298,9 @@ describe.skipIf(!hasClaude).each([
     expect(api.results.get(api.id(allowed.read))?.content).toContain('first')
     // Interactive Claude Code also runs gh itself as it starts (its own issue list): not a tool call, so not the guard's.
     expect(readFileSync(join(ran, 'gh'), 'utf8').split('\n')).toContain('issue view 7 --comments')
-    expect(readFileSync(join(ran, 'harness'), 'utf8')).toBe('super-tab --tab t post chat hello; nothing > here op-1\n')
+    expect(api.results.get(api.id(allowed.messages))).toEqual({ is_error: false, content: expect.stringContaining('harness-ran') })
+    // Its post and its read once each: none of the waits ran it.
+    expect(readFileSync(join(ran, 'harness'), 'utf8')).toBe('super-tab --tab t post chat hello; nothing > here op-1\nsuper-tab --tab t messages chat\n')
   })
 
   it.skipIf(skip).each(Object.keys(refused))('refuses %s, and it never ran', (name) => {
