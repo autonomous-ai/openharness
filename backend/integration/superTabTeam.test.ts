@@ -119,8 +119,9 @@ describe('a team session hosting its own machine', () => {
     // The reading is stamped with how the machine is signed in, from the session and never from the request.
     const pool = () => store.read(owner, f.tab).then(r => r.state.machines!.find(m => m.machineId === 'team-mac')!)
     expect((await pool()).observation).toMatchObject({ sessionKind: 'team' })
-    await store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))
-    expect((await pool()).observation).toMatchObject({ sessionKind: 'computer' })
+    // The person's own sign-in may not report for it (security review 2 of #2089): only its team session hosts it.
+    await expect(store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    expect((await pool()).observation).toMatchObject({ sessionKind: 'team' })
   })
 
   it('settles the starts queued for its own machine, as the pool host', async () => {
@@ -332,9 +333,8 @@ describe('a teammate\'s work and the machines that take it', () => {
     expect((await pool(f.tab, 'team-mac', person)).observation!.privacy).toMatchObject({ item: 'gitconfig', detail: FAILED.detail })
     expect((await pool(f.tab, 'team-mac')).observation!.privacy).toEqual({ mode: 'account', passed: false, item: 'gitconfig', checkedAt: FAILED.checkedAt, seenAt: expect.any(Number) })
     expect((await pool(f.tab, 'team-mac')).teamWork).toMatchObject({ allowed: false, code: 'PRIVACY_CHECK_FAILED' })
-    // A reading of the team machine from the person's own sign-in drops the check; its account row still says team.
-    await store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))
-    expect((await pool(f.tab, 'team-mac')).teamWork).toMatchObject({ allowed: false, code: 'PRIVACY_UNCHECKED' })
+    // The person's own sign-in may not report for the team machine at all (security review 2 of #2089).
+    await expect(store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY' })
   })
 
   it('refuses the owner\'s project on the person\'s personal Mac and admits it on their Team machine; the person\'s own work is unchanged', async () => {
@@ -352,7 +352,9 @@ describe('a teammate\'s work and the machines that take it', () => {
     await store.observeMachine(team, f.tab, 'team-mac', reading(f.generation, FAILED))
     await expect(start(f.tab, f.teamGroup, 'team-mac')).rejects.toMatchObject({ code: 'PRIVACY_CHECK_FAILED',
       message: 'The Harness Team account on MacBook Pro · Team is not private (gitconfig: it could read its owner\'s ~/.gitconfig), so it runs only its owner\'s projects.' })
-    await store.observeMachine(person, f.tab, 'team-mac', reading(f.generation))
+    // A reading with no check at all (the person's own sign-in may no longer report for it, security review 2 of #2089).
+    const { privacy: _privacy, ...unchecked } = reading(f.generation) as Record<string, unknown>
+    await store.observeMachine(team, f.tab, 'team-mac', unchecked as Parameters<SuperTabStore['observeMachine']>[3])
     await expect(start(f.tab, f.teamGroup, 'team-mac')).rejects.toMatchObject({ code: 'PRIVACY_UNCHECKED' })
     await store.observeMachine(team, f.tab, 'team-mac', reading(f.generation))
     // Twenty minutes on, the team daemon still sends the same check: it stopped running.
@@ -687,5 +689,138 @@ describe('one machine: a Mac and its Harness Team account', () => {
     await db.machine.update({ where: { machineId: 'retired-pc' }, data: { deletedAt: new Date() } })
     await run(tab, { type: 'tab.rename', name: 'Next change' })
     expect(await pending()).toEqual({ cleanups: ['kept-pc'], indexed: ['kept-pc'] })
+  })
+})
+
+// A project's Product Manager on another person's Team machine (leadStart.ts, Dee 10-29): placed by the store when a
+// machine reports, launched from a list older hosts do not read, and the project's Lead once it runs.
+describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
+  const capable = (generation: string) => ({ ...reading(generation), capabilities: ['leadStart'] }) as Parameters<SuperTabStore['observeMachine']>[3]
+
+  it('waits for a machine that can run it, starts on the Team machine once it reports, and leads the project', async () => {
+    const f = await fixture()
+    const created = (await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: 'Build it.' })).result
+    const projectId = String(created.projectId), home = String(created.conversationId)
+    // The team daemon has not said it starts Product Managers yet: nothing is free, so it waits.
+    const asked = await run(f.tab, { type: 'lead.start', projectId, machineId: null, engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
+    expect(asked.result).toMatchObject({ waiting: true })
+    expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.leadStarts).toBeUndefined()
+    // Contributed for every project, as a Mac added to a Swarm with projects is; the fixture's serves only the first. Its
+    // Builder of that first project goes, so the account can serve this project alone.
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    const row = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!
+    expect(row.leadStarts).toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'team-mac', cwd: `/team/${projectId}`,
+      leadFor: expect.objectContaining({ projectId, personId: owner.sub }) }) })])
+    expect(row.starts.some(s => s.request.leadFor)).toBe(false)
+    const startId = row.leadStarts![0]!.id
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const agentId = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `team-pm-${randomUUID()}`, configuration: config })).result.agentId)
+    const read = await store.read(owner, f.tab)
+    expect(read.state.conversations.find(c => c.id === home)).toMatchObject({ leadId: agentId })
+    expect(read.state.projects!.find(p => p.id === projectId)!.lead).toMatchObject({ status: 'started', machineId: 'team-mac' })
+    expect((await store.messages(owner, f.tab, home, {})).messages.map(m => m.text))
+      .toEqual(expect.arrayContaining(['Waiting for a machine to start the Product Manager.', 'Product Manager started on MacBook Pro · Team.']))
+  })
+
+  // The isolated confidential run (docs/performance/2026-10-27-pm-confidential-isolated-run.test.mts), its Team machine case:
+  // a Product Manager in another person's Team account, every way of watching or driving it through the Swarm.
+  it('in another person\'s Team account: its project\'s owner only watches it, and the Mac\'s owner neither watches nor drives it', async () => {
+    const f = await fixture()
+    const created = (await run(f.tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result
+    const projectId = String(created.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    // The fixture's own Builder of the owner's first project runs there: it goes first, so the account serves one project.
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const placed = await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
+    const startId = String(placed.result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const pm = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `team-pm-${randomUUID()}`, configuration: config })).result.agentId)
+    const terminal = (user: AuthUser, command: Command) => run(f.tab, command, user).then(() => 'ok', (error: { code?: string }) => error.code)
+    expect(await terminal(owner, { type: 'agent.screen', agentId: pm, scrollback: 50 })).toBe('ok')
+    expect(await terminal(owner, { type: 'agent.input', agentId: pm, text: 'ls ~' })).toBe('TERMINAL_PRIVATE')
+    expect(await terminal(person, { type: 'agent.screen', agentId: pm, scrollback: 50 })).toBe('TERMINAL_PRIVATE')
+    expect(await terminal(person, { type: 'agent.input', agentId: pm, text: 'ls ~' })).toBe('TERMINAL_PRIVATE')
+    // Its host's roster: confidential, watched by its project's owner alone, never by the Mac's owner.
+    const row = (await rosterRows(store, team, 'team-mac')).find(r => r.tabId === f.tab && r.agent.id === pm)!
+    expect(row).toMatchObject({ confidential: true })
+    expect(row.observers.map((o: { email: string }) => o.email)).toEqual([owner.email])
+    // Security review 2 of #2089: the Mac owner's own sign-in, ordinary tools, cannot act as the Team machine's host or as
+    // its Product Manager: no reading the chats it reads, no claiming its deliveries, no posting as it.
+    // People talk to the PM in its project's conversation (Chat with PM is closed on main): what it reads there, it reads.
+    const chat = String(created.conversationId)
+    await run(f.tab, { type: 'message.send', conversationId: chat, text: 'For the PM: the launch slips a week.', replyTo: null, recipientIds: [] })
+    await expect(store.messages(person, f.tab, chat, {}, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.deliveries(person, f.tab, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.execute(person, f.tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: chat, text: 'as the PM',
+      replyTo: null, recipientIds: [] } }, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.observeMachine(person, f.tab, 'team-mac', capable(generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    // Its own team session still is its host.
+    await expect(store.deliveries(team, f.tab, pm)).resolves.toBeInstanceOf(Array)
+    // An ordinary sign-in connecting as the Team computer resets its account row's mark (lib/adapterWs.ts): the Swarm's own
+    // record that it is a Team account still refuses the owner (security re-check 2 of #2089).
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'computer' } })
+    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'team' } }) })
+    await expect(store.messages(person, f.tab, chat, {}, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.deliveries(person, f.tab, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(store.observeMachine(person, f.tab, 'team-mac', capable(generation))).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await expect(rosterRows(store, person, 'team-mac')).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'team' } })
+    // And no other project's work starts there while it runs.
+    await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
+      cwd: '/team/lead', worktree: true, requirements } })).rejects.toMatchObject({ code: 'TEAM_ACCOUNT_HELD' })
+  })
+
+  // Review of #2142: the hold outlives its removal through the store's saves and loads, and only its host's confirmed close,
+  // sent once its session data is deleted, releases it (commands.ts agent.sessionClosed).
+  it('stays held for its project after its removal until its host confirms the close, across saves and loads', async () => {
+    const f = await fixture()
+    const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const startId = String((await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })).result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const harnessId = `team-pm-${randomUUID()}`
+    const pm = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId, configuration: config })).result.agentId)
+    await hostRun(f.tab, { type: 'agent.startSettled', startId, warning: null })
+    // A Product Manager leaves with its project.
+    await run(f.tab, { type: 'project.delete', projectId })
+    const start = () => run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
+      cwd: '/team/lead', worktree: true, requirements } }).then(() => 'started', (error: { code?: string }) => error.code)
+    // Each command loads the Swarm from its stored parts: the hold is there each time.
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    // No one else confirms it: not the Swarm's owner, nor anyone for another session.
+    await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId: 'another' }, team)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    // Nor the Mac's owner from an ordinary sign-in, which shares the Team session's person but is not its host, with no
+    // purge run (both security reviews of 0a181c00c), even once that sign-in resets the account row's Team mark.
+    const ordinary = () => run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, person).then(() => 'closed', (error: { code?: string }) => error.code)
+    expect({ forged: await ordinary(), after: await start() }).toEqual({ forged: 'TEAM_HOST_ONLY', after: 'TEAM_ACCOUNT_HELD' })
+    const row = (await db.machine.findFirst({ where: { machineId: 'team-mac' } }))!
+    const restore = () => db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: row.sessionKind, hostMachineId: row.hostMachineId } })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'computer', hostMachineId: null } })
+    onTestFinished(async () => { await restore() })
+    expect({ forged: await ordinary(), after: await start() }).toEqual({ forged: 'TEAM_HOST_ONLY', after: 'TEAM_ACCOUNT_HELD' })
+    await restore()
+    await run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, team)
+    expect(await start()).not.toBe('TEAM_ACCOUNT_HELD')
+  })
+
+  it('is refused on the teammate\'s personal Mac even while the Swarm does not yet require Team accounts', async () => {
+    const f = await fixture()
+    const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: '' })).result.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, person)
+    const generation = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(person, f.tab, 'personal-mac', capable(generation))
+    await expect(run(f.tab, { type: 'lead.start', projectId, machineId: 'personal-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' }))
+      .rejects.toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED', status: 403 })
   })
 })

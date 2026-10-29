@@ -84,6 +84,8 @@ import '../phone/phone_name_store.dart';
 import '../viewer/device_log.dart';
 import '../viewer/device_history.dart';
 import '../viewer/device_log_sync.dart';
+import '../swarm/swarm_notices.dart';
+import '../swarm/swarm_request.dart';
 
 enum AppStatus { bootstrapping, unauthenticated, authenticated }
 
@@ -2606,6 +2608,8 @@ class AppNotifier extends ChangeNotifier {
     if (nextStatus == ConnectionStatus.connected) {
       // The first computer to answer ends the launch.
       launchMeasurement?.ready();
+      // Back with a new sign-in, maybe: a Swarm read it refused may be asked of it again.
+      _swarmRefused.remove(machineId);
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
       // Let in: a later refusal is a new story ([_redialOnceVouched], [_settleTrust]).
@@ -6160,8 +6164,8 @@ class AppNotifier extends ChangeNotifier {
       osStatus[machineId]?['harnessOs'] == true;
 
   /// What a Harness OS computer's daemon does for a phone beyond its update and Wi-Fi, as its status
-  /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`, `github`, `check_update`. An older
-  /// one says none.
+  /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`, `github`, `check_update`, and
+  /// `computer_use` on one that carries them. An older one says none.
   bool osFeature(String machineId, String feature) {
     final features = osStatus[machineId]?['features'];
     return features is List && features.contains(feature);
@@ -6296,6 +6300,283 @@ class AppNotifier extends ChangeNotifier {
     osStatus[machineId] = status;
     _rememberHarnessOs(machineId, status);
     notifyListeners();
+  }
+
+  /// The machine the Swarm was last asked through, kept while it stays up so the reads of one
+  /// screen do not hop between computers.
+  String? _swarmMachineId;
+
+  /// Machines that refused a Swarm read another machine then answered: passed over until they
+  /// reconnect ([_onConnectionStatus]).
+  ///
+  /// ⚠️ Kept up, a refusing machine was asked for every read. On the owner's iPhone (2026-10-27)
+  /// the phone moved to a Team sign-in computer while the owner's Mac was briefly offline, then
+  /// read through it from 14:26 to 14:37 while the server refused every read, the Mac connected
+  /// all along — until the Team computer itself was marked offline.
+  final _swarmRefused = <String>{};
+
+  /// How long a Swarm call waits for a computer on its way back — a socket redialling — before it
+  /// says there is none.
+  @visibleForTesting
+  Duration swarmReconnectWait = const Duration(seconds: 8);
+
+  /// The machine the phone asks the Swarm through: one of the account's own whose socket is up —
+  /// the one asked last while it stays so, else the first by id, as the web build picks
+  /// (`desktop/lib/state/app_state.dart` `sharedTabsTarget`) — never one that refused. Null with
+  /// none up, or none but those in [except].
+  MachineState? _swarmMachine({Set<MachineState> except = const {}}) {
+    bool usable(MachineState? machine) =>
+        machine != null &&
+        !except.contains(machine) &&
+        machine.connectionStatus == ConnectionStatus.connected &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        !_swarmRefused.contains(machine.machine.machineId);
+    final kept = machineStates[_swarmMachineId];
+    if (usable(kept)) return kept;
+    MachineState? best;
+    for (final machine in machineStates.values) {
+      if (!usable(machine)) continue;
+      if (best == null ||
+          machine.machine.machineId.compareTo(best.machine.machineId) < 0) {
+        best = machine;
+      }
+    }
+    // Looking past [except] chooses nothing yet: the read through it decides.
+    if (except.isEmpty) _swarmMachineId = best?.machine.machineId;
+    return best;
+  }
+
+  /// One Swarm backend call ([method] on [path], `/api/super-tabs…`), forwarded by one of the
+  /// account's own machines with its session (`super_tabs`, `action: backend`,
+  /// cli/src/superTabs/service.ts). The phone holds no Swarm credential: the machine checks that
+  /// this connection is its owner's, and the backend what that account may read. Answers the
+  /// backend's value; a refusal — the backend's, the machine's, or none to ask — is a
+  /// [SuperTabFailure], and an answer that lands after the account changed is dropped.
+  ///
+  /// A refusal is asked again through each other machine that is up, one after another, up to
+  /// [_swarmAsksPerCall] in all. One that answers shows the refusals before it were those
+  /// machines' own — a Team sign-in the server will not read the person's Swarm for, say — and
+  /// they are passed over until they reconnect. Refusals alone pass over none: on #1802's review
+  /// a Team computer's refusal of its own once passed over the Mac that had said the person left
+  /// the Swarm. A command asked twice is the same command, under its operation id.
+  ///
+  /// With none answering, a refusal saying the person lost the Swarm stands over every other,
+  /// as everywhere: what was read of it must go. Otherwise, with no other machine up to ask, one
+  /// on its way back is waited for as below. With none, refusals from every machine up while
+  /// another of the account's is away tell nothing yet: no computer, so the list is read again
+  /// and Swarm soon retries ([SwarmInbox]). On the owner's iPhone (2026-10-27, 15:06) Swarm
+  /// showed a Team sign-in's refusal instead, and stayed on it until its next 15-second read,
+  /// 14 seconds after the Mac was back. With no other machine of the account, the last refusal
+  /// is the read's own.
+  ///
+  /// Nor is one read lost on the way — a timeout, a socket dropped — the end of it: it is asked
+  /// again through another computer that is up. With none up but one redialling, the call waits
+  /// [swarmReconnectWait] for it: Swarm said "Connect one of your computers" for 10 to 25 seconds
+  /// at a time on the owner's iPhone (2026-10-27) while the computer stayed connected.
+  Future<Object?> swarmRequest(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    var machine = _swarmMachine() ?? await _swarmMachineBack();
+    if (machine == null) throw _swarmNoComputer();
+    final asked = <MachineState>{}, refused = <MachineState>[];
+    SuperTabFailure? lost;
+    late Object failure;
+    late StackTrace trace;
+    while (machine != null) {
+      asked.add(machine);
+      try {
+        final value = await _swarmRequestVia(machine, method, path, body);
+        _swarmRefused.addAll([for (final m in refused) m.machine.machineId]);
+        _swarmMachineId = machine.machine.machineId;
+        return value;
+      } on SuperTabFailure catch (refusal, stack) {
+        if (refusal.code == 'ACCOUNT_CHANGED') rethrow;
+        (failure, trace) = (refusal, stack);
+        refused.add(machine);
+        if (const {'FORBIDDEN', 'NOT_FOUND'}.contains(refusal.code)) {
+          lost ??= refusal;
+        }
+      } catch (error, stack) {
+        (failure, trace) = (error, stack);
+      }
+      if (asked.length == _swarmAsksPerCall) break;
+      machine =
+          _swarmMachine(except: asked) ??
+          (failure is SuperTabFailure
+              ? await _swarmMachineBack(except: asked)
+              : null);
+    }
+    if (lost != null) throw lost;
+    if (machine == null &&
+        failure is SuperTabFailure &&
+        _swarmAnyOther(asked)) {
+      throw _swarmNoComputer();
+    }
+    Error.throwWithStackTrace(failure, trace);
+  }
+
+  /// Sends one Swarm chat file to the backend ([SwarmUpload]): straight from this phone with its own
+  /// sign-in ([ApiClient.uploadSwarmAttachment]), not through a machine as [swarmRequest] goes — the
+  /// backend takes a chat file only from the client, and a machine forwards only JSON. An answer
+  /// that lands after the account changed is dropped.
+  Future<Map<String, dynamic>> swarmUpload({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required CancelToken cancel,
+    required void Function(double sent) onProgress,
+  }) async {
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    try {
+      final answer = await api.uploadSwarmAttachment(
+        tabId: tabId,
+        conversationId: conversationId,
+        name: name,
+        mime: mime,
+        bytes: bytes,
+        cancel: cancel,
+        onProgress: onProgress,
+      );
+      stillThisAccount();
+      return answer;
+    } catch (_) {
+      stillThisAccount();
+      rethrow;
+    }
+  }
+
+  /// How many machines one Swarm call asks at most, one after another.
+  static const _swarmAsksPerCall = 5;
+
+  /// No computer to ask the Swarm through, with the list read again.
+  SuperTabFailure _swarmNoComputer() {
+    _swarmListAgain();
+    return const SuperTabFailure(
+      'MACHINE_UNAVAILABLE',
+      'Connect one of your computers to open Swarm.',
+    );
+  }
+
+  /// Another of the account's machines than those [asked] could be asked once it is up: linked,
+  /// and not passed over.
+  bool _swarmAnyOther(Set<MachineState> asked) => machineStates.values.any(
+    (other) =>
+        !asked.contains(other) &&
+        !other.needsLink &&
+        !_swarmRefused.contains(other.machine.machineId),
+  );
+
+  /// When the computer list was last read again for Swarm: at most once in [_swarmListGap].
+  DateTime? _swarmListedAt;
+  static const _swarmListGap = Duration(seconds: 2);
+
+  /// No computer to ask: the list is read again, as a refresh by hand would. What it says of each
+  /// one can be stale — a computer reported off at launch whose socket waits parked for a word
+  /// that it is back — and with any socket up, nothing else reads it again ([_rereadMachinesWhileDeaf]).
+  /// Swarm's own retries set the pace ([SwarmInbox]).
+  void _swarmListAgain() {
+    final now = DateTime.now();
+    final last = _swarmListedAt;
+    if (last != null && now.difference(last) < _swarmListGap) return;
+    _swarmListedAt = now;
+    _rereadMachines();
+  }
+
+  /// A computer that comes up within [swarmReconnectWait], when one is on its way: dialling or
+  /// redialling, linked, not reported off, and not passed over — nor in [except]. Null otherwise.
+  Future<MachineState?> _swarmMachineBack({
+    Set<MachineState> except = const {},
+  }) async {
+    bool coming(MachineState machine) =>
+        !except.contains(machine) &&
+        (machine.connectionStatus == ConnectionStatus.connecting ||
+            machine.connectionStatus == ConnectionStatus.reconnecting) &&
+        !machine.needsLink &&
+        machine.nodeOnline != false &&
+        !_swarmRefused.contains(machine.machine.machineId);
+    if (!machineStates.values.any(coming)) return null;
+    final back = Completer<MachineState?>();
+    void look() {
+      if (back.isCompleted) return;
+      final machine = _swarmMachine(except: except);
+      if (machine != null || !machineStates.values.any(coming)) {
+        back.complete(machine);
+      }
+    }
+
+    addListener(look);
+    final timer = Timer(swarmReconnectWait, () {
+      if (!back.isCompleted) back.complete(null);
+    });
+    try {
+      return await back.future;
+    } finally {
+      timer.cancel();
+      removeListener(look);
+    }
+  }
+
+  Future<Object?> _swarmRequestVia(
+    MachineState machine,
+    String method,
+    String path,
+    Map<String, dynamic>? body,
+  ) async {
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    final Map<String, dynamic> answer;
+    try {
+      answer = await _conn(machine.machine.machineId).request(
+        'super_tabs',
+        payload: {
+          'action': 'backend',
+          'method': method,
+          'path': path,
+          'body': ?body,
+        },
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      stillThisAccount();
+      throw SuperTabFailure(
+        failure.code,
+        failure.detail ?? 'Could not reach this Swarm.',
+      );
+    } catch (_) {
+      stillThisAccount();
+      rethrow;
+    }
+    stillThisAccount();
+    if (answer['error'] != null) {
+      throw SuperTabFailure(
+        answer['error'].toString(),
+        answer['detail'] as String? ?? 'Could not reach this Swarm.',
+        statusCode: (answer['status'] as num?)?.toInt() ?? 0,
+      );
+    }
+    return answer['value'];
   }
 
   Future<Map<String, dynamic>> connectors(
@@ -11046,6 +11327,15 @@ final appStateProvider = Provider<AppNotifier>((ref) {
     configStore: ConfigStore(),
     paneLayoutStore: PaneLayoutStore(),
   );
+  // The app icon's Swarm count: a launch that starts signed out has no
+  // Swarm session to take the last account's number off.
+  if (app.agentNotices.system case final SwarmNotices notices) {
+    swarmBadgeOffWhileSignedOut(
+      app,
+      signedOut: () => app.status == AppStatus.unauthenticated,
+      notices: notices,
+    );
+  }
   app.bootstrap();
   return app;
 });

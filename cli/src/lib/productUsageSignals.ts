@@ -18,8 +18,11 @@ const setup = new Set(['TMUX_UNAVAILABLE', 'PTY_HOST_UNAVAILABLE', 'TMUX_TOO_OLD
 const auth = new Set(['UNAUTHORIZED', 'AUTH_REQUIRED', 'LOGIN_REQUIRED', 'OWNER_REQUIRED', 'E2EE_REQUIRED'])
 const unavailable = new Set(['SERVICE_UNAVAILABLE', 'SERVICE_FAILED', 'GRID_UNAVAILABLE', 'API_UNAVAILABLE',
   'UNSUPPORTED', 'UNSUPPORTED_ON_REMOTE', 'TIMEOUT', 'NATIVE_UNAVAILABLE'])
+// A history page read for no session, or one this computer's index does not hold (services/search.ts): until
+// 2026-10-28 both were `other`, 2,225 that day, a Desktop list re-reading a conversation that had left the index.
 const invalid = new Set(['INVALID_ENGINE', 'INVALID_CWD', 'CWD_NOT_FOUND', 'INVALID_GRID', 'INVALID_DSH', 'INVALID_SWARM_ROLE',
-  'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY'])
+  'INVALID_MODEL', 'INVALID_PERMISSION_MODE', 'INVALID_CREATION_ID', 'INVALID_PROJECT_SOURCE', 'WORKTREE_BUSY',
+  'BAD_SESSION', 'NOT_INDEXED'])
 /** A Store install's or update's own refusals (dsh/install.ts, dsh/update.ts), by kind. Until 2026-10-28 every one was
  * `other`: that day's 11 failed installs, all on Windows, said nothing of why. For the Store's requests only, so a
  * create's or a resume's totals keep their meaning. Its busy and not-installed refusals are named with the others'. */
@@ -215,7 +218,7 @@ export function productUsageRequest(type: string, emit: (metric: ProductUsageMet
       // A Store install's or update's, whatever its kind: the 11 Windows installs of 2026-10-28 were `other`, and
       // nothing said which refusal. Its family adds up to `store_install_failed` (or `store_update_failed`).
       if (store) count(`error_code_${storeErrorCode(error)}`)
-      detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND', 'NOT_INSTALLED'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY', 'DSH_BUSY'].includes(error) ? 'conflict' : kind}`)
+      detail(`error_${failure ? failure : error === 'TIMEOUT' ? 'timeout' : typeof error === 'string' && ['AGENT_NOT_FOUND', 'SESSION_NOT_FOUND', 'NOT_FOUND', 'NOT_INSTALLED', 'NOT_INDEXED'].includes(error) ? 'not_found' : typeof error === 'string' && ['DELETE_IN_PROGRESS', 'WORKTREE_BUSY', 'BUSY', 'DSH_BUSY'].includes(error) ? 'conflict' : kind}`)
     } else if (state === 'pending' || state === 'preparing' || state === 'starting') { count('pending'); detail('pending') }
     else if (state === 'unconfirmed' || state === 'unavailable' || state === 'cancelled') { count('unknown'); detail(state === 'cancelled' ? 'cancelled' : 'unknown') }
     else if (!['create', 'resume', 'restart', 'fork'].includes(action) || hasAgent || state === 'created') { count('ok'); detail('ok') }

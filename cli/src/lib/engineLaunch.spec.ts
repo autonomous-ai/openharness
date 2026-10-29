@@ -824,6 +824,14 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
       .toEqual([engineBin('claude'), '--dangerously-skip-permissions'])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnly' }))
       .toEqual([engineBin('codex'), '--sandbox', 'read-only', ...CODEX_SCREEN])
+    // A Claude Buddy: what its guard does not allow is refused, never asked (Ken, 10-29).
+    // It reads only its own folder's settings and starts no MCP server: a teammate's committed hook or server would run
+    // with its person's credentials (Lead, 10-29).
+    expect(buildEngineCommandArgv('claude', { permissionMode: 'buddy', bypassPermission: true }))
+      .toEqual([engineBin('claude'), '--permission-mode', 'dontAsk', '--setting-sources', 'local', '--strict-mcp-config'])
+    // A Codex Buddy: reads in the sandbox, and asks the person at the terminal before anything outside it (Lead, 10-29).
+    expect(buildEngineCommandArgv('codex', { permissionMode: 'readOnlyAsk', bypassPermission: true }))
+      .toEqual([engineBin('codex'), '--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"', ...CODEX_SCREEN])
     expect(buildEngineCommandArgv('codex', { permissionMode: 'full' }))
       .toEqual([engineBin('codex'), '--dangerously-bypass-approvals-and-sandbox', ...CODEX_SCREEN])
     // A mode the engine lacks falls back to the yes/no.
@@ -1260,6 +1268,22 @@ describe('the permission gates', () => {
     const refusal = await refusePermissionFlagIfUnsupported('claude', { permissionMode: 'ask' }, shell)
     expect(refusal?.detail).toContain('Update claude by running npm install -g @anthropic-ai/claude-code, then try again.')
     expect(refusal?.detail).not.toContain('choose Ask')
+  })
+
+  it('holds a Buddy\'s relaunch rather than starting it without its mode (security review 1 of #2087)', async () => {
+    const binDir = mkdtempSync(join(tmpdir(), 'harness-engine-gate-'))
+    dirs.push(binDir)
+    process.env.HARNESS_ENGINE_TEST_PATH = binDir
+    fakeEngine(binDir, 'codex', '--sandbox')
+    const held = await dropPermissionFlagIfUnsupported('codex', { permissionMode: 'readOnlyAsk', bypassPermission: false }, bashProbeShell())
+    expect(held.choice).toEqual({ permissionMode: 'readOnlyAsk', bypassPermission: false })
+    expect(held.droppedFlag).toBeNull()
+    expect(held.nativeHold).toContain('does not support --ask-for-approval')
+    // A Claude Buddy's, too: a Claude Code with no --permission-mode is not relaunched in its own default.
+    fakeEngine(binDir, 'claude', '--resume')
+    const claude = await dropPermissionFlagIfUnsupported('claude', { permissionMode: 'buddy', bypassPermission: false }, bashProbeShell())
+    expect([claude.choice.permissionMode, claude.droppedFlag]).toEqual(['buddy', null])
+    expect(claude.nativeHold).toContain('does not support --permission-mode')
   })
 
   it('leaves a relaunch alone when the flag is supported', async () => {

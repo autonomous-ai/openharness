@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/reading.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/super_tab_fixture.dart';
@@ -13,9 +14,10 @@ import 'support/super_tab_fixture.dart';
 void main() {
   Future<SuperTabController> show(
     WidgetTester tester,
-    ConversationServer server,
-  ) async {
-    final c = server.controller();
+    ConversationServer server, {
+    SuperTabReading reading = const SuperTabReading(),
+  }) async {
+    final c = server.controller(reading: reading);
     await c.refresh();
     await tester.pumpWidget(
       MaterialApp(
@@ -330,6 +332,126 @@ void main() {
     expect(row('message-31').hitTestable(), findsOneWidget);
     expect(position(tester).extentAfter, lessThan(1));
     expect(find.text('1 new message'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await close(tester, c);
+  });
+
+  double bottomOf(WidgetTester tester, String id) =>
+      tester.getBottomLeft(row(id)).dy;
+
+  /// Each row in view, where it is drawn: a row regrouped (its name shown or
+  /// hidden) changes height, one moved changes place.
+  Map<String, Rect> onScreen(WidgetTester tester) {
+    final list = tester.getRect(
+      find.byKey(const PageStorageKey('super-messages-tab-lead')),
+    );
+    final rows = find.byWidgetPredicate(
+      (w) => switch (w.key) {
+        ValueKey<String>(:final value) => value.startsWith(
+          'super-message-message-',
+        ),
+        _ => false,
+      },
+    );
+    return {
+      for (final element in rows.evaluate())
+        if (tester.getRect(find.byWidget(element.widget)) case final rect
+            when rect.overlaps(list))
+          (element.widget.key! as ValueKey<String>).value: rect,
+    };
+  }
+
+  /// Polls [c] while [count] agent updates arrive, 50 a poll (once with
+  /// none), checking [each] at every frame, or once settled.
+  Future<void> poll(
+    WidgetTester tester,
+    ConversationServer server,
+    SuperTabController c,
+    int count,
+    void Function() each, {
+    bool everyFrame = true,
+  }) async {
+    for (var polls = count == 0 ? 1 : count ~/ 50; polls > 0; polls--) {
+      if (count > 0) agentUpdates(server, 50);
+      await c.refresh();
+      for (var frame = 0; everyFrame && frame < 3; frame++) {
+        await tester.pump();
+        each();
+      }
+      await tester.pumpAndSettle();
+      each();
+    }
+  }
+
+  testWidgets('a reader at the end stays at the end as polls cut the oldest '
+      'rows', (tester) async {
+    final server = ConversationServer();
+    agentUpdates(server, 30);
+    final c = await show(tester, server);
+    final end = bottomOf(tester, 'message-30');
+
+    // 1,000 updates, 50 a poll: past 500 each poll cuts the oldest. New rows
+    // reach the end a frame after they arrive, cut or not.
+    await poll(tester, server, c, 1000, everyFrame: false, () {
+      final newest = c.messages('lead').last.id;
+      expect(bottomOf(tester, newest), moreOrLessEquals(end, epsilon: .5));
+    });
+
+    expect(position(tester).extentAfter, lessThan(1));
+    expect(c.messages('lead'), hasLength(500));
+    expect(c.hasOlder('lead'), isTrue);
+    expect(tester.takeException(), isNull);
+    await close(tester, c);
+  });
+
+  testWidgets('a reader scrolled up keeps every row, in place, as polls pass '
+      'the cap', (tester) async {
+    final server = ConversationServer();
+    agentUpdates(server, 30);
+    final c = await show(tester, server);
+    position(tester).jumpTo(position(tester).maxScrollExtent / 2);
+    await tester.pumpAndSettle();
+    final shown = onScreen(tester);
+    expect(shown, isNotEmpty);
+
+    await poll(tester, server, c, 1000, () {
+      expect(onScreen(tester), shown);
+    });
+
+    expect(c.messages('lead'), hasLength(1030));
+    expect(tester.takeException(), isNull);
+    await close(tester, c);
+  });
+
+  testWidgets('back at the end after reading up, the cut with nothing new '
+      'moves and regroups no row', (tester) async {
+    final server = ConversationServer();
+    agentUpdates(server, 30);
+    // Desktop's: the messages read lands beside the state read, before the
+    // view hears of either.
+    final c = await show(tester, server, reading: SuperTabReading.desktop);
+    position(tester).jumpTo(position(tester).maxScrollExtent / 2);
+    await tester.pumpAndSettle();
+    await poll(tester, server, c, 600, () {});
+    expect(c.messages('lead'), hasLength(630));
+    // Back to the end: a lazy list learns its full extent as it goes.
+    for (var i = 0; i < 12 && position(tester).extentAfter > 0; i++) {
+      position(tester).jumpTo(position(tester).maxScrollExtent);
+      await tester.pumpAndSettle();
+    }
+    final shown = onScreen(tester);
+    expect(shown.keys, contains('super-message-message-630'));
+
+    // The first poll moves the list's dividing row to the rows on screen;
+    // the cut above it waits for the next.
+    for (var i = 0; i < 2; i++) {
+      await poll(tester, server, c, 0, () {
+        expect(onScreen(tester), shown);
+      });
+    }
+
+    expect(c.messages('lead'), hasLength(500));
+    expect(position(tester).extentAfter, lessThan(1));
     expect(tester.takeException(), isNull);
     await close(tester, c);
   });

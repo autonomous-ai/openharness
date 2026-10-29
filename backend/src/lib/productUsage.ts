@@ -2,18 +2,22 @@ import { healthBreakdowns } from '../analytics/productHealth.js'
 import type { ProductUsageContext } from '../types/productHealthContract.js'
 import { createHmac } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
-import type { Prisma } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
 import { env } from '../config/env.js'
 import { prisma } from './prisma.js'
+import { ensureIndex } from './db/indexes.js'
 import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
+import { PRODUCT_USAGE_RECEIPT_DAYS, PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
 import { createUsageBatch } from './productUsageBatch.js'
+import { createRelayTotals } from './productUsageRelay.js'
 
 const DAY = 86_400_000
 type Db = Pick<Prisma.TransactionClient, 'productUsagePreference' | 'analyticsMachineState'>
 
-/** A pre-existing off choice wins over the new default. Never cache an enabled answer. */
+/** A pre-existing off choice wins over the new default. Never cache an enabled answer: every caller reads it live.
+ * The one cache is `relayEnabled`'s, for counting connects, and it keeps only an off answer. */
 export async function productUsageChoice(userId: string, db: Db = prisma): Promise<ProductUsageChoice> {
   const saved = await db.productUsagePreference.findUnique({ where: { userId }, select: { enabled: true, revision: true } })
   if (saved) return saved
@@ -27,6 +31,7 @@ export async function setProductUsageChoice(userId: string, enabled: boolean): P
     where: { userId }, create: { userId, enabled, revision: 1 },
     update: { enabled, revision: { increment: 1 } }, select: { enabled: true, revision: true },
   })
+  dropRelayChoice(userId)
   if (!enabled) await deleteActivity(userId)
   return choice
 }
@@ -35,7 +40,7 @@ function validDay(day: string, now: Date): boolean {
   const stamp = Date.parse(day + 'T00:00:00.000Z')
   const today = Math.floor(now.getTime() / DAY) * DAY
   return Number.isFinite(stamp) && new Date(stamp).toISOString().slice(0, 10) === day
-    && stamp <= today && stamp > today - PRODUCT_USAGE_DAYS * DAY
+    && stamp <= today && stamp > today - PRODUCT_USAGE_RECEIPT_DAYS * DAY
 }
 
 /** [productUsageChoice] for several accounts at once, in two reads: a batch's permission checks. */
@@ -137,23 +142,30 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
         for (const r of permitted) if (!received.has(r.id)) { received.add(r.id); fresh.push(r) }
         if (!fresh.length) return results
         await tx.productUsageReceipt.createMany({ data: fresh.map(r => ({
-          id: r.id, expiresAt: new Date(Date.parse(r.day) + (PRODUCT_USAGE_DAYS + 1) * DAY) })) })
+          // [life]: once the receipt sweep's rule is installed, a server that does not write it cannot count (productUsageReceiptSweep.ts).
+          id: r.id, expiresAt: new Date(Date.parse(r.day) + PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS * DAY), life: PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS })) })
         const apart = await apartPrefixes(tx, fresh)
         await incrementUsageTotals(tx, summed(fresh.flatMap((r, i) =>
           apart[i] ? r.increments.map(inc => ({ ...inc, metric: apart[i] + inc.metric })) : r.increments)))
         return results
       })
     } catch (error) {
-      const code = (error as { code?: string } | null)?.code
-      const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
-      // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
-      const transient = error instanceof Error && error.message.includes('TransientTransactionError')
-      if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
-        || performance.now() - started + pause >= 1000) throw error
-      await delay(pause)
-      if (performance.now() - started >= 1000) throw error
+      await pauseForConflict(error, attempt, started)
     }
   }
+}
+
+/** Waits before another attempt after a write conflict from another process's batch, or throws [error]: any other
+ * failure, a fourth attempt, or a wait that would pass a second. */
+async function pauseForConflict(error: unknown, attempt: number, started: number): Promise<void> {
+  const code = (error as { code?: string } | null)?.code
+  const pause = 25 * 2 ** attempt + Math.floor(Math.random() * 50)
+  // A Mongo lock wait comes without a Prisma code, labelled transient, as Swarm's do (superTabs/store.ts).
+  const transient = error instanceof Error && error.message.includes('TransientTransactionError')
+  if ((code !== 'P2034' && code !== 'P2002' && !transient) || attempt >= 3
+    || performance.now() - started + pause >= 1000) throw error
+  await delay(pause)
+  if (performance.now() - started >= 1000) throw error
 }
 
 /** One update per day and name, whichever reports added to it. */
@@ -175,22 +187,74 @@ export type RelayUsageMetric = 'relay_desktop_opens' | 'relay_tui_opens' | 'rela
   | 'relay_mobile_debug_opens' | `breakdown:release:phone:${string}:relay_mobile_opens`
 
 let warnedAt = 0
+// A person who turned sharing off still opens sockets, so a process keeps that off answer a few seconds and skips the
+// read. An on answer is never kept: sharing turned off anywhere stops the next connect here at once (a burst of
+// connects that arrive while one read is under way share it). The cost is on the safe side: when a person turns
+// sharing back on elsewhere, this process goes on not counting for up to the TTL. Only counting uses it: the
+// activity marks are about a person and always read the preference itself. A change in this process drops the entry
+// at once, and a read that began before the change is not kept.
+const RELAY_CHOICE_TTL_MS = 5_000
+const RELAY_CHOICE_MAX = 10_000
+const relayOff = new Map<string, number>()
+const relayReads = new Map<string, Promise<boolean>>()
+let relayChoiceEpoch = 0
+
+function dropRelayChoice(userId: string): void {
+  relayChoiceEpoch++
+  relayOff.delete(userId)
+  relayReads.delete(userId)
+}
+
+async function relayEnabled(userId: string): Promise<boolean> {
+  const until = relayOff.get(userId)
+  if (until !== undefined && until > Date.now()) return false
+  const reading = relayReads.get(userId)
+  if (reading) return reading
+  const epoch = relayChoiceEpoch
+  const read = productUsageChoice(userId).then(({ enabled }) => {
+    if (!enabled && epoch === relayChoiceEpoch) {
+      if (relayOff.size >= RELAY_CHOICE_MAX) relayOff.clear()
+      relayOff.set(userId, Date.now() + RELAY_CHOICE_TTL_MS)
+    }
+    return enabled
+  }).finally(() => { if (relayReads.get(userId) === read) relayReads.delete(userId) })
+  relayReads.set(userId, read)
+  return read
+}
+
+/** A batch of connect totals and its receipt commit together; a batch seen again adds nothing. The receipt
+ * outlives every retry (a held batch is dropped after five minutes). */
+async function writeRelayBatch(id: string, increments: UsageIncrement[]): Promise<void> {
+  const receipt = `relay:${id}`
+  const started = performance.now()
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await prisma.$transaction(async tx => {
+        if ((await tx.productUsageReceipt.findMany({ where: { id: { in: [receipt] } }, select: { id: true } })).length) return
+        await tx.productUsageReceipt.createMany({ data: [{ id: receipt, expiresAt: new Date(Date.now() + 2 * DAY) }] })
+        await incrementUsageTotals(tx, increments)
+      })
+    } catch (error) {
+      await pauseForConflict(error, attempt, started)
+    }
+  }
+}
+
+const relayTotals = createRelayTotals({ write: writeRelayBatch })
+export const flushRelayUsage = relayTotals.flush
+/** Run in each process that takes connections. The stop it returns flushes what is waiting: call it on shutdown. */
+export const startRelayUsageFlush = relayTotals.start
+export function resetRelayUsageForTests(): void { relayOff.clear(); relayReads.clear(); relayChoiceEpoch++; relayTotals.reset() }
+
 /** Older clients still contribute totals. These are events, never distinct users or installations.
- *  [also]: more totals the same event adds to, under the one preference read. */
+ *  [also]: more totals the same event adds to, under the one preference read. Counted in memory and
+ *  written once a minute (`createRelayTotals`). */
 export async function recordRelayUsage(userId: string, now: Date, metric: RelayUsageMetric,
   also: readonly RelayUsageMetric[] = []): Promise<void> {
   try {
-    if (!(await productUsageChoice(userId)).enabled) return
+    if (!(await relayEnabled(userId))) return
     const dayUtc = new Date(Math.floor(now.getTime() / DAY) * DAY)
-    for (const name of [metric, ...also]) {
-      const where = { dayUtc_metric: { dayUtc, metric: name } }
-      try {
-        await prisma.productUsageTotal.upsert({ where, create: { dayUtc, metric: name, value: 1 }, update: { value: { increment: 1 } } })
-      } catch (error) {
-        if ((error as { code?: string }).code !== 'P2002') throw error
-        await prisma.productUsageTotal.update({ where, data: { value: { increment: 1 } } })
-      }
-    }
+    for (const name of [metric, ...also]) relayTotals.add(dayUtc, name)
   } catch {
     // Do not let analytics break a session or reach callers that log the account/agent and DB error.
     if (Date.now() - warnedAt >= 60_000) {
@@ -276,14 +340,12 @@ export async function deleteLegacyProductUsage(userId: string): Promise<void> {
   ])
 }
 
-async function ensureProductUsageTotalKey(): Promise<void> {
+async function ensureProductUsageTotalKey(db: PrismaClient): Promise<void> {
   // The API can receive relay counts before the singleton's general schema push. That push may
   // also decline unrelated changes. Install this correctness boundary explicitly; do not rely on it.
   for (let attempt = 0; attempt < 10; attempt++) {
     try {
-      await prisma.$runCommandRaw({ createIndexes: 'product_usage_totals', indexes: [{
-        key: { dayUtc: 1, metric: 1 }, name: 'product_usage_totals_dayUtc_metric_key', unique: true,
-      }] })
+      await ensureIndex(db, 'product_usage_totals', { key: { dayUtc: 1, metric: 1 }, name: 'product_usage_totals_dayUtc_metric_key', unique: true })
       return
     } catch (error) {
       const failure = error as { meta?: { code?: string | number; message?: string } }
@@ -293,7 +355,7 @@ async function ensureProductUsageTotalKey(): Promise<void> {
     // from concurrent writers: a changed/deleted row conflicts and retries instead of losing counts.
     // Bound each pass; a large backlog fails worker startup and resumes safely on its next start.
     try {
-      await prisma.$transaction(async tx => {
+      await db.$transaction(async tx => {
         const [group] = await tx.productUsageTotal.groupBy({
           by: ['dayUtc', 'metric'], having: { id: { _count: { gt: 1 } } },
           orderBy: [{ dayUtc: 'asc' }, { metric: 'asc' }], take: 1,
@@ -317,11 +379,9 @@ async function ensureProductUsageTotalKey(): Promise<void> {
 }
 
 /** Run only in the singleton worker. Required keys and expiry must survive a declined schema push. */
-export async function ensureProductUsageExpiry(): Promise<void> {
-  await prisma.$runCommandRaw({ createIndexes: 'product_usage_preferences', indexes: [{
-    key: { userId: 1 }, name: 'product_usage_preferences_userId_key', unique: true,
-  }] })
-  await ensureProductUsageTotalKey()
+export async function ensureProductUsageExpiry(db: PrismaClient = prisma): Promise<void> {
+  await ensureIndex(db, 'product_usage_preferences', { key: { userId: 1 }, name: 'product_usage_preferences_userId_key', unique: true })
+  await ensureProductUsageTotalKey(db)
   for (const [collection, field, seconds] of [
     ['product_usage_receipts', 'expiresAt', 0],
     ['product_usage_totals', 'dayUtc', 396 * DAY / 1000],
@@ -330,9 +390,7 @@ export async function ensureProductUsageExpiry(): Promise<void> {
       .map(name => [name, 'dayUtc', PRODUCT_USAGE_DAYS * DAY / 1000]),
     ['product_usage_activity', 'expiresAt', 0],
   ] as [string, string, number][]) {
-    await prisma.$runCommandRaw({ createIndexes: collection, indexes: [{ key: { [field]: 1 }, name: 'product_usage_expiry', expireAfterSeconds: seconds }] })
+    await ensureIndex(db, collection, { key: { [field]: 1 }, name: 'product_usage_expiry', expireAfterSeconds: seconds })
   }
-  await prisma.$runCommandRaw({ createIndexes: 'product_usage_activity', indexes: [{
-    key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true,
-  }] })
+  await ensureIndex(db, 'product_usage_activity', { key: { subject: 1, dayUtc: 1 }, name: 'product_usage_activity_subject_dayUtc_key', unique: true })
 }

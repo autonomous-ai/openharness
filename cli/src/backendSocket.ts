@@ -2,7 +2,7 @@ import { messageReceipt, productObservation, productUsageIntent, productUsageLau
 import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
+import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteAppPolicy, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
 import type { ViewerStreams } from './core/viewerStreams.js'
@@ -293,6 +293,26 @@ export class BackendSocket {
   /** The guest (email) an agent was started for, or null for the owner's own (registry `guest`): what a
    *  guest session may act on (core/guestPolicy.ts). Null treats every agent as the owner's. */
   agentGuest: ((agentId: string) => string | null) | null = null
+  /** On a Harness Team daemon, what the account's own apps may ask and hear (core/api.ts RemoteAppPolicy): another person's
+   *  Product Manager may run there, and the account is the Mac's owner's (#895). Null everywhere else. */
+  remoteAppPolicy: RemoteAppPolicy | null = null
+
+  /** The policy over [connId] when it is one of the account's own apps away from this desk: not a window here, nor a guest,
+   *  which has its own space (core/guestPolicy.ts). A remote connection with no client record fails closed: it is held. */
+  private appPolicyFor(connId: string): RemoteAppPolicy | null {
+    if (!this.remoteAppPolicy || !connId || this.localClients.has(connId) || isLocalClientId(connId)) return null
+    return this.remoteClient(connId)?.guest !== undefined ? null : this.remoteAppPolicy
+  }
+
+  /** Whether [connId] is one of the account's own apps away from this desk, held to watching its terminals now. */
+  appWatchOnly(connId: string): boolean {
+    return this.appPolicyFor(connId)?.watchOnly() ?? false
+  }
+
+  /** Whether [agentId]'s terminal is closed to [connId] now: a confidential session, to the account's own apps. */
+  appClosedTo(connId: string, agentId: string): boolean {
+    return this.appPolicyFor(connId)?.isConfidential(agentId) ?? false
+  }
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
   historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
@@ -449,9 +469,15 @@ export class BackendSocket {
     },
     notice: (notice: BackendNotice) => {
       this.onAccountNotice?.(notice)
-      // Only the Swarm host acts on it (superTabs/host.ts): the windows have nothing to re-read.
-      if (notice.type === 'super_tab_deliveries') return
+      // Only the Swarm host acts on these (superTabs/host.ts): the windows have nothing to re-read.
+      if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed') return
       if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
+      // A Swarm changed: its id, time and parts, or nothing for the server's word that it pushes (desktop swarm_pushes.dart).
+      if (notice.type === 'swarm_changed') {
+        const { type, ...payload } = notice
+        this.sendLocal({ type, payload })
+        return
+      }
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })
@@ -467,10 +493,16 @@ export class BackendSocket {
   /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
    *  devices (core/wifi.ts, services/wifi.ts). */
   private wifi?: WifiCore['fromGateway']
-  useWifi(wifi: WifiCore['fromGateway']): void { this.wifi = wifi }
+  /** Off on a Harness Team daemon (core/main.ts): the device's frames are sealed before anything here could filter them,
+   *  and its own doors (core/wifiAgents.ts) reach every agent, so it would reach a Swarm Product Manager there (security
+   *  re-check 2 of #2089). Nothing of it is wired, and nothing is sent to it. */
+  private wifiOff = false
+  disableWifi(): void { this.wifiOff = true; this.wifi = undefined }
+  useWifi(wifi: WifiCore['fromGateway']): void { if (!this.wifiOff) this.wifi = wifi }
   /** The Wi-Fi device's answers and events, sealed to one session; and which identity's app said hello on
    *  one. Through the gateway, guarded as every frame of the core's is. */
   deviceFrame(connId: string, type: string, payload: Record<string, unknown>): void {
+    if (this.wifiOff) return
     this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false)
   }
   deviceClient(connId: string, identity: string | null): void { this.toGateway('device', (gateway) => gateway.deviceClient(connId, identity)) }
@@ -579,8 +611,16 @@ export class BackendSocket {
     this.toRemoteApps(frame)
   }
 
-  private toRemoteApps(frame: Frame): void {
+  /** An up-frame as the account's apps and devices away from this desk may have it (`remoteAppPolicy`), or null to withhold
+   *  it: every path to them asks, the paired devices' and the Wi-Fi device's too (security re-review of #2089). */
+  private forApps(frame: Frame): Frame | null {
+    return this.remoteAppPolicy ? this.remoteAppPolicy.event(frame) : frame
+  }
+
+  private toRemoteApps(given: Frame): void {
     if (this.thisComputerOnly) return
+    const frame = this.forApps(given)
+    if (!frame) return
     const guest = this.frameGuest(frame)
     this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))
   }
@@ -664,7 +704,8 @@ export class BackendSocket {
 
   /** Send a user-level notification to every logged-in browser that owns this machine. */
   sendUser(frame: Frame): void {
-    this.toGateway('user', (gateway) => gateway.user(frame))
+    const shown = this.forApps(frame)
+    if (shown) this.toGateway('user', (gateway) => gateway.user(shown))
   }
 
   /**
@@ -685,9 +726,11 @@ export class BackendSocket {
   sendCommander(frame: Frame): void {
     this.onOutboundCommander?.(frame)
     if (isLocalOnly(frame)) return
-    if (env.LOG_FRAMES) logFrame('→', 'device', frame)
+    const shown = this.forApps(frame)
+    if (!shown) return
+    if (env.LOG_FRAMES) logFrame('→', 'device', shown)
     // The sentence a processing card carries for the Pro's cable stays on this computer (onOutboundCommander).
-    this.toGateway('device', (gateway) => gateway.commander(withoutUpdate(frame)))
+    this.toGateway('device', (gateway) => gateway.commander(withoutUpdate(shown)))
   }
 
   /** Attach one authenticated loopback desktop client to the same RPC and event plane as cloud web. */
@@ -956,6 +999,8 @@ export class BackendSocket {
     productUsageIntent(type, (frame.payload as { usageIntent?: unknown } | undefined)?.usageIntent,
       (frame.payload as { agentId?: unknown } | undefined)?.agentId, usageSource,
       signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
+    // A guest's own space is the guest policy's below; the account's own apps, away from this desk, answer to this one.
+    const appPolicy = !local && connId && this.remoteClient(connId)?.guest === undefined ? this.remoteAppPolicy : null
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
       if (t === type) {
         const failure = p.failure as { code?: unknown; reason?: unknown } | undefined
@@ -963,7 +1008,8 @@ export class BackendSocket {
         // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
         launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
       }
-      this.emitReply(connId, t, rid, p)
+      // The account's own apps see a reply as its policy shows it (`remoteAppPolicy`); a window here sees it whole.
+      this.emitReply(connId, t, rid, appPolicy ? appPolicy.reply(t, p) : p)
     }
     // A guest: a session trusted only because this machine is shared with its account (gateway/gateway.ts).
     const guest = local ? undefined : this.remoteClient(connId)?.guest
@@ -986,6 +1032,14 @@ export class BackendSocket {
       if (!verdict.allow) {
         console.warn(`[guest] refused ${logSafeType(type)} from conn:${sid(connId)} — ${verdict.error}`)
         if (requestId !== undefined) reply(type, requestId, { error: verdict.error, message: GUEST_REFUSALS[verdict.error] })
+        return
+      }
+    }
+    if (appPolicy) {
+      const refused = appPolicy.refuse(type, payload)
+      if (refused) {
+        console.warn(`[team] refused ${logSafeType(type)} from conn:${sid(connId)} — ${refused.error}`)
+        if (requestId !== undefined) reply(type, requestId, refused)
         return
       }
     }

@@ -24,7 +24,7 @@ export type GroupChange = LivePart<GroupView> | Tombstone | DormantStub
 /** The head as a reader sees it: no sharing, overlap alerts, retired number or parked groups; projects, rules and
  *  invitations filtered (invitations only for the Swarm owner). */
 export type HeadView = Pick<SuperTabState, 'version' | 'id' | 'name' | 'project' | 'projects' | 'leadsConversationId' | 'ownerId'
-  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility'>
+  | 'environment' | 'routingPolicy' | 'rules' | 'paused' | 'invitations' | 'localModels' | 'workspaceId' | 'workspaceVisibility' | 'buddies'>
 /** A member's avatar says only `{ kind: 'upload' }` for an upload: its link comes signed in `derived.avatars`. */
 export type MemberView = Omit<Person, 'avatar'> & { avatar?: import('../profile.js').AvatarView }
 /** The stored agent. Time-based and cross-part values (`downSince`, `limitedUntil`, an awaiting decision, the custom
@@ -34,8 +34,10 @@ export type AgentView = Omit<Agent, 'downNamed' | 'downSince' | 'limitedUntil' |
 export interface Audience { people: Array<{ id: string; generation: string }> }
 /** A conversation with its own message counter (`lastMessageSequence` and message sequences compare within one group).
  *  `dormant` is set only on a dormant group fetched on demand; `audience` only on a private conversation. */
-export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger'>
-  & { messageSeq: number; dormant?: true; audience?: Audience }
+export type GroupView = Omit<Conversation, 'messageSeq' | 'reportSeq' | 'dormant' | 'lastActivityAt' | 'audience' | 'ledger' | 'proposals'>
+  & { messageSeq: number; dormant?: true; audience?: Audience
+    /** A Buddy chat's owner, in place of its audience (read/views.ts groupView). */
+    buddyOwnerId?: string }
 /** A contribution as `state.machines[]` has it, privacy detail only for its contributor, harness ids cut to what the
  *  reader can see. Machines without a contribution are never sent. */
 export type MachineView = ContributedMachine
@@ -61,6 +63,8 @@ export interface Derived {
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */
   mentionsWaiting?: number
+  /** A person only: a digest of which tags wait, moving when they change though the count may not. */
+  mentionsDigest?: string
   /** Signed links to uploaded avatars, by `person:<id>` and `agent:<id>` (avatarLinks.ts): fresh with every read, the same
    *  through each half hour, each opening for at most an hour. Absent when nobody visible has one. */
   avatars?: Record<string, string>
@@ -68,6 +72,10 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
+   *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
+   *  higher of the two. Never another person's. */
+  readMarks?: Record<string, number>
   /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
    *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
   teamAccounts?: false
@@ -223,11 +231,17 @@ export interface HostPool {
   paused: boolean
   machine: ContributedMachine
   starts: AgentStart[]
+  /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
+  buddyStarts?: AgentStart[]
+  /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
+  leadStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   githubApp?: true
+  /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
+  capabilitiesWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

@@ -761,7 +761,14 @@ export async function getDevicePresence(deviceId: string): Promise<boolean> {
   }
 }
 
-export interface DeviceStatusMsg { deviceId: string; online: boolean; lastSeenAt?: string }
+export interface DeviceStatusMsg {
+  deviceId: string
+  online: boolean
+  lastSeenAt?: string
+  /** The device was revoked (lib/deviceRevoke.ts): a web socket drops it from its copy of the account's devices. It
+   *  still says `online: false`, so a server that predates the field reads it as the device going offline. */
+  removed?: true
+}
 
 /** Per-USER transition channel (one sub per watching web socket); messages are PER-DEVICE. */
 export function publishDeviceStatus(userId: string, msg: DeviceStatusMsg): Promise<number> {
@@ -801,6 +808,37 @@ export function publishSwarmDeliveries(machineId: string, msg: SwarmDeliveriesMs
 
 export function subscribeSwarmDeliveries(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
   return addSub(swarmDeliveriesChannel(machineId), cb)
+}
+
+// Per-MACHINE Swarm host changes: a commit changed what this machine's host reads (superTabs/store.ts hostsChanged), on some
+// REST worker; the worker holding that machine's adapter socket tells its host to read its changes (lib/swarmHostPushes.ts).
+// `pushes` is that socket's own 4-minute repeat that it pushes, sent through Redis so a silent Redis stops it.
+export type SwarmHostMsg = { tabId: string; lastChangedAt: number } | { pushes: true }
+
+const swarmHostChannel = (machineId: string): string => `swarm-host:${machineId}`
+
+export function publishSwarmHost(machineId: string, msg: SwarmHostMsg): Promise<number> {
+  return safePublish(swarmHostChannel(machineId), JSON.stringify(msg))
+}
+
+export function subscribeSwarmHost(machineId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(swarmHostChannel(machineId), cb)
+}
+
+// Per-USER Swarm changes: a commit changed a Swarm this person is in (superTabs/store.ts swarmChanged), on some REST worker;
+// every socket of theirs, daemon or web, tells their apps to read it again (lib/swarmClientPushes.ts).
+export interface SwarmMemberMsg { tabId: string; lastChangedAt: number; parts: Array<'main' | 'machine'> }
+/** One socket's own 4-minute repeat that the server pushes, named by that socket so its other sockets ignore it. */
+export interface SwarmMemberRepeat { pushes: string }
+
+const swarmMemberChannel = (userId: string): string => `swarm-member:${userId}`
+
+export function publishSwarmMember(userId: string, msg: SwarmMemberMsg | SwarmMemberRepeat): Promise<number> {
+  return safePublish(swarmMemberChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeSwarmMember(userId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(swarmMemberChannel(userId), cb)
 }
 
 // Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every

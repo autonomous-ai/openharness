@@ -12,6 +12,7 @@ import { startAgent } from './start.js'
 import { hostForm, swarmReply } from './fixtures/read/index.js'
 import { HostFeed } from './hostFeed.js'
 import { SwarmReads } from './swarmReads.js'
+import { processCoreApi } from '../services/processCoreApi.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 
 function fixture(env: NodeJS.ProcessEnv = {}, privacy: () => PrivacyObservation | null = () => null, relayed: () => boolean = () => false) {
@@ -230,6 +231,29 @@ describe('contributed machine executor', () => {
     expect(f.open).toHaveBeenCalledOnce()
     f.machine.stop(); f.advance(); await f.machine.tick()
     expect(f.open).toHaveBeenCalledOnce()
+  })
+  it('launches a Buddy\'s start, which the backend lists apart so that a host from before Buddies never does', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { starts: [], buddyStarts: [{ id: 'buddy-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'buddy-start', hostDispatch: true }])
+  })
+  it('launches a Product Manager\'s start, which the backend lists apart so that a host from before them never does', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { starts: [], leadStarts: [{ id: 'lead-start', dispatched: false }] })
+    await f.machine.tick()
+    expect((f.start.mock.calls as unknown[][]).map(call => call[0])).toEqual([{ tabId: 'tab', startId: 'lead-start', hostDispatch: true }])
+  })
+  it('says in its reading that it starts Product Managers, to a backend that asks, and to no other', async () => {
+    const f = fixture()
+    Object.assign(f.pool, { capabilitiesWanted: true })
+    await f.machine.tick()
+    const posted = (g: typeof f) => g.backend.mock.calls.filter(c => c[1] === 'POST').map(c => c[3] as Record<string, unknown>)
+    expect(posted(f)[0]).toMatchObject({ capabilities: ['leadStart'] })
+    // A backend from before them does not ask, and would refuse the field.
+    const older = fixture()
+    await older.machine.tick()
+    expect(posted(older)[0]).not.toHaveProperty('capabilities')
   })
   it('probes common tools plus pending-start requirements and publishes failures without calling them missing', async () => {
     const f = fixture()
@@ -653,6 +677,47 @@ describe('contributed machine executor', () => {
     expect(posts().map(fields).at(-1)).toEqual(['harnessProgress'])
     f.step(600_000); await machine.tick()
     expect(posts().map(fields).slice(-2)).toEqual([['harnessUncommitted', 'harnessProgress'], ['harnessProgress']])
+  })
+
+  it('sends each running harness’s token counts by model, and nothing for one with none or not running', async () => {
+    const f = fixture()
+    const session = (id: string) => ({ agentId: id, sessionId: `session-${id}`, engine: 'claude', transcriptPath: `/transcripts/${id}.jsonl`, registeredAt: 1 })
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => ['running', 'quiet'].includes(id) ? session(id) as never : undefined)
+    f.pool.harnessIds = ['running', 'quiet', 'stopped']
+    const opus = { input: 10, output: 5, cacheRead: 100, cacheWrite: 20 }
+    f.core.usage = vi.fn(async target => target.agentId === 'running'
+      ? { totalTokens: 135, updatedAt: '2026-10-29T00:00:00Z', inputTokens: 130, outputTokens: 5, models: { 'claude-opus-5-5': opus },
+        work: { current: [{ cwd: '/private/work', at: '2026-10-29T00:00:00Z' }], locations: [], pullRequests: [], uncertain: false, truncated: false } }
+      : { totalTokens: null, updatedAt: '2026-10-29T00:00:00Z' })
+    await f.machine.tick()
+    const body = f.backend.mock.calls.find(c => c[1] === 'POST')![3] as Record<string, unknown>
+    // Counts only: never the session's folders, pull requests or any other part of its usage reading.
+    expect(body.harnessTokens).toEqual({ running: { 'claude-opus-5-5': opus } })
+    expect(f.core.usage).toHaveBeenCalledTimes(2)
+    f.core.usage = vi.fn(async () => null)
+    f.advance(); await f.machine.tick()
+    expect(f.backend.mock.calls.filter(c => c[1] === 'POST').at(-1)![3]).not.toHaveProperty('harnessTokens')
+  })
+
+  it('drops token counts for a backend that refuses them, keeping every other field, and offers them again ten minutes later', async () => {
+    const f = fixture()
+    vi.mocked(f.core.agents.byAgent).mockImplementation(id => id === 'running'
+      ? { agentId: id, sessionId: 's', engine: 'claude', transcriptPath: '/t.jsonl', registeredAt: 1 } as never : undefined)
+    f.core.usage = vi.fn(async () => ({ totalTokens: 3, updatedAt: '2026-10-29T00:00:00Z', models: { m: { input: 1, output: 1, cacheRead: 1, cacheWrite: 0 } } }))
+    const original = f.backend.getMockImplementation()!
+    f.backend.mockImplementation(async (core, method, path, body) => {
+      if (method === 'POST' && (body as Record<string, unknown>)?.harnessTokens) throw new SuperTabHostError('VALIDATION_ERROR', 'Unrecognized key: harnessTokens', 400)
+      return original(core, method, path, body)
+    })
+    const machine = new ContributedMachines(f.core, 'host', { ...f.deps, progress: () => ({ running: 900 }) } as never)
+    const posts = () => f.backend.mock.calls.filter(c => c[1] === 'POST' && String(c[2]).includes('/machines/'))
+    const fields = (post: unknown) => ['harnessTokens', 'harnessProgress'].filter(key => key in (post as object))
+    await machine.tick()
+    expect(posts().map(c => fields(c[3]))).toEqual([['harnessTokens', 'harnessProgress'], ['harnessProgress']])
+    f.advance(); await machine.tick()
+    expect(posts().map(c => fields(c[3])).at(-1)).toEqual(['harnessProgress'])
+    f.step(600_000); await machine.tick()
+    expect(posts().map(c => fields(c[3])).slice(-2)).toEqual([['harnessTokens', 'harnessProgress'], ['harnessProgress']])
   })
 
   it('drops progress for a backend that refuses it, and offers it again ten minutes later', async () => {
@@ -1079,6 +1144,55 @@ describe('contributed machine executor', () => {
       ['Swarm start start is waiting: Waiting for the launched engine.']])
   })
 
+  // Diego's Mac, 2026-10-28: 410 connect timeouts on the reading in two days, and every one dropped that Swarm's starts
+  // for the pass with nothing in the log, until the backend's deadline failed them.
+  describe('a reading the backend did not take', () => {
+    const failReading = (f: ReturnType<typeof fixture>, error: () => unknown) => f.backend.mockImplementation(async (_core, method, path) =>
+      path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] }) : method === 'POST' && path.includes('/machines/') ? Promise.reject(error()) : { revision: 1 })
+
+    it('is logged once per error, again when it changes or clears, and the waiting start is still launched', async () => {
+      const f = fixture()
+      failReading(f, () => new Error('Connect Timeout Error'))
+      await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(2)
+      failReading(f, () => new SuperTabHostError('VALIDATION_ERROR', 'Invalid request body', 400))
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(4)
+      failReading(f, () => new SuperTabHostError('BACKEND_UNAVAILABLE', 'Could not reach this Super Tab.', 503))
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(5)
+      f.backend.mockImplementation(async (_core, _method, path) => path.includes('/hosts/host/changes') ? hostForm([], { pools: [f.pool] }) : { revision: 1 })
+      f.advance(); await f.machine.tick()
+      f.advance(); await f.machine.tick()
+      expect(f.start).toHaveBeenCalledTimes(7)
+      expect(f.log.mock.calls).toEqual([
+        ['Could not send this machine\'s reading to Swarm tab: Connect Timeout Error'],
+        ['Could not send this machine\'s reading to Swarm tab: Invalid request body'],
+        ['Could not send this machine\'s reading to Swarm tab: Could not reach this Super Tab.'],
+        ['This machine\'s reading reached Swarm tab again.']])
+    })
+
+    it('is logged, and the waiting start still launched, when the local daemon cannot be opened', async () => {
+      const f = fixture()
+      f.open.mockRejectedValueOnce(new Error('The Harness daemon is not running.'))
+      await f.machine.tick()
+      expect(f.start).toHaveBeenCalledOnce()
+      expect(f.log.mock.calls).toEqual([['Could not send this machine\'s reading to Swarm tab: The Harness daemon is not running.']])
+    })
+
+    it('launches nothing when the refusal says this machine lost access to that Swarm', async () => {
+      for (const [code, status] of [['CONTRIBUTION_REVOKED', 403], ['HOST_UNAVAILABLE', 403], ['NOT_FOUND', 404], ['UNAUTHORIZED', 401]] as const) {
+        const f = fixture()
+        failReading(f, () => new SuperTabHostError(code, 'Read the current machine contribution.', status))
+        await f.machine.tick()
+        expect(f.start).not.toHaveBeenCalled()
+        expect(f.log.mock.calls).toEqual([['Could not send this machine\'s reading to Swarm tab: Read the current machine contribution.']])
+      }
+    })
+  })
+
   describe('a start this machine cannot run', () => {
     const failures = (f: ReturnType<typeof fixture>) => f.backend.mock.calls.filter(c => c[1] === 'POST' && c[2] === '/api/super-tabs/hosts/host/starts/tab/start')
       .map(c => c[3] as { operationId: string; command: { type: string; error?: string } }).filter(body => body.command.type === 'agent.startFailed')
@@ -1459,7 +1573,7 @@ describe('removed machine cleanup', () => {
       live: vi.fn(() => live), all: vi.fn(all),
       creationStatus: vi.fn(async (creationId: string) => ({ creationId, state: 'created' as const,
         agentId: creationId === 'super-unproven' ? 'someone-else' : `h-${creationId.slice('super-'.length)}` })),
-      closeStarted: vi.fn(async (agentId: string) => { live = live.filter(s => s.agentId !== agentId); return { closed: true } as never }),
+      closeMember: vi.fn(async (agentId: string) => { live = live.filter(s => s.agentId !== agentId); return { closed: true } as never }),
     } })
     const backend = vi.fn(async (_core: unknown, method: string, path: string, _body?: unknown): Promise<unknown> =>
       method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
@@ -1528,7 +1642,7 @@ describe('removed machine cleanup', () => {
     // The person's repository forgets only the Swarm worktree it held.
     const listed = git(m.own, 'worktree', 'list', '--porcelain')
     expect(listed).toContain('/mine\n'); expect(listed).not.toContain('/earlier\n')
-    expect(m.core.agents.closeStarted).toHaveBeenCalledWith('h-recorded', 'now')
+    expect(m.core.agents.closeMember).toHaveBeenCalledWith('h-recorded', undefined)
     expect(m.acks()).toEqual([[m.core, 'POST', '/api/super-tabs/tab/commands',
       { operationId: 'machine-cleaned-removal', command: { type: 'machine.cleaned', machineId: 'host', removalId: 'removal' } }]])
     expect(JSON.parse(readFileSync(swarmWorktreesFile(m.data, 'host'), 'utf8')).worktrees.map((w: { tabId: string }) => w.tabId)).toEqual(['other-tab'])
@@ -1548,7 +1662,7 @@ describe('removed machine cleanup', () => {
     const host = m.open()
     await host.clean('tab', 'removal')
     for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
-    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.core.agents.closeMember).not.toHaveBeenCalled()
     expect(m.acks()).toEqual([])
     expect(m.log.mock.calls.flat().join('\n')).toContain('added to that Swarm again')
     // Settled: the next poll's row, if any, does not run it again.
@@ -1573,7 +1687,7 @@ describe('removed machine cleanup', () => {
     addedOnRead(m, 2)
     await m.open().clean('tab', 'removal')
     for (const kept of [join(m.data, 'swarm-projects', 'tab'), m.newRoot, m.recorded, m.earlier]) expect(existsSync(kept), kept).toBe(true)
-    expect(m.core.agents.closeStarted).not.toHaveBeenCalled()
+    expect(m.core.agents.closeMember).not.toHaveBeenCalled()
     expect(records(m)).toEqual(['tab', 'other-tab'])
     expect(m.acks()).toEqual([])
   })
@@ -1599,7 +1713,7 @@ describe('removed machine cleanup', () => {
       if (method !== 'GET' || !path.startsWith('/api/super-tabs/tab/')) return { parts: [] }
       return swarmReply(path, { starts: m.starts, ...(added ? { machines: [{ machineId: 'host', contributorId: 'person', cwd: m.newRoot }] } : {}) })
     })
-    vi.mocked(m.core.agents.closeStarted!).mockImplementation(async () => {
+    vi.mocked(m.core.agents.closeMember!).mockImplementation(async () => {
       // The close was slow; the owner re-added the machine while it was awaited and its new start reused this clone.
       added = true
       m.setLive([])
@@ -1661,16 +1775,80 @@ describe('removed machine cleanup', () => {
     expect(m.acks()).toHaveLength(1)
   })
 
-  it('keeps a folder whose session will not close, cleans the rest and acknowledges', async () => {
+  // Diego 10-29: a folder kept for a session still running in it was confirmed cleaned anyway, and its records dropped, so
+  // nothing ever tried it again. A kept folder now leaves the cleanup unconfirmed, retried on the usual backoff.
+  it('keeps a folder whose session will not close, cleans the rest and confirms nothing until it is gone', async () => {
     const m = machine()
     const person = session('person', join(m.newRoot), undefined)
     m.setLive([person])
-    await m.open().clean('tab', 'removal')
-    expect(m.core.agents.closeStarted).not.toHaveBeenCalledWith('person', 'now')
+    const host = m.open()
+    await expect(host.clean('tab', 'removal')).rejects.toThrow('a session still runs in tab.')
+    expect(vi.mocked(m.core.agents.closeMember!).mock.calls.map(([agentId]) => agentId)).not.toContain('person')
     expect(existsSync(m.newRoot)).toBe(true)
     expect(existsSync(join(m.data, 'swarm-projects', 'tab'))).toBe(false)
-    expect(m.log.mock.calls.flat().join('\n')).toContain(m.newRoot)
+    expect(m.log.mock.calls.flat().join('\n')).toContain('Kept tab: a session still runs in it.')
+    expect(m.log.mock.calls.flat().join('\n')).not.toContain(m.home)
+    expect(m.acks()).toEqual([])
+    expect(records(m)).toEqual(['tab', 'other-tab'])
+    // The person closed it: the next try after the backoff deletes the folder and confirms.
+    m.setLive([])
+    m.step(60_000)
+    await host.clean('tab', 'removal')
+    expect(existsSync(m.newRoot)).toBe(false)
     expect(m.acks()).toHaveLength(1)
+    expect(records(m)).toEqual(['other-tab'])
+  })
+
+  // Diego 10-29: under harnessd the Swarm runs in its own process, whose core API (services/processCoreApi.ts) has no
+  // closeStarted, so the agents were never closed and their folders were kept. It closes through the Swarm's own close.
+  it('closes the Swarm agents in its folders and deletes them when the Swarm runs in its own process', async () => {
+    const m = machine()
+    const cloned = join(m.data, 'swarm-projects', 'tab', 'project')
+    const starts = [...m.starts, { id: 'cloned', creationId: 'super-cloned-0123456789', harnessId: 'h-cloned', request: { machineId: 'host', worktree: false, cwd: cloned } }]
+    m.backend.mockImplementation(async (_core, method, path) => method === 'GET' && path.startsWith('/api/super-tabs/tab/') ? swarmReply(path, { starts }) : { parts: [] })
+    let live = [session('h-recorded', m.recorded, 'agent'), session('h-cloned', cloned, 'agent')]
+    const asked: [string, Record<string, unknown>][] = []
+    const ask = vi.fn(async (query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      asked.push([query, payload])
+      if (query === 'creation_status') return { observation: { creationId: payload.creationId, state: 'created', agentId: 'h-cloned' } }
+      if (query !== 'close_member') return { error: 'UNKNOWN_QUERY' }
+      live = live.filter(s => s.agentId !== payload.agentId)
+      return { closed: true }
+    })
+    const core = processCoreApi(m.data, 'superTabs', { live: () => live, ask })
+    await new ContributedMachines(core, 'host', { backend: m.backend, log: m.log, now: () => 0 } as never).clean('tab', 'removal')
+    expect(asked.filter(([query]) => query === 'close_member').map(([, payload]) => payload).sort((a, b) => String(a.agentId).localeCompare(String(b.agentId))))
+      .toEqual([{ agentId: 'h-cloned', creationId: 'super-cloned-0123456789' }, { agentId: 'h-recorded' }])
+    for (const gone of [join(m.data, 'swarm-projects', 'tab'), m.recorded]) expect(existsSync(gone), gone).toBe(false)
+    expect(m.acks()).toHaveLength(1)
+    expect(records(m)).toEqual(['other-tab'])
+  })
+
+  // Review of #2070: the close's answer was thrown away, so a removal that never confirmed said nothing of why.
+  it.each([
+    ['refuses', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'SERVICE_UNAVAILABLE' } as never), 'SERVICE_UNAVAILABLE'],
+    // Re-check of #2070: an error's own text can carry a full path, so a failed close is logged by a fixed code.
+    ['fails', (m: ReturnType<typeof machine>) => vi.mocked(m.core.agents.closeMember!).mockRejectedValue(new Error(`EACCES: ${m.recorded}`)), 'CLOSE_FAILED'],
+  ])('confirms nothing, keeps the records and logs why while a Swarm agent in the clone %s to close', async (_how, fail, reason) => {
+    const m = machine()
+    fail(m)
+    await expect(m.open().clean('tab', 'removal')).rejects.toThrow('a session still runs in recorded.')
+    expect(m.core.agents.closeMember).toHaveBeenCalledWith('h-recorded', undefined)
+    expect(existsSync(m.recorded)).toBe(true)
+    expect(m.acks()).toEqual([])
+    expect(records(m)).toEqual(['tab', 'other-tab'])
+    expect(m.log.mock.calls.flat().filter(line => String(line).startsWith('Kept recorded:')))
+      .toEqual([`Kept recorded: a session still runs in it; its close was refused: ${reason}.`])
+  })
+
+  // Review of #2070: both of a tab's clone roots end in its id, and the message named it twice.
+  it('names each kept folder once', async () => {
+    const m = machine()
+    const cloned = join(m.data, 'swarm-projects', 'tab', 'project')
+    m.setLive([session('h-recorded', m.recorded, 'agent'), session('person', cloned), session('another-person', m.newRoot)])
+    vi.mocked(m.core.agents.closeMember!).mockResolvedValue({ error: 'NOT_A_MEMBER' } as never)
+    await expect(m.open().clean('tab', 'removal')).rejects.toThrow(
+      new Error('Did not finish cleaning up Swarm tab yet: a session still runs in recorded, tab. It tries again later.'))
   })
 
   it('finishes a cleanup after a restart that interrupted its acknowledgement', async () => {

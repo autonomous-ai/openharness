@@ -165,24 +165,127 @@ from being reused for private work after removal.
 Private projects control application access. Contributing machine owners are
 trusted execution hosts and can access work running on their computers.
 
-## Chat with PM
+## Buddies
 
-Each person has a private chat with each project's product manager, next to the
-shared project chat, for their own questions and answers. In Desktop and the
-web app it is **Chat with PM**, the first entry under an expanded project. The
-first click opens a private conversation for that person alone, named after
-them, with the project's product manager in it. Later clicks, other windows and
-other devices open the same one: the request that creates it is the same for
-each person and project, and the server answers a repeat with the conversation
-it already made.
+A Buddy is a person's own agent in one project. They brainstorm with it in a chat that only they and their Buddy read:
+it asks what they want and why, offers two or three options with the one it recommends, and agrees the scope with
+them. When they say to send it to the product manager, it posts one proposal (goal, scope and priority, and up to five
+files such as a plan, spec, log or screenshot) in the project chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
+the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
 
-It behaves like the project chat: replies, attachments, the unread mark and the
-product manager's tags in Notifications. Only that person and the product
-manager read it. Other members, the project's owner and the Swarm's owner
-included, never receive it, its messages or its notifications. The chat is
-chat only: no work is assigned in it, and only the product manager joins it
-among agents. As with any session, the owner of the machine running the
-product manager can see what its terminal shows.
+Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (Ken, 2026-10-29).
+
+- **Buddy chat.** Each person has a Buddy chat in each project they read, from the start, before any Buddy runs. In
+  Desktop and the web app the sidebar's **Buddies** section has a row for each project; opening it opens the chat, and
+  ⇧⌘K opens the current project's. A row with new lines shows its name in bold, with no count; the Swarm tab counts
+  them. A chat with no Buddy running offers **Start**: one of the person's own machines and Claude Code, already
+  chosen, or Codex.
+- **The product manager's lines to one person.** What the product manager tells one person directly goes to that
+  person's Buddy chat in the project (a line it sends with `person.tell`, and the line saying what it chose for a
+  decision left to it). The chat opens for the line if the person has none yet, so no line drops. Such a line reads
+  as "River (PM) → you": the product manager writes there but cannot read the chat. It is addressed to the person;
+  their Buddy does not answer it for them. They answer in the project chat, or through a proposal.
+  Such a line is not secret from the project: every project member watching the product manager's terminal sees what
+  it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
+  manager puts nothing there it would not say in the project chat.
+- Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
+  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
+  Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
+  runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
+  agent.
+- A Buddy's machine checks every Swarm command against the window it runs in. An agent speaks only as itself, only
+  through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
+  `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The window's agent is
+  taken only when Harness's own window for it is among the command's parent processes, so a private tmux server can't
+  pose as another agent's window. What it can't see reads as a person's terminal, where naming an agent still works.
+  Each needs an agent deliberately evading the check:
+  - a command that detaches from its window and clears its tmux variables;
+  - a command run in a private tmux server's window, at a number no agent has;
+  - a command run through a fake tmux in the account's own `~/.local/bin`, which Harness trusts before Homebrew's.
+
+  Refusing these would also refuse people who work in their own tmux. The real fix is for the daemon to identify the
+  caller itself from its connection; that's the planned follow-up.
+- On Windows, the window is whatever the shell says it is, so any agent there could name another agent's window. Only
+  Buddies are kept off Windows; other agents there are trusted as before until Windows has a real caller check.
+- A Buddy reads what its owner reads of its project, so it can answer which task owns something, where its pull
+  request stands and what blocks it without the product manager's summaries. That is the project chat, its own chat
+  and the project's workgroups: each task's status, agents, checks, linked pull requests and its owner's open decisions,
+  and on request a task's messages and the archived tasks, a page at a time. The server checks every read as the owner,
+  at the membership they added the Buddy in: once they leave, rejoin or lose a private project, the Buddy reads nothing.
+- A Buddy never reads a private chat (its owner's own with others included), another person's Buddy chat, the Leads
+  conversation or another project, and its Swarm read shows no machines, agent starts or routing rules. It can post
+  only in its own chat. The server refuses every other command.
+- Its status is a short task summary, the newest 100 tasks, marking what changed since its last read and which ones
+  are archived but not yet in the product manager's report; routing rows (where a task was routed, what was left out
+  and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
+  GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
+  information, never as instructions; only its owner's words ask it to act.
+- A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
+  dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
+  Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
+  list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
+  no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
+  commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`, `--hostname-bin`), a
+  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out leaves
+  the call to dontAsk: it still runs the commands Claude Code itself counts as read-only, inside the folder, and refuses
+  everything else, so nothing can write. A managed policy that runs only managed hooks (`allowManagedHooksOnly`) would
+  leave a Buddy in that same state, plus whatever the policy itself allows; that was not tested, as it is an
+  administrator's file. Its Super Tab commands are a Buddy's
+  own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
+  `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
+  (18473) cannot run these commands, since reaching that daemon takes `--port`.
+- What a Buddy reads: the guard confines the Buddy's own reads to its folder. Files another local process places in
+  that folder, by link, hard link or copy, are outside what it can stop: it judges a path when it answers, before
+  Claude Code opens it, and a hard link's real path is its name in the folder. The Buddy has no command that writes, so
+  it cannot place any. Within that, it reads the files in its own copy of the project (by real path, so a link out of
+  it is out), the project's git history, the project's GitHub issues and pull requests through the person's own `gh`
+  sign-in, and through Harness its own chat, the project chat and the project's workgroups, as above. Its own
+  reads reach nothing else on the machine: absolute paths and `..`
+  are refused, glued to an option
+  too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
+  Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
+  broken one, is refused by its real path when the guard answers each command, and grep, rg and ls may not follow
+  links as they walk.
+- A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
+  person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
+  in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise
+  run with the person's credentials. It loads no memory file either (`CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules`):
+  a committed one importing files from outside the folder stopped a Buddy at a question nobody answers, and a yes would
+  read them past the guard. It can still read the project's instructions with Read. Its `grep` is Claude Code's
+  built-in ugrep, so only grep's plain long options are allowed, by their whole names, and rg's likewise. Harness's own session, turn and
+  Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
+  in its own copy of the project are read-only.
+  A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the
+  Harness GitHub App's token.
+- The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
+  asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
+  `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
+  it has a Codex home of its own. Every Codex Buddy started before the refusal (Harness before 10-29) runs with Codex's
+  full permissions, and its relaunches keep the mode it was started with: remove it and add a Claude Code Buddy. A
+  start the server recorded before the refusal, run by a Harness from 10-29 on, starts in Codex's read-only sandbox
+  with approvals sent to the person, and a Codex too old for that mode stays stopped rather than starting without it.
+- Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
+- A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
+  or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
+- A proposal's files are only ones its owner handed it: a file inside the Buddy's own copy of the project (checked by
+  its real path on its own machine, so never through a link out of it, and never the repository's or Harness's own
+  records), or a file its owner sent in their Buddy chat. Each file has a chat file's limits (10 MB). The server accepts
+  a Buddy's file only in its own chat and only on a proposal, so it cannot post a file in the project chat any other way.
+  The files show on the proposal message like any message's files, for the product manager and every member.
+- Nobody else reads a Buddy chat: not the product manager, and not the project's or the Swarm's owner. Private matters
+  stay there; the Buddy posts only what its owner asks it to send.
+- Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again
+  reopens the same chat. Adding one while the person's Buddy there is down replaces it in one step, in the same chat;
+  while it runs or starts, adding another is refused. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
+
+### Chat with PM, closed
+
+Chat with PM, each person's private chat with a project's product manager, is gone from Desktop, the phone and the
+web. Nobody opens a new one, and nobody reads or posts in an old one, the product manager and its person included.
+Old ones stay in the database, unread by anyone; nothing deleted or rewrote them. A decision asked in one before it
+closed stays in its person's Needs-you list and stays answerable; the answer's notice reaches the product manager in
+the project chat. (On 2026-10-29 production held 9 such chats in 4 Swarms, and none had a decision asked in it.)
 
 ## Leaderboard
 
@@ -200,8 +303,8 @@ Each person has three numbers:
 
 - **Shipped**: requests the person asked for whose pull request merged. A group
   records its requester when it is opened. A person's own new group names them,
-  and a product manager names the person who asked in the project chat or in
-  their Chat with PM. Right after merging, the product manager records the merge
+  and a product manager names the person who asked in the project chat, or
+  whose Buddy proposed it. Right after merging, the product manager records the merge
   with the group and the PR link (and the merge time, for one recorded later, up
   to four weeks back). The request ships at the merge, even if its work is lost
   or cancelled afterwards. A group that is Done with a linked PR ships too; the
@@ -249,8 +352,144 @@ opens the reader's own waiting item, or the first one when none waits on them.
 Only facts count, never message text. The leaderboard records when work was asked
 for and shipped, who answered what kind of item, and how long it waited. It
 never records what anyone wrote. The only text it shows is the title of a
-conversation the reader can read. Private conversations, Chat with PM among
+conversation the reader can read. Private conversations, Buddy chats among
 them, never count and never appear in it.
+
+## Routing
+
+The Lead routes each task before starting or assigning an agent. The route
+leaves out what cannot run it or breaks one of the owner's hard rules, then
+orders the rest by the owner's soft rules and the routing policy (strength,
+quota fit, effective cost).
+
+**Grid models.** A model served on the Swarm's grid counts as strong as the
+policy says. Kimi K3 and DeepSeek v4.1 are rated 2, Sonnet's tier; every other
+grid or local model takes the policy's local quality (1). An owner can change
+both, and add rows of their own, in the policy's local models (`models`: a name
+and a quality, first match first). A model whose host is offline is left out
+with that reason, so no Builder is sent to a machine that cannot start it.
+
+**Cheap first.** Low-risk work that is not a review ranks a grid model first:
+low-difficulty work, and medium work of kind `docs`, `copy`, `tests`,
+`fixtures`, `fix` or `refactor`. The floor still keeps a small model off medium
+work. An owner opts out with the `noGridFirst` rule.
+
+**Stepping up.** When a grid attempt's first review says Ready no, or its grid
+host never starts the agent (the start fails or misses its window), the Swarm
+steps the task up: it closes the attempt, tells its Builder to stop, and wakes
+the Lead to route it again. The next attempt runs on no grid model and nothing
+below quality 2 (Sonnet), and after a second failure nothing below 3 (Opus). A
+task steps up at most twice; after that the Lead decides. The route and the
+server both keep to the new floor. The next attempt's brief carries the pull
+request, the last result and the review's findings, and the step (attempt
+number and why) is kept on the attempt and its route decision.
+
+**Reviews.** A review never runs on a grid model or on a model the policy rates
+below 2. A model the policy does not name, a small Codex variant such as a mini
+or nano among them, is rated 1; an agent launched on its engine's own model is
+rated by that engine's `default` row. A review runs on another engine than the
+reviewed Builder's while a strong Reviewer of another engine can run in the
+Swarm (a Builder on a grid model counts as that model's family). A Swarm with
+one engine keeps its automatic reviews: the Builder's own engine reviews at its
+top tier (quality 3) only, and the route decision records why. The server
+refuses such a start, assignment or pick from an agent, whatever the soft rules
+say, and lets a person through with a warning.
+
+Design:
+
+- Growth: one step record per task, replaced at each step; it goes with its
+  group. Policy rows are capped at 40.
+- Concurrency: a step is recorded in the write that saw the failure (the
+  review's verdict, the failed start or the start timeout), so a newer write
+  retries on current data like every other Swarm write.
+- Read cost: no new reads beyond the tab's policy, which work commands read once.
+- Scale: at most two steps per task; a Swarm's 300 tasks a week add at most 600
+  small records. The step-up rate in `costs` is the first warning.
+- Compatibility: a policy saved before per-model rows reads the built-in rows.
+  An older CLI routes without the new exclusions, and the server still refuses
+  a grid or weak Reviewer and a pick below a step's floor.
+- Migration and rollback: additive fields, no migration. Rolling back leaves
+  them unread; a stepped-up task is then routed as before.
+- Audience: the step is part of its group, read by whoever reads the group.
+- Identity: steps are the Swarm's own notices, written as the project's Lead.
+- Failure: a step is told to the Lead and the Builder; a step that cannot be
+  taken (the cap) leaves the attempt with its Builder.
+- Platforms: server-side; the same on every host.
+
+## Cost records
+
+Every task a Lead routes records what it ran on, what it cost and how it ended,
+so a Swarm can show that it gets work done cheaper and route each job to the
+cheapest harness that still gets it right.
+
+Each attempt keeps:
+
+- the kind of job the Lead gave when routing (`ui`, `docs`; `review` for a
+  review), or none;
+- the engine, model and effort it ran at, and the model on the Swarm's grid when
+  it ran one;
+- how it was paid: an engine plan (subscription), per token through an API (an
+  API key, or a grid model shared from one), the Swarm's own GPUs, or unknown;
+- its session's token counts by model (input, output, cache reads and cache
+  writes) when it started and when it ended. Its tokens are the difference. A
+  session counts up to 15 models apart; any more are counted together as
+  `other`, which has no price;
+- its end reading: an agent finishing its own work (Done or Stopped) sends its
+  session's totals read at that moment. Finished by someone else, or by a host
+  from before cost records, its tokens are unknown rather than taken from an
+  older report. A lost, cancelled or host-stopped attempt ends with its
+  machine's last report;
+- how it ended: done, stopped, cancelled, lost, or superseded when its group went
+  while it was still active. A task lost to a usage limit and taken back by the
+  same session is the same attempt, still going. Handing a lost task to another
+  agent is a new attempt; the old one stays lost.
+
+Each machine sends its running Swarm agents' token counts with its usual report.
+Only counts leave the machine: never text, prompts, folders or pull requests.
+Members never see the raw counts; they read the summary.
+
+**Prices.** Costs use API list prices per model, in US dollars, from one reviewed
+table in the backend (`backend/src/superTabs/costs/prices.ts`). Each price names
+its source and the day it was read. A model without a listed price has no cost,
+never a guessed one. Grid models reached through OpenRouter are priced at
+OpenRouter's rates. A model served on the Swarm's own GPUs costs 0, and its
+attempts say so. Two costs are shown: what the tokens would have cost on the API,
+and what was actually spent per token (nothing on a plan or on own GPUs).
+
+**Reading it.** The Lead reads `harness super-tab costs [--days N]` (7 days unless
+set, at most 90), for the Product Manager, and later for the leaderboard and the
+nightly reflection. Per engine, model, effort and kind of job it gives:
+attempts, first-review pass rate, shipped, median minutes to ship, tokens,
+API-equivalent cost, actual spend, cost per shipped change, and how many
+attempts stepped up from a cheaper model. The same figures per model alone (a
+grid model by its own name) compare models week over week. A request ships
+once, at its merge or first Done as the leaderboard records it, by the attempt
+that was running then; more attempts done afterwards ship nothing new. Time to
+ship runs from that attempt's start to when the request shipped. Cost per shipped change is shown only when every ended attempt's cost is
+known, so a partial sum never reads cheaper than it was. It covers only attempts
+routed since cost records began, in the groups the reader may read.
+
+Design:
+
+- Growth: the records live on route decisions, which are deleted after 90 days
+  as before. A machine's report keeps counts only for its running agents.
+- Concurrency: recorded in the same write that starts or ends the attempt, so a
+  newer write retries on current data like every other Swarm write.
+- Read cost: one index read of the period's decisions (tabId and creation time),
+  at most 3,000, then only the groups they name. It never reads messages.
+- Scale: a busy Swarm routes about 300 tasks a week, so 90 days is about 4,000;
+  the 3,000 cap says when it cut. The read's time is the first warning.
+- Compatibility: an old host sends no counts and its attempts have no tokens; an
+  old backend refuses the new fields and the CLI sends its report and routes
+  without them. The backend deploys first.
+- Migration and rollback: additive fields, no migration. Rolling back leaves them
+  unread.
+- Audience: the server returns only attempts in groups the reader may read.
+- Identity: counts are recorded per Swarm agent, never as the machine owner.
+- Failure: an attempt with no reading or no price shows no cost and is counted
+  apart, never as zero.
+- Platforms: the counts come from Claude Code and Codex transcripts on macOS,
+  Linux and Windows hosts alike.
 
 ## Avatars, status and celebrations
 

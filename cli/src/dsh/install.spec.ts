@@ -6,7 +6,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DOCTOR_TIMEOUT_MS, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
+import { DOCTOR_TIMEOUT_MS, gitStartFailure, installDsh, isTransientGitFailure, removeDsh, resolveInstallSource, runDshDoctor, type DshInstallProgress } from './install.js'
 import { dshInstallDir, installedDsh, invalidateInstalledDsh, listInstalledDsh, readInstalledIndex, type InstalledDsh } from './installed.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from './registry.js'
 
@@ -375,6 +375,16 @@ describe('installDsh, every way it can go', () => {
       expect(leftovers()).toEqual([])
     })
 
+    it('on Windows, where git does not come with the system, no git says to install Git for Windows', () => {
+      const missing = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' })
+      expect(gitStartFailure(missing, 'win32')).toBe('Git is not installed on this computer, and harnesses are installed with it. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.')
+      // Elsewhere, the plain sentence; any other failure to start, what Node said.
+      const plain = 'Git is not installed on this computer, and installing a harness needs it. Install Git, then try again.'
+      expect(gitStartFailure(missing, 'darwin')).toBe(plain)
+      expect(gitStartFailure(missing, 'linux')).toBe(plain)
+      expect(gitStartFailure(Object.assign(new Error('spawn git EACCES'), { code: 'EACCES' }), 'win32')).toBe('spawn git EACCES')
+    })
+
     it('a clone still running after ten minutes is stopped, and said to have been', async () => {
       stubGit('echo "Cloning into x..." >&2\nexec sleep 30')
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -474,19 +484,24 @@ describe('installDsh, every way it can go', () => {
       beforeEach(() => { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) })
       afterEach(() => { Object.defineProperty(process, 'platform', platform) })
 
-      it('a harness with a setup or a doctor is refused before either runs, said in words, and not recorded', async () => {
+      it('a harness with a setup or a doctor is refused once fetched, before it is placed, and nothing stays on disk', async () => {
         // 2026-10-28: every Store install on Windows failed; their setup and doctor ran through a /bin/sh Windows lacks.
-        const detail = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
-        for (const toolchain of [{ setup: 'setup.sh' }, { doctor: 'doctor.sh' }]) {
+        // The review of #2026 found the refusal came after the package was placed, so its files stayed, unrecorded.
+        // They run in Git Bash now; this computer, taken for Windows, has none (no Program Files, no git.exe on PATH).
+        const detail = 'This harness runs a setup or check script, which needs Git Bash on Windows, and it was not found. Install Git for Windows from https://git-scm.com/download/win (or run: winget install --id Git.Git -e), then try again.'
+        const placed = (): boolean => { try { lstatSync(dshInstallDir('acme/thing')); return true } catch { return false } }
+        for (const [toolchain, link] of [[{ setup: 'setup.sh' }, false], [{ doctor: 'doctor.sh' }, false], [{ setup: 'setup.sh' }, true]] as const) {
           rmSync(join(root, 'src'), { recursive: true, force: true })
           const repo = thing({ toolchain }, { 'setup.sh': '#!/bin/sh\ntouch set-up\n', 'doctor.sh': '#!/bin/sh\ntouch checked\n' })
           const frames: DshInstallProgress[] = []
-          const result = await installDsh({ source: repo, onProgress: (p) => frames.push(p) })
-          expect(result, JSON.stringify(toolchain)).toEqual({ ok: false, error: 'SHELL_UNAVAILABLE', detail })
+          const result = await installDsh({ source: repo, link, onProgress: (p) => frames.push(p) })
+          const what = `${JSON.stringify(toolchain)} link=${link}`
+          expect(result, what).toEqual({ ok: false, error: 'SHELL_UNAVAILABLE', detail })
           expect(frames.at(-1)).toEqual({ id: 'acme/thing', phase: 'failed', error: 'SHELL_UNAVAILABLE', detail })
           expect(frames.map((f) => f.phase)).toEqual(['clone', 'failed'])
-          expect(existsSync(join(dshInstallDir('acme/thing'), 'set-up'))).toBe(false)
-          expect(existsSync(join(dshInstallDir('acme/thing'), 'checked'))).toBe(false)
+          expect(placed(), what).toBe(false)
+          expect(leftovers(), what).toEqual([])
+          expect(existsSync(join(repo, 'set-up'))).toBe(false)
           expect(readInstalledIndex()).toEqual([])
         }
       })

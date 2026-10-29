@@ -21,9 +21,10 @@ import { readDshManifest, viewerUse, type DshManifest } from './manifest.js'
 import { PACKAGE_PATH_RE, type DshRegistryEntry } from './registry.js'
 import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
-import { dshShellAvailable, runDshCommand } from './shell.js'
+import { DSH_SHELL_UNAVAILABLE, dshShellAvailable, runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
 import { insideGitCheckout } from '../lib/gitProject.js'
+import { INSTALL_GIT_FOR_WINDOWS } from '../lib/windows/gitBash.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -188,7 +189,7 @@ async function cloneOnce(
     // `--progress` because stderr is not a tty here and git would otherwise stay silent until the end;
     // streamed, not collected, so "Receiving objects: 39%" reaches the dialog while it is true.
     const clone = await cloneRepo(source, ref, tmpDir, false, onLine)
-    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.noGit ? NO_GIT : clone.detail)
+    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.detail)
     commit = await gitHead(tmpDir)
     revision = await gitHead(tmpDir, 'HEAD^{tree}')
   } else {
@@ -199,7 +200,7 @@ async function cloneOnce(
     // whole-repo one (the manifest at its root) and nothing else of the monorepo lands on the machine.
     const repoDir = join(root, `.tmp-${randomUUID()}`)
     const clone = await cloneRepo(source, ref, repoDir, true, onLine)
-    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.noGit ? NO_GIT : clone.detail, repoDir)
+    if (!clone.ok) return fail(clone.noGit ? 'GIT_UNAVAILABLE' : 'CLONE_FAILED', clone.detail, repoDir)
     const sparse = await streamGit(['-C', repoDir, 'sparse-checkout', 'set', '--', path], onLine)
     if (!sparse.ok) return fail('CLONE_FAILED', sparse.detail, repoDir)
     const folder = join(repoDir, ...path.split('/'))
@@ -280,7 +281,7 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
     })
     child.on('error', (error: NodeJS.ErrnoException) => {
       clearTimeout(timer)
-      resolve({ ok: false, detail: error.message, ...(error.code === 'ENOENT' ? { noGit: true as const } : {}) })
+      resolve({ ok: false, detail: gitStartFailure(error), ...(error.code === 'ENOENT' ? { noGit: true as const } : {}) })
     })
     // Exit may precede the last stderr data. Classify the failure only once
     // the pipe closes, so a retryable Git error cannot become an empty one.
@@ -294,6 +295,16 @@ function streamGit(args: string[], onLine: ((line: string) => void) | undefined)
       resolve({ ok: false, detail: said ? `${how}: ${said}` : how })
     })
   })
+}
+
+/**
+ * What a git that could not start is reported as. A missing one is said in words (NO_GIT); on Windows, where git is
+ * not part of the system and the installer does not bring it, with where to get Git for Windows and the winget line
+ * that installs it (0 of 25 Windows Store installs succeeded, 2026-10-28). Any other failure to start: what Node said.
+ */
+export function gitStartFailure(error: NodeJS.ErrnoException, platform: NodeJS.Platform = process.platform): string {
+  if (error.code !== 'ENOENT') return error.message
+  return platform === 'win32' ? `Git is not installed on this computer, and harnesses are installed with it. ${INSTALL_GIT_FOR_WINDOWS}` : NO_GIT
 }
 
 /** Put the clone (or the link) at its final path, replacing whatever an earlier install left there. */
@@ -337,6 +348,18 @@ export async function runDshDoctor(installed: InstalledDsh, onLine?: (line: stri
   return { ok: result.code === 0 && !result.timedOut, lines: result.lines }
 }
 
+/**
+ * A package whose setup or doctor this computer has no shell for (dsh/shell.ts), refused in words before either runs,
+ * rather than as one that could not start (`spawn /bin/sh ENOENT`). An install is refused once fetched or linked and
+ * before it is placed: one with no catalog entry (from a link) cannot be refused before its download (dsh/service.ts),
+ * but nothing of it may stay on disk (review of #2026, 2026-10-28).
+ */
+function refuseWithoutShell(manifest: DshManifest, progress: (p: DshInstallProgress) => void): DshInstallResult | null {
+  if (!(manifest.toolchain?.setup || manifest.toolchain?.doctor) || dshShellAvailable()) return null
+  progress({ id: manifest.id, phase: 'failed', detail: DSH_SHELL_UNAVAILABLE, error: 'SHELL_UNAVAILABLE' })
+  return { ok: false, error: 'SHELL_UNAVAILABLE', detail: DSH_SHELL_UNAVAILABLE }
+}
+
 export async function installDsh(opts: DshInstallOptions): Promise<DshInstallResult> {
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
   const wrongId = (actual: string): DshInstallResult => {
@@ -359,6 +382,8 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
       if (!linked.ok) { progress({ id: null, phase: 'failed', detail: linked.detail, error: linked.error }); return linked }
       manifest = linked.manifest
       if (opts.expectedId && manifest.id !== opts.expectedId) return wrongId(manifest.id)
+      const refused = refuseWithoutShell(manifest, progress)
+      if (refused) return refused
       unlock = lockDsh(manifest.id)
       if (!unlock) return dshBusy(manifest.id)
       realDir = linked.realDir
@@ -375,6 +400,9 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
         rmSync(cloned.tmpDir, { recursive: true, force: true })
         return wrongId(manifest.id)
       }
+      // The fetched copy goes with `staged`, in the finally below.
+      const refused = refuseWithoutShell(manifest, progress)
+      if (refused) return refused
       unlock = lockDsh(manifest.id)
       if (!unlock) return dshBusy(manifest.id)
       commit = cloned.commit
@@ -406,12 +434,9 @@ export async function finishInstall(resolved: InstalledDsh, opts: DshInstallOpti
   const { manifest, realDir } = resolved
   const progress = (p: DshInstallProgress): void => opts.onProgress?.(p)
 
-  // Refused before anything runs, rather than as a setup or doctor that could not start (`spawn /bin/sh ENOENT`).
-  if ((manifest.toolchain?.setup || manifest.toolchain?.doctor) && !dshShellAvailable()) {
-    const detail = 'This harness runs a setup or check script, and Harness cannot run those on Windows yet.'
-    progress({ id: manifest.id, phase: 'failed', detail, error: 'SHELL_UNAVAILABLE' })
-    return { ok: false, error: 'SHELL_UNAVAILABLE', detail }
-  }
+  // An update reaches here with its new copy placed; a failed update puts the previous one back (update.ts).
+  const refused = refuseWithoutShell(manifest, progress)
+  if (refused) return refused
 
   const setupLines: string[] = []
   if (manifest.toolchain?.setup) {

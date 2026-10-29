@@ -1,6 +1,7 @@
 /**
- * Where the Harness Team account lives on a Mac, and the checks every value passes before it goes into the
- * privileged script (docs/plans/2026-10-24-swarm-team-account.md, Task 2).
+ * Where the Harness Team account lives on a Mac and on Linux (`teamLayout`), and the checks every value passes before
+ * it goes into the privileged script (docs/plans/2026-10-24-swarm-team-account.md, Task 2;
+ * docs/superpowers/plans/2026-10-28-harness-team-account-linux.md).
  *
  * The team account is a separate, standard macOS user that runs a second Harness daemon for Swarm work, so a
  * teammate's agent on this Mac cannot read the owner's files. It is listed in System Settings > Users & Groups
@@ -8,26 +9,104 @@
  * security tools and careful engineers treat as malware, and anyone auditing the Mac should find it at a glance.
  * macOS lists an account only when it has a password, so it gets a random one that nobody knows (./script.ts).
  */
-import { isAbsolute, normalize } from 'node:path'
+import { isAbsolute, normalize, win32 } from 'node:path'
 
 export const TEAM_USER = 'harnessteam'
 export const TEAM_REAL_NAME = 'Harness Team'
-export const TEAM_HOME = `/Users/${TEAM_USER}`
 /** The team daemon's control port. Not 18473 (the owner's daemon) or 18474 (a dev daemon beside it): the team
  *  daemon runs as its own OS user and would find another port anyway, but a fixed one is easier to audit. */
 export const TEAM_PORT = 18493
-export const TEAM_LABEL = 'ai.autonomous.harness.team'
-export const TEAM_PLIST = `/Library/LaunchDaemons/${TEAM_LABEL}.plist`
-/** Root-owned: what setup made, read by the team daemon. Root's so a process in the team account cannot point its
- *  own privacy check somewhere else. */
-export const TEAM_SHARED_DIR = '/Library/Application Support/Harness'
-/** Left in that folder by a setup that made it, so removal takes the folder away once it is empty, and never one made
- *  by anything else. */
-export const TEAM_SHARED_MARK = `${TEAM_SHARED_DIR}/.made-by-harness-team-setup`
-export const TEAM_CONFIG_FILE = `${TEAM_SHARED_DIR}/team.json`
-/** The team account's: where its daemon reports sign-in and the privacy check, for the owner's `harness team status`. */
-export const TEAM_STATUS_DIR = `${TEAM_SHARED_DIR}/Team`
-export const TEAM_STATUS_FILE = `${TEAM_STATUS_DIR}/status.json`
+
+export type TeamPlatform = 'darwin' | 'linux' | 'win32'
+
+/** Where the team account and what setup makes live on one platform. Every caller reads its paths from here. */
+export interface TeamLayout {
+  platform: TeamPlatform
+  home: string
+  /** Root-owned: what setup made, read by the team daemon. Root's so a process in the team account cannot point its
+   *  own privacy check somewhere else. */
+  sharedDir: string
+  /** Left in that folder by a setup that made it, so removal takes the folder away once it is empty, and never one
+   *  made by anything else. */
+  sharedMark: string
+  configFile: string
+  /** The team account's: where its daemon reports sign-in and the privacy check, for the owner's `harness team status`. */
+  statusDir: string
+  statusFile: string
+  /** What runs the team daemon as the team account from boot, and the root-owned file that defines it. */
+  service: { kind: 'launchd' | 'systemd' | 'taskscheduler'; label: string; file: string }
+  /** The owner's folder for the subscription relay's hand-off (./relay.ts), per owner. */
+  relayDir(owner: string): string
+  /** The team account's primary group. */
+  group: string
+}
+
+const MAC_SHARED = '/Library/Application Support/Harness'
+const MAC_LABEL = 'ai.autonomous.harness.team'
+
+const LAYOUTS: Record<TeamPlatform, TeamLayout> = {
+  darwin: {
+    platform: 'darwin',
+    home: `/Users/${TEAM_USER}`,
+    sharedDir: MAC_SHARED,
+    sharedMark: `${MAC_SHARED}/.made-by-harness-team-setup`,
+    configFile: `${MAC_SHARED}/team.json`,
+    statusDir: `${MAC_SHARED}/Team`,
+    statusFile: `${MAC_SHARED}/Team/status.json`,
+    service: { kind: 'launchd', label: MAC_LABEL, file: `/Library/LaunchDaemons/${MAC_LABEL}.plist` },
+    // /Users/Shared lets anyone make a folder; a macOS ACL lets the team account read this one.
+    relayDir: (owner) => `/Users/Shared/.harness-team-relay-${owner}`,
+    // Every local account on a Mac is in staff.
+    group: 'staff',
+  },
+  // The Linux account follows the guest helper's tools (useradd, setfacl) and the daemon's own supervisor (systemd).
+  linux: {
+    platform: 'linux',
+    home: `/home/${TEAM_USER}`,
+    sharedDir: '/etc/harness',
+    sharedMark: '/etc/harness/.made-by-harness-team-setup',
+    configFile: '/etc/harness/team.json',
+    statusDir: '/var/lib/harness/team',
+    statusFile: '/var/lib/harness/team/status.json',
+    service: { kind: 'systemd', label: 'harness-team.service', file: '/etc/systemd/system/harness-team.service' },
+    // Made by setup for the owner (nobody else can make a folder under /var/lib/harness); an ACL lets the team account read it.
+    relayDir: (owner) => `/var/lib/harness/team-relay-${owner}`,
+    // Its own group, as useradd makes one: no other account shares it.
+    group: TEAM_USER,
+  },
+  // docs/superpowers/plans/2026-10-28-harness-team-account-windows.md. Paths there pass checkWindowsPath, not checkPath.
+  win32: {
+    platform: 'win32',
+    // The profile Windows makes for the account.
+    home: `C:\\Users\\${TEAM_USER}`,
+    sharedDir: 'C:\\ProgramData\\Harness',
+    sharedMark: 'C:\\ProgramData\\Harness\\.made-by-harness-team-setup',
+    configFile: 'C:\\ProgramData\\Harness\\team.json',
+    statusDir: 'C:\\ProgramData\\Harness\\Team',
+    statusFile: 'C:\\ProgramData\\Harness\\Team\\status.json',
+    // A scheduled task at startup, as the team account: Task Scheduler keeps its definition in System32\Tasks.
+    service: { kind: 'taskscheduler', label: '\\Harness\\Harness Team', file: 'C:\\Windows\\System32\\Tasks\\Harness\\Harness Team' },
+    relayDir: (owner) => `C:\\ProgramData\\Harness\\team-relay-${owner}`,
+    // A member of Users only, never Administrators.
+    group: 'Users',
+  },
+}
+
+/** This platform's layout, or null where there is no Harness Team account. */
+export function teamLayout(platform: NodeJS.Platform): TeamLayout | null {
+  return Object.hasOwn(LAYOUTS, platform) ? LAYOUTS[platform as TeamPlatform] : null
+}
+
+// The macOS values under the names every Mac caller has used since the account was made.
+const MAC = LAYOUTS.darwin
+export const TEAM_HOME = MAC.home
+export const TEAM_LABEL = MAC.service.label
+export const TEAM_PLIST = MAC.service.file
+export const TEAM_SHARED_DIR = MAC.sharedDir
+export const TEAM_SHARED_MARK = MAC.sharedMark
+export const TEAM_CONFIG_FILE = MAC.configFile
+export const TEAM_STATUS_DIR = MAC.statusDir
+export const TEAM_STATUS_FILE = MAC.statusFile
 /** A file in the owner's home, readable by everyone, so only the home folder's own mode keeps it from the team
  *  account. Directly in the home: ~/Library is 700 on its own, so a sentinel there would pass even with the home
  *  folder open. */
@@ -58,6 +137,8 @@ export function teamPaths(home: string = TEAM_HOME) {
 
 const USER = /^[a-z_][a-z0-9_.-]{0,31}$/
 const SAFE_PATH = /^\/[A-Za-z0-9._@+ /-]{0,1023}$/
+/** SAFE_PATH's characters, after a drive and with Windows' separator. */
+const WINDOWS_PATH = /^[A-Za-z]:\\[A-Za-z0-9._@+ \\-]{0,1023}$/
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const WS_URL = /^wss?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~/-]{0,200})?$/
 const HTTP_URL = /^https?:\/\/[A-Za-z0-9.-]{1,253}(:\d{1,5})?(\/[A-Za-z0-9._~/-]{0,200})?$/
@@ -83,6 +164,42 @@ export function checkPath(path: string, what = 'path'): string {
   }
   return path
 }
+
+/** MAX_PATH less the terminating NUL: the longest path every Windows API takes without the `\\?\` prefix. */
+const MAX_PATH = 259
+
+/**
+ * A Windows absolute path of plain characters (`X:\…`), for a script run elevated: no UNC share, no `\\?\` or `\\.\`
+ * form, no forward slash, no quote, nothing cmd.exe expands or splits on (`%`, `!`, `&`…: the team task's actions run
+ * through it), normalized, and no segment that is empty, `.` or `..`. A segment may not end in a dot or a space either:
+ * Windows drops them, so the name would mean another one.
+ */
+export function checkWindowsPath(path: string, what = 'path'): string {
+  const segments = path.slice(3).split('\\')
+  if (!WINDOWS_PATH.test(path) || path.length > MAX_PATH || win32.normalize(path) !== path
+    || (path.length > 3 && segments.some((s) => s === '' || s === '.' || s === '..' || s.endsWith('.') || s.endsWith(' ')))) {
+    throw new TeamInputError(`the ${what} must be a plain absolute Windows path: ${JSON.stringify(path)}`)
+  }
+  return path
+}
+
+/** A local Windows account's name as Windows takes it (20 characters at most), in plain characters, never `DOMAIN\`. */
+const WINDOWS_USER = /^[A-Za-z0-9_.-](?:[A-Za-z0-9_. -]{0,18}[A-Za-z0-9_-])?$/
+export function checkWindowsUser(user: string, what = 'account'): string {
+  if (!WINDOWS_USER.test(user)) throw new TeamInputError(`not a usable ${what} name: ${JSON.stringify(user)}`)
+  return user
+}
+
+const SID_PATTERN = /^S-1-\d+(-\d+)+$/
+/** A security identifier in its `S-1-…` string form. */
+export function checkSid(sid: string, what = 'account'): string {
+  if (!SID_PATTERN.test(sid)) throw new TeamInputError(`the ${what} is not a SID: ${JSON.stringify(sid)}`)
+  return sid
+}
+
+/** This platform's checks of a path and of an account name: Windows' on Windows, the POSIX ones elsewhere. */
+export const pathCheck = (platform: NodeJS.Platform) => platform === 'win32' ? checkWindowsPath : checkPath
+export const userCheck = (platform: NodeJS.Platform) => platform === 'win32' ? checkWindowsUser : checkUser
 
 /** One path segment (a runtime folder's name). */
 export function checkName(name: string, what = 'name'): string {

@@ -1,7 +1,9 @@
 /** A Lead tags people in its message; each tag waits in the person's Swarm-wide list until they reply in that
  *  conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
  *  reads and writes a tab that has them. Called inside SuperTabStore's transactions. */
+import { createHash } from 'node:crypto'
 import type { Prisma, PrismaClient } from '@prisma/client'
+import { ensureIndex } from '../lib/db/indexes.js'
 import { fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 import { groupsBy } from './parts/indexed.js'
@@ -17,8 +19,7 @@ const waiting: Prisma.SuperTabMentionWhereInput = { OR: [{ resolvedAt: null }, {
 
 /** Run by the singleton worker at startup, like the terminal answer expiry. */
 export async function ensureMentionExpiry(db: PrismaClient): Promise<void> {
-  await db.$runCommandRaw({ createIndexes: 'SuperTabMention', indexes: [{ key: { createdAt: 1 }, name: 'mention_expiry',
-    expireAfterSeconds: MENTION_EXPIRY_MS / 1000 }] })
+  await ensureIndex(db, 'SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: MENTION_EXPIRY_MS / 1000 })
 }
 
 /** Only the project's Lead tags, only in that project's conversations, and only people who can read the conversation. */
@@ -92,7 +93,16 @@ async function readable(tx: Tx, tabId: string, state: SuperTabState, actor: Extr
 }
 
 export async function mentionsWaiting(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number): Promise<number> {
-  return (await readable(tx, tabId, state, actor, now, true)).length
+  return (await waitingMentions(tx, tabId, state, actor, now)).count
+}
+
+/** A person's waiting tags: how many, and a digest of which, as decisions.ts decisionsWaiting. A client reads its lists again
+ *  when either moves (a tag made, answered or expired, though the count may stay), not on every change of the Swarm. Only
+ *  the person's own tags they can still read go into it, and only their ids. */
+export async function waitingMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>,
+  now: number): Promise<{ count: number; digest: string }> {
+  const ids = (await readable(tx, tabId, state, actor, now, true)).map(({ row }) => row.id).sort()
+  return { count: ids.length, digest: createHash('sha256').update(ids.join('\n')).digest('base64url').slice(0, 16) }
 }
 
 export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, actor: Extract<Actor, { kind: 'person' }>, now: number, open: boolean) {

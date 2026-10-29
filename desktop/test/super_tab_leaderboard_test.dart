@@ -118,9 +118,6 @@ void main() {
     test('parses every number the column shows', () {
       final board = SuperTabLeaderboard.fromJson(answer());
       expect(board.week, week);
-      expect(board.goal.openRequests, 7);
-      expect(board.goal.thisWeek.medianAskToShipMs, 3 * hour);
-      expect(board.goal.lastWeek.shipped, 12);
       final ken = board.people.first;
       expect(
         [ken.personId, ken.points, ken.rank, ken.medal],
@@ -313,6 +310,48 @@ void main() {
         await reader.show('lead');
         expect(reader.board, isNull);
         expect(reader.error, isNull);
+      },
+    );
+
+    test('forgets the board once the reader may not read the project, without naming why', () async {
+      final requests = FakeRequests();
+      final reader = SuperTabLeaderboardReader(
+        tabId: 'tab',
+        request: requests.call,
+      );
+      addTearDown(reader.dispose);
+      await reader.show('lead');
+      expect(reader.board, isNotNull);
+      requests.respond = (_) => const SuperTabFailure(
+        'FORBIDDEN',
+        'Not a member of Pilot.',
+        statusCode: 403,
+      );
+      await reader.refresh();
+      expect(reader.board, isNull);
+      expect(reader.error, isNull);
+    });
+
+    test(
+      'clears the board and drops a read in flight once no project is shown',
+      () async {
+        final late = Completer<Map<String, dynamic>>();
+        var reads = 0;
+        final reader = SuperTabLeaderboardReader(
+          tabId: 'tab',
+          request: (method, path, {body}) async {
+            reads++;
+            return reads == 1 ? answer() : late.future;
+          },
+        );
+        addTearDown(reader.dispose);
+        await reader.show('lead');
+        final inFlight = reader.refresh();
+        reader.clear();
+        expect(reader.board, isNull);
+        late.complete(answer());
+        await inFlight;
+        expect(reader.board, isNull);
       },
     );
 

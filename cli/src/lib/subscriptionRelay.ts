@@ -279,3 +279,13 @@ export function codexRelayArgs(relayUrl: string): string[] {
 export function codexRelayEnv(token: string): Record<string, string> {
   return { [RELAY_TOKEN_VAR]: token }
 }
+
+/** The account id CLI 0.5.1 wrote into a Harness Team account's Codex `auth.json` for the relay, a sign-in Codex's own
+ *  screen could not start with (`workspace routing discovery unauthorized (401)`, 2026-10-29). Read only to remove it. */
+export const CODEX_RELAY_ACCOUNT = 'harness-relay'
+
+/** Whether a parsed `auth.json` is that left-over sign-in: the relay's, not one of the account's own. */
+export function isCodexRelayAuth(auth: unknown): boolean {
+  const tokens = auth && typeof auth === 'object' ? (auth as { tokens?: unknown }).tokens : null
+  return !!tokens && typeof tokens === 'object' && (tokens as { account_id?: unknown }).account_id === CODEX_RELAY_ACCOUNT
+}

@@ -116,6 +116,18 @@ describe('stopping idle workers', () => {
     expect(stopIdleWorkers(finished, 'lead', at, new Set())).toHaveLength(1)
   })
 
+  it('says so in a group the poll loaded, never in an asleep one, which would refuse the line (review of #2073)', () => {
+    const reviewer = () => worker({ role: 'reviewer' })
+    const asleep = group({ id: 'r2', reviewOf: 'g1', assignment: done({ id: 'a3' }), lastActivityAt: iso(START) })
+    const older = group({ id: 'r1', reviewOf: 'g1', assignment: done({ id: 'a2' }), lastActivityAt: iso(START - 5 * MINUTE) })
+    const finished = group({ agentIds: ['L', 'b'], assignment: done({ agentId: 'b' }) })
+    const loaded = swarm({ agents: [reviewer()], groups: [finished, older] })
+    expect(stopIdleWorkers(loaded, 'lead', at, new Set(), [asleep])).toEqual([expect.objectContaining({ conversationId: 'r1' })])
+    const alone = swarm({ agents: [reviewer()], groups: [finished] })
+    expect(stopIdleWorkers(alone, 'lead', at, new Set(), [asleep])).toEqual([expect.objectContaining({ conversationId: 'lead' })])
+    expect(target(alone).workDecision).toBe('stop')
+  })
+
   it('does nothing once the owner turned tidying off, or for another project\'s workers', () => {
     const off = swarm()
     off.tidy = false

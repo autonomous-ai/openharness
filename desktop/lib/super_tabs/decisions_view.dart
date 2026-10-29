@@ -45,13 +45,13 @@ class SuperTabDecisionList extends StatelessWidget {
       if (decision.batchId != batch) {
         batch = decision.batchId;
         final count = d.open.where((o) => o.batchId == batch).length;
-        // The reader's own chat with the PM is named as the sidebar names it,
-        // not by the reader's own name (as notifications.dart does).
-        final place =
-            d.controller.pmChat(decision.projectId)?.id ==
-                decision.conversationId
-            ? 'Chat with PM'
-            : decision.conversationTitle;
+        // An old Chat with PM an older server still sends opens the project's
+        // chat, and is named so (as notifications.dart does).
+        final c = d.controller;
+        final hidden = c.snapshot?.conversation(decision.conversationId);
+        final place = hidden == null || !c.hiddenByBuddies(hidden)
+            ? decision.conversationTitle
+            : '#${decision.projectName}';
         yield _note(
           '${decision.askerName} asked $count '
           '${count == 1 ? 'question' : 'questions'} · '
@@ -68,7 +68,7 @@ class SuperTabDecisionList extends StatelessWidget {
   );
 }
 
-/// The open decisions asked in one project, above its Chat with PM. Hide
+/// The open decisions asked in one project, above the reader's Buddy chat. Hide
 /// and each card's Not now fold them into the one heading line until the
 /// reader shows them again; a decision asked later shows.
 class SuperTabDecisionsPanel extends StatelessWidget {
@@ -150,7 +150,7 @@ Widget quietDecisionAction({
 
 /// One question: what it unblocks, one button per option, the recommended
 /// one marked, and the quiet Let PM decide (only with a recommendation) and
-/// Not now ([onNotNow], in Chat with PM). Answered, it shows the choice, or
+/// Not now ([onNotNow], in the Buddy chat). Answered, it shows the choice, or
 /// that the PM decided.
 class SuperTabDecisionCard extends StatelessWidget {
   const SuperTabDecisionCard({

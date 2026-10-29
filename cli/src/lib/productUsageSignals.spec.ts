@@ -6,6 +6,7 @@ import { failureKind, launchErrorCode, messageReceipt, storeErrorCode, productOb
 import type { MessageOutcome } from './sessionInput.js'
 import { LAUNCH_ERROR_CODES, PRODUCT_USAGE_AUTOMATIC_ACTIONS, PRODUCT_USAGE_FLOWS, PRODUCT_USAGE_METRICS, PRODUCT_USAGE_SETUP_METRICS } from './productUsageContract.js'
 import { AUTOMATIC_POLL_ACTIONS, HEALTH_MEASURES } from './productHealthContract.js'
+import { searchRequests } from '../services/search.js'
 
 it('separates automated polling, tool and app RPCs without inspecting error objects or content', () => {
   const emit = vi.fn()
@@ -361,6 +362,22 @@ it.each([
   expect(names).toContain(`request_app_store_update_error_${kind}`)
   // The detailed counters the prod watch reads; the action totals have five kinds only, `other` among them.
   expect(names.filter(name => name.startsWith('request_') && name.endsWith('_error_other'))).toEqual([])
+})
+
+// 2026-10-28: 2,225 history page reads from macOS CLI 0.4.97 were `other`, about 12 a minute: a Desktop list re-reading,
+// every 5 seconds, a conversation this computer's index no longer held. Its two refusals, as session_tail answers them.
+it.each([
+  [{}, 'invalid', 'invalid'],
+  [{ sessionId: 'gone-session' }, 'invalid', 'not_found'],
+])('counts a history page read refused for %o as %s (%s in detail), not `other`', async (payload, kind, detail) => {
+  const index = { search: () => { throw new Error('not searched') }, tail: async () => null }
+  const reply = await searchRequests(index as never).session_tail(payload, { local: false, owner: true, connection: 'c' })
+  const emit = vi.fn()
+  productUsageRequest('session_tail', emit, () => 0, 'app')(reply.error, reply.state, false)
+  const names: string[] = emit.mock.calls.flat()
+  expect(names).toEqual(expect.arrayContaining(['history_page_failed', `history_page_error_${kind}`,
+    `request_automatic_history_page_error_${detail}`]))
+  expect(names.filter(name => name.endsWith('_error_other'))).toEqual([])
 })
 
 it('keeps every refusal a Store install or update can answer in the code list', () => {

@@ -156,6 +156,11 @@ export class CacheView {
 
   get available(): boolean { return this.stamps !== null }
 
+  /** This Swarm's main stamp as the view read it, or none without stamps or a cache. */
+  mainStamp(tabId: string): number | undefined {
+    return this.cache ? this.stamps?.get(tabId)?.main : undefined
+  }
+
   /** The value `load` gives for this Swarm at the view's stamp: held, or loaded and held. `scope` says which stamps it
    *  depends on: 'main' for what a machine's reading never changes, 'all' for anything holding machine parts. */
   async get<T>(tabId: string, name: string, scope: StampScope | 'all', load: () => Promise<T>): Promise<T> {

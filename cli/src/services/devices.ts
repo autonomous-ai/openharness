@@ -19,7 +19,7 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CardChat, type CoreApi, type SaidOnCard, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
@@ -83,6 +83,8 @@ export interface DevicesDeps {
 const NO_AGENT_LIST = 'no agent list yet'
 /** A Super Tab conversation id as the dials hold one (48 bytes with its NUL). */
 const CHAT_ID = /^[A-Za-z0-9_-]{1,47}$/
+/** A backend's refusal as a dial's voice error: a sentence or two, never a page. */
+const VOICE_ERROR_BYTES = 300
 const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
@@ -171,6 +173,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The assistant's latest paragraph per agent, as the processing cards carry it; gone when the turn ends.
   const latestUpdate = new Map<string, string>()
   // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts). An error is an answer too.
+  /** What became of words for a Lead, as the service answered: a refusal keeps its code and its message, cut to what a dial
+   *  shows in a voice error. */
+  const saidOf = (answer: Record<string, unknown>): SaidOnCard => {
+    if (answer.said === true) return { said: true }
+    const refused = answer.refused && typeof answer.refused === 'object' ? answer.refused as Record<string, unknown> : {}
+    if (typeof refused.code !== 'string' || typeof refused.message !== 'string') return { said: false }
+    return { said: false, refused: { code: refused.code, message: truncateUtf8(refused.message, VOICE_ERROR_BYTES) } }
+  }
+  /** A card request's chat, as the core passes it on: none for the Pro, whose requests stay as they were. */
+  const chatFlag = (chat: CardChat | undefined): { chat?: true | 'buddy' } => chat ? { chat } : {}
   const askCards = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try { return await core.superTabRequest!(payload) } catch { return { error: 'SERVICE_UNAVAILABLE' } }
   }
@@ -240,17 +252,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if ((before === 0) !== (cardDevices === 0)) tellCards()
     },
     // The text is the service's to read and not validated by the core: cut here, on a character, to what the Pro takes.
-    // With `chat` (a round dial that speaks swarmChat), the chat on the face's, which must name that chat by an id: a dial
-    // never shows it for another one.
+    // With `chat` (a round dial that speaks swarmChat, or 'buddy' for swarmBuddy), the chat on that dial's face's, which must
+    // name that chat by an id: a dial never shows it for another one.
     swarmCardRecap: async (tabId, leadId, chat) => {
-      const r = await askCards({ action: 'cardRecap', tabId, leadId, ...(chat ? { chat: true } : {}) })
+      const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
-      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}) }
+      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
+        ...(chat === 'buddy' ? { buddy: true as const } : {}) }
     },
-    swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...(chat ? { chat: true } : {}) }) },
+    swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
+    swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat) => (await askCards({ action: 'cardSay', harnessId, text, ...(chat ? { chat: true } : {}) })).said === true,
+    swarmSay: async (harnessId, text, chat, chatId) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat), ...(chatId ? { chatId } : {}) })),
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
@@ -384,13 +398,20 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       // A Swarm Reviewer on a Mac's Harness Team account failed every turn in 1-2 s (2026-10-28), and each failure took over
       // the round dial with the engine's raw error for 8 s. A Swarm's workers answer to their Lead, who hears of it in the
       // Swarm: one the person has not put on a tab ends its tile quietly, as a finished turn does, and never stays Working.
-      if (swarmWorker(event) && !onDesk(event.agentId)) {
+      const quiet = (): void => {
         tally(cableHost.describe(event.agentId)?.name ?? '', 'silent', 'rule:swarm-worker', 'turn.error', 0)
         void cable.turnDone(event.agentId)
-        return
       }
-      tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
-      void cable.turnError(event.agentId, event.text)
+      const shown = (): void => {
+        tally(cableHost.describe(event.agentId)?.name ?? '', 'alert', 'rule:failed', 'turn.error', 0)
+        void cable.turnError(event.agentId, event.text)
+      }
+      if (onDesk(event.agentId)) return shown()
+      if (swarmWorker(event)) return quiet()
+      // Another of the person's computers says nothing of the Swarm in its card: the Swarm service is asked, and returned so
+      // the agent's next card waits behind the answer. No answer (an older computer, the service down) shows it, as before.
+      if (!event.machineId) return shown()
+      return remoteWorker(event.machineId, event.agentId).then((worker) => worker ? quiet() : shown())
     }
   }
   /** A Builder or Reviewer the Swarm started here (its record's Swarm role, and an agent started it, as every Swarm start
@@ -400,6 +421,27 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     const session = event.machineId ? undefined : core.agents.byAgent(event.agentId)
     const role = session?.startedBy === 'agent' ? session.swarmSkill?.role : undefined
     return role === 'dev' || role === 'review' || (!!event.machineId && teamMachines.has(event.machineId))
+  }
+  /** Whether an agent on another machine is a Swarm's Builder or Reviewer, as the Swarm service read it last
+   *  (superTabs/cards.ts `worker`). Asked once a minute at most per agent: a failing worker fails every 1-2 s. */
+  const WORKER_ANSWER_MS = 60_000
+  /** How long a failure waits for the answer before it shows as before: a hung service must not leave the tile working. */
+  const WORKER_WAIT_MS = 2_000
+  const workerAnswers = new Map<string, { worker: boolean; at: number }>()
+  const remoteWorker = async (machineId: string, agentId: string): Promise<boolean> => {
+    const key = `${machineId}/${agentId}`
+    const held = workerAnswers.get(key)
+    if (held && monotonic() - held.at < WORKER_ANSWER_MS) return held.worker
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // No answer in time is held as "not a worker" like any other, so the next failures in the minute do not wait again.
+    const worker = await Promise.race([
+      askCards({ action: 'cardWorker', machineId, harnessId: agentId }).then((answer) => answer.worker === true),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), WORKER_WAIT_MS) }),
+    ]).finally(() => clearTimeout(timer))
+    // Each key is an agent that failed off the desk; a long-lived process forgets them all rather than grow.
+    if (workerAnswers.size >= 256) workerAnswers.clear()
+    workerAnswers.set(key, { worker, at: monotonic() })
+    return worker
   }
   /** On any of the window's tabs, or the desk the dial walks: the person put it there, so its failure is theirs to see. */
   const onDesk = (agentId: string): boolean =>

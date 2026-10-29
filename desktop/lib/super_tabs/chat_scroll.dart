@@ -29,6 +29,14 @@ class SuperTabChatScroll extends ScrollController {
     oldPosition: oldPosition,
     debugLabel: debugLabel,
   );
+
+  /// The list's dividing row moved [by] down the rows: the view and the
+  /// place it keeps move with them, so nothing on screen moves.
+  void moveContent(double by) {
+    for (final position in positions) {
+      if (position is _AnchoredPosition) position._moveContent(by);
+    }
+  }
 }
 
 class _AnchoredPosition extends ScrollPositionWithSingleContext {
@@ -61,6 +69,15 @@ class _AnchoredPosition extends ScrollPositionWithSingleContext {
       _anchor = (messageId: anchor.messageId, top: anchor.top + correction);
     }
     if (_settledPixels != null) _settledPixels = _settledPixels! + correction;
+  }
+
+  void _moveContent(double by) {
+    correctPixels(pixels + by);
+    if (_anchor case final anchor?) {
+      _anchor = (messageId: anchor.messageId, top: anchor.top + by);
+    }
+    if (_settledPixels != null) _settledPixels = _settledPixels! + by;
+    if (_settledMax != null) _settledMax = _settledMax! + by;
   }
 
   @override
