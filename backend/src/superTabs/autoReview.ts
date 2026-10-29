@@ -1,6 +1,6 @@
 import { githubRepository } from '../github/repository.js'
 import { agentDisplayName } from './agentNames.js'
-import { activeWork, agentRole, nextConversationNumber, renderWorkTask, stableId, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
+import { activeWork, agentRole, forRecipients, nextConversationNumber, renderWorkTask, stableId, type Agent, type Author, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { agentProjectId, groupProject, skillSetOf } from './projects.js'
 import { recordAsked, recordRun } from './leaderboard/record.js'
 import { renewLease } from './liveness.js'
@@ -113,8 +113,8 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
     checks: [{ description: VERDICT_CHECK, independent: false, id: stableId(id, '0'), evidence: null, passedBy: null }] }
   state.conversations.push(review)
   recordAsked(review, group.requesterId, context.now)
-  const row = (key: string, text: string, recipients: string[]): MessageDraft => ({ id: stableId(context.operationId, 'auto-review', key),
-    conversationId: id, author, text, replyTo: null, recipients, source: { kind: 'auto-review', reviewOf: group.id } })
+  const row = (key: string, text: string, recipients: string[], source: Record<string, unknown> = { kind: 'auto-review', reviewOf: group.id }): MessageDraft =>
+    ({ id: stableId(context.operationId, 'auto-review', key), conversationId: id, author, text, replyTo: null, recipients, source })
   const messages = [row('brief', brief, [])]
   if (reviewer) {
     review.agentIds.push(reviewer.id)
@@ -130,6 +130,8 @@ export function openReview(state: SuperTabState, group: Conversation, handoff: s
   const name = reviewer && (reviewer.displayName ?? reviewer.name)
   if (leadId) messages.push(row('lead', reviewer
     ? `Review opened by itself for #${group.number}: ${name} reviews it. Cancel it here if it is not needed.`
-    : `Review opened by itself for #${group.number}, but no Reviewer is free. Route it and start one.`, [leadId]))
+    : `Review opened by itself for #${group.number}, but no Reviewer is free. Route it and start one.`, [leadId],
+    // The Lead's wake, its alone (review of #2225): people read the review's brief and its status.
+    forRecipients({ kind: 'auto-review', reviewOf: group.id })))
   return { review, reviewer, messages }
 }

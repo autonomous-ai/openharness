@@ -102,11 +102,39 @@ describe('a worker left idle', () => {
     const member = await f.member()
     expect(member.workDecision).toBe('stop')
     expect((await rosterRows(f.timed, host, 'test-host')).find(r => r.agent.id === f.worker)!.agent).toMatchObject({ releaseId: member.releaseId })
-    expect(await f.lines()).toEqual([expect.objectContaining({ conversationId: f.group, recipientIds: [], text: 'Worker stopped: no work for 15 minutes.' })])
+    expect(await f.lines()).toEqual([expect.objectContaining({ conversationId: f.group, recipientIds: [f.lead], text: 'Worker stopped: no work for 15 minutes.' })])
     // A second poll finds it already stopping and writes nothing more.
     f.clock.now += MINUTE
     await f.timed.deliveries(host, f.tab, f.lead)
     expect(await f.lines()).toHaveLength(1)
+  })
+
+  // Ken, 2026-10-29: the stop is the Lead's to handle. Its line wakes the Lead in that same poll, and no person, nor the
+  // stopped worker, reads it in the task's chat or the project chat, or by its id; with the Lead outside the task's chat it
+  // hears in its own, and the task's copy is no one's.
+  it('wakes the Lead with its line, which no person or other agent reads in the task chat or the project chat', async () => {
+    for (const leadInTask of [true, false]) {
+      const f = await swarm()
+      if (!leadInTask) await f.execute({ type: 'conversation.agent', conversationId: f.group, agentId: f.lead, present: false, lead: false })
+      f.clock.now += 15 * MINUTE + 1_000
+      await f.observe('test-host', [f.harness.worker], { harnessUncommitted: { [f.harness.worker]: false } })
+      const inbox = await f.timed.deliveries(host, f.tab, f.lead)
+      const lines = await f.lines()
+      const written = leadInTask ? [[f.group, [f.lead]]] : [[f.group, []], ['lead', [f.lead]]]
+      expect(lines.map(m => [m.conversationId, m.recipientIds])).toEqual(expect.arrayContaining(written))
+      expect(lines).toHaveLength(written.length)
+      const heard = lines.find(m => m.recipientIds.includes(f.lead))!
+      expect(inbox.map(d => d.messageId)).toContain(heard.id)
+      const page = async (user: AuthUser, conversationId: string, query: { messageId?: string } = {}, asAgentId?: string) =>
+        (await f.timed.messages(user, f.tab, conversationId, query, asAgentId)).messages.map(m => m.id)
+      expect(await page(host, heard.conversationId, {}, f.lead)).toContain(heard.id)
+      const ids = lines.map(m => m.id)
+      for (const user of [owner, host]) {
+        for (const conversationId of [f.group, 'lead']) expect((await page(user, conversationId)).filter(id => ids.includes(id))).toEqual([])
+        for (const m of lines) expect(await page(user, m.conversationId, { messageId: m.id })).toEqual([])
+      }
+      expect((await page(host, f.group, {}, f.worker)).filter(id => ids.includes(id))).toEqual([])
+    }
   })
 
   it('is kept while its host reports uncommitted changes, or does not say', async () => {
@@ -266,6 +294,18 @@ describe('a review the Swarm opens by itself', () => {
     expect(queued.map(d => d.conversationId)).toContain(review.id)
     const leadLine = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: review.id, text: { startsWith: 'Review opened by itself' } } })
     expect(leadLine.text).toBe('Review opened by itself for #2: Reviewer reviews it. Cancel it here if it is not needed.')
+    // The Lead's wake (review of #2225): delivered to the Lead and read by it alone; people and the Reviewer read the brief only.
+    expect(leadLine.recipientIds).toEqual([f.lead])
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: leadLine.id } })).map(d => d.agentId)).toEqual([f.lead])
+    const page = async (user: AuthUser, asAgentId?: string, messageId?: string) =>
+      (await f.timed.messages(user, f.tab, review.id, messageId ? { messageId } : {}, asAgentId)).messages.map(m => m.id)
+    expect(await page(host, f.lead)).toContain(leadLine.id)
+    for (const user of [owner, host]) {
+      expect(await page(user)).not.toContain(leadLine.id)
+      expect(await page(user, undefined, leadLine.id)).toEqual([])
+    }
+    expect(await page(host, reviewer)).not.toContain(leadLine.id)
+    expect((await page(owner)).length).toBeGreaterThan(0)
     await f.execute({ type: 'work.cancel', conversationId: review.id, assignmentId: review.assignment!.id, reason: 'Not needed' })
     await f.execute({ type: 'conversation.archive', conversationId: review.id, archived: true })
     expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === review.id)?.archived ?? true).toBe(true)
