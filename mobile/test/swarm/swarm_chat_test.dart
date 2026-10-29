@@ -296,6 +296,67 @@ void main() {
     expect(find.text('Then the build'), findsOneWidget);
   });
 
+  // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the
+  // prompt was answered, and a new one came under every message after it.
+  testWidgets('a prompt warning shows once, while its agent still waits, '
+      'and goes once it is answered', (tester) async {
+    Map<String, dynamic> alert(String id, int sequence, String kind) => {
+      ...message(
+        id,
+        sequence,
+        text: kind == 'prompt'
+            ? 'Nova is waiting at a prompt in its terminal.'
+            : 'Nova hit a usage limit. Routing skips it until 15:00 UTC.',
+        minute: sequence,
+      ),
+      'source': {
+        'kind': 'terminal-alert',
+        'agentId': 'agent-builder',
+        'alert': kind,
+      },
+    };
+    Map<String, dynamic> nova(List<String> alerting) => {
+      ...agent('agent-builder', displayName: 'Nova'),
+      'alerting': alerting,
+    };
+    final fake = backend([
+      alert('a1', 1, 'prompt'),
+      message('m2', 2, text: 'Here is what I found', minute: 2),
+      alert('a3', 3, 'limit'),
+      alert('a4', 4, 'prompt'),
+    ]);
+    final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+      ...(await parts(body))! as Map<String, dynamic>,
+      'agents': [
+        part(
+          'agent-lead',
+          1,
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+        ),
+        part('agent-builder', 1, nova(['prompt'])),
+      ],
+    };
+    final host = await pump(tester, fake);
+
+    // Still waiting: only the newest warning, and the usage limit's own note.
+    expect(key('swarm-message-a1'), findsNothing);
+    expect(key('swarm-message-a4'), findsOneWidget);
+    expect(key('swarm-message-a3'), findsOneWidget);
+
+    // Answered: the backend clears the agent's alert, and its warning goes.
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+      ...changes(cursor: 'c3', lastChangedAt: 200),
+      'agents': [part('agent-builder', 2, nova([]))],
+    };
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+    expect(key('swarm-message-a4'), findsNothing);
+    expect(key('swarm-message-a1'), findsNothing);
+    expect(key('swarm-message-a3'), findsOneWidget);
+    expect(find.text('Here is what I found'), findsOneWidget);
+  });
+
   testWidgets('a file in a message opens', (tester) async {
     // Review of #1802 at bd73842: this test once passed with opening off.
     final opened = <Object?>[];
