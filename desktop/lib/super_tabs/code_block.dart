@@ -86,28 +86,16 @@ class _SuperTabCodeBlockState extends State<SuperTabCodeBlock> {
   }
 }
 
-/// A quiet text control in the block: the accent's words, no fill at rest,
-/// the shared hover wash.
+/// A quiet control in the block, in the accent: no fill or rim at rest.
 Widget _quiet({
   required String label,
   required VoidCallback onPressed,
   IconData? icon,
-}) {
-  final style = TextButton.styleFrom(
-    foregroundColor: DesktopChrome.accent,
-    overlayColor: grid.AppSurface.hoverFill,
-    padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.menuInset),
-    minimumSize: const Size(0, grid.AppDesktop.identitySize),
-    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    textStyle: DesktopChrome.metadata(),
-  );
-  final text = Text(label);
-  return icon == null
-      ? TextButton(style: style, onPressed: onPressed, child: text)
-      : TextButton.icon(
-          style: style,
-          onPressed: onPressed,
-          icon: Icon(icon, size: grid.AppDesktop.iconSize),
-          label: text,
-        );
-}
+}) => DesktopPill(
+  label: label,
+  icon: icon,
+  onPressed: onPressed,
+  quiet: true,
+  compact: true,
+  foregroundColor: DesktopChrome.accent,
+);
