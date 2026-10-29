@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/swarm/swarm_activity.dart';
@@ -515,6 +517,40 @@ void main() {
       expect(activity.unreadChats, isTrue);
       expect(activity.count(SwarmActivityFilter.needsYou), 2);
       expect(activity.items(SwarmActivityFilter.threads), isEmpty);
+    });
+
+    test('says it is reading the project chats until they answer', () async {
+      final fake = backend();
+      final gate = Completer<void>();
+      fake.routes[chatPath] = (_) async {
+        await gate.future;
+        return {'messages': <Object>[], 'next': null};
+      };
+      final session = await start(fake);
+      final activity = session.activity..shown = true;
+      await settle();
+      expect(activity.reading, isTrue);
+
+      gate.complete();
+      await settle();
+      expect(activity.reading, isFalse);
+    });
+
+    test('Try again reads a project chat that failed', () async {
+      final fake = backend();
+      fake.routes[chatPath] = (_) =>
+          throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+      final session = await start(fake);
+      final activity = session.activity..shown = true;
+      await settle();
+      expect(activity.unreadChats, isTrue);
+
+      fake.routes[chatPath] = (_) => page();
+      activity.retry();
+      await settle();
+
+      expect(activity.unreadChats, isFalse);
+      expect(activity.items(SwarmActivityFilter.threads), isNotEmpty);
     });
 
     test(

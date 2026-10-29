@@ -225,12 +225,29 @@ class SwarmActivity extends ChangeNotifier {
   int get badge => count(SwarmActivityFilter.needsYou);
 
   /// Some project chat could not be read at its last change.
-  bool get unreadChats {
+  bool get unreadChats => _anyChat(session.peeks.failedAt);
+
+  /// A project chat is being read for the first time since it moved, with
+  /// nothing of it read yet: Threads and Reactions may still fill.
+  bool get reading => _anyChat(
+    (reader, chat) =>
+        session.peeks.busyAt(reader, chat) &&
+        session.peeks.of(reader, chat) == null,
+  );
+
+  /// The person's Try again: the project chats that failed are read again.
+  void retry() => _anyChat((reader, chat) {
+    session.peeks.retry(reader, chat);
+    return false;
+  });
+
+  /// Whether [test] holds for a project chat of a listed Swarm.
+  bool _anyChat(bool Function(SwarmReader reader, String chatId) test) {
     for (final swarm in inbox.swarms) {
       final reader = inbox.reader(swarm.id);
       if (reader == null) continue;
-      for (final chat in _projectChats(reader)) {
-        if (session.peeks.failedAt(reader, chat.chat.id)) return true;
+      for (final (project: _, :chat) in _projectChats(reader)) {
+        if (test(reader, chat.id)) return true;
       }
     }
     return false;
