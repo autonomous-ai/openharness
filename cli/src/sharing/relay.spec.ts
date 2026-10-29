@@ -24,6 +24,7 @@ describe('recipient relay', () => {
     ownerPublicKey: b64e(identity.pub), expiresAt: new Date(Date.now() + 100000).toISOString() }
   let relay: HarnessShareRelay
   let account: string
+  let tokens: ReturnType<typeof vi.fn<() => Promise<string>>>
   let discover: ReturnType<typeof vi.fn<() => Promise<any[]>>>
   let sink: { sendFrame: ReturnType<typeof vi.fn>; sendBinary: ReturnType<typeof vi.fn> }, closed: ReturnType<typeof vi.fn<(code: number, reason: string) => void>>
   beforeEach(() => {
@@ -31,7 +32,8 @@ describe('recipient relay', () => {
     sink = { sendFrame: vi.fn(() => true), sendBinary: vi.fn(() => true) }; closed = vi.fn()
     discover = vi.fn(async () => [{ machineId: 'machine', shares: [share] }])
     account = 'first'
-    relay = new HarnessShareRelay({ accessToken: async () => 'signed-in-token' } as AuthSessionManager,
+    tokens = vi.fn(async () => 'signed-in-token')
+    relay = new HarnessShareRelay({ accessToken: tokens } as unknown as AuthSessionManager,
       'ws://localhost:1234/', 'prod', discover, () => account)
   })
   afterEach(() => { relay.close(); vi.useRealTimers() })
@@ -312,6 +314,25 @@ describe('recipient relay', () => {
       await expect(relay.acquire('machine', 'missing', sink as never, closed)).rejects.toThrow('temporarily unavailable');
       (await ready()).session.detach()
       expect(discover).toHaveBeenCalledTimes(3)
+    })
+
+    // Re-check of #2107: a window that took its share from the kept list and was waiting for its token still opened
+    // after another window's refresh failed.
+    it('a window waiting for its token looks again after another window\'s refresh failed', async () => {
+      (await ready()).session.detach()
+      let tokenAnswer: ((token: string) => void) | null = null
+      tokens.mockImplementationOnce(() => new Promise(resolve => { tokenAnswer = resolve }))
+      const before = state.sockets.length
+      const waiting = relay.acquire('machine', 'share', sink as never, closed)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(tokenAnswer).not.toBeNull()
+      discover.mockRejectedValueOnce(new Error('Shared harnesses are temporarily unavailable.'))
+        .mockResolvedValueOnce([])
+      await expect(relay.acquire('machine', 'missing', sink as never, closed)).rejects.toThrow('temporarily unavailable')
+      tokenAnswer!('signed-in-token')
+      await expect(waiting).rejects.toBeInstanceOf(SharingEndedError)
+      expect(discover).toHaveBeenCalledTimes(3)
+      expect(state.sockets).toHaveLength(before)
     })
 
     it('a refresh that fails for a sign-in no longer current leaves the current list alone', async () => {

@@ -31,8 +31,8 @@ export class HarnessShareRelay {
   private sessions = new Set<() => void>()
   private listed: { at: number; account: string; machines: SharedMachineReference[] } | null = null
   private reading: { account: string; machines: Promise<SharedMachineReference[]> } | null = null
-  /** Bumped whenever the list is put in doubt (a window failed to open, or was no longer shared): a read begun before
-   *  is neither kept nor joined, and a window that looked its share up across it looks again. */
+  /** Bumped whenever the list is put in doubt (a window failed to open or was no longer shared, or a refresh failed):
+   *  a read begun before is neither kept nor joined, and a window that looked its share up across it looks again. */
   private generation = 0
   /** `account` names the sign-in the list is read for: a list read for another one answers nothing. */
   constructor(private readonly auth: Pick<AuthSessionManager, 'accessToken'>, private readonly backendWsBase: string,
@@ -163,7 +163,8 @@ export class HarnessShareRelay {
       if (current()) this.listed = { at: Date.now(), account, machines: list }
       return list
     }, (error: unknown) => {
-      if (current()) this.listed = null
+      // The list it was replacing is in doubt too, for windows already looking at it.
+      if (current()) this.doubt()
       throw error
     }).finally(() => { if (this.reading?.machines === machines) this.reading = null })
     this.reading = { account, machines }
