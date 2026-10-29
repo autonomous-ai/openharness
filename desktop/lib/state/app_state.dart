@@ -1736,7 +1736,8 @@ class AppNotifier extends ChangeNotifier {
 
   /// Natively, this computer switched to a Harness Team account (`harness team
   /// on`): its daemon signs in as the team, which the server never lets act as
-  /// the person, so none of the person's Swarm requests or files go out here.
+  /// the person, so none of the person's Swarm requests, files or profile
+  /// pictures go out here.
   bool get _teamComputer =>
       viewer == null && localMachineState?.machine.isTeamAccount == true;
 
@@ -1807,7 +1808,14 @@ class AppNotifier extends ChangeNotifier {
             cancel: cancel,
             onProgress: onProgress,
           ),
-    avatarUpload: uploadAvatarWith(() => api),
+    avatarUpload: ({required tabId, required png}) => _teamComputer
+        ? Future.error(
+            const SuperTabFailure(
+              'MACHINE_UNAVAILABLE',
+              teamComputerSwarmMessage,
+            ),
+          )
+        : uploadAvatarWith(() => api)(tabId: tabId, png: png),
     onMention: superTabMentionNotice(systemNotifications),
     onTagCounts: notifyListeners,
     onNotices: notifyListeners,

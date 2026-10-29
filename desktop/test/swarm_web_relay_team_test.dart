@@ -244,6 +244,22 @@ void main() {
       expect(api.posted, isEmpty);
     });
 
+    test('a profile picture is refused here, plainly, and never sent', () async {
+      computer('team');
+      await expectLater(
+        app.superTabs.avatarUpload(
+          tabId: 'tab',
+          png: Uint8List.fromList([1, 2, 3]),
+        ),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
+              .having((f) => f.message, 'message', plainly),
+        ),
+      );
+      expect(api.posted, isEmpty);
+    });
+
     test('a shared-tabs read is refused plainly too, and never sent', () async {
       computer('team');
       online(_row('elsewhere', sessionKind: 'computer'));
