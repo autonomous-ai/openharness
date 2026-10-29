@@ -201,6 +201,26 @@ void main() {
       });
     });
 
+    // A tag is news for the badge and a notice: a push for an away Swarm is
+    // read at the old pace (the 3 s gap), not held for the idle 15 s.
+    test('shows a tag the server pushes within the old 3 s gap', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads)..start();
+        async.flushMicrotasks();
+        c.pushUntil = clock.now().add(kSwarmPushLease);
+        c.away = true;
+        async.elapse(const Duration(seconds: 1));
+        expect(c.snapshot!.mentionsWaiting, 0);
+        server.tag('message-2');
+        c.told(main: true);
+        async.elapse(const Duration(seconds: 2));
+        expect(c.snapshot!.mentionsWaiting, 1);
+        c.dispose();
+      });
+    });
+
     test('is read when told, within 15 s while the server pushes', () {
       fakeAsync((async) {
         final server = ConversationServer()..append('Hello');

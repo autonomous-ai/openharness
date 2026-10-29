@@ -362,16 +362,18 @@ class SuperTabController extends ChangeNotifier {
     });
   }
 
-  /// How often the poll reads: every [pollInterval], or
+  /// How often the idle poll reads: every [pollInterval], or
   /// [SuperTabReading.awayPoll] while the Swarm is away (never more often
-  /// than [pollInterval]).
+  /// than [pollInterval]). A push is not an idle poll: [_readGap] keeps
+  /// reading a told change at [pollInterval], so a tag reaches an away
+  /// Swarm's badge and notice as fast as before.
   Duration get _every {
     final away = _policy.awayPoll;
     if (away == null || !_away) return pollInterval;
     return away > pollInterval ? away : pollInterval;
   }
 
-  /// How often the poll read before pushes: every [_every], or
+  /// How often the poll read before pushes: every [pollInterval], or
   /// [SuperTabReading.quietPoll] once the person has been quiet a while.
   Duration get _readGap {
     final quiet = _policy.quietPoll;
@@ -379,7 +381,7 @@ class SuperTabController extends ChangeNotifier {
         clock.now().difference(_lastActivity) >= _policy.quietAfter) {
       return quiet;
     }
-    return _every;
+    return pollInterval;
   }
 
   bool get _gapPassed {
