@@ -37,15 +37,16 @@ function requireSuccess(reply: Json): Json {
     { code: typeof reply.error === 'string' ? reply.error : null })
   return object(reply.value)
 }
-/** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
 /** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
  *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
 function leadPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${mode ? `${swarmSkillUse('lead', mode)} ` : ''}Discuss first; build when authorized. Coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up. Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the request with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. Route only to start an agent or assign work, never your own: harness super-tab --tab ${tabId} route GROUP JSON. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 
-function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
-  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+/** A Buddy's start note. On a teammate's machine (backend buddies.ts chatOnlyBuddy) the server lets it read and post only its own
+ *  chat, so the note says so first (Dee, 10-29). */
+function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null, chatOnly = false): string {
+  return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}${chatOnly ? "You run on a teammate's machine: read and post only in this chat. You cannot read the project or send proposals; your owner sends those to the PM. " : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
 export async function inspectCapacity(target: Daemon, request: Json) {
   const wanted = object(request.requirements)
@@ -380,7 +381,7 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
-        prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode)
+        prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode, object(request.buddyOf).chatOnly === true)
           : lead ? `${leadPrompt(String(input.tabId), String(request.conversationId), mode)}${github ? ` ${githubPromptLine(github.requester)}` : ''}` : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
           ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
           : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.${github ? ` ${githubPromptLine(github.requester)}` : ''}`,

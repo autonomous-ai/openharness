@@ -262,6 +262,20 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
+// Dee, 10-29: a Buddy on a teammate's machine runs in its Team account and reads and posts only its own chat (backend
+// buddies.ts chatOnlyBuddy); its note says so, so it never tries what the server refuses.
+it('tells a Buddy on a teammate\'s machine that it reads and posts only its chat, and that its owner sends proposals', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, engine: 'claude', buddyOf: { personId: 'peer', generation: 'g', chatOnly: true } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-chat-only', request: f.start.request }, f.scoped, where, f.open)
+  const prompt = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt as string
+  expect(prompt).toContain('You run on a teammate\'s machine: read and post only in this chat. You cannot read the project or send proposals; your owner sends those to the PM.')
+  const own = fixture()
+  own.start.request = { ...own.start.request, engine: 'claude', buddyOf: { personId: 'peer', generation: 'g' } } as typeof own.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-own', request: own.start.request }, own.scoped, where, own.open)
+  expect(own.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.prompt).not.toContain('teammate')
+})
+
 it('starts no Buddy with full permissions or the GitHub App\'s token: Claude refusing what its guard does not allow, Codex in its read-only sandbox asking', async () => {
   for (const [engine, mode, bypass] of [['claude', 'buddy', false], ['codex', 'readOnlyAsk', false]] as const) {
     const f = fixture()
