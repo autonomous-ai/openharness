@@ -2,7 +2,7 @@
  *  read. When they ask, it posts one proposal in the project chat on their behalf; the PM assigns the work as usual. A Buddy
  *  reads only its project's chat and its own chat, and does nothing but post in its chat and propose. On in every Swarm:
  *  Buddies replaced Chat with PM (Ken, 10-29). */
-import { fail, stableId, type Agent, type AgentStartRequest, type Conversation, type Person } from './model.js'
+import { fail, nextConversationNumber, stableId, type Agent, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 
 export const isBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf
 export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group.kind === 'buddy'
@@ -16,6 +16,25 @@ export function buddyReads(buddy: Agent, group: Conversation, leadConversationId
 /** A person's Buddy chat in a project, the same each time they add a Buddy there; a new membership opens a new one, as a
  *  private conversation's audience is held at the membership it was opened in. */
 export const buddyChatId = (projectId: string, owner: Pick<Person, 'id' | 'generation'>): string => stableId('buddy', projectId, owner.id, owner.generation)
+
+/** [owner]'s Buddy chat in [projectId], opened if they have none yet and again if archived (Lead's ruling, 10-29): every
+ *  person has one in each project from the start, before any Buddy, so the PM's private lines to them never drop. Only
+ *  they read it (projects.ts canReadGroup); the caller checks that they read the project. A quiet one is loaded by its id
+ *  first (store.ts moreNamed), so it is never opened twice. */
+export function openBuddyChat(state: SuperTabState, projectId: string, owner: Person): Conversation {
+  const id = buddyChatId(projectId, owner)
+  let chat = state.conversations.find(c => c.id === id)
+  if (!chat) {
+    const number = nextConversationNumber(state)
+    state.groupCounter = number
+    chat = { id, kind: 'buddy', ...(state.projects ? { projectId } : {}), number, title: `${owner.email.split('@')[0]}'s Buddy`, leadId: null,
+      agentIds: [], archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0,
+      audience: { people: [{ id: owner.id, generation: owner.generation }] } }
+    state.conversations.push(chat)
+  }
+  chat.archived = false
+  return chat
+}
 
 /** What a Buddy asks of its machine: it reads and talks, so the usual agent's share with git to read the project. */
 export const BUDDY_REQUIREMENTS: AgentStartRequest['requirements'] = { memoryBytes: 2 * 1024 ** 3, diskBytes: 1024 ** 3, maxCpuPercent: 85,

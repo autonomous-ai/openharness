@@ -107,3 +107,29 @@ describe('a Buddy through the store', () => {
       .rejects.toThrow('A Buddy posts only in its own chat')
   })
 })
+
+describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (Ken, 10-29)', () => {
+  const tell = (text: string) => ({ type: 'person.tell' as const, personId: peer.sub, text })
+
+  it('opens on the person\'s ask and takes the PM\'s line, which they read and the PM cannot', async () => {
+    const f = await swarm()
+    const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    await f.execute(tell('Your fix is merged.'), owner, f.lead)
+    expect((await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)).toEqual(['Your fix is merged.'])
+    await expect(f.store.messages(owner, f.tab, chat, {}, f.lead)).rejects.toThrow('unavailable')
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
+  })
+
+  it('is opened for the PM\'s first line, and a quiet one takes the next line rather than a second chat', async () => {
+    const f = await swarm()
+    await f.execute(tell('First.'), owner, f.lead)
+    const chats = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
+      .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
+    const [chat] = await chats()
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
+    await f.execute(tell('Second.'), owner, f.lead)
+    expect((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId).toBe(chat)
+    expect(await chats()).toEqual([chat])
+    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
+  })
+})

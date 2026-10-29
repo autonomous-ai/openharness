@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
+import { buddyChatId } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -532,7 +533,7 @@ export class SuperTabStore {
 
   /** What a command touches beyond its own fields: a named start's group, a decision's group and start, a delivery's
    *  group, and every group of the agents it removes or writes into (dormant ones too, design section 1.1 D8). */
-  private async moreNamed(tx: Transaction, tabId: string, state: SuperTabState, command: Command): Promise<Named> {
+  private async moreNamed(tx: Transaction, tabId: string, state: SuperTabState, command: Command, personId: string | null, asAgentId?: string): Promise<Named> {
     const named = namedFor(command)
     const groupIds = [...named.groupIds ?? []], startIds = [...named.startIds ?? []], agentIds: string[] = [], startAgentIds: string[] = []
     const start = 'startId' in command ? state.starts?.find(s => s.id === command.startId) : undefined
@@ -551,6 +552,13 @@ export class SuperTabStore {
       // Left to the PM: the person's Chat with PM in that project, quiet or not, takes the PM's line.
       if (asked && command.delegate) projectIds.push(asked.projectId)
     }
+    // A person's Buddy chat may have gone quiet: it is loaded by its id before it is opened again, never made twice.
+    const buddyChat = (projectId: string | undefined, id: string | null | undefined) => {
+      const owner = state.people.find(p => p.id === id)
+      if (projectId && owner) groupIds.push(buddyChatId(projectId, owner))
+    }
+    if (command.type === 'buddy.chat' || command.type === 'buddy.create') buddyChat(command.projectId, personId)
+    if (command.type === 'person.tell' && asAgentId) buddyChat(ledProject(state, asAgentId)?.id, command.personId)
     if (command.type === 'delivery.resolve') {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
       if (delivery) groupIds.push(delivery.conversationId)
@@ -898,7 +906,7 @@ export class SuperTabStore {
       started = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command))
-      const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command))
+      const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
       const original = loaded.state
       const team = await this.teamHost(tx, user)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.

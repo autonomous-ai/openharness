@@ -3,6 +3,7 @@ import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
 import { ANSWERED_NOTICE } from './decisions.js'
+import { buddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -37,7 +38,7 @@ function setup() {
     checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'first' }] } })
   state.agents.push({ id: 'buddy', projectId: app.projectId, machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'host',
     contributorId: 'peer', membershipGeneration: 'first', name: 'Buddy', configuration, buddyOf: { personId: 'peer', generation: 'first' } })
-  const chat: Conversation = { id: 'peer-buddy', kind: 'buddy', projectId: app.projectId, title: 'Buddy', leadId: null, agentIds: ['buddy'],
+  const chat: Conversation = { id: buddyChatId(app.projectId, { id: 'peer', generation: 'first' }), kind: 'buddy', projectId: app.projectId, title: 'Buddy', leadId: null, agentIds: ['buddy'],
     archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'first' }] } }
   state.conversations.push(chat)
   return { run, app, web, pm, group, pmChat, chat: chat.id, get state() { return state } }
@@ -443,6 +444,65 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     const answered = f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, peer, { decision })
     expect(answered.result.decisionId).toBe('old')
     expect(answered.messages.map(m => [m.conversationId, m.recipients, m.text])).toEqual([[f.app.conversationId, [f.pm], ANSWERED_NOTICE]])
+  })
+})
+
+describe('a person\'s Buddy chat before any Buddy (Lead, 10-29)', () => {
+  it('opens on its person\'s ask, read by them alone with nobody in it, and is the chat adding a Buddy then uses', () => {
+    const f = fresh()
+    const opened = f.run({ type: 'buddy.chat', projectId: f.app.projectId }, peer)
+    const chat = group(f, opened.result.conversationId as string)
+    expect(chat).toMatchObject({ kind: 'buddy', projectId: f.app.projectId, title: 'peer\'s Buddy', leadId: null, agentIds: [], archived: false,
+      audience: { people: [{ id: 'peer', generation: 'first' }] } })
+    expect(opened.messages).toEqual([])
+    expect([canReadGroup(f.state, peer, chat), canReadGroup(f.state, owner, chat), canReadGroup(f.state, agentActor(f.pm), chat)]).toEqual([true, false, false])
+    expect(f.run({ type: 'buddy.chat', projectId: f.app.projectId }, peer).result.conversationId).toBe(chat.id)
+    expect(addBuddy(f, peer, f.app.projectId).result.conversationId).toBe(chat.id)
+    expect(f.state.conversations.filter(c => c.kind === 'buddy').map(c => c.id)).toEqual([chat.id])
+  })
+
+  it('is one per person and project, opened again if archived, and never an agent\'s', () => {
+    const f = fresh()
+    const app = f.run({ type: 'buddy.chat', projectId: f.app.projectId }, peer).result.conversationId as string
+    expect(f.run({ type: 'buddy.chat', projectId: f.web.projectId }, peer).result.conversationId).not.toBe(app)
+    expect(f.run({ type: 'buddy.chat', projectId: f.app.projectId }).result.conversationId).not.toBe(app)
+    group(f, app).archived = true
+    f.run({ type: 'buddy.chat', projectId: f.app.projectId }, peer)
+    expect(group(f, app).archived).toBe(false)
+    expect(() => f.run({ type: 'buddy.chat', projectId: f.app.projectId }, agentActor(f.pm))).toThrow('A person opens their own Buddy chat')
+  })
+})
+
+describe('the PM\'s private line to a person (Ken, 10-29)', () => {
+  const tell = (personId = 'peer', text = 'Your fix is merged.') => ({ type: 'person.tell' as const, personId, text })
+
+  it('goes to the person\'s Buddy chat in its project, opening it when they have none, to nobody; the PM still cannot read it', () => {
+    const f = fresh()
+    const told = f.run(tell(), agentActor(f.pm))
+    const chat = f.state.conversations.find(c => c.kind === 'buddy' && c.projectId === f.app.projectId)!
+    expect(chat).toMatchObject({ agentIds: [], audience: { people: [{ id: 'peer', generation: 'first' }] } })
+    expect(told.messages).toEqual([expect.objectContaining({ conversationId: chat.id, recipients: [], text: 'Your fix is merged.',
+      author: expect.objectContaining({ kind: 'agent', id: f.pm }) })])
+    expect(told.result).toEqual({ messageId: told.messages[0]!.id })
+    expect(canReadGroup(f.state, agentActor(f.pm), chat)).toBe(false)
+    expect(canReadGroup(f.state, peer, chat)).toBe(true)
+    // The same chat its Buddy joins later, and a line to it then reaches the person, not the Buddy.
+    expect(addBuddy(f, peer, f.app.projectId).result.conversationId).toBe(chat.id)
+    expect(f.run(tell('peer', 'Again.'), agentActor(f.pm)).messages[0]).toMatchObject({ conversationId: chat.id, recipients: [] })
+  })
+
+  it('is a project Lead\'s alone, to a person in the Swarm, and needs a line', () => {
+    const f = fresh()
+    expect(() => f.run(tell(), peer)).toThrow('Only a project\'s Lead')
+    expect(() => f.run(tell(), agentActor('buddy-none'))).toThrow()
+    expect(() => f.run(tell('stranger'), agentActor(f.pm))).toThrow('person in this Swarm')
+    expect(() => f.run(tell('peer', '  '), agentActor(f.pm))).toThrow()
+    expect(f.state.conversations.filter(c => c.kind === 'buddy')).toEqual([])
+  })
+
+  it('is refused to a Buddy, as every command but its own chat\'s', () => {
+    const f = setup()
+    expect(() => f.run(tell('owner'), agentActor('buddy'))).toThrow('A Buddy')
   })
 })
 

@@ -3,7 +3,7 @@
  *  with one tap, and the answer reaches the asking agent and the Lead in the conversation it came from. Decisions live in
  *  SuperTabDecision, never in the tab state, as mentions do. A decision is not a private channel: the PM's private lines go
  *  to the person's Buddy chat (buddies.ts). Called inside SuperTabStore's transactions. */
-import { isBuddyChat } from './buddies.js'
+import { openBuddyChat } from './buddies.js'
 import { createHash } from 'node:crypto'
 import type { Prisma } from '@prisma/client'
 import { z } from 'zod'
@@ -103,19 +103,17 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   const noticeIn = isClosedPmChat(group) ? state.conversations.find(c => c.id === project.leadConversationId)! : group
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
   const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
-  const line = given.delegate && lead ? delegatedLine(state, actor, project.id, lead, asked, choice) : null
+  const line = given.delegate && lead ? delegatedLine(state, project.id, lead, asked, choice) : null
   return { answer, noticeIn: noticeIn.id, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
-/** The Lead's one line saying what it chose, in the person's own Chat with PM of that project: only they read it, and they
- *  were asked the question. None when they have no open one with the Lead in it. While Buddies are on, Chat with PM is
- *  read-only and decisions live with the Buddy (Ken's spec, 10-28): the line goes to their Buddy chat instead, or nowhere. */
-function delegatedLine(state: SuperTabState, actor: Actor, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
+/** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read
+ *  it, and they were asked the question. Opened for the line when they have none (buddies.ts openBuddyChat), so it never
+ *  drops: Buddies replaced Chat with PM (Ken, 10-29). */
+function delegatedLine(state: SuperTabState, projectId: string, leadId: string, asked: DecisionTarget, choice: number) {
   const lead = state.agents.find(a => a.id === leadId)
-  const theirs = (c: Conversation) => !c.archived && c.audience?.people.length === 1 && c.audience.people[0]!.id === asked.personId
-    && groupProject(state, c).id === projectId && canReadGroup(state, actor, c)
-  const chat = state.conversations.find(c => theirs(c) && isBuddyChat(c))
-  if (!lead || !chat) return null
+  if (!lead) return null
+  const chat = openBuddyChat(state, projectId, person(state, asked.personId))
   const author: Author = { kind: 'agent', id: lead.id, name: lead.name, displayName: agentDisplayName(state.agents, lead.id), membershipGeneration: lead.membershipGeneration }
   const question = asked.question.replace(/\s+/g, ' ')
   return { conversationId: chat.id, author, text: `${answerText(asked.options[choice]!, true)} — ${question}`,

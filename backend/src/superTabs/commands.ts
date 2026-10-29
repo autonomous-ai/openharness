@@ -26,7 +26,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -131,6 +131,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.propose'), conversationId: id, ownerMessageId: id, goal: z.string().trim().min(1).max(2000),
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']) }).strict(),
   z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
+  // A person's own Buddy chat in a project, opened before any Buddy is (buddies.ts openBuddyChat).
+  z.object({ type: z.literal('buddy.chat'), projectId: id }).strict(),
+  // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
+  z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
   z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -1349,6 +1353,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (target) removeAgent(target)
       break
     }
+    case 'buddy.chat': {
+      if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person opens their own Buddy chat.', 403)
+      result.conversationId = openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
+      break
+    }
+    case 'person.tell': {
+      const project = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
+      if (!project) fail('TELL_FORBIDDEN', 'Only a project\'s Lead sends a person a private line, in its own project.', 403)
+      const to = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Tell a person in this Swarm.', 400)
+      if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${to.email} cannot read this project.`, 400)
+      // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them.
+      message(openBuddyChat(state, project.id, to).id, command.text)
+      break
+    }
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
@@ -1370,15 +1388,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
       }
       const contributor = person(state, grant.contributorId)
-      let chat = state.conversations.find(c => c.id === chatId)
-      if (!chat) {
-        const number = nextConversationNumber(state)
-        state.groupCounter = number
-        chat = { id: chatId, kind: 'buddy', ...(state.projects ? { projectId: project.id } : {}), number, title: `${who}'s Buddy`, leadId: null, agentIds: [],
-          archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: audienceOf(state, project, [me.id]) }
-        state.conversations.push(chat)
-      }
-      chat.archived = false
+      openBuddyChat(state, project.id, me)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,

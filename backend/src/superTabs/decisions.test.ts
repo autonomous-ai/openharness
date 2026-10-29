@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, type Actor, type AgentConfiguration } from './model.js'
 import { listDecisions, waitingInProject, type DecisionTarget } from './decisions.js'
+import { buddyChatId } from './buddies.js'
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -120,9 +121,10 @@ describe('leaving a decision to the PM', () => {
   /** The peer's own Buddy chat in the project, as adding a Buddy opens it (buddies.ts). */
   const buddyChat = (s: ReturnType<typeof swarm>) => {
     const generation = s.state.people.find(p => p.id === 'peer')!.generation
-    s.state.conversations.push({ id: 'peer-buddy', kind: 'buddy', projectId: 'lead', title: 'peer\'s Buddy', leadId: null, agentIds: [], archived: false,
+    const id = buddyChatId('lead', { id: 'peer', generation })
+    s.state.conversations.push({ id, kind: 'buddy', projectId: 'lead', title: 'peer\'s Buddy', leadId: null, agentIds: [], archived: false,
       brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation }] } })
-    return 'peer-buddy'
+    return id
   }
   const delegate = (s: ReturnType<typeof swarm>, actor: Actor, decision: DecisionTarget | undefined) =>
     s.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, actor, decision ? { decision } : {})
@@ -144,15 +146,16 @@ describe('leaving a decision to the PM', () => {
     expect(answered.messages).toHaveLength(2)
   })
 
-  it('posts no line when the person has no open Buddy chat in that project', () => {
+  it('opens the person\'s Buddy chat for the line when they have none, and opens an archived one again: the line never drops', () => {
     const s = swarm()
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toMatchObject({ choice: 1, delegated: true })
-    expect(answered.messages.map(m => m.conversationId)).toEqual([s.group])
-    // An archived one refuses posts: the answer still stands, without the line.
-    const chat = buddyChat(s)
-    s.state.conversations.find(c => c.id === chat)!.archived = true
-    expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group])
+    const chat = s.state.conversations.find(c => c.kind === 'buddy')!
+    expect(chat).toMatchObject({ projectId: 'lead', agentIds: [], audience: { people: [{ id: 'peer' }] } })
+    expect(answered.messages.map(m => m.conversationId)).toEqual([s.group, chat.id])
+    chat.archived = true
+    expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group, chat.id])
+    expect(s.state.conversations.find(c => c.id === chat.id)!.archived).toBe(false)
   })
 
   it('lets only the person asked delegate, once, and only a decision with a recommended option', () => {
