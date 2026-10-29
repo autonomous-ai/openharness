@@ -119,6 +119,7 @@ enum SuperTabReactionEmoji {
   heart('heart', '❤️'),
   laugh('laugh', '😄'),
   eyes('eyes', '👀'),
+  check('check', '✅'),
   rocket('rocket', '🚀');
 
   const SuperTabReactionEmoji(this.key, this.glyph);
