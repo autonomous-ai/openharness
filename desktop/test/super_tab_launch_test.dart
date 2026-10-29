@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/core/launch_setup.dart';
+import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/state/harness_attachments.dart';
@@ -377,6 +378,7 @@ class SuperTabLaunchFixture {
     bool local = false,
     SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
     LocalCliDiscovery? discovery,
+    SystemNotifications? systemNotifications,
   }) {
     connection =
         connectionFactory?.call(store) ??
@@ -386,6 +388,7 @@ class SuperTabLaunchFixture {
       connectionForTest: (_) => connection,
       connected: true,
       localCliDiscovery: discovery,
+      systemNotifications: systemNotifications,
     );
     app.machineStates['m']!
       ..localOnly = true

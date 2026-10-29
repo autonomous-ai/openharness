@@ -4,6 +4,7 @@ import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/measurement/product_measurement.dart';
+import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/state/pane_preset.dart';
@@ -35,6 +36,7 @@ AppNotifier createApp({
   bool connected = false,
   ProductMeasurement? productMeasurement,
   LocalCliDiscovery? localCliDiscovery,
+  SystemNotifications? systemNotifications,
 }) {
   final app = AppNotifier(
     config: AppConfig.dev,
@@ -43,6 +45,7 @@ AppNotifier createApp({
     connectionForTest: connectionForTest,
     localCliDiscovery: localCliDiscovery,
     productMeasurement: productMeasurement,
+    systemNotifications: systemNotifications,
     paneLayoutStore: store == null ? null : PaneLayoutStore(storage: store),
   )..hasNavigationRail = false;
   const machine = Machine(

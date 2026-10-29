@@ -15,6 +15,7 @@ import 'super_tab_launch_test.dart'
     show SuperTabFixtureConnection, SuperTabLaunchFixture, tabId;
 import 'support/super_tab_fixture.dart';
 import 'swarm_screen_test.dart' show mount;
+import 'swarm_state_test.dart' show MemoryStore;
 
 const otherId = 'fedcba9876543210fedcba98';
 
@@ -140,6 +141,14 @@ Future<void> openWithNotices(SuperTabLaunchFixture f) async {
   await SuperTabMentions.of(c).load();
   await SuperTabDecisions.of(c).load();
 }
+
+/// The app's notifications as the macOS runner answers them, on any computer:
+/// a click comes back on `harness/notifications` (Linux CI picks its own
+/// notifier otherwise, which hears no such click).
+SystemNotifications clicks() => SystemNotifications(
+  store: DesktopNotificationStore(storage: MemoryStore()),
+  notifier: MacSystemNotifier(),
+);
 
 void main() {
   test('the menu bar lists what needs the person in each Swarm: decisions, '
@@ -479,7 +488,10 @@ void main() {
       'a click on a tag\'s system notification brings its Swarm tab forward '
       'and opens the tagged message',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         final swarmTab = f.app.activeSwarmId;
         tagInOffline(f.connection.server);
@@ -506,7 +518,10 @@ void main() {
       'a click on a tag in a Swarm not loaded yet loads it, checks the tag, '
       'and opens it',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         f.app.newSwarm(name: 'Atlas');
         f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
@@ -532,7 +547,10 @@ void main() {
       'a click on a tag in a closed Swarm tab reopens it at the tag; one no '
       'longer waiting reopens nothing',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         f.app.newSwarm(name: 'Atlas');
         f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
@@ -572,7 +590,10 @@ void main() {
     testWidgets(
       'a click on a tag in a Swarm this account is not in opens nothing',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         f.app.newSwarm(name: 'Desktop');
         final before = f.app.activeSwarmId;
@@ -606,7 +627,10 @@ void main() {
         'a click whose fresh tag check is $name opens nothing, though the tag '
         'waits in what was read before',
         (tester) async {
-          final f = SuperTabLaunchFixture(connectionFactory: RefusingTags.new);
+          final f = SuperTabLaunchFixture(
+            connectionFactory: RefusingTags.new,
+            systemNotifications: clicks(),
+          );
           await tester.runAsync(() => openWithNotices(f));
           f.app.newSwarm(name: 'Desktop');
           final before = f.app.activeSwarmId;
@@ -632,7 +656,10 @@ void main() {
       'a click that opens nothing lets go of a Swarm it loaded for a tab not '
       'shown yet',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: TwoSwarms.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         f.app.newSwarm(name: 'Atlas');
         f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
@@ -654,7 +681,10 @@ void main() {
       'a click opens from the one read that confirmed the tag: a refusal '
       'after it changes nothing, as no second read decides',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: RefusingTags.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: RefusingTags.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         tagInOffline(f.connection.server);
         final swarmTab = f.app.activeSwarmId;
@@ -683,7 +713,10 @@ void main() {
       'an older tag refresh still on its way cannot replace the read that '
       'confirmed the click',
       (tester) async {
-        final f = SuperTabLaunchFixture(connectionFactory: StaleTagRefresh.new);
+        final f = SuperTabLaunchFixture(
+          connectionFactory: StaleTagRefresh.new,
+          systemNotifications: clicks(),
+        );
         await tester.runAsync(() => openWithNotices(f));
         final swarmTab = f.app.activeSwarmId;
         f.app.newSwarm(name: 'Desktop');
