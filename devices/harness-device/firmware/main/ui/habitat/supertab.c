@@ -170,6 +170,7 @@ void ht_supertabs_recap_open(ht_supertabs_t *s, const char *tab, const char *lea
     bool open = lead && *lead && tab && *tab;
     // The Lead already on the face keeps what it shows until a new recap replaces it: emptying it left the resting pet
     // for the 5 s retry on every reopen (Diego, 2026-10-29). Only while the face's chat is still the one it was for.
+    // A kept recap is not LOADING, so its refresh has no 5 s retry: one lost on the way waits for the next push.
     if (open && (s->recap.state == HT_RECAP_LOADED || s->recap.state == HT_RECAP_EMPTY) && !strcmp(s->recap.tab, tab) && !strcmp(s->recap.lead, lead)) {
         const ht_supertab_t *t = ht_supertabs_find(s, tab);
         for (int i = 0; t && i < t->lead_n; i++)

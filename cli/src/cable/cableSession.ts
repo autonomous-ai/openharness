@@ -2789,6 +2789,8 @@ export class CableSession {
 
   /** A Lead's changed text, for the Pro that has that Lead's recap open. */
   async swarmCardRecap(recap: LeadRecap): Promise<void> {
+    // A newer text than the read a repeat request would be answered from: that read is not handed out again.
+    if (this.lastRecapGet?.key === `${recap.tabId}/${recap.leadId}`) this.lastRecapGet = null
     if (!this.swarmCard || this.openLead?.tabId !== recap.tabId || this.openLead.leadId !== recap.leadId) return
     // The service pushes a Lead's recap and its face chat's apart: each device takes only the kind it asked for.
     if (this.swarmChat !== (recap.chatId !== undefined)) return

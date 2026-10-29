@@ -4197,6 +4197,26 @@ describe('swarm cards', () => {
     } finally { now.mockRestore(); await session.stop() }
   })
 
+  it('a repeat after a pushed recap is read again, never answered with the older read', async () => {
+    const recaps = vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'A', at: 1, none: false }))
+    const host = cardHost({ cards: [card('st1')] }, { swarmCardRecap: recaps })
+    const { session, port } = await connect(host)
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(5_000_000)
+      port.say(PRO)
+      await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+      port.say({ t: 'supertab.open', tab: 'st1', lead: 'lead1' })
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      await session.swarmCardRecap({ tabId: 'st1', leadId: 'lead1', text: 'B', at: 2, none: false })
+      recaps.mockResolvedValueOnce({ tabId: 'st1', leadId: 'lead1', text: 'B', at: 2, none: false })
+      now.mockReturnValue(5_000_200)
+      port.say({ t: 'supertab.recap.get', tab: 'st1', lead: 'lead1' }); await settle(); await settle()
+      expect(recaps).toHaveBeenCalledTimes(2)
+      expect(ofType(port, 'supertab.recap').map((f) => f.text)).toEqual(['A', 'B', 'B'])
+    } finally { now.mockRestore(); await session.stop() }
+  })
+
   it('reads a repeat again once the Lead left the cards, and a read that throws answers nothing', async () => {
     const state = { cards: [card('st1')] }
     const recaps = vi.fn(async (tabId: string, leadId: string) => ({ tabId, leadId, text: 'Shipped it.', at: 1792560000, none: false }))
