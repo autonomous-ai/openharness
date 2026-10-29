@@ -22,24 +22,25 @@ export class SharingEndedError extends Error {}
  *  or holds expired, is read again at once, and so is the list after any window failed to open: a new invitation
  *  opens at once, and the backend checks the share on every connect whatever the list said. */
 const SHARES_LIST_MS = 60_000
+/** How many times a window looks its share up again when the sign-in changed, or the list was put in doubt, while it
+ *  looked. Past it the window does not open. */
+const SHARE_LOOKUPS_MAX = 3
 
 /** One invitation per connection. Never promoted into a full machine link or a shared connection pool. */
 export class HarnessShareRelay {
   private sessions = new Set<() => void>()
   private listed: { at: number; account: string; machines: SharedMachineReference[] } | null = null
   private reading: { account: string; machines: Promise<SharedMachineReference[]> } | null = null
+  /** Bumped whenever the list is put in doubt (a window failed to open, or was no longer shared): a read begun before
+   *  is neither kept nor joined, and a window that looked its share up across it looks again. */
+  private generation = 0
   /** `account` names the sign-in the list is read for: a list read for another one answers nothing. */
   constructor(private readonly auth: Pick<AuthSessionManager, 'accessToken'>, private readonly backendWsBase: string,
     private readonly environment: string, private readonly discover: () => Promise<SharedMachineReference[]>,
     private readonly account: () => string) {}
   async acquire(machineId: string, shareId: string, sink: LocalClientSink,
     onClosed: (code: number, reason: string) => void): Promise<RelaySession> {
-    const listed = this.listed && this.listed.account === this.account() && Date.now() - this.listed.at < SHARES_LIST_MS
-      ? this.listed.machines : null
-    const kept = this.find(listed, machineId, shareId)
-    const share = kept && Date.parse(kept.expiresAt) > Date.now() ? kept : this.find(await this.read(), machineId, shareId)
-    if (!share) throw new SharingEndedError('Sharing ended or invitation expired')
-    const token = await this.auth.accessToken()
+    const { share, token } = await this.lookUp(machineId, shareId)
     const url = `${this.backendWsBase.replace(/\/$/, '')}/api/observer-ws?share=${encodeURIComponent(shareId)}&autonomousEnv=${encodeURIComponent(this.environment)}`
       + `&${declaredClientQuery('relay')}`
     const ws = new WebSocket(url, [token], { handshakeTimeout: 10_000, maxPayload: 3 * 1024 * 1024 })
@@ -47,7 +48,7 @@ export class HarnessShareRelay {
     let cipher: ObserverCipher | null = null, detached = false, settled = false
     let heartbeat: ReturnType<typeof watchSocketLiveness> | null = null
     const detach = () => { detached = true; heartbeat?.stop(); this.sessions.delete(detach); ws.terminate() }
-    const failed = () => { this.listed = null }
+    const failed = () => this.doubt()
     this.sessions.add(detach)
     try {
       await new Promise<void>((resolve, reject) => {
@@ -120,20 +121,50 @@ export class HarnessShareRelay {
   }
   close(): void { for (const stop of [...this.sessions]) stop() }
 
+  /** The share and the token to open it with, both for the same sign-in and the same list: if either changed while
+   *  this looked, it looks again, so a window never opens on one sign-in's list with another's token. */
+  private async lookUp(machineId: string, shareId: string): Promise<{ share: SharedHarnessReference; token: string }> {
+    for (let lookup = 1; ; lookup++) {
+      const account = this.account(), generation = this.generation
+      const unchanged = () => this.account() === account && this.generation === generation
+      const listed = this.listed && this.listed.account === account && Date.now() - this.listed.at < SHARES_LIST_MS
+        ? this.listed.machines : null
+      const kept = this.find(listed, machineId, shareId)
+      const share = kept && Date.parse(kept.expiresAt) > Date.now() ? kept : this.find(await this.read(), machineId, shareId)
+      if (unchanged()) {
+        if (!share) throw new SharingEndedError('Sharing ended or invitation expired')
+        const token = await this.auth.accessToken()
+        if (unchanged()) return { share, token }
+      }
+      if (lookup === SHARE_LOOKUPS_MAX) throw new Error('Shared harnesses are temporarily unavailable.')
+    }
+  }
+
+  /** The list is in doubt: whatever was kept, or is being read, answers no window from now on. */
+  private doubt(): void {
+    this.generation++
+    this.listed = null
+    this.reading = null
+  }
+
   /** The share in `machines`, if it holds it. A kept list's share past its expiry is read again; a list just read is
    *  the backend's word, whatever this computer's clock says. */
   private find(machines: SharedMachineReference[] | null, machineId: string, shareId: string): SharedHarnessReference | undefined {
     return machines?.find(m => m.machineId === machineId)?.shares.find(s => s.id === shareId)
   }
 
-  /** The list read now, once for every window of the same sign-in asking at the same time. A failed read is not
-   *  kept, nor one that ends after the sign-in changed. */
+  /** The list read now, once for every window of the same sign-in asking at the same time. It is kept only while the
+   *  sign-in and the list's generation are still those it was read under. A failed read leaves no list to use. */
   private read(): Promise<SharedMachineReference[]> {
-    const account = this.account()
+    const account = this.account(), generation = this.generation
     if (this.reading?.account === account) return this.reading.machines
+    const current = () => this.account() === account && this.generation === generation
     const machines = this.discover().then((list) => {
-      if (this.account() === account) this.listed = { at: Date.now(), account, machines: list }
+      if (current()) this.listed = { at: Date.now(), account, machines: list }
       return list
+    }, (error: unknown) => {
+      if (current()) this.listed = null
+      throw error
     }).finally(() => { if (this.reading?.machines === machines) this.reading = null })
     this.reading = { account, machines }
     return machines
