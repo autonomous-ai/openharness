@@ -369,8 +369,21 @@ class SuperTabOutgoingReceipt extends StatelessWidget {
     required this.message,
     required this.onDelete,
     this.onRetry,
+    this.inline = false,
   });
   final SuperTabOutgoing message;
+  final bool inline;
+
+  Widget _line(List<Widget> parts) => inline
+      ? Semantics(
+          liveRegion: true,
+          child: Wrap(
+            spacing: grid.AppDesktop.controlGap,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: parts,
+          ),
+        )
+      : _receiptLine(parts);
 
   /// Null while it cannot be done now, as during another send.
   final VoidCallback? onRetry;
@@ -380,25 +393,26 @@ class SuperTabOutgoingReceipt extends StatelessWidget {
   Widget build(BuildContext context) {
     if (message.state == SuperTabOutgoingState.sending) {
       final style = superTabReceiptStyle(DesktopChrome.muted);
-      return _receiptLine([
-        if (MediaQuery.disableAnimationsOf(context))
-          Icon(AppIcons.loaderCircle, size: 14, color: DesktopChrome.muted)
-        else
-          SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: DesktopChrome.muted,
+      return _line([
+        if (!inline)
+          if (MediaQuery.disableAnimationsOf(context))
+            Icon(AppIcons.loaderCircle, size: 14, color: DesktopChrome.muted)
+          else
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: DesktopChrome.muted,
+              ),
             ),
-          ),
         Text('Sending…', style: style),
       ]);
     }
     final color = Theme.of(context).colorScheme.error;
     final style = superTabReceiptStyle(color);
     final refused = message.state == SuperTabOutgoingState.refused;
-    return _receiptLine([
+    return _line([
       Icon(AppIcons.triangleAlert, size: 14, color: color),
       Text('Not sent', style: style),
       if (refused && message.error != null) ...[

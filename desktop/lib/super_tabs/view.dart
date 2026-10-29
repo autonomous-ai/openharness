@@ -432,9 +432,9 @@ class _SuperTabViewState extends State<SuperTabView>
     if (!c.canWrite ||
         c.selected == null ||
         c.selected!.archived ||
-        c.saving ||
         c.uploading ||
-        c.hasPendingAction ||
+        ((c.saving || c.hasPendingAction) &&
+            (!_files.isEmpty || !c.canQueueText)) ||
         (_composer.text.trim().isEmpty && _files.isEmpty)) {
       return;
     }
@@ -1818,65 +1818,76 @@ class _SuperTabViewState extends State<SuperTabView>
         ?.showSnackBar(SnackBar(content: Text(failure)));
   }
 
-  /// [sent], drawn as the reader's own message will be once the transcript
-  /// holds it, with where it stands under it.
-  Widget _outgoingRow(
-    SuperTabOutgoing sent,
-    List<SuperTabMessage> messages,
-    Map<String, SuperTabMessage> byId,
-  ) {
+  SuperTabMessage _outgoingMessage(SuperTabOutgoing sent) {
     final id = sent.conversationId;
     final person = c.snapshot?.people
         .where((p) => p.id == c.accountId)
         .firstOrNull;
-    final message = SuperTabMessage.fromJson({
-      'id': 'outgoing',
+    return SuperTabMessage.fromJson({
+      'id': sent.operationId ?? 'outgoing',
       'conversationId': id,
       'text': sent.text,
       'replyTo': sent.replyTo,
       'sequence': 0,
-      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'createdAt': sent.confirmedAt ?? DateTime.now().toUtc().toIso8601String(),
       'author': {
         'kind': 'person',
         'id': c.accountId,
         'name': person?.email ?? '',
       },
     });
+  }
+
+  /// Uses the transcript's own row identity before and after acknowledgement.
+  Widget _outgoingRow(
+    SuperTabOutgoing sent,
+    List<SuperTabMessage> messages,
+    Map<String, SuperTabMessage> byId,
+  ) {
+    final message = _outgoingMessage(sent);
+    final person = c.snapshot?.people
+        .where((p) => p.id == c.accountId)
+        .firstOrNull;
     final reply = byId[sent.replyTo];
     return KeyedSubtree(
       key: const ValueKey('super-outgoing'),
-      child: SuperTabMessageRow(
-        message: message,
-        author: _shownAuthor(c, message),
-        proposalOwner: _proposalOwner(message),
-        person: person,
-        grouped: SuperTabMessageRow.groupsWith(message, messages.lastOrNull),
-        reply: reply,
-        replyAuthor: reply == null ? null : _shownAuthor(c, reply),
-        onReturnToComposer: _focus.requestFocus,
-        readerId: c.accountId,
-        receipts: [
-          SuperTabOutgoingReceipt(
-            message: sent,
-            // A refused message goes again only when nothing else is on
-            // its way.
-            onRetry:
-                c.saving ||
-                    (sent.state == SuperTabOutgoingState.refused &&
-                        c.hasPendingAction)
-                ? null
-                : () {
-                    unawaited(c.retryOutgoing(sent));
+      child: Opacity(
+        opacity: sent.state == SuperTabOutgoingState.sending ? 0.6 : 1,
+        child: SuperTabMessageRow(
+          message: message,
+          author: _shownAuthor(c, message),
+          proposalOwner: _proposalOwner(message),
+          person: person,
+          grouped: false,
+          reply: reply,
+          replyAuthor: reply == null ? null : _shownAuthor(c, reply),
+          onReturnToComposer: _focus.requestFocus,
+          readerId: c.accountId,
+          headerStatus: sent.state == SuperTabOutgoingState.confirmed
+              ? null
+              : SuperTabOutgoingReceipt(
+                  inline: true,
+                  message: sent,
+                  // A refused message goes again only when nothing else is on
+                  // its way.
+                  onRetry:
+                      c.saving ||
+                          (sent.state == SuperTabOutgoingState.refused &&
+                              c.hasPendingAction)
+                      ? null
+                      : () {
+                          unawaited(c.retryOutgoing(sent));
+                          _focus.requestFocus();
+                        },
+                  // The click lands in the transcript; typing goes on in the
+                  // composer, as after Reply.
+                  onDelete: () {
+                    c.discardOutgoing(sent);
                     _focus.requestFocus();
                   },
-            // The click lands in the transcript; typing goes on in the
-            // composer, as after Reply.
-            onDelete: () {
-              c.discardOutgoing(sent);
-              _focus.requestFocus();
-            },
-          ),
-        ],
+                ),
+          receipts: const [],
+        ),
       ),
     );
   }
@@ -1960,7 +1971,7 @@ class _SuperTabViewState extends State<SuperTabView>
       person: message.fromAgent ? null : _people[message.authorId],
       onOpenAgent: agent == null ? null : () => _openAgent(agent),
       machineName: agent == null ? null : widget.machineName(agent.machineId),
-      grouped: grouped,
+      grouped: grouped && !c.sentHere(message.id),
       reply: reply,
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       replyGone: quoted != null && reply == null,
@@ -2250,17 +2261,23 @@ class _SuperTabViewState extends State<SuperTabView>
           (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
         )
         .firstOrNull;
-    final messages = _shownMessages(c.selectedId);
+    final actualMessages = _shownMessages(c.selectedId);
+    final outgoing = c.outgoing(c.selectedId);
+    final pendingById = {for (final sent in outgoing) sent.operationId: sent};
+    final messages = [...actualMessages, ...outgoing.map(_outgoingMessage)];
     final entries = superTabTranscriptEntries(messages);
     final byId = {for (final message in messages) message.id: message};
     final rowIndex = {
       for (final (index, entry) in entries.indexed)
-        _rowKey(entry.message.id): index,
+        _rowKey(c.messageIdentity(entry.message.id)): index,
     };
     // A row stays the same row as pages arrive above it, state and all.
     int? rowOf(Key key) => key is ValueKey<String> ? rowIndex[key.value] : null;
-    final split = _splitAt(c.selectedId, entries);
-    final grouped = _joined(messages, _split[c.selectedId]);
+    final split = _splitAt(
+      c.selectedId,
+      superTabTranscriptEntries(actualMessages),
+    );
+    final grouped = _joined(actualMessages, _split[c.selectedId]);
     Widget row(int index) {
       final entry = entries[index];
       final message = entry.message;
@@ -2270,7 +2287,7 @@ class _SuperTabViewState extends State<SuperTabView>
       final previous = index > 0 ? entries[index - 1].message : null;
       final time = message.createdAt;
       return Column(
-        key: ValueKey(_rowKey(message.id)),
+        key: ValueKey(_rowKey(c.messageIdentity(message.id))),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (time != null &&
@@ -2288,7 +2305,13 @@ class _SuperTabViewState extends State<SuperTabView>
               key: message.id == _target ? _targetKey : null,
               child: SuperTabMessageHighlight(
                 on: message.id == _lit,
-                child: entry.interruptions > 0
+                child: pendingById.containsKey(message.id)
+                    ? _outgoingRow(
+                        pendingById[message.id]!,
+                        actualMessages,
+                        byId,
+                      )
+                    : entry.interruptions > 0
                     ? SuperTabRecordingNotice(
                         key: ValueKey('super-message-${message.id}'),
                         author: _shownAuthor(c, message),
@@ -2317,11 +2340,11 @@ class _SuperTabViewState extends State<SuperTabView>
     // More came than were read: the count is a floor.
     final moreNew = c.hasNewer(c.selectedId);
     final reply = _replies[c.selectedId];
-    final outgoing = c.outgoing(c.selectedId);
     // A failed message says so in its own row, with what can be done.
     final errorInRow = outgoing.any(
       (sent) => switch (sent.state) {
-        SuperTabOutgoingState.sending => false,
+        SuperTabOutgoingState.sending ||
+        SuperTabOutgoingState.confirmed => false,
         SuperTabOutgoingState.unconfirmed => c.hasPendingAction,
         SuperTabOutgoingState.refused => sent.error == c.operationError,
       },
@@ -2471,17 +2494,8 @@ class _SuperTabViewState extends State<SuperTabView>
                               sliver: SliverList(
                                 delegate: SliverChildBuilderDelegate(
                                   // Messages on their way end the list.
-                                  (context, index) =>
-                                      index < entries.length - split
-                                      ? row(split + index)
-                                      : _outgoingRow(
-                                          outgoing[index -
-                                              (entries.length - split)],
-                                          messages,
-                                          byId,
-                                        ),
-                                  childCount:
-                                      entries.length - split + outgoing.length,
+                                  (context, index) => row(split + index),
+                                  childCount: entries.length - split,
                                   findChildIndexCallback: (key) =>
                                       switch (rowOf(key)) {
                                         final i? when i >= split => i - split,
@@ -2940,8 +2954,10 @@ class _SuperTabViewState extends State<SuperTabView>
                                       color: DesktopChrome.accent,
                                       onPressed:
                                           writable &&
-                                              !busy &&
-                                              !c.hasPendingAction &&
+                                              !c.uploading &&
+                                              ((!busy && !c.hasPendingAction) ||
+                                                  (_files.isEmpty &&
+                                                      c.canQueueText)) &&
                                               (_composer.text
                                                       .trim()
                                                       .isNotEmpty ||

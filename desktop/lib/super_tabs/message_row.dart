@@ -39,6 +39,7 @@ class SuperTabMessageRow extends StatefulWidget {
     this.reactorName,
     this.onReact,
     this.proposalOwner,
+    this.headerStatus,
   });
 
   final SuperTabMessage message;
@@ -70,6 +71,7 @@ class SuperTabMessageRow extends StatefulWidget {
   final ValueChanged<BuildContext>? onOpenReply;
   final VoidCallback onReturnToComposer;
   final List<Widget> receipts;
+  final Widget? headerStatus;
 
   /// The reader, whose own reactions are marked; [reactorName] names the
   /// others. Without [onReact] the counts only show.
@@ -308,7 +310,11 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                             size: 14,
                                           ),
                                         ),
-                                      if (message.createdAt case final time?)
+                                      if (widget.headerStatus
+                                          case final status?)
+                                        status
+                                      else if (message.createdAt
+                                          case final time?)
                                         Tooltip(
                                           message: MaterialLocalizations.of(
                                             context,

@@ -6,6 +6,219 @@ import 'package:harness/super_tabs/controller.dart';
 import 'support/super_tab_fixture.dart';
 
 void main() {
+  test(
+    'queued sends retain their project, workgroup and own Buddy destinations',
+    () async {
+      final s = ConversationServer();
+      final gate = Completer<void>();
+      var hold = false;
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: s.save,
+        pollInterval: Duration.zero,
+        request: (method, path, {body}) async {
+          if (method == 'POST' && hold) await gate.future;
+          return s.request(method, path, body: body);
+        },
+      );
+      await c.refresh();
+      await c.addBuddy(projectId: 'lead', machineId: 'mac', engine: 'claude');
+      hold = true;
+      final sends = <Future<Map<String, dynamic>?>>[];
+      for (final id in ['lead', 'offline', 'buddy-owner-lead']) {
+        expect(await c.select(id), isTrue);
+        c.setDraft(id, 'Message for $id');
+        sends.add(c.send());
+        expect(c.outgoing(id).single.text, 'Message for $id');
+      }
+      gate.complete();
+      await Future.wait(sends);
+      final posts = s.posts
+          .map((p) => p['command'] as Map)
+          .where((p) => p['type'] == 'message.send');
+      expect(posts.map((p) => p['conversationId']), [
+        'lead',
+        'offline',
+        'buddy-owner-lead',
+      ]);
+      await c.flush();
+      c.dispose();
+    },
+  );
+  test('a slow refresh never delays the next queued POST', () async {
+    final s = ConversationServer();
+    final reads = Completer<void>();
+    var holdReads = false;
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: s.save,
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'GET' && holdReads) {
+          final captured = await s.request(method, path, body: body);
+          await reads.future;
+          return captured;
+        }
+        return s.request(method, path, body: body);
+      },
+    );
+    await c.refresh();
+    holdReads = true;
+    c.setDraft('lead', 'First');
+    final one = c.send();
+    c.setDraft('lead', 'Second');
+    final two = c.send();
+    await Future<void>.delayed(Duration.zero);
+    expect(s.posts.map((p) => (p['command'] as Map)['text']), [
+      'First',
+      'Second',
+    ]);
+    reads.complete();
+    await Future.wait([one, two]);
+    expect(c.messages('lead').map((m) => m.text), ['First', 'Second']);
+    await c.flush();
+    c.dispose();
+  });
+  test('queued text survives closing and can never cross accounts', () async {
+    final s = ConversationServer();
+    final gate = Completer<void>();
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: s.save,
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'POST') await gate.future;
+        return s.request(method, path, body: body);
+      },
+    );
+    await c.refresh();
+    c.setDraft('lead', 'First');
+    final one = c.send();
+    c.setDraft('lead', 'Second');
+    final two = c.send();
+    await c.flush();
+    final saved = s.saved!;
+    c.dispose();
+    gate.complete();
+    await Future.wait([one, two]);
+    final restored = s.controller(initial: saved);
+    await restored.refresh();
+    expect(restored.outgoing('lead').map((m) => m.text), ['First', 'Second']);
+    expect(
+      s.posts,
+      hasLength(1),
+      reason: 'Only the request already dispatched before close can finish; restoration sends nothing.',
+    );
+    final other = SuperTabController(
+      tabId: 'tab',
+      accountId: 'someone-else',
+      request: s.request,
+      save: s.save,
+      initial: saved,
+      pollInterval: Duration.zero,
+    );
+    expect(other.outgoing('lead'), isEmpty);
+    restored.dispose();
+    other.dispose();
+  });
+  test(
+    'acknowledged text confirms before the following refresh finishes',
+    () async {
+      final s = ConversationServer();
+      final reads = Completer<void>();
+      var holdReads = false;
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: s.save,
+        pollInterval: Duration.zero,
+        request: (method, path, {body}) async {
+          if (method == 'GET' && holdReads) await reads.future;
+          return s.request(method, path, body: body);
+        },
+      );
+      await c.refresh();
+      holdReads = true;
+      c.setDraft('lead', 'Confirmed already');
+      final sent = c.send();
+      await Future<void>.delayed(Duration.zero);
+      expect(c.outgoing('lead').single.state.name, 'confirmed');
+      reads.complete();
+      await sent;
+      expect(c.outgoing('lead'), isEmpty);
+      expect(c.messages('lead').map((m) => m.text), ['Confirmed already']);
+      await c.flush();
+      c.dispose();
+    },
+  );
+  test(
+    'an uncertain first send keeps later text retryable in typed order',
+    () async {
+      final server = ConversationServer()..loseReply = true;
+      final gate = Completer<void>();
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: server.save,
+        pollInterval: Duration.zero,
+        request: (method, path, {body}) async {
+          if (method == 'POST') await gate.future;
+          return server.request(method, path, body: body);
+        },
+      );
+      await c.refresh();
+      c.setDraft('lead', 'First');
+      final one = c.send();
+      c.setDraft('lead', 'Second');
+      final two = c.send();
+      gate.complete();
+      await Future.wait([one, two]);
+      expect(server.posts, hasLength(1));
+      expect(c.outgoing('lead').map((m) => m.text), ['First', 'Second']);
+      expect(c.outgoing('lead').map((m) => m.state), [
+        SuperTabOutgoingState.unconfirmed,
+        SuperTabOutgoingState.refused,
+      ]);
+      await c.flush();
+      c.dispose();
+    },
+  );
+  test('rapid text sends show immediately and post in typed order', () async {
+    final server = ConversationServer();
+    final first = Completer<void>();
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: server.save,
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'POST' && server.posts.isEmpty) await first.future;
+        return server.request(method, path, body: body);
+      },
+    );
+    await c.refresh();
+    c.setDraft('lead', 'First');
+    final one = c.send();
+    await Future<void>.delayed(Duration.zero);
+    c.setDraft('lead', 'Second');
+    final two = c.send();
+    await Future<void>.delayed(Duration.zero);
+    expect(c.outgoing('lead').map((m) => m.text), ['First', 'Second']);
+    expect(c.draft('lead'), isEmpty);
+    first.complete();
+    await Future.wait([one, two]);
+    expect(server.posts.map((p) => (p['command'] as Map)['text']), [
+      'First',
+      'Second',
+    ]);
+    expect(c.messages('lead').map((m) => m.text), ['First', 'Second']);
+    await c.flush();
+    c.dispose();
+  });
+
   /// A controller whose sends wait for [hold] while it is set.
   ({SuperTabController controller, ConversationServer server}) open({
     Completer<void>? Function()? hold,
@@ -65,7 +278,9 @@ void main() {
     // The send lands; the read after it does not.
     server.failReads = true;
     await controller.send();
-    expect(outgoing(controller), [('Ship it', SuperTabOutgoingState.sending)]);
+    expect(outgoing(controller), [
+      ('Ship it', SuperTabOutgoingState.confirmed),
+    ]);
     expect(controller.messages('lead'), isEmpty);
 
     server.failReads = false;
