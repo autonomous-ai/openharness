@@ -1912,10 +1912,14 @@ export class SuperTabStore {
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
     // A lost task's rows and a machine leaving name the machine; a Buddy reads them without it (security reviews of #2115).
-    const shown = buddy ? page.map(withoutMachineNames) : page
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
-    const threads = roots.length ? threadSummaries(state, group, await pageThreads(tx, tabId, conversationId, roots)) : []
+    const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
+    // A Buddy reads no routing row, nor any trace of one: a thread rooted at a route row gets no reply line, and its
+    // replies read as messages of their own, without the root's id (reviewer's thread probes on #2115).
+    const hiddenRoots = new Set(buddy ? threadRows.filter(r => r.routing && r.id === r.thread).map(r => r.id) : [])
+    const threads = threadRows.length ? threadSummaries(state, group, buddy ? threadRows.filter(r => !r.routing && !hiddenRoots.has(r.thread)) : threadRows) : []
+    const shown = buddy ? page.map(withoutMachineNames).map(m => m.thread && hiddenRoots.has(m.thread) ? { ...m, thread: null } : m) : page
     return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
