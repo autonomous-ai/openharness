@@ -1,3 +1,15 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { env } from '../config/env.js'
+import { PASTE_DROPS_DIR } from './pasteDropFiles.js'
+
+/** Where a Buddy's guard reads what its person sent it (the host's list for this Buddy), and where Harness downloads chat
+ *  files to (lib/pasteDropFiles.ts). */
+export interface BuddyReads { file: string; drops: string }
+/** A listed file or link lasts as long as Harness keeps a download (lib/pasteDropFiles.ts): a day. */
+const KEPT_MS = 24 * 60 * 60 * 1000
+
 /**
  * A Buddy's guard: the Claude Code PreToolUse hook its folder's settings run before every tool call (lib/swarmSkills.ts).
  *
@@ -30,17 +42,27 @@
  * Its Super Tab commands are a Buddy's own (status, messages, message, decisions, post, propose, help) as the pane it runs
  * in identifies it: never --agent, --port or --machine. Nothing runs on: no background shell, no tail -f.
  *
+ * Outside its folder it reads only what its person sent it in their Buddy chat (Tony, 10-30: his Buddy could open neither
+ * the screenshot he sent it nor an Artifact he linked). The host lists those for this Buddy alone (`allowBuddyReads`
+ * below, superTabs/host.ts), out of the project, so no commit or pull can add to the list. Read opens a listed file by the
+ * exact path the Buddy was handed, while it is still the one file Harness downloaded there; the Artifact tool reads a
+ * listed link with its read action alone.
+ *
  * Plain JavaScript with node's own modules only, written into the Buddy's folder with that folder's real path and run by
  * Harness's node: the tests run this exact text (lib/buddyGuard.spec.ts, and Claude Code itself in
  * lib/buddyGuard.claude.spec.ts).
  */
-export const buddyGuardSource = (root: string): string => String.raw`#!/usr/bin/env node
+export const buddyGuardSource = (root: string, reads: BuddyReads): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
-import { lstatSync, realpathSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 // The Buddy's folder, as its real path: what it reads stays in it.
 const ROOT = ${JSON.stringify(root)}
+// What its person sent it in their Buddy chat, as the host lists it, and the folder Harness downloads chat files to.
+const READS = ${JSON.stringify(reads.file)}
+const DROPS = ${JSON.stringify(reads.drops)}
+const KEPT_MS = ${KEPT_MS}
 const TOOLS = new Set(['TodoWrite', 'ToolSearch'])
 const READERS = new Set(['cat', 'ls', 'head', 'tail', 'wc', 'grep', 'pwd'])
 const GIT = new Set(['grep', 'log', 'show', 'diff', 'blame', 'status'])
@@ -142,6 +164,51 @@ const longNames = (word, names) => word.startsWith('--') && names.some((name) =>
   return given.length > 0 && name.startsWith(given)
 })
 
+// The list's [kind] entries from the last day, as long as Harness keeps a download; none when it cannot be read.
+function listed(kind) {
+  try {
+    const entries = JSON.parse(readFileSync(READS, 'utf8'))[kind], now = Date.now()
+    return Array.isArray(entries) ? entries.filter((entry) => entry && typeof entry === 'object' && Number.isFinite(entry.at)
+      && now - entry.at < KEPT_MS) : []
+  } catch { return [] }
+}
+
+// Whether [path] is a file its person sent: listed by that exact path, in the downloads folder, and still the one file
+// Harness downloaded there (its device, inode and size), with no other name. A link, a hard link (a second name for it)
+// or another file put in its place would read something its person did not send.
+function attached(path) {
+  if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0') || dirname(path) !== DROPS) return false
+  const file = listed('files').find((entry) => entry.path === path)
+  if (!file) return false
+  try {
+    const stat = lstatSync(path, { bigint: true })
+    return stat.isFile() && stat.nlink === 1n && String(stat.dev) === file.dev && String(stat.ino) === file.ino
+      && String(stat.size) === file.size && realpathSync(path) === join(realpathSync(DROPS), basename(path))
+  } catch { return false }
+}
+
+// A claude.ai Artifact link as the host lists it (artifactLink in lib/buddyGuard.ts), or null: https, claude.ai or
+// preview.claude.ai, an artifact's own path, and nothing more (no port, user, query or fragment).
+function artifactLink(text) {
+  if (typeof text !== 'string') return null
+  let url
+  try { url = new URL(text) } catch { return null }
+  const path = /^\/((?:code\/)?artifact\/[A-Za-z0-9_-]{1,100})\/?$/.exec(url.pathname)
+  if (!path || url.protocol !== 'https:' || !['claude.ai', 'preview.claude.ai'].includes(url.hostname) || url.port || url.username
+    || url.password || url.search || url.hash) return null
+  return 'https://' + url.hostname + '/' + path[1]
+}
+
+// Claude Code's Artifact tool reads a claude.ai link as its person's own Claude sign-in: its read action alone, of a link
+// its person sent, with no file of it saved to a folder of the Buddy's choosing and nothing published, listed or removed.
+const ARTIFACT_READ = new Set(['action', 'url', 'prompt', 'page'])
+function artifactAllowed(tool) {
+  if (tool.action !== 'read' || !Object.keys(tool).every((key) => ARTIFACT_READ.has(key))) return false
+  if ((tool.prompt !== undefined && typeof tool.prompt !== 'string') || (tool.page !== undefined && typeof tool.page !== 'boolean')) return false
+  const link = artifactLink(tool.url)
+  return link !== null && listed('links').some((entry) => entry.url === link)
+}
+
 // harness super-tab [--tab ID] ACTION ...: only a Buddy's actions, and an --attach only from its folder.
 function superTabAllowed(rest) {
   let i = 0
@@ -190,7 +257,9 @@ function decide(input) {
   if (!tool) return false
   if (TOOLS.has(input.tool_name)) return true
   // Its read tools, in its folder: Read a file there, Grep and Glob there (their folder by default), LS a folder there.
-  if (input.tool_name === 'Read') return inside(tool.file_path)
+  // Read opens what its person sent it too, and the Artifact tool reads the links they sent.
+  if (input.tool_name === 'Read') return inside(tool.file_path) || attached(tool.file_path)
+  if (input.tool_name === 'Artifact') return artifactAllowed(tool)
   if (input.tool_name === 'LS') return inside(tool.path)
   if (input.tool_name === 'Grep') return tool.path === undefined || inside(tool.path)
   if (input.tool_name === 'Glob') {
@@ -210,6 +279,101 @@ process.stdin.on('end', () => {
     permissionDecision: allow ? 'allow' : 'deny', permissionDecisionReason: allow ? 'A Buddy may read.' : MAY } }))
 })
 `
+
+/** The list for one Buddy session, by its Swarm skill's key: in Harness's data folder, never in the Buddy's own folder,
+ *  where a commit or a pull could put one. */
+export function buddyReadsOf(key: string): BuddyReads {
+  return { file: join(env.ADAPTER_DATA_DIR, 'buddy-reads', `${createHash('sha256').update(key).digest('hex')}.json`), drops: PASTE_DROPS_DIR }
+}
+
+/** A message holds at most ten files (superTabs/attachments.ts): ten messages' worth, and as many links. */
+const MAX_FILES = 100
+const MAX_LINKS = 50
+
+/** A claude.ai Artifact link as the guard compares it (`artifactLink` in the guard above, the same rules), or null. */
+function artifactLink(text: string): string | null {
+  let url: URL
+  try { url = new URL(text) } catch { return null }
+  const path = /^\/((?:code\/)?artifact\/[A-Za-z0-9_-]{1,100})\/?$/.exec(url.pathname)
+  if (!path || url.protocol !== 'https:' || !['claude.ai', 'preview.claude.ai'].includes(url.hostname) || url.port || url.username
+    || url.password || url.search || url.hash) return null
+  return `https://${url.hostname}/${path[1]}`
+}
+
+/** The claude.ai Artifact links in a message's text, each as the artifact's own link: a query or fragment the person's
+ *  link carried is dropped, so the Buddy reads the artifact by the one link the guard lets it read. */
+export function artifactLinks(text: string): string[] {
+  const found = new Set<string>()
+  for (const [candidate] of text.matchAll(/https:\/\/[^\s<>()[\]{}"'`]+/gi)) {
+    let url: URL
+    try { url = new URL(candidate.replace(/[.,;:!?]+$/, '')) } catch { continue }
+    url.search = ''; url.hash = ''
+    const link = artifactLink(url.href)
+    if (link) found.add(link)
+  }
+  return [...found].slice(0, MAX_LINKS)
+}
+
+interface ListedFile { path: string; dev: string; ino: string; size: string; at: number }
+interface ListedLink { url: string; at: number }
+interface List { version: 1; files: ListedFile[]; links: ListedLink[] }
+
+function heldList(file: string): List {
+  try {
+    const held = JSON.parse(readFileSync(file, 'utf8')) as { files?: unknown; links?: unknown }
+    const entries = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object') : []
+    return { version: 1,
+      files: entries(held.files).filter((entry): entry is Record<string, unknown> & ListedFile => ['path', 'dev', 'ino', 'size']
+        .every(field => typeof entry[field] === 'string') && Number.isFinite(entry.at)),
+      links: entries(held.links).filter((entry): entry is Record<string, unknown> & ListedLink => typeof entry.url === 'string' && Number.isFinite(entry.at)) }
+  } catch { return { version: 1, files: [], links: [] } }
+}
+
+/** Best-effort, as the downloads' own prune is (lib/pasteDropFiles.ts): the lists of Buddy sessions nothing has written to
+ *  for a day, ended or quiet, hold nothing the guard would still allow. */
+function sweep(dir: string, now: number): void {
+  try {
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue
+      try { if (now - statSync(join(dir, name)).mtimeMs >= KEPT_MS) rmSync(join(dir, name), { force: true }) } catch { /* raced: ignore */ }
+    }
+  } catch { /* unreadable: nothing to sweep */ }
+}
+
+/**
+ * Lists for one Buddy the files and Artifact links its person sent it in their own Buddy chat (superTabs/host.ts decides
+ * that), before the message reaches it. Each file is listed by its path with its device, inode and size, and only as one
+ * regular file in the downloads folder with no other name: what the guard checks again when the Buddy opens it. Entries
+ * last a day. The host's poll loop is the only writer, and it writes synchronously, so two deliveries never interleave;
+ * the guard reads a whole old list or a whole new one, never a part (a rename).
+ */
+export function allowBuddyReads(reads: BuddyReads, sent: { files: readonly string[]; links: readonly string[] }, now = Date.now()): void {
+  const files = sent.files.flatMap((path): ListedFile[] => {
+    if (dirname(path) !== reads.drops) return []
+    try {
+      const stat = lstatSync(path, { bigint: true })
+      return stat.isFile() && stat.nlink === 1n ? [{ path, dev: String(stat.dev), ino: String(stat.ino), size: String(stat.size), at: now }] : []
+    } catch { return [] }
+  })
+  const links = sent.links.flatMap((url): ListedLink[] => artifactLink(url) === url ? [{ url, at: now }] : [])
+  if (!files.length && !links.length) return
+  const dir = dirname(reads.file)
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  sweep(dir, now)
+  const held = heldList(reads.file)
+  const fresh = <T extends { at: number }>(entries: T[]) => entries.filter(entry => now - entry.at < KEPT_MS)
+  const list: List = { version: 1,
+    files: [...fresh(held.files).filter(entry => !files.some(file => file.path === entry.path)), ...files].slice(-MAX_FILES),
+    links: [...fresh(held.links).filter(entry => !links.some(link => link.url === entry.url)), ...links].slice(-MAX_LINKS) }
+  const temporary = `${reads.file}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temporary, `${JSON.stringify(list)}\n`, { mode: 0o600, flag: 'wx' })
+    renameSync(temporary, reads.file)
+  } catch (error) {
+    rmSync(temporary, { force: true })
+    throw error
+  }
+}
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
 
