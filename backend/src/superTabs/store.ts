@@ -53,6 +53,7 @@ import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/hold
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, summarizeCosts } from './costs/read.js'
+import { recordEvidence } from './evidence/store.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
@@ -1383,6 +1384,7 @@ export class SuperTabStore {
       if (command.type === 'work.status' && (command.status === 'done' || command.status === 'stopped')) {
         await closeAssignment(tx, tabId, command.assignmentId, command.status, context.now)
       }
+      await recordEvidence(tx, tabId, original, effects.state, context.now)
       await this.writeMessages(tx, tabId, effects.state, effects.messages, sequences)
       if (command.type === 'message.send' && actor.kind === 'person') await resolveByReply(tx, tabId, command.conversationId, actor.userId, context.now)
       await writeMentions(tx, tabId, effects.state, effects.messages, context.now)
@@ -2160,6 +2162,7 @@ export class SuperTabStore {
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
         await recordAttempts(tx, tabId, loaded.state, state, now)
+        await recordEvidence(tx, tabId, loaded.state, state, now)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, rows, sequences, true)
         return { version }
@@ -2443,6 +2446,7 @@ export class SuperTabStore {
       // second finds none).
       await this.endRuns(tx, tabId, loaded.state, state)
       await recordAttempts(tx, tabId, loaded.state, state, this.now())
+      await recordEvidence(tx, tabId, loaded.state, state, this.now())
       if (ledProject(state, agentId)) {
         await this.releaseRuns(tx, tabId, await this.staleRuns(tx, tabId, state))
       }
@@ -2634,6 +2638,7 @@ export class SuperTabStore {
       const project = group ? groupProject(state, group).id : undefined
       await this.save(tx, loaded, state, clock.next(), project && state.projects ? [{ kind: 'progress', key: project }] : [])
       await recordAttempts(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
+      await recordEvidence(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await this.writeMessages(tx, tabId, state, notices, sequences)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
       ended = endedHolds(before, state)

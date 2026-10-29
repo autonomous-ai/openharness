@@ -8,6 +8,7 @@ import {
   finishWorker, requireWorkerDecisions, reviewing, seenMachineIds, swarmGridName, visibleState, AGENT_ONLY, forRecipients,
   type Actor, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
+import { jobKindOf } from './evidence/jobKind.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
 import { DEFAULT_ROUTING_POLICY, routingOverrideSchema, type RoutingPolicy } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, sameEngineReview, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
@@ -22,7 +23,7 @@ import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
-import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
+import { fixedOriginal, LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordFix, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
   recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
@@ -135,8 +136,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
+  // `fixes`: the merged PR this one fixes, for its model's fixes after merge (leaderboard/record.ts recordFix).
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
-    mergedAt: z.iso.datetime().optional() }).strict(),
+    mergedAt: z.iso.datetime().optional(), fixes: z.string().max(400).regex(PULL_REQUEST_URL).optional() }).strict(),
   z.object({ type: z.literal('agent.add'), conversationId: id, machineId: id, harnessId: id, name: title, configuration, lead: z.boolean(), project: project.optional(), roleId: roleId.optional(), initialMessage: text.optional() }).strict(),
   z.object({ type: z.literal('agent.start'), request: startRequestSchema, routeDecisionId: id.optional(), overrideReason: reason.optional() }).strict(),
   // A Buddy's proposal for its owner, posted in its project's chat: `conversationId` is its own chat, and `ownerMessageId` its
@@ -1302,16 +1304,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (mergedAt > context.now || mergedAt <= context.now - (LEDGER_WEEKS - 1) * WEEK_MS) {
         fail('MERGE_TIME', 'Record a merge from the last four weeks, not one still to come.', 400)
       }
+      // One refusal for every link it cannot take, so a link never tells what another project or a private chat holds.
+      const original = command.fixes === undefined ? undefined : fixedOriginal(state, group, command.fixes, mergedAt)
+        ?? fail('FIX_LINK', 'No merged pull request in this project matches that link within the last 14 days.', 400)
       const shippedAt = group.ledger?.shippedAt, linked = group.pullRequestUrls?.includes(command.pullRequestUrl)
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
       // Like a Slack app's update: the card shows the merge, and the line goes in the card's thread, once per pull request.
-      // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card.
+      // Without a card yet, the group's first ship or a new link still says so, and the line becomes the card. A fix of an
+      // earlier merge says so once more.
+      const fixed = original ? recordFix(original, group, mergedAt) : false
       const card = pullRequestCard(group, command.pullRequestUrl)
-      if (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt) {
-        message(group.id, `Merged ${command.pullRequestUrl}`, [], card?.messageId ?? null, SYSTEM_ROW)
-        if (card) effects.messages.at(-1)!.thread = card.messageId
-        else bindPullRequestCards(group, effects.messages.at(-1)!)
+      if (fixed || (card ? card.mergedAt === undefined : !linked || group.ledger!.shippedAt !== shippedAt)) {
+        message(group.id, `Merged ${command.pullRequestUrl}${original ? `, a fix of ${command.fixes}` : ''}`, [], card?.messageId ?? null, SYSTEM_ROW)
+        const posted = effects.messages.at(-1)!
+        if (card) posted.thread = card.messageId
+        else bindPullRequestCards(group, posted)
       }
       recordCardMerged(group, command.pullRequestUrl, mergedAt)
       break
@@ -1959,9 +1967,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // the server's own judgement (rules.ts).
       const step = conversation(state, command.conversationId).stepUp
       const sameEngine = sameEngineReview(state, conversation(state, command.conversationId).reviewOf, member ? agentTarget(state, member) : chosen, policy, mayRun(command.conversationId, true))
-      const { stepUp: _sent, sameEngine: _said, ...made } = decision
+      const { stepUp: _sent, sameEngine: _said, jobKind: _kind, ...made } = decision
+      const jobKind = jobKindOf(conversation(state, command.conversationId), decision.assessment.kind)
       effects.routeDecisions.push({ op: 'create', id: operationId, conversationId: command.conversationId,
-        record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, ...sameEngine ? { sameEngine } : {} } })
+        record: { ...made, ...step ? { stepUp: { attempt: step.attempt, reason: step.reason } } : {}, ...sameEngine ? { sameEngine } : {}, jobKind } })
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why

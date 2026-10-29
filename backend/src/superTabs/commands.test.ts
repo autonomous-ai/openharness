@@ -750,6 +750,19 @@ describe('route.record and route.override', () => {
       expect(() => run(sized('small', patch))).toThrow()
     }
   })
+  it('writes the job kind from the group\'s owned paths, then the route word, and never takes one sent with the route', () => {
+    const f = routed(), group = f.group()
+    const route = (conversationId: string, patch: Record<string, unknown> = {}, kind?: string) => f.run({ type: 'route.record', conversationId,
+      decision: record({ ...patch, assessment: { difficulty: 'high', risk: 'low', why: 'Schema change.', ...(kind ? { kind } : {}) } }) } as Command, f.leadActor, {}).routeDecisions[0]
+    f.run({ type: 'work.define', conversationId: group, task: { goal: 'g', changes: 'c', constraints: 'k', owns: ['backend/src/superTabs', 'backend/src/superTabs/store.test.ts'] },
+      checks: [{ description: 'Tests pass.', independent: false }] })
+    expect(route(group, {}, 'ui')).toMatchObject({ record: { jobKind: 'backend', assessment: { kind: 'ui' } } })
+    expect(route(group, {}, 'security')).toMatchObject({ record: { jobKind: 'security' } })
+    expect(route(group, { jobKind: 'docs' })).toMatchObject({ record: { jobKind: 'backend' } })
+    // The Lead conversation owns nothing: the route word decides, and a word outside the list is general.
+    expect(route('lead', {}, 'mobile')).toMatchObject({ record: { jobKind: 'mobile' } })
+    expect(route('lead', {}, 'parser')).toMatchObject({ record: { jobKind: 'general' } })
+  })
   it('refuses a pick outside the candidates, a non-lead agent and a busy hour', () => {
     const f = routed()
     const route = (decision: unknown, actor: Actor, context: Partial<CommandContext>) =>
