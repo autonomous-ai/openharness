@@ -22,8 +22,9 @@ String swarmCardStatus(Map<String, dynamic>? assignment) =>
 /// "Reviewer: Ivy · Ready: no on 050bab807", as the desktop's
 /// `SuperTabController.reviewLine` reads it: the newest review chat's recorded
 /// verdict for [group] (its result or check evidence), else the newest
-/// `Ready:` line a reviewer posted in [messages]. Only review chats of
-/// [group]'s own project count. Null without a reviewer.
+/// `Ready:` line a reviewer posted in [messages]. Only workgroups of
+/// [group]'s own project count as its review chats: never a Buddy chat or the
+/// Leads chat. Null without a reviewer.
 String? swarmReviewLine(
   SuperTabSnapshot snapshot,
   SuperTabConversation group,
@@ -32,7 +33,10 @@ String? swarmReviewLine(
   final reviews =
       snapshot.conversations
           .where(
-            (c) => c.reviewOf == group.id && c.projectId == group.projectId,
+            (c) =>
+                c.reviewOf == group.id &&
+                c.projectId == group.projectId &&
+                c.kind == null,
           )
           .toList()
         ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
@@ -103,7 +107,9 @@ class SwarmCardFacts {
         ? group.pullRequestUrls
         : [for (final c in card.pullRequests) c.url];
     final checks = group.checks;
-    final passed = checks.where((c) => c['evidence'] != null).length;
+    // A failed check keeps its evidence; only a pass names who passed it
+    // (backend commands.ts `work.check`).
+    final passed = checks.where((c) => c['passedBy'] != null).length;
     return SwarmCardFacts(
       task: card.task
           ? (

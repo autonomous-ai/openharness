@@ -96,8 +96,20 @@ void main() {
       lastMessageSequence: 3,
     ),
     'checks': [
-      {'id': 'a', 'description': 'Tests pass', 'evidence': 'ok'},
-      {'id': 'b', 'description': 'Screens', 'evidence': null},
+      {
+        'id': 'a',
+        'description': 'Tests pass',
+        'evidence': 'ok',
+        'passedBy': 'agent:agent-builder',
+      },
+      // A failed check, as the server records one: its evidence, nobody
+      // passing it.
+      {
+        'id': 'b',
+        'description': 'Screens',
+        'evidence': 'Two screens cut off',
+        'passedBy': null,
+      },
     ],
     'pullRequestUrls': prs,
     'cards': {
@@ -128,7 +140,10 @@ void main() {
     },
   };
 
-  FakeSwarm backend({List<Map<String, dynamic>>? groups}) {
+  FakeSwarm backend({
+    List<Map<String, dynamic>>? groups,
+    List<Map<String, dynamic>> agents = const [],
+  }) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -142,6 +157,7 @@ void main() {
         agent('agent-lead', name: 'Lead', displayName: 'River'),
         agent('agent-builder', displayName: 'Nova'),
         {...agent('agent-review', displayName: 'Ivy'), 'role': 'reviewer'},
+        ...agents,
       ],
     );
     fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(cursor: 'c2');
@@ -345,6 +361,118 @@ void main() {
     grid.AppTheme.palette.value = HarnessPalette.graphite;
     grid.AppTheme.brightness.value = Brightness.dark;
   }, skip: shots == null || !Platform.isMacOS);
+
+  testWidgets('another project\'s reviewer of the same name is never read', (
+    tester,
+  ) async {
+    // Two Ivys: this project's reviews #12 here; another project's Ivy
+    // "reviews" it from a chat of that project.
+    final elsewhere = {
+      ...review(projectId: 'other'),
+      'id': 'g3',
+      'number': 14,
+      'agentIds': ['agent-ivy-2'],
+      'assignment': {
+        'id': 'attempt-g3',
+        'agentId': 'agent-ivy-2',
+        'status': 'done',
+        'result': 'Ready: yes on deadbeef1',
+      },
+    };
+    await pump(
+      tester,
+      backend(
+        groups: [work(), review(), elsewhere],
+        agents: [
+          {
+            ...agent('agent-ivy-2', displayName: 'Ivy'),
+            'projectId': 'other',
+            'role': 'reviewer',
+          },
+        ],
+      ),
+    );
+    expect(
+      inCard('m1', 'Reviewer: Ivy · Ready: no on 050bab807'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('deadbeef1'), findsNothing);
+  });
+
+  testWidgets('a Buddy chat or the Leads chat is never read as a review', (
+    tester,
+  ) async {
+    Map<String, dynamic> posing(String id, Map<String, dynamic> chat) => {
+      ...chat,
+      'reviewOf': 'g1',
+      'agentIds': ['agent-review'],
+      'assignment': {
+        'id': 'attempt-$id',
+        'agentId': 'agent-review',
+        'status': 'done',
+        'result': 'Ready: yes on deadbeef1',
+      },
+    };
+    await pump(
+      tester,
+      backend(
+        groups: [
+          work(),
+          posing('buddy-me', buddyChatData('buddy-me')),
+          posing('leads', {
+            ...groupData('leads', title: 'Leads'),
+            'kind': 'leads',
+          }),
+        ],
+      ),
+    );
+    expect(inCard('m1', '#12 Fix login'), findsOneWidget);
+    expect(find.textContaining('Ivy'), findsNothing);
+    expect(find.textContaining('deadbeef1'), findsNothing);
+  });
+
+  testWidgets('the verdict goes when the review chat is taken away, and the '
+      'task card stays', (tester) async {
+    final fake = backend();
+    final host = await pump(tester, fake);
+    expect(find.textContaining('050bab807'), findsWidgets);
+    await change(tester, host, fake, [
+      {'key': 'g2', 'version': 9, 'changedAt': 9, 'deleted': true},
+    ]);
+    expect(inCard('m1', '#12 Fix login'), findsOneWidget);
+    expect(find.textContaining('050bab807'), findsNothing);
+    expect(find.textContaining('Ivy'), findsNothing);
+  });
+
+  testWidgets('a failed read keeps the card as it was, with no loading left', (
+    tester,
+  ) async {
+    final fake = backend();
+    final host = await pump(tester, fake);
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
+        throw SuperTabFailure('UNAVAILABLE', 'offline', statusCode: 503);
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+    expect(inCard('m1', 'Working · 1 of 2 checks passed'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('a group read without its cards shows plain messages', (
+    tester,
+  ) async {
+    // An older backend, or a group whose cards never came: nothing is drawn
+    // half way.
+    await pump(
+      tester,
+      backend(
+        groups: [
+          {...work()}..remove('cards'),
+        ],
+      ),
+    );
+    expect(card('m1'), findsNothing);
+    expect(find.text('Add a sign-in screen.'), findsOneWidget);
+  });
 
   test("a task's status reads in the desktop's words", () {
     final desktop = File('../desktop/lib/super_tabs/live_card.dart')
