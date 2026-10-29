@@ -42,6 +42,11 @@ const envSchema = z.object({
   // Its size per process, counted as the JSON size of what it holds.
   SWARM_CACHE_MB: z.string().default('64').transform(Number),
 
+  // On: a per-user web-ws socket that says it is a daemon's relay, a link or a group sync (`?client=`) starts the
+  // account's feeds (machine and device statuses, the machine-list, desk/zoo and E2EE-pair channels) only when it asks
+  // for them, lib/webWs.ts. Off (the default): every socket starts them as it connects, as before.
+  WEB_WS_LAZY_FEEDS: z.enum(['on', 'off']).default('off'),
+
   // This backend instance's stable id (used to route manager-command replies via Redis in a
   // multi-instance deploy). Defaults to the pm2 instance index or a per-process fallback.
   BACKEND_INSTANCE_ID: z.string().default(''),
@@ -51,6 +56,10 @@ const envSchema = z.object({
   // that lands on an instance NOT holding the agent's manager socket is forwarded to the instance that
   // does (agent:{machineId}:appinst), so the data path is a direct backpressured socket, not Redis relay.
   // Off by default (single-instance/dev needs nothing — it's always co-located). Enable in multi-instance.
+  // Roadmap Phase 1.3: refuse a bad token on /api/web-ws with HTTP 401 before the upgrade, instead of upgrading and closing
+  // 4401, for sockets that declare `auth=http` (the daemon's relay from 1.3.64). Off by default; turn on once that release
+  // is out. Browsers and the phone keep the 4401, since a browser cannot read the status of a failed upgrade.
+  WEB_WS_AUTH_HTTP_401: z.string().default('false').transform((v) => v === 'true'),
   MESH_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // Host the mesh endpoint is reachable at from OTHER instances: 127.0.0.1 for a single-host pm2 cluster,
   // the VM's routable IP for multi-VM. Advertised verbatim in Redis.

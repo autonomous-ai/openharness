@@ -28,7 +28,7 @@ import { touchDeviceKey } from './deviceKeyLog.js'
 import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeMachineShareChanged } from './bus.js'
 import { sharedMachineAccess } from './machineAccess.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
-import { DAEMONS } from '../config/env.js'
+import { DAEMONS, env } from '../config/env.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
 import { authenticateAccessToken, SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { Frame } from './tunnel.js'
@@ -83,6 +83,11 @@ const WATCH_DEBOUNCE_MS = 250
  *  re-dialled offline machines every few seconds, 68% of 1,884 selects in 10 minutes (prod, 2026-10-27, #314). The
  *  Desktop's own longest reconnect backoff, so a machine coming back is seen no later than it was. */
 export const OFFLINE_RETRY_AFTER_MS = 30_000
+/** Sockets that never read the account's feeds unless they ask, with WEB_WS_LAZY_FEEDS on: a daemon's relay, `harness
+ *  link`'s one-shot socket and the apps' trust-group sync (`?client=`). Prod, 2026-10-29: about 121 connects a minute
+ *  living a median 0.4 s, nearly all relays, each reading the account's machines and devices and subscribing five
+ *  channels it never read (WebSocket roadmap Phase 1 item 4). A socket that declares nothing may be an older app. */
+const ON_DEMAND_FEED_CLIENTS: ReadonlySet<string> = new Set(['relay', 'link', 'group-sync'])
 
 /** Who is on the other end of a per-user socket, as the client declares it: the surface (`?client=`), and
  *  for the phone the release (`?release=`, the public x.y.z) and whether the build is a debug or simulator
@@ -121,8 +126,8 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
 
   // PER-USER mode: profile validation is async, so authenticate before completing the upgrade.
   void (async () => {
+    const query = new URL(req.url ?? '/api/web-ws', 'http://backend.local').searchParams
     try {
-      const query = new URL(req.url ?? '/api/web-ws', 'http://backend.local').searchParams
       const requestedEnvironment = parseAutonomousEnvironment(query.get('autonomousEnv'))
       // Who is on the other end, as the client declares it: the mobile app and the web viewer say so;
       // the daemon's relay (and any older client) says nothing and is never counted as a person.
@@ -139,6 +144,11 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       // A Mac's team account (lib/teamSession.ts) never selects or attaches to a machine here: refused for good,
       // not an expired sign-in to refresh and retry.
       const team = err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED'
+      if (invalid && env.WEB_WS_AUTH_HTTP_401 && query.get('auth') === 'http') {
+        try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
+        socket.destroy()
+        return
+      }
       const code = invalid ? 4401 : mismatch || team ? 4403 : 1013
       const reason = invalid
         ? 'auth expired'
@@ -168,7 +178,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // Its connect and disconnect lines (lib/wsAttribution.ts): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes
   // declared no client and lived a median 0.4 s, and these lines named only the user.
   const track = trackSocket('web', 'web user', ws, { ...declared, userId: user.sub })
-  const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number }): void => {
+  const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number; reason?: 'deleted' }): void => {
     track.selected(payload.error)
     send({ type: 'machine_select_error', payload })
   }
@@ -195,6 +205,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // dead. This used to be a second heartbeat loop here, carefully disabled while attached so the two
   // sweeps couldn't race; the hub now tracks the socket itself, which is one sweep for both states.
   const releaseLiveness = trackSocketLiveness(ws, 'web')
+  // A relay, a link or a group sync starts the feeds below only when it asks (ON_DEMAND_FEED_CLIENTS).
+  const feedsOnDemand = env.WEB_WS_LAZY_FEEDS === 'on' && ON_DEMAND_FEED_CLIENTS.has(declared.client)
 
   // ── Live Machines-list feed ──────────────────────────────────────────────────────────────────
   // Subscribe node_status for EVERY agent the user owns and forward it tagged with the machineId (the
@@ -257,7 +269,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       void watchAgents().catch((err) => logger.warn('web-ws watchAgents failed', { userId: user.sub, error: String(err) }))
     }, WATCH_DEBOUNCE_MS)
   }
-  void watchAgents().catch((err) => logger.warn('web-ws watchAgents failed', { userId: user.sub, error: String(err) }))
+  if (!feedsOnDemand) void watchAgents().catch((err) => logger.warn('web-ws watchAgents failed', { userId: user.sub, error: String(err) }))
 
   // ── Live device-status feed (mirror of watchAgents; per-DEVICE statuses over one per-user sub) ──
   // Transitions ride the user-scoped `devstatus:{userId}` channel (deviceWs publishes on connect/
@@ -292,32 +304,39 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     await seedDeviceStatuses()
   }
-  void watchDevices().catch((err) => logger.warn('web-ws watchDevices failed', { userId: user.sub, error: String(err) }))
+  if (!feedsOnDemand) void watchDevices().catch((err) => logger.warn('web-ws watchDevices failed', { userId: user.sub, error: String(err) }))
 
   // ── Live machine-LIST invalidation ─────────────────────────────────────────────────────────────
   // The `devmachines:{userId}` channel (despite the device-era name) is the per-user "machine list
   // changed" bus: create/delete/rename publish here from whatever worker served the REST call.
   // Forward it as `machines_changed` so every open tab re-fetches the list (names stay in sync
-  // across tabs without F5).
+  // across tabs without F5). It also ends the socket when the account moves to another environment, so a socket whose
+  // feeds wait to be asked for still hears it from the moment it holds a machine (bindAgent).
   let machineListUnsub: (() => void) | null = null
-  void (async () => {
-    machineListUnsub = await subscribeDeviceMachineListChanged(user.sub, (msg) => {
-      if (ws.readyState !== WebSocket.OPEN) return
-      if (msg.reason === 'environment_changed' && msg.autonomousEnv && msg.autonomousEnv !== user.autonomousEnv) {
-        try { ws.close(4403, `env:${msg.autonomousEnv}`) } catch { /* ignore */ }
-        return
-      }
-      send({ type: 'machines_changed', payload: { reason: msg.reason } })
-    })
-    if (closed) { machineListUnsub(); machineListUnsub = null }
-  })().catch((err) => logger.warn('web-ws machine-list watch failed', { userId: user.sub, error: String(err) }))
+  let machineListWatched = false
+  const watchMachineList = (): void => {
+    if (machineListWatched) return
+    machineListWatched = true
+    void (async () => {
+      machineListUnsub = await subscribeDeviceMachineListChanged(user.sub, (msg) => {
+        if (ws.readyState !== WebSocket.OPEN) return
+        if (msg.reason === 'environment_changed' && msg.autonomousEnv && msg.autonomousEnv !== user.autonomousEnv) {
+          try { ws.close(4403, `env:${msg.autonomousEnv}`) } catch { /* ignore */ }
+          return
+        }
+        send({ type: 'machines_changed', payload: { reason: msg.reason } })
+      })
+      if (closed) { machineListUnsub(); machineListUnsub = null }
+    })().catch((err) => logger.warn('web-ws machine-list watch failed', { userId: user.sub, error: String(err) }))
+  }
+  if (!feedsOnDemand) watchMachineList()
 
   // ── The account's desk and zoo: changed somewhere ────────────────────────────────────────────
   // The same `desk:{userId}` and `zoo:{userId}` invalidations every adapter socket hears
   // (lib/adapterAccountPushes.ts), forwarded to the clients that have no daemon to relay them — the
   // phone. One frame carrying the revision each; see lib/webAccountPushes.ts.
   let documentsUnsub: (() => void) | null = null
-  void (async () => {
+  if (!feedsOnDemand) void (async () => {
     documentsUnsub = await relayWebDocumentPushes(user.sub, (frame) => {
       if (ws.readyState !== WebSocket.OPEN) return
       send(frame)
@@ -329,7 +348,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // Not tied to current machine selection: any logged-in page can receive the notice, then the frontend
   // checks whether this browser already trusts the target machine before showing the global popup.
   let deviceE2eePairUnsub: (() => void) | null = null
-  void (async () => {
+  if (!feedsOnDemand) void (async () => {
     deviceE2eePairUnsub = await subscribeDeviceE2eePair(user.sub, (msg) => {
       if (ws.readyState !== WebSocket.OPEN) return
       const { kind, ...payload } = msg
@@ -351,9 +370,10 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       const mgr = await getAgentPresence(machineId)
       if (ws.readyState !== WebSocket.OPEN || currentAgentId !== machineId) return
       const online = await machineOnline(machineId, !!mgr)
-      const lifecycle = await getMachineLifecycleStatus(machineId)
+      // An online machine is `running` whatever machine_nodes says: read only for one that is not.
+      const lifecycle = online ? 'running' : await getMachineLifecycleStatus(machineId)
       if (ws.readyState !== WebSocket.OPEN || currentAgentId !== machineId) return
-      send({ type: 'node_status', payload: { online, status: online ? 'running' : lifecycle === 'unknown' ? 'offline' : lifecycle } })
+      send({ type: 'node_status', payload: { online, status: lifecycle === 'unknown' ? 'offline' : lifecycle } })
     })(), 'web-ws seed node_status', { userId: user.sub, machineId })
   }
   const bindAgent = async (machineIdRaw: unknown, refuseOffline: boolean): Promise<void> => {
@@ -373,7 +393,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       // client's stale list; a failed share check is ours.
       const reason = !binding ? 'unknown' : binding.deletedAt ? 'deleted' : shareCheckFailed ? 'share_check_failed' : 'not_shared'
       logger.warn('machine_select rejected', { userId: user.sub, machineId, reason })
-      refuse({ machineId: machineId, error: 'NOT_YOUR_MACHINE' })
+      // Only the person's own machine says it was deleted (a daemon then stops dialling it); anyone else's says nothing more.
+      refuse({ machineId: machineId, error: 'NOT_YOUR_MACHINE', ...(binding?.deletedAt && binding.userId === user.sub ? { reason: 'deleted' as const } : {}) })
       return
     }
     if (storedAutonomousEnvironment(binding.autonomousEnv) !== user.autonomousEnv) {
@@ -419,6 +440,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     currentAgentId = machineId
     currentBinding = binding
     watchShare(shared ? machineId : null)
+    watchMachineList()
     logger.info('web user selected agent', { userId: user.sub, machineId, connId: client.connId, ...(shared ? { shared } : {}) })
     ack(machineId)
   }

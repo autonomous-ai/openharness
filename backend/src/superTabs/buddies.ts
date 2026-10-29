@@ -49,6 +49,8 @@ export function requireBuddyCommand(buddy: Agent, command: { type: string; conve
 export const MAX_PROPOSAL_ASKS = 200
 /** How long an owner's message, other than their newest in the chat, may still be named as asking for a proposal. */
 export const PROPOSAL_ASK_MS = 60 * 60_000
+/** The files one proposal may carry: its plan, spec, log or screenshot, each held to a chat file's own limits. */
+export const MAX_PROPOSAL_ATTACHMENTS = 5
 
 /** Written by the server, never the Buddy: who it is for and on whose behalf, then the three parts the PM needs. */
 export function proposalText(owner: string, proposal: { goal: string; scope: string; priority: string }): string {
