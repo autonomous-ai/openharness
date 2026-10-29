@@ -34,7 +34,7 @@ import { openReview, openReviewOf, projectPullRequest, verdictPending } from './
 import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, stepUpRefusal } from './stepUp.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
 
@@ -150,6 +150,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
   // A person's own Buddy chat in a project, opened before any Buddy is (buddies.ts openBuddyChat).
   z.object({ type: z.literal('buddy.chat'), projectId: id }).strict(),
+  // A person names their own Buddy from its chat, or clears the name with null (buddies.ts renameBuddy).
+  z.object({ type: z.literal('buddy.rename'), conversationId: id, name: z.string().max(200).nullable() }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
@@ -233,6 +235,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.startSettled': ['warning'],
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
   'conversation.rename': ['title'],
+  'buddy.rename': ['name'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
   'work.assign': ['overrideReason'],
   'work.status': ['result'],
@@ -297,6 +300,9 @@ export interface CommandContext {
     agentOnly?: true }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
+  /** For `buddy.rename` and `buddy.create`: the names chosen in this Swarm's Buddy chats, quiet ones included, read by the
+   *  store (buddies.ts chosenBuddyName): a command loads only the chats it names. */
+  buddyNames?: import('./buddies.js').ChosenBuddyName[]
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
   proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
@@ -1546,6 +1552,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.conversationId = openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
       break
     }
+    case 'buddy.rename':
+      renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
+      break
     case 'person.tell': {
       const project = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
       if (!project) fail('TELL_FORBIDDEN', 'Only a project\'s Lead sends a person a private line, in its own project.', 403)
@@ -1590,10 +1599,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A slot for each of its person's Buddies there, one per project: it takes nothing else.
       if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
-      openBuddyChat(state, project.id, me)
+      const chat = openBuddyChat(state, project.id, me)
+      const named = chosenBuddyName(state, chat, me, context.buddyNames)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
+        ...(command.model ? { model: command.model } : {}), name: named.name, cwd: projectFolder(pool, project), worktree: true,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
@@ -1601,6 +1611,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.starts.push({ poolGeneration: admitted.generation, id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
         hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      // Its chosen name was taken since: its owner reads so in their chat, to nobody else (buddies.ts chosenBuddyName).
+      if (named.notice) message(chatId, named.notice, [], null, SYSTEM_ROW)
       result.startId = operationId
       result.conversationId = chatId
       break

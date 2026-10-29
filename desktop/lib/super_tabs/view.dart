@@ -1818,14 +1818,14 @@ class _SuperTabViewState extends State<SuperTabView>
   bool _isBuddyChat(SuperTabConversation group) =>
       c.buddyChat(group.projectId)?.id == group.id;
 
-  /// The name of the reader's Buddy that [group] is the chat with, or
-  /// "your Buddy" while it has none (removed, or starting). Null when [group]
-  /// is no Buddy chat of the reader's.
+  /// The name of the reader's Buddy that [group] is the chat with: the name
+  /// they chose while it has none (removed, or starting), else "your Buddy".
+  /// Null when [group] is no Buddy chat of the reader's.
   String? _buddyName(SuperTabConversation? group) {
     if (group == null || !_isBuddyChat(group)) return null;
     final agent = c.buddy(group.projectId);
     return agent == null
-        ? 'your Buddy'
+        ? group.buddyName ?? 'your Buddy'
         : c.snapshot!.agentName(agent.id, fallback: agent.name);
   }
 
@@ -1848,7 +1848,7 @@ class _SuperTabViewState extends State<SuperTabView>
         ? '# $kProductManagersChannel'
         : _buddyName(group) == null
         ? null
-        : c.buddy(group.projectId) == null
+        : c.buddy(group.projectId) == null && group.buddyName == null
         ? 'Your Buddy'
         : '${_buddyName(group)} · Your Buddy';
     if (name == null) return SuperTabWorkgroupName(group!, style: style);
@@ -2130,9 +2130,14 @@ class _SuperTabViewState extends State<SuperTabView>
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
-          // A Buddy chat is the reader's own: the Buddy itself to remove.
-          // Nothing to rename or archive, and no way to a Chat with PM (Ken,
-          // 10-28).
+          // A Buddy chat is the reader's own: the Buddy itself to name, any
+          // time, and to remove. Nothing to archive, and no way to a Chat with
+          // PM (Ken, 10-28).
+          if (editable)
+            item(
+              'Rename Buddy…',
+              () => unawaited(showRenameBuddy(context, c, group.projectId)),
+            ),
           if (editable && c.buddy(group.projectId) != null)
             item(
               'Remove Buddy',

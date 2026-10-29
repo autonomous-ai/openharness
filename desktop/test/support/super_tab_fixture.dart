@@ -412,6 +412,9 @@ class ConversationServer {
   // Makes every command answer with this refusal: {code, message}, with
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
+  // While set, every command waits for it before it answers: a slow server.
+  Completer<void>? holdCommands;
+
   int refuseStatus = 409;
 
   /// How many re-sends of an operation already answered lose their reply
@@ -770,6 +773,7 @@ class ConversationServer {
     }
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
+      if (holdCommands case final hold?) await hold.future;
       if (reject) {
         throw const SuperTabFailure(
           'INVALID_RECIPIENT',
@@ -974,6 +978,46 @@ class ConversationServer {
           });
         }
         output['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.rename') {
+        // As the backend's: the reader's own Buddy chat keeps the name, or
+        // drops it for the default, and its Buddy shows it at once.
+        final person = reader ?? 'owner';
+        final chat = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>()
+            .where(
+              (g) =>
+                  g['id'] == command['conversationId'] &&
+                  g['kind'] == 'buddy' &&
+                  g['buddyOwnerId'] == person,
+            )
+            .firstOrNull;
+        if (chat == null) {
+          throw const SuperTabFailure(
+            'NOT_FOUND',
+            'This conversation is unavailable.',
+            statusCode: 404,
+          );
+        }
+        revision++;
+        final owner = (state['people'] as List? ?? const [])
+            .cast<Map>()
+            .where((p) => p['id'] == person)
+            .firstOrNull;
+        final name = command['name'] as String?;
+        final shown =
+            name ??
+            "${(owner?['email'] as String? ?? person).split('@').first}'s Buddy";
+        if (name == null) {
+          chat.remove('buddyName');
+        } else {
+          chat['buddyName'] = name;
+        }
+        chat['title'] = shown;
+        for (final agent in (state['agents'] as List).cast<Map>()) {
+          if ((chat['agentIds'] as List).contains(agent['id'])) {
+            agent['displayName'] = shown;
+          }
+        }
       } else if (command['type'] == 'buddy.remove') {
         revision++;
         final person = reader ?? 'owner';
