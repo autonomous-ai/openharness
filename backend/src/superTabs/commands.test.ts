@@ -4,6 +4,7 @@ import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
+import { startFinished } from './parts/write.js'
 import { agentTarget, broken } from './rules.js'
 import { DEFAULT_ROUTING_POLICY, effectivePolicy } from './routingPolicy.js'
 
@@ -1276,8 +1277,44 @@ describe('Reviewer role', () => {
     // A known small model it reports is never promoted by its launch (review of ee4ee6c9a).
     expect(member({ engine: 'codex', model: 'gpt-5.5-mini' })).toThrow('Codex gpt-5.5-mini is 1.')
     expect(member({ engine: 'codex', model: 'gpt-5-nano' })).toThrow('Codex gpt-5-nano is 1.')
+    // An agent from before the flag was kept is judged by its start: one that named the model is rated by that model's row.
+    delete f.state.agents.find(a => a.id === reviewer)!.launchedDefault
+    expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).not.toThrow()
     f.state.starts!.find(s => s.harnessId === 'native-reviewer')!.request.model = 'gpt-6.1-sol'
     expect(member({ engine: 'codex', model: 'gpt-6.1-sol' })).toThrow('Codex gpt-6.1-sol is 1.')
+  })
+
+  it('rates a Reviewer launched on its engine\'s default by the default row after it reports its model, once its start has finished', () => {
+    const f = fixture(), lead = f.add('lead', 'owner', 'lead', true), group = f.group()
+    const leadActor = { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' } as const
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: lead, present: true, lead: true })
+    // Started with no model: Codex runs its own default and reports none yet.
+    const startId = f.run({ type: 'agent.start', request: request(group, { role: 'reviewer' }), ...via } as Command, leadActor, { contribution, ...decisionIn(group) }).result.startId as string
+    f.run({ type: 'agent.startDispatch', startId }, leadActor, { contribution })
+    const reviewer = f.run({ type: 'agent.started', startId, harnessId: 'native-reviewer', configuration: { ...config, model: null } }, leadActor, { contribution }).result.agentId as string
+    // A command loads only unfinished starts (parts/load.ts loadActive): the finished one is gone from its state.
+    f.state.starts = f.state.starts!.filter(s => !startFinished(s))
+    const builder = f.add('builder', 'owner', group)
+    f.state.agents.find(a => a.id === builder)!.configuration.engine = 'claude'
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
+      leadActor).result.conversationId as string
+    const pick = () => f.run({ type: 'route.record', conversationId: review, decision: record({ candidates: [candidate('c0', { kind: 'member', agentId: reviewer, machineId: 'host' })], pick: 'c0' }) } as Command, leadActor)
+    expect(pick).not.toThrow()
+    // Codex then reports its slug.
+    const reviewerActor = { kind: 'agent', agentId: reviewer, machineOwnerId: f.state.agents.find(a => a.id === reviewer)!.machineOwnerId } as const
+    const before = f.state.agents.find(a => a.id === reviewer)!.configurationVersion!
+    f.run({ type: 'agent.configuration', previousVersion: before, configuration: { ...config, model: 'gpt-6.1-sol' } }, reviewerActor)
+    expect(pick).not.toThrow()
+    // A small model it reports is still never promoted (review of ee4ee6c9a).
+    const now = f.state.agents.find(a => a.id === reviewer)!.configurationVersion!
+    f.run({ type: 'agent.configuration', previousVersion: now, configuration: { ...config, model: 'gpt-5.5-mini' } }, reviewerActor)
+    expect(pick).toThrow('Codex gpt-5.5-mini is 1.')
+    // A replaced terminal (Change agent) is not the session its start launched: it is rated by the model it reports.
+    f.run({ type: 'agent.rebind', agentId: reviewer, machineId: 'host', projectId: 'lead', previousHarnessId: 'native-reviewer', harnessId: 'native-reviewer-2',
+      configuration: { ...config, model: 'gpt-6.1-sol' } }, reviewerActor)
+    expect(f.state.agents.find(a => a.id === reviewer)).not.toHaveProperty('launchedDefault')
+    expect(pick).toThrow('Codex gpt-6.1-sol is 1.')
   })
 
   it('stores the role chosen at start and reads agents without one as Builders', () => {
