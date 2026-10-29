@@ -235,10 +235,24 @@ static void chats(void)
     // An old daemon's Lead (no chat) takes the recap that names none, as before.
     ht_supertabs_recap_open(&model, "s1", "L2", 200);
     assert(ht_supertabs_recap_put(&model, "s1", "L2", "", "Shipped.", 3, false) && !model.recap.chat_id[0]);
+    // Opening the Lead already on the face keeps its recap until a new one arrives; one still on its way is asked anew.
+    ht_supertabs_recap_open(&model, "s1", "L0", 250);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    ht_supertabs_recap_open(&model, "s1", "L0", 260);
+    assert(model.recap.state == HT_RECAP_LOADED && !strcmp(model.recap.text, "Tests green.") && model.recap.asked_ms == 260);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Deployed.", 4, false) && !strcmp(model.recap.text, "Deployed."));
+    ht_supertabs_recap_open(&model, "s1", "L2", 270); ht_supertabs_recap_open(&model, "s1", "L2", 280);
+    assert(model.recap.state == HT_RECAP_LOADING && model.recap.asked_ms == 280);
+    // The face's chat moved on: what it holds is another chat's, and is not kept.
+    ht_supertabs_recap_open(&model, "s1", "L0", 290);
+    assert(ht_supertabs_recap_put(&model, "s1", "L0", "g1", "Tests green.", 2, false));
+    t.leads[0].chat_id[0] = 'h'; ht_supertabs_put(&model, &t, 0, NULL, 0);
+    ht_supertabs_recap_open(&model, "s1", "L0", 295);
+    assert(model.recap.state == HT_RECAP_LOADING && !model.recap.text[0] && !model.recap.chat_id[0]);
     // Opening another Lead forgets the chat the last recap was for.
     ht_supertabs_recap_open(&model, "s1", "L1", 300);
     assert(!model.recap.chat_id[0]);
-    puts("supertab: chat kind/id/name, old Leads as the Lead chat, recap only for the face's chat PASS");
+    puts("supertab: chat kind/id/name, old Leads as the Lead chat, recap only for the face's chat, the face's own reopen keeps it PASS");
 }
 
 int main(void)
