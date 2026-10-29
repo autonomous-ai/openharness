@@ -9,7 +9,7 @@ import { resolve } from 'node:path'
 import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
-import { runningPane, type PaneProbe } from './callerPane.js'
+import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
 import { agentShell, buddiesHere, WINDOWS_BUDDY } from './buddyPane.js'
@@ -167,6 +167,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
       const caller = callerOf(frames, pane, request.where.machineId)
+      if (caller && !await inDaemonPane(daemon, caller.agentId, running.ancestors)) throw new Error(NOT_IN_PANE)
       if (caller) request.payload.harnessId = caller.agentId
       else if (!help && !request.payload.agentId) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
     }

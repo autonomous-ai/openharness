@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
-import { processProbe, runningPane } from './callerPane.js'
+import { processProbe, runningPane, systemTmuxPaths } from './callerPane.js'
 
 const CLI_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
@@ -21,11 +21,12 @@ const probe = (over: { panes?: typeof panes | null; ancestors?: ReturnType<typeo
 const UNPROVEN = { refused: 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.' }
 
 it('finds the pane this command runs in from its parent processes, whatever TMUX_PANE says', () => {
-  expect(runningPane({ TMUX_PANE: '%42' }, probe(), 'darwin')).toEqual({ pane: '%42' })
+  // With the parents its harness is held to (inDaemonPane).
+  expect(runningPane({ TMUX_PANE: '%42' }, probe(), 'darwin')).toEqual({ pane: '%42', ancestors: [900, 800, 700, 600, 1] })
   // Unsetting TMUX_PANE does not hide the pane.
-  expect(runningPane({}, probe(), 'darwin')).toEqual({ pane: '%42' })
+  expect(runningPane({}, probe(), 'darwin')).toMatchObject({ pane: '%42' })
   // tmux inside a harness's pane: the nearest pane is the one asking.
-  expect(runningPane({ TMUX_PANE: '%7' }, probe({ ancestors: chain(900, 500, 600, 800, 700, 600, 1) }), 'darwin')).toEqual({ pane: '%7' })
+  expect(runningPane({ TMUX_PANE: '%7' }, probe({ ancestors: chain(900, 500, 600, 800, 700, 600, 1) }), 'darwin')).toMatchObject({ pane: '%7' })
 })
 
 // The Lead's must on #904's plan: an allowed command can't claim another harness by typing its pane.
@@ -101,6 +102,15 @@ describe('reading the real processes and panes', () => {
     } finally { await tmux.close() }
   }, 30_000)
 
+  // Re-check 2 of #2093 (critical 5): MacPorts and the install folders Harness already trusts (tmuxOnPath.ts), after the
+  // managed tmux, and never PATH: the folders come from this account's home, whatever HOME or PATH say.
+  it('looks for the system\'s tmux where Harness installs and trusts it, and nowhere a command names', () => {
+    expect(systemTmuxPaths('darwin', '/Users/ken')).toEqual(['/Users/ken/.local/bin/tmux', '/opt/homebrew/bin/tmux', '/usr/local/bin/tmux',
+      '/opt/local/bin/tmux', '/usr/bin/tmux', '/bin/tmux', '/run/current-system/sw/bin/tmux'])
+    expect(systemTmuxPaths('linux', '/home/ken')).toEqual(['/home/ken/.local/bin/tmux', '/usr/local/bin/tmux', '/opt/local/bin/tmux',
+      '/usr/bin/tmux', '/bin/tmux', '/run/current-system/sw/bin/tmux'])
+  })
+
   it('finds the pane a command runs in, whatever its environment says, and refuses when it cannot be proven', async () => {
     const tmux = await isolatedTmux()
     try {
@@ -122,12 +132,14 @@ describe('reading the real processes and panes', () => {
       await tmux.run('new-session', '-d', '-s', 'probe', '-x', '80', '-y', '20',
         `${probeScript(inPane, cases)}; ( ( ${probeScript(detached, `{ detached: runningPane({ ...env, TMUX_PANE: '' }) }`)} & ) & ); sleep 30`)
       const pane = await tmux.run('display-message', '-p', '-t', 'probe', '#{pane_id}')
-      expect(processProbe(tmux.env).panes({ pid: 0, command: 'tmux' })).toContainEqual({ pane, pid: Number(await tmux.run('display-message', '-p', '-t', 'probe', '#{pane_pid}')) })
+      const panePid = Number(await tmux.run('display-message', '-p', '-t', 'probe', '#{pane_pid}'))
+      expect(processProbe(tmux.env).panes({ pid: 0, command: 'tmux' })).toContainEqual({ pane, pid: panePid })
       await vi.waitFor(() => expect(existsSync(inPane) && existsSync(detached)).toBe(true), { timeout: 25_000, interval: 100 })
       const unproven = { refused: 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.' }
-      expect(JSON.parse(readFileSync(inPane, 'utf8'))).toEqual({ named: { pane }, unset: { pane },
+      const withParents = expect.objectContaining({ pane, ancestors: expect.arrayContaining([panePid]) })
+      expect(JSON.parse(readFileSync(inPane, 'utf8'))).toEqual({ named: withParents, unset: withParents,
         other: { refused: 'This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.' },
-        badSocket: unproven, fakeTmux: { pane } })
+        badSocket: unproven, fakeTmux: withParents })
       expect(JSON.parse(readFileSync(detached, 'utf8'))).toEqual({ detached: unproven })
     } finally { await tmux.close() }
   }, 40_000)

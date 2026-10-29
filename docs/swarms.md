@@ -203,9 +203,12 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   agent.
 - A Buddy's machine checks every Swarm command against the window it runs in. An agent speaks only as itself, only
   through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
-  `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The one case it can't
-  see is a command that deliberately detaches from its window and clears its tmux variables; it reads as a person's
-  terminal.
+  `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The window's agent is
+  taken only when Harness's own window for it is among the command's parent processes, so a private tmux server can't
+  pose as another agent's window. The one case it can't see is a command that deliberately detaches from its window
+  and clears its tmux variables; it reads as a person's terminal.
+- On Windows, the window is whatever the shell says it is, so any agent there could name another agent's window. Only
+  Buddies are kept off Windows; other agents there are trusted as before until Windows has a real caller check.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.

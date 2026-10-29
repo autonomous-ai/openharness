@@ -12,7 +12,7 @@
 import { openDaemon, whereFor, type Where } from '../agentClient/daemon.js'
 import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { sendPane } from '../messages/command.js'
-import { runningPane, type PaneProbe } from './callerPane.js'
+import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
 
 const BUDDY = 'A Buddy talks with its owner in its own chat: it may not send to, start, tell or close other sessions.'
 const UNSURE = 'Harness could not confirm whether this harness is a Buddy just now, so it did not run this. Try again in a moment.'
@@ -46,6 +46,7 @@ export async function buddyRefusal(deps: {
     const listed = await daemon.request('agents_list')
     const caller = callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], running.pane, where.machineId)
     if (!caller) return null
+    if (!await inDaemonPane(daemon, caller.agentId, running.ancestors)) return NOT_IN_PANE
     const answer = await daemon.request('super_tabs', { action: 'buddyCheck', harnessId: caller.agentId }, 10_000)
     // The Swarm answered it is on: one that then cannot say for this harness is no answer of "no Buddy" (re-check 1 of #2093).
     if (answer.ok !== true || typeof answer.buddy !== 'boolean') return UNSURE

@@ -13,6 +13,8 @@ function daemon(check: (payload: Record<string, unknown>) => Record<string, unkn
   const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => {
     if (type === 'agents_list') return { agents: [{ id: 'pane-harness', engine: 'claude', tmuxPane: '%42', status: 'active' }] }
     if (type === 'super_tabs' && payload.action === 'buddyCheck') return check(payload)
+    // The daemon's own pane %42 is process 700, this command's ancestor.
+    if (type === 'terminal_info' && payload.agentId === 'pane-harness') return { command: 'claude', path: '/work', pid: 700, tty: '/dev/ttys001' }
     return { error: 'UNSUPPORTED' }
   })
   return { close, request, deps: { where: () => where, open: async () => ({ request, close, machineId: 'machine' }), probe: probe(), env: {} } }
@@ -71,4 +73,14 @@ it('refuses when the Swarm is on but cannot answer for this harness', async () =
     expect(await buddyRefusal(d.deps, 'darwin'))
       .toBe('Harness could not confirm whether this harness is a Buddy just now, so it did not run this. Try again in a moment.')
   }
+})
+
+// Re-check 2 of #2093 (important 6): a private tmux server's pane that has another harness's pane id is not that harness.
+it('refuses a pane whose harness\'s own pane, as the daemon reads it, is not among the command\'s parents', async () => {
+  const d = daemon(swarm(false))
+  const request = d.request.getMockImplementation()!
+  d.request.mockImplementation(async (type: string, payload: Record<string, unknown> = {}) =>
+    type === 'terminal_info' ? { command: 'claude', path: '/work', pid: 555, tty: '/dev/ttys001' } : request(type, payload))
+  expect(await buddyRefusal(d.deps, 'darwin'))
+    .toBe('This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.')
 })

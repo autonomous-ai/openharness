@@ -411,3 +411,28 @@ it('on Windows, refuses another machine from a harness\'s pane, and asks this co
   expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: {} })).toBe(0)
   expect(opened.at(-1)).toMatchObject({ machineId: 'macbook' })
 })
+// Re-check 2 of #2093 (important 6): pane ids restart in every tmux server, so a private server counted up to a Builder's
+// pane id (%221) and its command was taken for that Builder. The pane's harness is taken only when the Harness daemon's own
+// pane of it is among the command's parents.
+it('takes a pane\'s harness only when the daemon\'s own pane process is among the command\'s parents', async () => {
+  let panePid = 555
+  const request = vi.fn(async (type: string) => type === 'agents_list'
+    ? { agents: [{ id: 'builder-harness', engine: 'claude', tmuxPane: '%221', status: 'active' }] }
+    : type === 'terminal_info' ? { command: 'claude', path: '/work', pid: panePid, tty: '/dev/ttys001' } : { ok: true })
+  const print = vi.fn()
+  // A private tmux server (600) whose pane %221 runs this command (700): the daemon's own %221 is process 555.
+  const probe = { panes: () => [{ pane: '%221', pid: 700 }], ancestors: () => [900, 700, 600, 1].map(pid => ({ pid, command: pid === 600 ? 'tmux' : 'node' })) }
+  const deps = { where: () => where, probe, env: { TMUX: '/private/x/default,600,0', TMUX_PANE: '%221' }, print,
+    open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) }
+  for (const argv of [['--tab', 'tab', 'status'], ['--tab', 'tab', '--agent', 'builder', 'post', 'g1', 'Ready', 'op']]) {
+    expect(await superTabCommand(argv, deps)).toBe(1)
+    expect(JSON.parse(print.mock.calls.at(-1)![0]).error)
+      .toBe('This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.')
+  }
+  expect(request.mock.calls.some(([type]) => type === 'super_tabs')).toBe(false)
+  // The daemon's own pane: the harness goes with the request.
+  panePid = 700
+  expect(await superTabCommand(['--tab', 'tab', 'status'], deps)).toBe(0)
+  expect(request).toHaveBeenCalledWith('terminal_info', { agentId: 'builder-harness' }, 10_000)
+  expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ harnessId: 'builder-harness' }), 30_000)
+})
