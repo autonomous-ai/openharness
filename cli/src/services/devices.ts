@@ -266,8 +266,10 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
     swarmSay: async (harnessId, text, chat, chatId, reviewed) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat),
       ...(chatId ? { chatId, ...(reviewed ? { reviewed: true } : {}) } : {}) })),
-    // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
-    superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
+    // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window. `chat`, from a round dial
+    // that keeps sides: the Buddy chat or the Lead chat there; a window from before it opens the project's Lead chat.
+    superTabSelected: (superTabId, projectId, chat) =>
+      core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId, ...(chat ? { chat } : {}) } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),
     // Gestures stay at this desk. The device inventory and its settings also reach the owner's other
     // machines, through the encrypted device-management event.

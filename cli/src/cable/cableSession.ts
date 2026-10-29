@@ -184,8 +184,12 @@ function chatLead(l: SwarmLead, chat = l.chat): Record<string, unknown> {
 }
 /** A Lead's entry for a swarmBuddy dial (spec 2026-10-29-round-dial-pm-buddy): the face on the side it keeps, and while the
  *  Swarm has Buddies on, `buddies` and the reader's Buddy. With Buddies off it is a swarmChat dial's entry. */
+/** The Buddy as the dial draws it: its session id stays on this computer. */
+function dialBuddy({ local: _local, ...drawn }: SwarmBuddy): Record<string, unknown> {
+  return { ...drawn }
+}
 function buddyLead(l: SwarmLead): Record<string, unknown> {
-  return { ...chatLead(l, l.sideChat ?? l.chat), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: { ...l.buddy } } : {}) }
+  return { ...chatLead(l, l.sideChat ?? l.chat), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: dialBuddy(l.buddy) } : {}) }
 }
 /** A Swarm agent's id as the backend makes it; a harness's id is a UUID, so the two never meet. */
 const SWARM_AGENT_ID = /^[0-9a-f]{24}$/
@@ -356,7 +360,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmBuddy, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 
 export interface RouteDecision {
@@ -401,8 +405,9 @@ export interface CableHost {
    *  `refused`: the backend refused the post, whose words are never typed anywhere instead. `chatId`: the chat they were
    *  spoken to, the only one they may be posted in. */
   swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string, reviewed?: boolean): Promise<SaidOnCard>
-  /** A device picked a Lead: the window opens that Swarm tab and project. */
-  superTabSelected?(superTabId: string, projectId: string): void
+  /** A device picked a Lead: the window opens that Swarm tab and project. `chat` (a round dial that speaks swarmBuddy): the
+   *  reader's Buddy chat there ('buddy') or the project's Lead chat ('pm'), so the desktop follows the dial's side. */
+  superTabSelected?(superTabId: string, projectId: string, chat?: CardSide): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
   activeSwarmProject?(): { superTabId: string; projectId: string; conversationId?: string; fromDevice: boolean } | null
   appName(): string
@@ -1441,7 +1446,10 @@ export class CableSession {
       case 'supertab.side': {
         // Only a dial that keeps sides, for a Swarm id it can hold; anything else is a frame this daemon cannot use.
         const tab = str('tab') ?? '', side = str('side')
-        if (this.swarmBuddy && CARD_ID.test(tab) && (side === 'pm' || side === 'buddy')) this.host.swarmCardSide?.(tab, side)
+        if (this.swarmBuddy && CARD_ID.test(tab) && (side === 'pm' || side === 'buddy')) {
+          this.host.swarmCardSide?.(tab, side)
+          this.followSide(tab, side)
+        }
         return
       }
       case 'swarm.select':
@@ -1531,10 +1539,17 @@ export class CableSession {
         await this.syncPlayerLibrary(true)
         return
       }
-      case 'agent.open':
+      case 'agent.open': {
         // Only the one reason the window knows; anything else reads as a tap, the older frame's meaning.
-        if (str('agentId')) this.host.openAgent(str('agentId')!, str('reason') === 'question' ? 'question' : undefined)
+        const agentId = str('agentId'), reason = str('reason') === 'question' ? 'question' as const : undefined
+        if (!agentId) return
+        // A tap on the reader's Buddy or a Lead running here opens its chat in the Swarm tab: a terminal tab of its own is
+        // one whose close stopped the Buddy (Diego, 10-30). A question screen brings the agent forward as before.
+        const swarm = reason ? null : this.swarmSessionOf(agentId)
+        if (swarm) this.openSwarmChat(swarm.tab, swarm.projectId, swarm.chat)
+        else this.host.openAgent(agentId, reason)
         return
+      }
       case 'agent.fork': {
         // The dial's Fork action. The host opens the new agent in the window itself; the dial only needs
         // to hear a refusal, as a toast, so a press that did nothing is not a press that was lost.
@@ -2986,10 +3001,10 @@ export class CableSession {
     if (type === 'supertab.select') {
       const projectId = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.find((l) => l.id === lead)?.projectId
       if (!projectId) { this.log(`cable: ignored pick of unknown Lead ${lead}`); return }
-      // Remembered before the window answers, so its announce of this very project is not sent back as a focus.
-      this.focusedKey = `${tab}/${projectId}`
-      this.picked = { key: this.focusedKey, at: Date.now() }
-      this.host.superTabSelected?.(tab, projectId)
+      // A swarmBuddy dial on the Buddy side: the next project's Buddy chat, where the reader has one there.
+      const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
+      const onBuddy = this.swarmBuddy && card?.side === 'buddy' && this.buddyIn(card, projectId)
+      this.openSwarmChat(tab, projectId, onBuddy ? 'buddy' : undefined)
       return
     }
     // A repeat for the same Lead inside a second is answered from the first read, not read again. Dropping it left a dial
@@ -3006,6 +3021,52 @@ export class CableSession {
     const recap = await this.lastRecapGet.read
     // Nothing on a failure: the Pro keeps its "…" and asks again on the next open.
     if (recap) await this.queued(async () => { await this.send(recapFrame(recap)) })
+  }
+
+  /** Open a project's chat in its Swarm tab for this dial. Remembered before the window answers, so its announce of this very
+   *  project is not sent back as a focus. */
+  private openSwarmChat(tab: string, projectId: string, chat: CardSide | undefined): void {
+    this.focusedKey = `${tab}/${projectId}`
+    this.picked = { key: this.focusedKey, at: Date.now() }
+    if (chat) this.host.superTabSelected?.(tab, projectId, chat)
+    else this.host.superTabSelected?.(tab, projectId)
+  }
+
+  /** The reader's Buddy in a project of a card, when Buddies are on and they have one there. */
+  private buddyIn(card: SwarmCard, projectId: string): boolean {
+    const lead = card.leads.find((l) => l.projectId === projectId)
+    return lead?.buddies === true && lead.buddy !== undefined
+  }
+
+  /**
+   * A swarmBuddy dial swiped a Swarm to a side: the desktop opens the Buddy chat (or the Lead chat) of the project on the
+   * dial's face, which is the one it last picked or was pointed at in that Swarm. With none known there, no project is
+   * guessed; a Buddy side where the reader has no Buddy opens nothing, so no Buddy chat is made from a swipe.
+   */
+  private followSide(tab: string, side: CardSide): void {
+    const [focusedTab, projectId] = this.focusedKey.split('/')
+    if (focusedTab !== tab || !projectId) return
+    const card = this.host.swarmCards?.()?.find((c) => c.id === tab)
+    if (!card?.leads.some((l) => l.projectId === projectId)) return
+    if (side === 'buddy' && !this.buddyIn(card, projectId)) return
+    this.openSwarmChat(tab, projectId, side)
+  }
+
+  /**
+   * The Swarm session a swarmBuddy dial's tap names: the reader's Buddy ('buddy') or a Lead ('pm') whose session runs on
+   * this computer, by the session id the cards hold for it. An id the cards hold twice is no one session's, and opens a
+   * tile as before; so does every other agent, and any tap from another device.
+   */
+  private swarmSessionOf(agentId: string): { tab: string; projectId: string; chat: CardSide } | null {
+    if (!this.swarmBuddy) return null
+    const found: Array<{ tab: string; projectId: string; chat: CardSide }> = []
+    for (const card of this.host.swarmCards?.() ?? []) {
+      for (const lead of card.leads) {
+        if (lead.local === agentId) found.push({ tab: card.id, projectId: lead.projectId, chat: 'pm' })
+        if (lead.buddies && lead.buddy?.local === agentId) found.push({ tab: card.id, projectId: lead.projectId, chat: 'buddy' })
+      }
+    }
+    return found.length === 1 ? found[0] : null
   }
 
   // ── swarms ────────────────────────────────────────────────────────────────────────────────────────
