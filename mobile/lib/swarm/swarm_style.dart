@@ -183,16 +183,10 @@ class SwarmGroup extends StatelessWidget {
 /// A row on its way, in the shape of the row it stands for: a mark at its
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
-/// row arrives. [SwarmSkeletonRow.new] stands for a card's row (`SwarmRow`)
-/// with a line under its title; [SwarmSkeletonRow.drawer] for a project in
-/// the drawer (`SwarmDrawerRow`).
+/// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
+/// title; the drawer draws its own.
 class SwarmSkeletonRow extends StatelessWidget {
-  const SwarmSkeletonRow({super.key, this.round = false, this.width = .45})
-    : _drawer = false;
-
-  const SwarmSkeletonRow.drawer({super.key, this.width = .45})
-    : round = false,
-      _drawer = true;
+  const SwarmSkeletonRow({super.key, this.round = false, this.width = .45});
 
   /// An avatar's round mark rather than a project's tile.
   final bool round;
@@ -200,24 +194,19 @@ class SwarmSkeletonRow extends StatelessWidget {
   /// The title bar's share of the row's words.
   final double width;
 
-  final bool _drawer;
-
   @override
   Widget build(BuildContext context) {
-    // The real rows' metrics: the drawer's title takes its line height from
-    // the drawer, as its row's does.
-    final title = TextStyle(
+    // The real rows' metrics.
+    const title = TextStyle(
       fontSize: 16,
       fontWeight: FontWeight.w500,
-      height: _drawer ? null : 1.3,
+      height: 1.3,
     );
-    final line = TextStyle(fontSize: _drawer ? 13 : 13.5, height: 1.35);
+    const line = TextStyle(fontSize: 13.5, height: 1.35);
     return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: _drawer ? 52 : 56),
+      constraints: const BoxConstraints(minHeight: 56),
       child: Padding(
-        padding: _drawer
-            ? const EdgeInsets.fromLTRB(10, 6, 10, 6)
-            : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           children: [
             Skeleton(
@@ -233,7 +222,7 @@ class SwarmSkeletonRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SkeletonText(style: title, widthFactor: width),
-                  SizedBox(height: _drawer ? 2 : 3),
+                  const SizedBox(height: 3),
                   SkeletonText(
                     style: line,
                     widthFactor: (width + .25).clamp(0, 1),
@@ -249,15 +238,11 @@ class SwarmSkeletonRow extends StatelessWidget {
 }
 
 /// [rows] rows on their way ([SwarmSkeletonRow]), in a card ([SwarmGroup]),
-/// or bare as the drawer's rows are ([drawer]); fading towards the last, one
-/// "Loading" to a screen reader. Keyed [id]; its row `i`, `$id-$i`.
+/// fading towards the last; one "Loading" to a screen reader. Keyed [id]; its
+/// row `i`, `$id-$i`.
 class SwarmSkeletonRows extends StatelessWidget {
-  SwarmSkeletonRows({
-    required this.id,
-    this.rows = 2,
-    this.round = false,
-    this.drawer = false,
-  }) : super(key: ValueKey(id));
+  SwarmSkeletonRows({required this.id, this.rows = 2, this.round = false})
+    : super(key: ValueKey(id));
 
   final String id;
   final int rows;
@@ -265,35 +250,21 @@ class SwarmSkeletonRows extends StatelessWidget {
   /// Avatars' round marks rather than projects' tiles.
   final bool round;
 
-  /// The drawer's projects.
-  final bool drawer;
-
   @override
   Widget build(BuildContext context) {
     final children = [
       for (var i = 0; i < rows; i++)
         Opacity(
           opacity: skeletonFade(i, rows, depth: .4),
-          child: drawer
-              ? SwarmSkeletonRow.drawer(
-                  key: ValueKey('$id-$i'),
-                  width: i.isEven ? .45 : .6,
-                )
-              : SwarmSkeletonRow(
-                  key: ValueKey('$id-$i'),
-                  round: round,
-                  width: i.isEven ? .45 : .6,
-                ),
+          child: SwarmSkeletonRow(
+            key: ValueKey('$id-$i'),
+            round: round,
+            width: i.isEven ? .45 : .6,
+          ),
         ),
     ];
-    return SkeletonBlock(
-      child: drawer
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: children,
-            )
-          : SwarmGroup(children: children),
-    );
+    return SkeletonBlock(child: SwarmGroup(children: children));
+
   }
 }
 
