@@ -217,6 +217,8 @@ export interface Conversation {
   lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
+  cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
   messageSeq?: number
   /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
@@ -256,14 +258,13 @@ export interface TaskLiveness {
   personId?: string
 }
 
+/** The GitHub pull request links in [text], each once, in order. */
+export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
   const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) {
-    if (!text) continue
-    for (const match of text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)) {
-      if (Number(match[1]) <= Number.MAX_SAFE_INTEGER) urls.add(match[0])
-    }
-  }
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
