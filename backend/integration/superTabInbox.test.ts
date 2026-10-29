@@ -289,6 +289,28 @@ describe('a person\'s inbox: unread threads and each chat\'s latest message', ()
     // Another Swarm's id reads as one that does not exist.
     expect((await inbox(`tab-${randomUUID()}`, owner)).status).toBe(404)
   })
+
+  it('does not list a thread whose only replies are the person\'s own', async () => {
+    const s = await busyScene()
+    const ownRoot = await send(s.tabId, s.web, 'Own root')
+    await send(s.tabId, s.web, 'Own reply', { replyTo: ownRoot.id })
+    const { body } = await inbox(s.tabId, owner)
+    expect(threadsOf(body.data)).toEqual([
+      { chat: s.secretGroup, root: 'Secret root', unread: 1, last: s.worker },
+      { chat: s.web, root: 'Web root', unread: 1, last: s.worker },
+    ])
+    expect(JSON.stringify(body.data.threads)).not.toMatch(/Own root|Own reply/)
+  })
+
+  it('shows a top-level message as latest, never a thread reply, when the newest row is a copy nobody reads', async () => {
+    const s = await scene()
+    const root = await send(s.tabId, s.web, 'Thread root')
+    await send(s.tabId, s.web, 'Thread reply', { replyTo: root.id })
+    const [copy] = await insert(s.tabId, s.web, [{ text: 'Lost task notice', author: agentAuthor('swarm'), source: { kind: 'work-lost' } }])
+    await insert(s.tabId, s.leads, [{ id: stableId(copy!, 'lead'), text: 'Lead copy', author: agentAuthor('swarm'), source: { kind: 'work-lost' },
+      recipientIds: ['lead-agent'] }])
+    expect(latestOf((await inbox(s.tabId, outsider)).body.data)[s.web]).toBe('Thread root')
+  })
 })
 
 describe('what the inbox costs the database', () => {
