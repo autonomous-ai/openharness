@@ -113,6 +113,16 @@ describe('a Buddy on its person\'s own machine outside the Swarm', () => {
     expect((f.state.starts ?? []).filter(s => !s.request.buddyOf)).toEqual([])
   })
 
+  it('is never where a new Product Manager is placed, though no Swarm machine has room', () => {
+    const f = setup()
+    addOwn(f, f.app.projectId)
+    f.state.machines!.find(m => m.machineId === 'owner-mac')!.paused = true
+    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { projectId: string }
+    const placed = f.run({ type: 'lead.start', projectId: docs.projectId, machineId: null, engine: 'claude', repositoryUrl: 'https://github.com/example/docs' } as Command)
+    expect(placed.result).toMatchObject({ waiting: true })
+    expect((f.state.starts ?? []).filter(s => s.request.leadFor)).toEqual([])
+  })
+
   it('is no route candidate: a pick there is refused', () => {
     const f = setup()
     addOwn(f, f.app.projectId)
