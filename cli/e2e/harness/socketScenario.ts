@@ -191,11 +191,13 @@ async function resolveMachine(backend: RealBackend, who: Account, label: string)
   return { machineId: r.body.data.machine.machineId as string, computerId }
 }
 
-/** A daemon signed in as `who` on machine `machine`, dialling the backend through the meter. */
-async function machineDaemon(meter: SocketMeter, who: Account, machine: { machineId: string; computerId: string },
+/** A daemon signed in as `who` on machine `machine`, dialling the backend through its own meter entry, named `name`:
+ *  two daemons of one account declare the same client, version and token, and only the entry tells them apart. */
+async function machineDaemon(meter: SocketMeter, name: string, who: Account, machine: { machineId: string; computerId: string },
   e2ee: Record<string, unknown>, stops: Array<() => unknown>): Promise<IsolatedDaemon> {
+  const entry = await meter.entry(name)
   const daemon = await IsolatedDaemon.create({ env: {
-    ADAPTER_COMPUTER_ID: machine.computerId, BACKEND_WS_URL: meter.wsUrl, WEB_URL: meter.url,
+    ADAPTER_COMPUTER_ID: machine.computerId, BACKEND_WS_URL: entry.wsUrl, WEB_URL: entry.url,
     HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200' } })
   // Before anything else can throw: the daemon's tmux server and folders exist from here on.
   stops.push(() => daemon.close())
@@ -226,7 +228,7 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
 
     const idA = newIdentity(), idB = newIdentity(), tab = newIdentity()
     const linkedAt = Date.now()
-    const daemonA = await machineDaemon(meter, alice, a, {
+    const daemonA = await machineDaemon(meter, 'a', alice, a, {
       'identity.json': { priv: b64e(idA.priv), pub: b64e(idA.pub) },
       // Pins as `harness link connect` left them; X's and Y's keys are never used, their selects fail first.
       'machinePeers.json': [
@@ -235,7 +237,7 @@ export async function runSocketScenario(options: { durationMs: number; log?: (li
         { machineId: offline.machineId, pub: b64e(newIdentity().pub), label: 'machine-y', linkedAt },
       ],
     }, stops)
-    const daemonB = await machineDaemon(meter, alice, b, {
+    const daemonB = await machineDaemon(meter, 'b', alice, b, {
       'identity.json': { priv: b64e(idB.priv), pub: b64e(idB.pub) },
       'paired.json': [
         { identityPub: b64e(idA.pub), label: 'machine-a', pairedAt: linkedAt, role: 'web', machineId: a.machineId, kind: 'machine' },

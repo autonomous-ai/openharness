@@ -12,7 +12,7 @@ const at = 1_000_000
 
 const socket = (client: string, machineId: string, outcome: string): SocketRecord => ({
   endpoint: '/api/web-ws', client, version: null, openedAt: at, closedAt: null, closeCode: null, closeReason: '',
-  selects: [{ machineId, at, outcome }],
+  selects: [{ machineId, at, outcome }], via: null,
 })
 
 /** What a run that did everything it should looks like. */
