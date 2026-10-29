@@ -20,7 +20,8 @@ import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
 import { workspaceCan, type WorkspaceRole } from './workspaces.js'
-import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerged, recordPost, recordReview, recordRun, recordStatus } from './leaderboard/record.js'
+import { LEDGER_WEEKS, PULL_REQUEST_URL, recordAsked, recordDecision, recordMerged, recordPost, recordProposal, recordReview, recordRun, recordStatus,
+  recordVerdict } from './leaderboard/record.js'
 import { WEEK_MS } from './leaderboard/week.js'
 import { react, reactionSchema, type ReactionTarget } from './reactions.js'
 import { shipNotice, shippedAt } from './ship.js'
@@ -117,7 +118,9 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('project.roles.reset'), projectId: id, roles: roleSet }).strict(),
   // `audience`: a private conversation that only these people and the project's Lead read (projects.ts canReadGroup).
   z.object({ type: z.literal('conversation.create'), projectId: id.optional(), title, brief: z.string().trim().max(8000).optional(), task: task.optional(), reviewOf: id.optional(), checks: z.array(check).max(40),
-    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional() }).strict()
+    audience: z.object({ personIds: z.array(id).max(200) }).strict().optional(), requesterId: id.optional(),
+    // The Buddy's proposal message in the project chat the group comes from (Lead, 2026-10-29): the Buddy earns when it ships.
+    proposalMessageId: id.optional() }).strict()
     .refine(c => c.task !== undefined || c.brief !== undefined, 'Provide a task or brief.')
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
@@ -270,6 +273,8 @@ export interface CommandContext {
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
+  /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
+  proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
     /** The owner's newest message in that chat, which may always be named. */
     newestOwnerMessageId?: string }
@@ -477,6 +482,18 @@ function requester(state: SuperTabState, project: SwarmProject, personId: string
   if (!canReadProject(state, { kind: 'person', userId: member.id, email: member.email }, project)) fail('REQUESTER_UNAVAILABLE', 'Name a person who can read this project.', 400)
   return member.id
 }
+/** The Buddy whose proposal a new group comes from: the message must be a Buddy's proposal posted in the project's chat. Its
+ *  row is the Swarm's own (buddy.propose), so a Buddy removed since still earns for it. */
+function proposalOf(state: SuperTabState, project: SwarmProject, proposal: CommandContext['proposal']): { buddyId: string; messageId: string } {
+  const author = proposal?.author
+  const buddy = author?.kind === 'agent' ? state.agents.find(a => a.id === author.id) : undefined
+  if (!proposal || proposal.conversationId !== project.leadConversationId || proposal.source?.kind !== 'buddy-proposal'
+    || author?.kind !== 'agent' || (buddy && !isBuddy(buddy))) {
+    fail('PROPOSAL_UNKNOWN', 'Name a Buddy\'s proposal posted in this project\'s chat, or leave the proposal out.', 400)
+  }
+  return { buddyId: author.id, messageId: proposal.id }
+}
+
 function open(state: SuperTabState, conversationId: string) {
   const group = conversation(state, conversationId)
   if (group.archived) fail('ARCHIVED', 'Reopen this conversation before changing its work.')
@@ -1131,7 +1148,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.audience) {
         pmChatClosed(true)
         // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
-        if (command.task || command.checks.length || command.reviewOf || command.requesterId) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+        if (command.task || command.checks.length || command.reviewOf || command.requesterId || command.proposalMessageId) {
+          fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
+        }
         if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
           fail('AUDIENCE_SELF', 'Open a private conversation with yourself in it.', 403)
         }
@@ -1161,6 +1180,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
       recordAsked(state.conversations.at(-1)!, requesterId, context.now)
+      if (command.proposalMessageId) recordProposal(state.conversations.at(-1)!, proposalOf(state, project, context.proposal))
       result.conversationId = operationId
       result.number = number
       if (brief) message(operationId, brief, [], null, SYSTEM_ROW)
@@ -2043,6 +2063,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
       recordReview(group, check, command.passed)
+      if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
