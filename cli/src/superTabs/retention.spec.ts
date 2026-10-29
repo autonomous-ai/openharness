@@ -143,3 +143,13 @@ it('treats a close as possibly of a Buddy only while the file cannot be read', (
   writeFileSync(file, JSON.stringify({ version: 2, machineId: 'machine', harnesses: [], leads: [], buddies: ['../bad'] }))
   expect(mayBeBuddy(dir, 'worker')).toBe(true)
 })
+
+// The Product Manager, 10-30: the owner of a computer always stops anything running on it with one explicit action. Stop
+// Harness refuses only a Lead (core/main.ts hands it `mayBeLead`), so a Buddy, a teammate's too, must never read as one.
+it('leaves every Buddy to Stop Harness: none reads as a Lead', () => {
+  const dir = root()
+  const buddyOf = (personId: string, harnessId: string) => ({ tabId: 'tab', agent: { harnessId, machineId: 'machine', buddyOf: { personId } }, active: false })
+  retainContributions(dir, 'machine', [buddyOf('owner', 'own-buddy'), buddyOf('teammate', 'their-buddy'), row('lead', { lead: true })])
+  expect([mayBeBuddy(dir, 'own-buddy'), mayBeBuddy(dir, 'their-buddy')]).toEqual([true, true])
+  expect([mayBeLead(dir, 'own-buddy'), mayBeLead(dir, 'their-buddy'), mayBeLead(dir, 'lead')]).toEqual([false, false, true])
+})
