@@ -36,7 +36,6 @@ import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import { agentLaunchArgs, joinedInstructions, type StartedBy } from './agentAttribution.js'
-import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { machineMcpLaunchArgs } from './machineMcp.js'
 import type { CreationAuthority } from './agentCreationReceipt.js'
 import type { publishGridConfigDir } from './publishedGridConfig.js'
@@ -121,6 +120,7 @@ export interface LaunchOverridesDeps {
   swarm?: {
     prepare(workspace: string, saved: SwarmSkill): { instructions: string }
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+    args(engine: string): string[]
   }
 }
 
@@ -307,8 +307,8 @@ export async function prepareLaunchOverrides(
     // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
     const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
-    // What the Swarm adds for its own sessions (lib/swarmEngineArgs.ts), in the slot `agent_create` gave it.
-    if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarmEngineArgs(engine)] }
+    // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
+    if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
     let swarmInstructions: string | undefined

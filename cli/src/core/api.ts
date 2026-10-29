@@ -1209,6 +1209,8 @@ export interface SwarmLaunch {
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
   prepare(cwd: string, skill: SwarmSkill): { instructions: string }
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+  /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
+  args(engine: string): string[]
 }
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row

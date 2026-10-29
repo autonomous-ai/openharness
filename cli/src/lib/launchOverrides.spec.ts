@@ -12,6 +12,7 @@ import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
+import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
 
@@ -40,7 +41,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    swarm: { prepare: prepareSwarmSkill, github: (key) => swarmGitHubLaunch(key) },
+    swarm: { prepare: prepareSwarmSkill, github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
     ...overrides,
   }
   return { d, calls }
