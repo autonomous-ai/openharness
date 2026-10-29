@@ -7,8 +7,8 @@ import { describe, expect, it, vi } from 'vitest'
 const fixtures = vi.hoisted(() => ({ configFile: '', signedIn: null as null | { kind: string } }))
 vi.mock('../../team/layout.js', async (original) => ({ ...await original<object>(), get TEAM_CONFIG_FILE() { return fixtures.configFile } }))
 vi.mock('../../lib/authSession.js', async (original) => ({ ...await original<object>(), readAuthSession: () => fixtures.signedIn }))
-import { CONFIDENTIAL_RECORD_MAX, confidentialRecord, confidentialRecordFile, createConfidentialPurge, createTeamAppPolicy, isTeamDaemon,
-  pmEngineHome, readConfidentialMarks, scrubClaudeSession, sweepFor, teamAppPolicyFor, type HeldSession, type TeamAppDeps } from './teamApps.js'
+import { CONFIDENTIAL_RECORD_MAX, confidentialRecord, confidentialRecordFile, createTeamAppPolicy, isTeamDaemon,
+  pmEngineHome, purgeRecord, readConfidentialMarks, teamAppPolicyFor, type HeldSession, type TeamAppDeps } from './teamApps.js'
 
 // A Harness Team daemon's own account's apps: the Mac owner's (#895). The Swarm's Product Manager there reads people's
 // private chats, so those apps never reach a confidential session, and while one runs there they only watch the others:
@@ -175,148 +175,28 @@ describe('the policy when what it reads fails', () => {
   })
 })
 
-// A Product Manager removed or replaced for good: its chats stay with the Swarm, and its session files in the Team account go
-// (security re-check 2 of #2089, the Lead's option A): a Codex one's own engine home whole, a Claude Code one's files scrubbed
-// from the Team user's shared home, then that home swept for its session id and folder.
-describe('the session data of a confidential session the Swarm ended', () => {
-  /** The Team user's home with a Claude Code PM's traces among another session's. */
-  function teamHome() {
-    const home = dir(), claude = join(home, '.claude'), cwd = '/Users/team/swarm/app/.worktrees/pm'
-    const slug = cwd.replace(/[^A-Za-z0-9]/g, '-')
-    for (const sub of ['paste-cache', `projects/${slug}/memory`, 'projects/-other', 'file-history/pm-session', 'session-env/pm-session', 'todos', 'debug', '.codex'])
-      mkdirSync(join(sub === '.codex' ? home : claude, sub), { recursive: true })
-    writeFileSync(join(claude, 'history.jsonl'), [
-      JSON.stringify({ display: 'the launch slips a week', pastedContents: { 1: { id: 1, type: 'text', contentHash: 'abc123' } }, project: cwd, sessionId: 'pm-session' }),
-      JSON.stringify({ display: 'other work', pastedContents: {}, project: '/Users/team/swarm/web', sessionId: 'other' }), ''].join('\n'))
-    writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), 'pasted secret')
-    writeFileSync(join(claude, 'paste-cache', 'keep.txt'), 'other paste')
-    writeFileSync(join(claude, 'projects', slug, 'pm-session.jsonl'), 'transcript')
-    writeFileSync(join(claude, 'projects', slug, 'memory', 'MEMORY.md'), 'remembered')
-    writeFileSync(join(claude, 'projects', '-other', 'other.jsonl'), 'other transcript')
-    writeFileSync(join(claude, 'todos', 'pm-session-agent-pm-session.json'), '[]')
-    writeFileSync(join(claude, 'todos', 'other-agent-other.json'), '[]')
-    writeFileSync(join(claude, 'debug', 'pm-session.txt'), 'debug')
-    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [cwd]: { history: ['secret'] }, '/Users/team/swarm/web': { allowedTools: [] } } }))
-    return { home, claude, cwd }
-  }
-
-  it('of a Claude Code session, scrubs every file its session or folder names, and leaves the others', () => {
-    const { home, claude, cwd } = teamHome()
-    scrubClaudeSession(home, 'pm-session', cwd)
-    expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toBe(`${JSON.stringify({ display: 'other work', pastedContents: {}, project: '/Users/team/swarm/web', sessionId: 'other' })}\n`)
-    expect(existsSync(join(claude, 'paste-cache', 'abc123.txt'))).toBe(false)
-    expect(existsSync(join(claude, 'paste-cache', 'keep.txt'))).toBe(true)
-    expect(existsSync(join(claude, 'todos', 'other-agent-other.json'))).toBe(true)
-    expect(existsSync(join(claude, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-')))).toBe(false)
-    expect(existsSync(join(claude, 'projects', '-other', 'other.jsonl'))).toBe(true)
-    for (const gone of ['file-history/pm-session', 'session-env/pm-session', 'todos/pm-session-agent-pm-session.json', 'debug/pm-session.txt']) {
-      expect(existsSync(join(claude, gone)), gone).toBe(false)
-    }
-    expect(JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8'))).toEqual({ projects: { '/Users/team/swarm/web': { allowedTools: [] } } })
-    // Nothing left names it, so the sweep finds nothing.
-    expect(sweepFor([claude, join(home, '.claude.json'), join(home, '.codex')], ['pm-session', cwd])).toBeNull()
-  })
-
-  it('with no folder, or an id that is no session\'s, never takes another session\'s project folder', () => {
-    const { home, claude } = teamHome()
-    scrubClaudeSession(home, 'pm-session', null)
-    scrubClaudeSession(home, '', '/')
-    expect(existsSync(join(claude, 'projects', '-other', 'other.jsonl'))).toBe(true)
-    expect(existsSync(join(claude, 'file-history', 'pm-session'))).toBe(false)
-    expect(existsSync(join(claude, 'paste-cache', 'abc123.txt'))).toBe(false)
-  })
-
-  it('keeps what does not name it, whatever shape: an unreadable line, a paste without a hash, a config without the folder', () => {
-    const home = dir(), claude = join(home, '.claude'), cwd = '/Users/team/swarm/pm'
-    mkdirSync(join(claude, 'paste-cache'), { recursive: true })
-    writeFileSync(join(claude, 'paste-cache', 'keep.txt'), 'kept')
-    writeFileSync(join(claude, 'history.jsonl'), ['not json, other work', 'not json, pm-session', `not json, ${cwd}`,
-      JSON.stringify({ display: 'x', sessionId: 'pm-session' }), JSON.stringify({ sessionId: 'pm-session', pastedContents: { 1: { contentHash: '../keep' }, 2: null } }), ''].join('\n'))
-    writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { '/elsewhere': {} } }))
-    scrubClaudeSession(home, 'pm-session', cwd)
-    expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toBe('not json, other work\n')
-    expect(existsSync(join(claude, 'paste-cache', 'keep.txt'))).toBe(true)
-    expect(JSON.parse(readFileSync(join(home, '.claude.json'), 'utf8'))).toEqual({ projects: { '/elsewhere': {} } })
-    // Every line its own: the history is left empty; no todos, no config: nothing to do there.
-    writeFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ sessionId: 'pm-session' })}\n`)
-    rmSync(join(home, '.claude.json'))
-    scrubClaudeSession(home, 'pm-session', cwd)
-    expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).toBe('')
-    // A home where Claude Code never ran.
-    expect(() => scrubClaudeSession(dir(), 'pm-session', cwd)).not.toThrow()
-  })
-
-  it('sweeps names and contents, so a place Claude Code starts writing to cannot slip through', () => {
-    const { home, claude, cwd } = teamHome()
-    scrubClaudeSession(home, 'pm-session', cwd)
-    mkdirSync(join(claude, 'new-feature'), { recursive: true })
-    writeFileSync(join(claude, 'new-feature', 'notes.json'), JSON.stringify({ cwd }))
-    expect(sweepFor([claude], ['pm-session', cwd])).toBe(join(claude, 'new-feature', 'notes.json'))
-    rmSync(join(claude, 'new-feature'), { recursive: true })
-    mkdirSync(join(claude, 'later', 'pm-session'), { recursive: true })
-    expect(sweepFor([claude], ['pm-session', cwd])).toBe(join(claude, 'later', 'pm-session'))
-    // Across the boundary of a read: a mention split between two chunks is still found.
-    rmSync(join(claude, 'later'), { recursive: true })
-    writeFileSync(join(claude, 'big.log'), `${'x'.repeat(65_536 - 4)}pm-session`)
-    expect(sweepFor([claude], ['pm-session'])).toBe(join(claude, 'big.log'))
-    expect(sweepFor([join(home, 'missing')], ['pm-session'])).toBeNull()
-  })
-
-  it('gives a Codex Product Manager in a Team account its own engine home, under one root, and none to anyone else', () => {
+// Security re-check 3 of #2089: a purge still to finish (inCore/teamPurge.ts) keeps the account held, its session closed.
+describe('a Codex Product Manager\'s engine home', () => {
+  it('is its own on a Team daemon, under one root, and none for anyone else', () => {
     expect(pmEngineHome('codex', 'super-start-1', true, '/Users/team')).toBe('/Users/team/.harness-pm-homes/super-start-1/codex')
     expect(pmEngineHome('claude', 'super-start-1', true, '/Users/team')).toBeNull()
     expect(pmEngineHome('codex', 'super-start-1', false, '/Users/team')).toBeNull()
     expect(pmEngineHome('codex', '../escape', true, '/Users/team')).toBeNull()
   })
+})
 
-  const purge = (calls: Array<Record<string, unknown>> = []) => vi.fn(async (request: Record<string, unknown>) => {
-    calls.push(request)
-    return request.mode === 'inspect' ? { reviewId: 'review-1' } : { ok: true }
-  })
-
-  it('of a Claude Code session, deletes it through the reviewed purge, scrubs, sweeps, and fails while anything still names it', async () => {
-    const { home, claude, cwd } = teamHome()
-    const calls: Array<Record<string, unknown>> = []
-    const ended = createConfidentialPurge({ confidential: id => id === 'pm', home,
-      session: id => ({ agentId: id, sessionId: 'pm-session', registeredAt: 5, engine: 'claude', cwd }), purge: purge(calls) })
-    expect(await ended('pm')).toEqual({ ok: true })
-    expect(calls.map(c => c.mode)).toEqual(['inspect', 'delete'])
-    expect(calls[1]).toMatchObject({ reviewId: 'review-1', choices: { sessionData: true, worktreeData: false } })
-    expect(existsSync(join(claude, 'paste-cache', 'abc123.txt'))).toBe(false)
-    writeFileSync(join(claude, 'stray.txt'), 'pm-session was here')
-    expect(await ended('pm')).toEqual({ error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${join(claude, 'stray.txt')}` })
-  })
-
-  it('of a Codex session in its own engine home, deletes that home whole', async () => {
-    const home = dir(), codexHome = join(home, '.harness-pm-homes', 'super-start-1', 'codex')
-    mkdirSync(join(codexHome, 'sessions'), { recursive: true })
-    writeFileSync(join(codexHome, 'history.jsonl'), 'the launch slips a week')
-    const ended = createConfidentialPurge({ confidential: () => true, home,
-      session: id => ({ agentId: id, sessionId: 'pm-session', registeredAt: 5, engine: 'codex', cwd: '/Users/team/swarm/pm', codexHome }), purge: purge() })
-    expect(await ended('pm')).toEqual({ ok: true })
-    expect(existsSync(join(home, '.harness-pm-homes', 'super-start-1'))).toBe(false)
-  })
-
-  it('stops at a delete the reviewed purge refused, and scrubs nothing then; a session with no id or folder is swept for neither', async () => {
-    const calls: Array<Record<string, unknown>> = []
-    const refusedDelete = vi.fn(async (request: Record<string, unknown>) => { calls.push(request); return request.mode === 'inspect' ? { reviewId: 'r' } : { error: 'DELETE_IN_PROGRESS' } })
-    const { home, claude, cwd } = teamHome()
-    const ended = createConfidentialPurge({ confidential: () => true, home, session: id => ({ agentId: id, sessionId: 'pm-session', registeredAt: 5, engine: 'claude', cwd }), purge: refusedDelete })
-    expect(await ended('pm')).toEqual({ error: 'DELETE_IN_PROGRESS' })
-    expect(existsSync(join(claude, 'paste-cache', 'abc123.txt'))).toBe(true)
-    const bare = createConfidentialPurge({ confidential: () => true, home: dir(), session: id => ({ agentId: id, sessionId: null, registeredAt: 5, engine: 'codex', cwd: null }), purge: purge() })
-    expect(await bare('pm')).toEqual({ ok: true })
-  })
-
-  it('of any other session, or one no longer held, is left alone; a refused review deletes nothing', async () => {
-    const refused = vi.fn(async () => ({ error: 'NOT_FOUND' }))
-    const home = dir()
-    const ended = createConfidentialPurge({ confidential: id => id === 'pm', home,
-      session: id => id === 'pm' ? { agentId: id, sessionId: null, registeredAt: 5, engine: 'claude', cwd: '/x' } : null, purge: refused })
-    expect(await ended('worker')).toEqual({ skipped: true })
-    expect(await createConfidentialPurge({ confidential: () => true, home, session: () => null, purge: refused })('gone')).toEqual({ skipped: true })
-    expect(await ended('pm')).toEqual({ error: 'NOT_FOUND' })
-    expect(refused).toHaveBeenCalledOnce()
+describe('a Team daemon with a purge still to finish', () => {
+  it('keeps the account held and the session closed until it finishes, and when its record cannot be read', () => {
+    let purging: { ids: string[]; unknown: boolean } = { ids: ['pm'], unknown: false }
+    const p = createTeamAppPolicy({ marks: () => [], live: () => [{ agentId: 'worker', lead: false }], stopped: () => [], recorded: () => [], record: () => {},
+      purging: () => purging })
+    expect(p.refuse('terminal_open', { agentId: 'pm' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
+    expect(p.refuse('message', { agentId: 'worker' })).toMatchObject({ error: 'TEAM_READ_ONLY' })
+    expect(p.watchOnly()).toBe(true)
+    purging = { ids: [], unknown: true }
+    expect(p.refuse('message', { agentId: 'worker' })).toMatchObject({ error: 'TEAM_READ_ONLY' })
+    purging = { ids: [], unknown: false }
+    expect(p.refuse('message', { agentId: 'worker' })).toBeNull()
   })
 })
 
@@ -330,6 +210,22 @@ describe('the Mac owner\'s apps on a Team daemon whose marks cannot be read', ()
       message: 'This computer\'s Harness Team account has not heard from its Swarm yet, so its agents can be watched here but not typed in, and no agent can be started in it until it does.' })
     expect(p.event({ type: 'agent_synced', payload: { agent: { id: 'worker' } } })).toBeNull()
     expect(p.watchOnly()).toBe(true)
+  })
+})
+
+// Security re-check 3 of #2089: a reading that failed, or marks that are there but cannot be read, said the account had not
+// heard from its Swarm yet. They say it could not read them.
+describe('the Mac owner\'s apps when what the guard reads cannot be read', () => {
+  const COULD_NOT = { error: 'SWARM_CONFIDENTIAL', message: 'This computer\'s Harness Team account could not read its Swarm\'s settings, so its agents are not shown here.' }
+  const COULD_NOT_START = { error: 'TEAM_READ_ONLY', message: 'This computer\'s Harness Team account could not read its Swarm\'s settings, so its agents can be watched here but not typed in, and no agent can be started in it.' }
+  it('say they could not be read, when the marks are there but unreadable', () => {
+    const p = createTeamAppPolicy({ marks: () => null, heard: () => true, live: () => [{ agentId: 'worker', lead: false }], stopped: () => [], recorded: () => [], record: () => {} })
+    expect(p.refuse('terminal_open', { agentId: 'worker' })).toEqual(COULD_NOT)
+    expect(p.refuse('agent_create', { engine: 'claude' })).toEqual(COULD_NOT_START)
+  })
+  it('say they could not be read, when a reading failed', () => {
+    const p = createTeamAppPolicy({ marks: () => { throw new Error('EIO') }, live: () => [], stopped: () => [], recorded: () => [], record: () => {} })
+    expect(p.refuse('agents_list', {})).toEqual(COULD_NOT)
   })
 })
 
@@ -425,5 +321,11 @@ describe('the policy as the core runs it', () => {
     expect(p.refuse('terminal_open', { agentId: 'worker' })).toBeNull()
     expect(confidentialRecord(confidentialRecordFile(d)).ids()).toEqual(['marked', 'pm'])
     expect(p.isConfidential('marked')).toBe(true)
+    // With a purge still to finish in its record, the account is held and that session closed.
+    const purges = purgeRecord(join(d, 'super-tabs', 'team-purges.json'))
+    purges.put({ agentId: 'gone-pm', sessionId: null, cwd: null, engine: 'claude', codexHome: null })
+    const held = teamAppPolicyFor(d, () => 'team-mac', () => [{ agentId: 'worker' }], () => [], purges)
+    expect(held.refuse('message', { agentId: 'worker' })).toMatchObject({ error: 'TEAM_READ_ONLY' })
+    expect(held.refuse('agent_resume', { agentId: 'gone-pm' })).toMatchObject({ error: 'SWARM_CONFIDENTIAL' })
   })
 })

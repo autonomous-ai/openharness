@@ -97,7 +97,8 @@ export interface CreateAgentDeps {
   dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
   /** In the Harness Team account, for an engine it has not signed in itself: the owner's subscription through the
    *  owner's relay (team/relay.ts `teamRelayLaunch`), null otherwise. Absent ⇒ never. */
-  ownerRelay?: (engine: AgentEngine) => Promise<{ env: Record<string, string>; args: string[] } | null>
+  /** [codexHome]: the launch's own Codex home, whose sign-in and model list are its own (a Swarm Product Manager's). */
+  ownerRelay?: (engine: AgentEngine, codexHome?: string) => Promise<{ env: Record<string, string>; args: string[] } | null>
   /** The Swarm's part of a start with a Swarm role (superTabs/inCore/launch.ts); absent while the Swarm is off. */
   swarmLaunch?: SwarmLaunch
 }
@@ -291,7 +292,7 @@ export function createAgentCreator({
     }
     // In the Harness Team account, an engine it has not signed in itself spends the owner's subscription through the
     // owner's relay (team/relay.ts), where a grid would otherwise sit: a grid launch is its own provider.
-    const relay = !grid && ownerRelay ? await ownerRelay(engine) : null
+    const relay = !grid && ownerRelay ? await (engine === 'codex' && codexHome ? ownerRelay(engine, codexHome) : ownerRelay(engine)) : null
     if (!current()) return stale()
     // The Swarm starts its agents in full mode, so a machine that never accepted full mode's warning stops each one there
     // before its first turn (Claude Code's "Yes, I accept", the Mac Studio, 2026-10-26). The Swarm's owner chose that mode

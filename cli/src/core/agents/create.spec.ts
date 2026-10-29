@@ -244,6 +244,9 @@ describe('creating an agent', () => {
     ownerRelay.mockClear()
     await setup({ ownerRelay }).create(request({ cwd: folder(), grid: { baseUrl: 'https://grid.example/relay/v1', networkName: 'g', model: 'm' } }))
     expect(ownerRelay).not.toHaveBeenCalled()
+    // A Codex launch in a home of its own (a Swarm Product Manager's): the relay readies, and asks about, that home.
+    await setup({ ownerRelay }).create(request({ engine: 'codex', cwd: folder(), codexHome: '/fixture/pm-home/codex' }))
+    expect(ownerRelay).toHaveBeenCalledWith('codex', '/fixture/pm-home/codex')
   })
 
   it('launches as before where the GitHub App does not apply, and without a role never asks', async () => {

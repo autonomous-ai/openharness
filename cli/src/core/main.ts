@@ -1445,9 +1445,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // owner's own apps never reach the Swarm's confidential sessions, and only watch the rest while one runs (#895).
   // Decided once, as it starts: only a Team daemon has it (security review 1 of #2089), and it reads the stopped sessions too.
   if (swarm && teamDaemon) {
-    const policy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list(), () => stoppedAgents.list())
+    // The purges still to finish, kept across restarts: the account stays held until each has (superTabs/inCore/teamPurge.ts).
+    const purges = swarm.purgeRecord(join(env.ADAPTER_DATA_DIR, 'super-tabs', 'team-purges.json'))
+    const policy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list(), () => stoppedAgents.list(), purges)
     backend.remoteAppPolicy = policy
-    teamPurge = swarm.createConfidentialPurge({ confidential: (agentId) => policy.isConfidential(agentId), home: homedir(),
+    teamPurge = swarm.createConfidentialPurge({ confidential: (agentId) => policy.isConfidential(agentId), home: homedir(), record: purges,
       session: (agentId) => registry.byAgent(agentId) ?? stoppedAgents.get(agentId),
       purge: async (request) => backend.purgeAgentService ? await backend.purgeAgentService.request(request as never) : { error: 'UNSUPPORTED' } })
   }

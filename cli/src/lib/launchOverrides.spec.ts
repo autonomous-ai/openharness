@@ -225,6 +225,8 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
       .toMatchObject({ ok: true, overrides: { env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: 't' }, extraArgs: [] } })
     expect(await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: null, codexHome: '/home/u/.codex-work' }, 'a'))
       .toMatchObject({ ok: true, overrides: { env: { CODEX_HOME: '/home/u/.codex-work', HARNESS_RELAY_TOKEN: 't' }, extraArgs: relay.args } })
+    // The relay readies, and asks about, that home: a Swarm Product Manager's own, whose sign-in and models are its own.
+    expect(ownerRelay).toHaveBeenLastCalledWith('codex', '/home/u/.codex-work')
     // A grid is its own provider: the relay is not asked.
     ownerRelay.mockClear()
     await buildLaunchOverrides(deps({ ownerRelay }).d, 'codex', { gridLaunch: GRID }, 'a')
