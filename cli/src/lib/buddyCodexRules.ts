@@ -21,7 +21,7 @@ import { harnessRules } from '../engines/kit/hookSettings.js'
 import { BUDDY_SUPER_TAB_ACTIONS } from './buddyCommands.js'
 
 /** A Swarm id, as the backend makes them: only its own words reach the rule. */
-const SWARM_ID = /^[A-Za-z0-9_-]{1,64}$/
+export const isSwarmId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value)
 
 /** The name Harness gives a Buddy's rules file, and how removal finds them. */
 export const BUDDY_CODEX_RULES = /^harness-buddy-[A-Za-z0-9_-]{1,64}\.rules$/
@@ -42,7 +42,7 @@ function rulesText(tabId: string): string {
 
 /** Write the rule of [tabId]'s Buddies into the Codex home [home], atomically, readable by its person only. */
 export function writeBuddyCodexRules(home: string, tabId: string): void {
-  if (!SWARM_ID.test(tabId)) throw new Error('A Buddy\'s Codex rule needs its Swarm\'s id.')
+  if (!isSwarmId(tabId)) throw new Error('A Buddy\'s Codex rule needs its Swarm\'s id.')
   const file = buddyCodexRulesFile(home, tabId)
   mkdirSync(join(home, 'rules'), { recursive: true, mode: 0o700 })
   const temporary = `${file}.${process.pid}.tmp`

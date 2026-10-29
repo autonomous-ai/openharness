@@ -367,6 +367,9 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
         ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
+        // A Buddy's Swarm, for the rule that lets a Codex Buddy's own chat commands leave its sandbox without asking
+        // (lib/buddyCodexRules.ts). An older machine ignores it, and its Buddy asks as before.
+        ...(buddy && mode ? { swarmTabId: String(input.tabId) } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode)
           : lead ? `${leadPrompt(String(input.tabId), String(request.conversationId), mode)}${github ? ` ${githubPromptLine(github.requester)}` : ''}` : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer

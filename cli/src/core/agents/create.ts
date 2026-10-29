@@ -33,7 +33,7 @@ import { agentLaunchArgs, joinedInstructions } from '../../lib/agentAttribution.
 import { machineMcpLaunchArgs } from '../../lib/machineMcp.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { describeGridLaunch, gridConfigHandOff, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
-import { profileEnvironment } from '../../lib/engineHomes.js'
+import { launchHome, profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { LaunchAuthority, LaunchPreparation } from '../../lib/launchPreparation.js'
@@ -366,6 +366,13 @@ export function createAgentCreator({
     // What Harness tells the agent (its instructions, and the pull request line for one another agent started), last.
     const swarmSkill = input.swarmRole ? { role: input.swarmRole, key: label, ...(input.swarmSkillMode ? { mode: input.swarmSkillMode } : {}),
       ...(swarmGitHub ? { github: true as const } : {}) } : undefined
+    // A Codex Buddy's chat commands need the daemon, which its read-only sandbox cannot reach: without its rule each one
+    // waited at a prompt nobody at its terminal answers (Scholes, 10-29; lib/buddyCodexRules.ts). One it cannot write is
+    // logged, and the Buddy asks as before.
+    if (swarmLaunch && input.swarmRole === 'buddy' && input.swarmTabId && engine === 'codex') {
+      try { swarmLaunch.codexRules(launchHome('CODEX_HOME', codexHome, native?.environment), input.swarmTabId) }
+      catch (error) { console.warn(`[agent] a Buddy's Codex rule · ${error instanceof Error ? error.message : error}`) }
+    }
     let swarmInstructions: string | undefined
     if (swarmLaunch && swarmSkill) {
       try { swarmInstructions = swarmLaunch.prepare(cwd, swarmSkill).instructions }

@@ -306,10 +306,24 @@ describe('agent_create, refused before any pane exists', () => {
     expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
   })
 
+  it('passes a Buddy\'s Swarm with the Buddy role only, as one plain id, and refuses anything else before dispatch', async () => {
+    const { ask, create } = setup()
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'buddy', swarmTabId: 'tab_1-a' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).toMatchObject({ swarmRole: 'buddy', swarmTabId: 'tab_1-a' })
+    await ask({ engine: 'codex', cwd: '/w', swarmRole: 'buddy' })
+    expect(vi.mocked(create!).mock.calls.at(-1)![0]).not.toHaveProperty('swarmTabId')
+    const calls = vi.mocked(create!).mock.calls.length
+    for (const payload of [{ swarmRole: 'dev', swarmTabId: 'tab' }, { swarmTabId: 'tab' }, { swarmRole: 'buddy', swarmTabId: '' },
+      { swarmRole: 'buddy', swarmTabId: 'a"b' }, { swarmRole: 'buddy', swarmTabId: 7 }]) {
+      expect(await ask({ engine: 'codex', cwd: '/w', ...payload })).toMatchObject({ error: 'INVALID_SWARM_ROLE' })
+    }
+    expect(vi.mocked(create!).mock.calls).toHaveLength(calls)
+  })
+
   // HARNESS_SWARM=off: nothing of the Swarm's is asked of a launch, and a start that asks for it is refused at the wire.
   it('refuses every Swarm field while the Swarm is off, before dispatch, and starts everything else as before', async () => {
     const { ask, create } = setup({ swarmLaunch: undefined })
-    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmGitHub: true }, { swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true }]) {
+    for (const payload of [{ swarmRole: 'dev' }, { swarmSkillMode: 'default' }, { swarmGitHub: true }, { swarmTabId: 'tab' }, { swarmRole: 'lead', swarmSkillMode: 'orchestration', swarmGitHub: true }]) {
       expect(await ask({ engine: 'claude', cwd: '/w', ...payload })).toStrictEqual({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' })
     }
     expect(create).not.toHaveBeenCalled()

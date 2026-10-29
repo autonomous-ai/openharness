@@ -75,7 +75,7 @@ export interface LaunchRequestDeps {
   /** A guest's New Harness, as the guest's own OS user (core/agents/guestCreate.ts); null where there is none. */
   guestCreate?: () => GuestCreate | null
   /** Which Swarm roles and skill modes a start may ask for (superTabs/inCore/launch.ts); absent while the Swarm is off. */
-  swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode'>
+  swarmLaunch?: Pick<SwarmLaunch, 'role' | 'mode' | 'tabId'>
 }
 
 type Reply = (result: Record<string, unknown>) => void
@@ -408,7 +408,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       prompt = trimmed || null
     }
     const swarmRole = payload.swarmRole
-    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined)) {
+    if (!swarmLaunch && ((swarmRole !== undefined && swarmRole !== null) || payload.swarmSkillMode !== undefined || payload.swarmGitHub !== undefined
+      || payload.swarmTabId !== undefined)) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'The Swarm is off on this computer (HARNESS_SWARM).' }); return
     }
     const isSwarmRole = (value: unknown): value is NonNullable<CreateInput['swarmRole']> => !!swarmLaunch?.role(value)
@@ -426,6 +427,12 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
     const swarmGitHub = payload.swarmGitHub
     if (swarmGitHub !== undefined && (swarmGitHub !== true || !isSwarmRole(swarmRole))) {
       reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmGitHub is true, with a Swarm role.' }); return
+    }
+    // A Buddy's Swarm, for its Codex rule (lib/buddyCodexRules.ts): only with the Buddy role, and only a plain id, as the
+    // rule is written from it.
+    const swarmTabId: unknown = payload.swarmTabId
+    if (swarmTabId !== undefined && (swarmRole !== 'buddy' || !swarmLaunch?.tabId(swarmTabId))) {
+      reply({ error: 'INVALID_SWARM_ROLE', detail: 'swarmTabId is a Swarm id, with the Buddy role.' }); return
     }
     // Its worktree fetches nothing with this machine's own git login: its host fetched with the app's token just before
     // (superTabs/projectFolder.ts), or, started by a Lead on its own machine, it starts from what the checkout has.
@@ -498,7 +505,8 @@ export function createLaunchRequests({ receipts, createAgent, prepareCreate, pre
       codexHome,
       dsh,
       prompt,
-      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}) } : {}),
+      ...(isSwarmRole(swarmRole) ? { swarmRole, ...(swarmSkillMode ? { swarmSkillMode } : {}), ...(swarmGitHub ? { swarmGitHub } : {}),
+        ...(swarmTabId !== undefined && swarmLaunch?.tabId(swarmTabId) ? { swarmTabId } : {}) } : {}),
       name,
       agent,
       resumeSessionId,

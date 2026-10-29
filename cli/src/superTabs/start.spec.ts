@@ -246,6 +246,8 @@ it.each(['claude', 'codex'])('starts a %s Reviewer with the built-in swarm-revie
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'reviewer-prompt', request: f.start.request }, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('review')
+  // Only a Buddy's launch is told its Swarm, for its Codex rule (lib/buddyCodexRules.ts).
+  expect(payload).not.toHaveProperty('swarmTabId')
   expect(payload.prompt).toContain('swarm-review skill')
   expect(payload.prompt).not.toContain('swarm-dev')
 })
@@ -256,6 +258,8 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   await startAgent({ action: 'start', tabId: 'tab', operationId: 'buddy-prompt', request: f.start.request }, f.scoped, where, f.open)
   const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
   expect(payload.swarmRole).toBe('buddy')
+  // Its Swarm, so a Codex Buddy's launch lets its own chat commands run without asking (lib/buddyCodexRules.ts).
+  expect(payload.swarmTabId).toBe('tab')
   expect(payload.prompt).toContain('Use the built-in swarm-buddy skill for this session.')
   expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
   expect(payload.prompt).not.toContain('assign')
