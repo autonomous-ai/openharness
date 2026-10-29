@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../widgets/desktop_chrome.dart';
+import 'buddy_chat.dart';
 import 'identity.dart';
-import 'pm_chat.dart';
 import 'section_heading.dart';
 
 /// A sidebar count, such as the tags waiting in Notifications.
@@ -14,10 +14,10 @@ class SuperTabCountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     constraints: const BoxConstraints(minWidth: 18),
-    padding: const EdgeInsets.symmetric(horizontal: 5),
-    decoration: BoxDecoration(
+    padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.badgeInset),
+    decoration: ShapeDecoration(
       color: grid.AppPalette.warn.withValues(alpha: .16),
-      borderRadius: BorderRadius.circular(9),
+      shape: const StadiumBorder(),
     ),
     child: Text(
       countText(count),
@@ -27,59 +27,37 @@ class SuperTabCountBadge extends StatelessWidget {
   );
 }
 
-/// A PM chat's unread count, "2 new in Chat with PM"; [onTap] opens the chat.
-class SuperTabPmUnread extends StatelessWidget {
-  const SuperTabPmUnread(this.count, {super.key, this.onTap});
-  final int count;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) => Tooltip(
-    message: pmUnreadLabel(count),
-    child: Semantics(
-      button: onTap != null,
-      label: pmUnreadLabel(count),
-      excludeSemantics: true,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(9),
-        child: SuperTabCountBadge(count),
-      ),
-    ),
-  );
-}
-
-/// A person's Chat with PM as a direct message: the Product Manager's avatar
-/// and name, like a chat app's direct messages, with the project in brackets
-/// after it when the Swarm has several: "Finn (web-2)".
-class SuperTabPmChatRow extends StatelessWidget {
-  const SuperTabPmChatRow({
+/// A person's Buddy chat in a project, in the sidebar's Buddies: its Buddy's
+/// avatar and name ("Buddy" while none runs), with the project in brackets
+/// after it when the Swarm has several: "Wren (web-2)". New lines, the PM's
+/// private ones among them, show as the name in bold, with no count (design
+/// system: Unread).
+class SuperTabBuddyRow extends StatelessWidget {
+  const SuperTabBuddyRow({
     super.key,
     required this.agentId,
     required this.name,
+    required this.tooltip,
     required this.onTap,
     this.project,
     this.selected = false,
     this.unread = false,
-    this.unreadCount = 0,
-    this.tooltip,
     this.note,
     this.detail,
     this.status,
   });
 
-  /// The Product Manager's agent, for its avatar; null while it has none.
+  /// The Buddy, for its avatar; null while none runs.
   final String? agentId;
   final String name;
 
   /// The project's name, shown when the Swarm has several.
   final String? project;
   final bool selected, unread;
-  final int unreadCount;
   final VoidCallback? onTap;
 
-  /// What hovering says; Chat with PM's name when not given.
-  final String? tooltip;
+  /// What hovering says: "Your Buddy · openharness".
+  final String tooltip;
 
   /// A quiet word after the name, such as a Buddy's "offline".
   final String? note;
@@ -97,7 +75,7 @@ class SuperTabPmChatRow extends StatelessWidget {
         ? DesktopChrome.muted
         : DesktopChrome.foreground;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
+      padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
       child: Material(
         color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -111,9 +89,7 @@ class SuperTabPmChatRow extends StatelessWidget {
             focusColor: grid.AppSurface.hoverFill,
             borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
             child: Tooltip(
-              message:
-                  tooltip ??
-                  (project == null ? kChatWithPm : '$kChatWithPm · $project'),
+              message: tooltip,
               child: Row(
                 children: [
                   SizedBox(width: SuperTabSectionHeading.indentFor(0)),
@@ -122,7 +98,7 @@ class SuperTabPmChatRow extends StatelessWidget {
                     child: Center(
                       child: SuperTabAvatar(
                         identity: agentId == null
-                            ? 'pm:$name'
+                            ? 'buddy:$name'
                             : 'agent:$agentId',
                         name: name,
                         size: 20,
@@ -133,7 +109,9 @@ class SuperTabPmChatRow extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: grid.AppDesktop.controlGap,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
@@ -168,9 +146,17 @@ class SuperTabPmChatRow extends StatelessWidget {
                                     ),
                                   ),
                                 ],
+                                // A quiet note yields first at large text sizes.
                                 if (note case final note?) ...[
                                   const SizedBox(width: 8),
-                                  Text(note, style: DesktopChrome.metadata()),
+                                  Flexible(
+                                    child: Text(
+                                      note,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
                                 ],
                               ],
                             ),
@@ -199,16 +185,7 @@ class SuperTabPmChatRow extends StatelessWidget {
                   SizedBox(
                     width: _column,
                     // Unread is drawn as a bold name and heard in words.
-                    child: Semantics(
-                      label: unread && unreadCount == 0
-                          ? 'Unread messages'
-                          : null,
-                      child: Center(
-                        child: unreadCount > 0
-                            ? SuperTabPmUnread(unreadCount)
-                            : null,
-                      ),
-                    ),
+                    child: Semantics(label: unread ? 'Unread messages' : null),
                   ),
                   const SizedBox(width: _column),
                 ],

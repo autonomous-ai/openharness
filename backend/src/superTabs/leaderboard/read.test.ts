@@ -20,7 +20,7 @@ describe('the dormant groups the leaderboard sums', () => {
     expect(await recentDormantGroups(tx, 'tab', 'web', since)).toEqual([{ id: 'g1', requesterId: 'peer', ledger: { shippedAt: since + 1 }, assignment: { id: 'a1', status: 'done' } }])
     const [{ pipeline }] = asked as [{ pipeline: Array<Record<string, Record<string, unknown>>> }]
     expect(pipeline[0]!.$match).toEqual({ tabId: 'tab', deleted: false, dormant: true, lastActivityAt: { $gte: { $date: new Date(since).toISOString() } }, projectId: { $in: ['web'] } })
-    expect(Object.keys(pipeline[1]!.$project!).sort()).toEqual(['_id', ...['archived', 'assignment.id', 'assignment.status', 'audience', 'id', 'kind', 'ledger',
+    expect(Object.keys(pipeline[1]!.$project!).sort()).toEqual(['_id', ...['archived', 'assignment.id', 'assignment.status', 'audience', 'id', 'kind', 'leadId', 'ledger',
       'projectId', 'pullRequestUrls', 'requesterId', 'reviewOf', 'title'].map(field => `data.${field}`)].sort())
   })
 

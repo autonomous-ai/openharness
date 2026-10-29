@@ -660,6 +660,21 @@ class ConversationServer {
           ..['resolvedBy'] = 'done';
         state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
         revision++;
+      } else if (command['type'] == 'machine.contribute') {
+        // As the backend: the reader's machine is in the Swarm, whole.
+        state['machines'] = <dynamic>[
+          ...state['machines'] as List? ?? const [],
+          {
+            'machineId': command['machineId'],
+            'name': command['name'],
+            'contributorId': reader ?? 'owner',
+            'scope': command['scope'],
+            'engines': command['engines'],
+            'maxAgents': command['maxAgents'],
+            'availableSlots': command['maxAgents'],
+          },
+        ];
+        revision++;
       } else if (command['type'] == 'buddy.create') {
         // As the backend's Buddy create: a start for the reader's Buddy and
         // its chat, fixed per person and project. The fixture's host starts it
@@ -749,6 +764,30 @@ class ConversationServer {
         output
           ..['startId'] = 'start-$revision'
           ..['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.chat') {
+        // As the backend's: the reader's own Buddy chat in the project, opened
+        // before any Buddy, the same chat a Buddy added later joins.
+        final person = reader ?? 'owner';
+        final projectId = command['projectId'] as String;
+        final chatId = 'buddy-$person-$projectId';
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        if (!conversations.any((g) => g['id'] == chatId)) {
+          revision++;
+          final owner = (state['people'] as List? ?? const [])
+              .cast<Map>()
+              .where((p) => p['id'] == person)
+              .firstOrNull;
+          final name = (owner?['email'] as String? ?? person).split('@').first;
+          conversations.add({
+            ...conversationFixture(chatId, "$name's Buddy"),
+            'kind': 'buddy',
+            'projectId': projectId,
+            'buddyOwnerId': person,
+            'agentIds': <String>[],
+          });
+        }
+        output['conversationId'] = chatId;
       } else if (command['type'] == 'buddy.remove') {
         revision++;
         final person = reader ?? 'owner';
