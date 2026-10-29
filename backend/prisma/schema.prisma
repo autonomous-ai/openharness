@@ -583,6 +583,8 @@ model ProductUsageActivity {
   @@map("product_usage_activity")
   /// Expires these rows (lib/productUsage.ts ensureProductUsageExpiry). Declared so db push keeps it; the worker sets its expiry.
   @@index([expiresAt], map: "product_usage_expiry")
+  /// The hourly people rollup reads the marks of its last days (services/ProductUsagePeopleRollupService.ts).
+  @@index([dayUtc])
 }
 
 /// Legacy individual counters. New ingestion is disabled; dayUtc TTL removes these after 35 days.
