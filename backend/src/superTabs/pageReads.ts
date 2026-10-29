@@ -1,4 +1,5 @@
 import type { Prisma, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
+import { routingRow } from './buddies.js'
 import { ms } from './parts/light.js'
 import type { ReactionRow } from './reactions.js'
 import { agentOnly, stableId, type Author } from './model.js'
@@ -114,7 +115,8 @@ export async function deliveredCopies(tx: Transaction, tabId: string, rows: Read
   return new Set(copies.filter(row => reached.has(stableId(row.id, 'lead'))).map(row => row.id))
 }
 
-export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean }
+/** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root. */
+export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean }
 
 /** Every message of the threads rooted at `roots` in one conversation, roots included, oldest first: what the page's thread
  *  summaries are counted from. Matched as the page reads are, so the tabId+conversationId+thread index bounds it. */
@@ -126,5 +128,6 @@ export async function pageThreads(tx: Transaction, tabId: string, conversationId
     .map(row => ({ id: row._id as string, source: row.source, recipientIds: (row.recipientIds ?? []) as string[] })))
   return rows.map(row => ({ thread: row.thread as string, id: row._id as string, author: row.author as Author,
     mentions: (row.mentions ?? []) as string[], sequence: row.sequence as number, createdAt: new Date(ms(row.createdAt)),
-    agentOnly: copies.has(row._id as string) || agentOnly(row.source, (row.recipientIds ?? []) as string[]) })).sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
+    agentOnly: copies.has(row._id as string) || agentOnly(row.source, (row.recipientIds ?? []) as string[]), routing: routingRow(row.source) }))
+      .sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
 }

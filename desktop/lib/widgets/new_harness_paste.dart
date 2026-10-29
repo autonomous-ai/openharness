@@ -75,24 +75,26 @@ class _NewHarnessPasteTargetState extends State<NewHarnessPasteTarget> {
     super.dispose();
   }
 
+  /// Adds [files] to [target], the box the paste was made in: it may be
+  /// another box by the time a clipboard answers.
   void _attach(
+    HarnessAttachments target,
     Iterable<HarnessAttachment> files, {
     Iterable<String> oversized = const [],
   }) {
-    // Reading a clipboard takes a moment the box may not have survived.
-    if (!mounted || !widget.enabled) return;
-    reportAttachProblem(
-      context,
-      widget.attachments.addPasted(files, oversized: oversized),
-    );
+    final problem = target.addPasted(files, oversized: oversized);
+    if (mounted) reportAttachProblem(context, problem);
   }
 
   void _attachFiles(
     List<PastedFile> files, {
     Iterable<String> oversized = const [],
-  }) => _attach([
-    for (final file in files) HarnessAttachment(file.name, file.bytes),
-  ], oversized: oversized);
+  }) {
+    if (!mounted || !widget.enabled) return;
+    _attach(widget.attachments, [
+      for (final file in files) HarnessAttachment(file.name, file.bytes),
+    ], oversized: oversized);
+  }
 
   /// ⌘V: what the clipboard holds as attachments, or [pasteText] — the
   /// field's own paste — when text is what was copied.
@@ -101,14 +103,32 @@ class _NewHarnessPasteTargetState extends State<NewHarnessPasteTarget> {
   /// name as text and its icon as a picture, and neither is what was copied.
   Future<void> _paste(VoidCallback pasteText) async {
     if (!widget.enabled) return pasteText();
-    final copied = await widget.readFiles();
-    if (copied.files.isNotEmpty || copied.tooLarge.isNotEmpty) {
-      return _attachFiles(copied.files, oversized: copied.tooLarge);
-    }
-    if (pastedTextWins(await _clipboardText())) return pasteText();
-    final image = await widget.readImage();
-    if (image == null || image.isEmpty) return pasteText();
-    _attach([HarnessAttachment(kPastedImageName, image)]);
+    // The box this paste was made in, held until the clipboard has answered.
+    final target = widget.attachments;
+    await target.reading(() async {
+      final copied = await widget.readFiles();
+      if (copied.files.isNotEmpty || copied.tooLarge.isNotEmpty) {
+        return _attachCopied(target, copied);
+      }
+      if (pastedTextWins(await _clipboardText())) {
+        return _pasteText(target, pasteText);
+      }
+      final image = await widget.readImage();
+      if (image == null || image.isEmpty) return _pasteText(target, pasteText);
+      _attach(target, [HarnessAttachment(kPastedImageName, image)]);
+    });
+  }
+
+  void _attachCopied(HarnessAttachments target, CopiedFiles copied) => _attach(
+    target,
+    [for (final file in copied.files) HarnessAttachment(file.name, file.bytes)],
+    oversized: copied.tooLarge,
+  );
+
+  /// The field's own paste, unless the box moved on to another message while
+  /// the clipboard was read: the text would land in the wrong one.
+  void _pasteText(HarnessAttachments target, VoidCallback pasteText) {
+    if (mounted && identical(widget.attachments, target)) pasteText();
   }
 
   Future<String?> _clipboardText() async {
