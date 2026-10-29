@@ -112,7 +112,9 @@ const superTabStatusPresets = [
   ('🤒', 'Out sick'),
 ];
 
-/// The reactions a message can carry, in the order counts show.
+/// The reactions a message can carry, in the order counts show (backend
+/// REACTIONS). Agents acknowledge with the last three, as Slack bots do:
+/// 👀 started, ✅ done, 🚀 merged.
 enum SuperTabReactionEmoji {
   thumbsUp('thumbs_up', '👍'),
   tada('tada', '🎉'),
