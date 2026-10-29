@@ -1,5 +1,6 @@
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
@@ -69,9 +70,17 @@ void main() {
           ),
         ),
       );
+
+  /// The line as it reads: its parts, in order.
   String line(WidgetTester tester) => tester
-      .widget<Text>(find.byKey(const ValueKey('super-task-line-g')))
-      .data!;
+      .widgetList<Text>(
+        find.descendant(
+          of: find.byKey(const ValueKey('super-task-line-g')),
+          matching: find.byType(Text),
+        ),
+      )
+      .map((text) => text.data!)
+      .join();
   HarnessActivity mark(WidgetTester tester) =>
       tester.widget<ActivityMark>(find.byType(ActivityMark)).activity;
 
@@ -120,7 +129,7 @@ void main() {
         leadAction: {'kind': 'route', 'at': ago(minute * 2)},
       ),
     );
-    expect(line(tester), 'Queued: no free machine · 25m · PM retrying');
+    expect(line(tester), 'Queued: no free machine · 25m · PM retrying 2m ago');
     expect(mark(tester), HarnessActivity.unknown);
   });
 
@@ -132,7 +141,7 @@ void main() {
         leadAction: {'kind': 'assign', 'at': ago(minute)},
       ),
     );
-    expect(line(tester), 'Quiet 34m · PM reassigned it');
+    expect(line(tester), 'Quiet 34m · PM reassigned it 1m ago');
     expect(mark(tester), HarnessActivity.failed);
     // What the PM did before it went quiet is not handling it.
     await show(
@@ -150,7 +159,90 @@ void main() {
         leadAction: {'kind': 'post', 'at': ago(minute)},
       ),
     );
-    expect(line(tester), 'Quiet 34m · PM posted');
+    expect(line(tester), 'Quiet 34m · PM posted 1m ago');
+  });
+
+  testWidgets(
+    'a reassigned task that is working again shows its agent\'s progress, not the PM\'s old action',
+    (tester) async {
+      await show(
+        tester,
+        task(
+          progress: minute * 2,
+          leadAction: {'kind': 'assign', 'at': ago(minute * 3)},
+        ),
+      );
+      expect(line(tester), 'Working · 2m ago');
+    },
+  );
+
+  testWidgets(
+    'its ages keep moving on their own, the state\'s and the PM\'s, with no other rebuild',
+    (tester) async {
+      var at = now;
+      final group = task(
+        liveness: state('quiet', 'silent', minute * 34),
+        leadAction: {'kind': 'post', 'at': ago(minute)},
+      );
+      await withClock(Clock(() => at), () async {
+        await tester.pumpWidget(
+          MaterialApp(home: Material(child: SuperTabTaskLine(group))),
+        );
+        expect(line(tester), 'Quiet 34m · PM posted 1m ago');
+        for (final expected in [
+          'Quiet 35m · PM posted 2m ago',
+          'Quiet 36m · PM posted 3m ago',
+        ]) {
+          at = at.add(minute);
+          await tester.pump(minute + const Duration(milliseconds: 2));
+          expect(line(tester), expected);
+        }
+        // Gone with its row: no timer is left behind.
+        await tester.pumpWidget(const SizedBox());
+      });
+    },
+  );
+
+  testWidgets('a line too long for its row cuts its reason, never its age', (
+    tester,
+  ) async {
+    final group = task(
+      status: 'needs_human',
+      result: 'Please approve the production deployment and confirm the rollback plan',
+      liveness: state('waiting', 'person', minute * 12, personId: 'ken'),
+      leadAction: {'kind': 'post', 'at': ago(minute * 2)},
+    );
+    for (final scale in [1.0, 2.0]) {
+      await withClock(
+        Clock.fixed(now),
+        () => tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+              child: Material(
+                child: Center(
+                  child: SizedBox(
+                    width: 180 * scale,
+                    child: SuperTabTaskLine(group, personName: person),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      RenderParagraph part(String text) =>
+          tester.renderObject<RenderParagraph>(find.text(text));
+      expect(part(' · 12m').didExceedMaxLines, isFalse, reason: '×$scale');
+      expect(
+        part(
+          'Waiting on Ken · Please approve the production deployment and confirm the rollback plan',
+        ).didExceedMaxLines,
+        isTrue,
+        reason: '×$scale',
+      );
+      expect(tester.takeException(), isNull);
+    }
   });
 
   testWidgets('waiting on a review, a new revision, a blocker or a start', (
@@ -242,12 +334,18 @@ void main() {
         ),
       );
       final row = find.byKey(const ValueKey('super-group-offline'));
+      final line = find.descendant(
+        of: row,
+        matching: find.byKey(const ValueKey('super-task-line-offline')),
+      );
       expect(
-        find.descendant(
-          of: row,
-          matching: find.text('Waiting on ken · mockup OK? · 12m'),
-        ),
-        findsOneWidget,
+        tester
+            .widgetList<Text>(
+              find.descendant(of: line, matching: find.byType(Text)),
+            )
+            .map((text) => text.data)
+            .join(),
+        'Waiting on ken · mockup OK? · 12m',
       );
       expect(
         find.descendant(

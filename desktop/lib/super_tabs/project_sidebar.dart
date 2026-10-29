@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:clock/clock.dart';
 import 'package:collection/collection.dart' show mergeSort;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -204,6 +203,20 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// A workgroup's row from what its project's reading already asked.
+  /// A task row's status, kept current by its own clock, for its line and
+  /// its tooltip alike; any other row is built without one.
+  Widget _withTaskStatus(
+    SuperTabConversation group,
+    Widget Function(SuperTabTaskStatus? status) build, {
+    required bool task,
+  }) => task
+      ? SuperTabTaskClock(
+          group: group,
+          personName: _personName,
+          builder: (_, status) => build(status),
+        )
+      : build(null);
+
   /// A member as the Humans list names them, for a task's "Waiting on …".
   String? _personName(String personId) => switch (controller.snapshot?.people
       .where((p) => p.id == personId)
@@ -289,77 +302,83 @@ class ProjectSidebar extends StatelessWidget {
                               ? 'Private project'
                               : null,
                           selected: selected,
-                          child: Tooltip(
-                            message:
-                                label ??
-                                project?.name ??
-                                [
-                                  SuperTabWorkgroupName.plain(group),
-                                  ?superTabTaskStatus(
-                                    group,
-                                    clock.now(),
-                                    personName: _personName,
-                                  )?.line,
-                                ].join('\n'),
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(minHeight: 36),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
+                          child: _withTaskStatus(
+                            group,
+                            task: label == null && project == null,
+                            (status) => Tooltip(
+                              message:
+                                  label ??
+                                  project?.name ??
+                                  [
+                                    SuperTabWorkgroupName.plain(group),
+                                    if (status != null)
+                                      superTabTaskStatusText(status),
+                                  ].join('\n'),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  minHeight: 36,
                                 ),
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: label == null && project == null
-                                          ? Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                SuperTabWorkgroupName(
-                                                  group,
-                                                  style: style,
-                                                ),
-                                                // Moving, waiting and on what, or stuck (#957).
-                                                SuperTabTaskLine(
-                                                  group,
-                                                  personName: _personName,
-                                                ),
-                                              ],
-                                            )
-                                          : Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text(
-                                                  label ?? project!.name,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  style: style,
-                                                ),
-                                                // Teammates' agents cannot push to its repository yet (project_github.dart).
-                                                if (project != null)
-                                                  ProjectGitHubLine(
-                                                    controller: controller,
-                                                    project: project,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: label == null && project == null
+                                            ? Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  SuperTabWorkgroupName(
+                                                    group,
+                                                    style: style,
                                                   ),
-                                              ],
-                                            ),
-                                    ),
-                                    if (project?.isPrivate == true) ...[
-                                      const SizedBox(width: 8),
-                                      Tooltip(
-                                        message: 'Private project',
-                                        child: Icon(
-                                          AppIcons.lock,
-                                          size: 14,
-                                          color: DesktopChrome.muted,
-                                        ),
+                                                  // Moving, waiting and on what, or stuck (#957).
+                                                  if (status != null)
+                                                    SuperTabTaskLineView(
+                                                      status,
+                                                      key: ValueKey(
+                                                        'super-task-line-${group.id}',
+                                                      ),
+                                                    ),
+                                                ],
+                                              )
+                                            : Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    label ?? project!.name,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: style,
+                                                  ),
+                                                  // Teammates' agents cannot push to its repository yet (project_github.dart).
+                                                  if (project != null)
+                                                    ProjectGitHubLine(
+                                                      controller: controller,
+                                                      project: project,
+                                                    ),
+                                                ],
+                                              ),
                                       ),
+                                      if (project?.isPrivate == true) ...[
+                                        const SizedBox(width: 8),
+                                        Tooltip(
+                                          message: 'Private project',
+                                          child: Icon(
+                                            AppIcons.lock,
+                                            size: 14,
+                                            color: DesktopChrome.muted,
+                                          ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ),
                             ),
