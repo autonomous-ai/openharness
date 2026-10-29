@@ -446,6 +446,49 @@ describe('work that loses its owner', () => {
     expect((await lost.timed.messages(owner, lost.tab, lost.group, {})).messages.map(m => m.text)).toContain('The tab owner cancelled this task: Not needed.')
   })
 
+  /** A second task whose chat the Lead left before its worker was assigned (a Lead outside a task's chat), or one in
+   *  `projectId`, a project with no Lead. */
+  const withoutLead = async (f: Awaited<ReturnType<typeof swarm>>, projectId?: string) => {
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it', ...(projectId ? { projectId } : {}),
+      checks: [{ description: 'Read', independent: false }] } as Command)).result.conversationId)
+    if (!projectId) await f.execute({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: false, lead: false })
+    const harness = randomUUID()
+    const worker = await f.add(group, 'test-host', harness, 'Writer')
+    await f.execute({ type: 'work.assign', conversationId: group, agentId: worker })
+    return { group, worker, harness }
+  }
+
+  // Review of #2177: a notice that reaches no agent is the people's to act on, so they read it. The old agent's notice still
+  // reaches it alone.
+  it('shows people a lost-task notice no Lead receives, and keeps the moved notice the agent\'s', async () => {
+    const f = await swarm()
+    const projectId = String((await f.execute({ type: 'project.create', name: 'No Lead yet', visibility: 'public', brief: '' })).result.projectId)
+    const { group, worker, harness } = await withoutLead(f, projectId)
+    await f.observe('test-host', [harness], { stoppedHarnessIds: [harness] })
+    const rows = (await f.lostRows()).filter(m => m.conversationId === group || m.recipientIds.includes(worker))
+    const wake = rows.filter(m => m.text.includes('lost its task'))
+    const moved = rows.find(m => m.recipientIds.includes(worker))!
+    expect(wake.length).toBeGreaterThan(0)
+    expect(wake.every(m => !m.recipientIds.length)).toBe(true)
+    const shown = (await f.timed.messages(owner, f.tab, group, {})).messages.map(m => m.id)
+    expect(wake.filter(m => m.conversationId === group).map(m => m.id).every(id => shown.includes(id))).toBe(true)
+    expect(shown).not.toContain(moved.id)
+  })
+
+  // The Lead outside the task's chat hears in its own chat; the task's chat keeps a copy for no one, which is that same notice.
+  it('hides the task chat\'s copy of a lost-task notice whose Lead hears it in the project chat', async () => {
+    const f = await swarm()
+    const { group, harness } = await withoutLead(f)
+    await f.observe('test-host', [harness], { stoppedHarnessIds: [harness] })
+    const rows = (await f.lostRows()).filter(m => m.text.includes('lost its task "Write the docs"'))
+    expect(rows.map(m => [m.conversationId, m.recipientIds])).toEqual(expect.arrayContaining([[group, []], ['lead', [f.lead]]]))
+    for (const conversationId of [group, 'lead']) {
+      const shown = (await f.timed.messages(owner, f.tab, conversationId, {})).messages.map(m => m.id)
+      expect(rows.filter(m => shown.includes(m.id))).toEqual([])
+    }
+    expect((await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.map(m => m.id)).toEqual(expect.arrayContaining(rows.filter(m => m.conversationId === 'lead').map(m => m.id)))
+  })
+
   it('lets the Lead assign the lost work to another agent, and keeps the old one fenced', async () => {
     const f = await swarm()
     await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
@@ -905,6 +948,24 @@ describe('a task that stalls', () => {
     const shown = (await f.timed.messages(owner, f.tab, stalled!.conversationId, {})).messages.find(m => m.id === sent.result.messageId)!
     expect(shown.thread ?? shown.id).toBe(shown.id)
     expect(shown.text).toBe('I nudged the worker.')
+  })
+
+  // Review of #2177: before the fix above, a Lead's reply to a stalled alert was stored in the alert's thread. With the alert
+  // hidden, people could not open that thread, so such a reply reads as one in the chat.
+  it('lists a reply already stored in a stalled alert\'s thread in the chat people read', async () => {
+    const f = await swarm()
+    const posted = f.clock.now
+    await f.beat(posted)
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
+    await tick(f, posted + 30 * MINUTE)
+    const [stalled] = await stalledRows(f)
+    const id = randomUUID().replaceAll('-', '').slice(0, 24)
+    await db.superTabMessage.create({ data: { id, tabId: f.tab, conversationId: stalled!.conversationId, sequence: stalled!.sequence + 1,
+      author: stalled!.author as Prisma.InputJsonValue, text: 'I nudged the worker.', replyTo: stalled!.id, thread: stalled!.id, recipientIds: [], mentions: [] } })
+    const page = await f.timed.messages(owner, f.tab, stalled!.conversationId, {})
+    const reply = page.messages.find(m => m.id === id)!
+    expect(reply.thread ?? reply.id).toBe(reply.id)
+    expect(page.threads.map(t => t.id)).not.toContain(stalled!.id)
   })
 
   it('is orphaned when its agent is removed, and the Lead is woken once by the next time checks', async () => {

@@ -1099,7 +1099,7 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
-          thread: reply.thread, ...(agentOnly(reply.source) ? { agentOnly: true } : {}) }
+          thread: reply.thread, ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
@@ -1188,7 +1188,7 @@ export class SuperTabStore {
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       const effects = applyCommand(original, actor, command, context)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
-      const shown = effects.messages.filter(message => !agentOnly(message.source))
+      const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
         appendPullRequestUrls(group, [
           ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
@@ -1609,7 +1609,7 @@ export class SuperTabStore {
   private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand): Promise<ReactionTarget | undefined> {
     const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
       select: { id: true, source: true, recipientIds: true } })
-    if (!message || (agentOnly(message.source) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    if (!message || (agentOnly(message.source, message.recipientIds) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
     return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
   }
 
@@ -1910,7 +1910,7 @@ export class SuperTabStore {
     for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
       const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
         orderBy: [{ sequence: order }, { id: order }], take: 101 })
-      rows.push(...batch.filter(m => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
+      rows.push(...batch.filter(m => (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
         && !(buddy && routingRow(m.source))))
       if (batch.length < 101) break
       edge = batch.at(-1)
@@ -1924,8 +1924,13 @@ export class SuperTabStore {
     const shown = buddy ? page.map(withoutMachineNames) : page
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
-    const threads = roots.length ? threadSummaries(state, group, await pageThreads(tx, tabId, conversationId, roots)) : []
-    return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
+    // A reply stored in the thread of a notice only its recipients read (the Lead answering a stalled alert before such
+    // replies started no thread, commands.ts) reads as one in the chat: nobody else can open that thread (review of #2177).
+    const hiddenRoots = new Set(threadRows.filter(row => row.id === row.thread && row.agentOnly).map(row => row.id))
+    const threads = threadRows.length ? threadSummaries(state, group, threadRows.filter(row => !hiddenRoots.has(row.thread))) : []
+    const inChat = (m: SuperTabMessage) => m.thread && m.thread !== m.id && hiddenRoots.has(m.thread) ? { ...m, thread: m.id } : m
+    return { messages: shown.map(inChat).map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }

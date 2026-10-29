@@ -64,8 +64,8 @@ export interface ThreadReply { thread: string; id: string; author: Author; menti
 export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
   // Sorted here: a $sort in the pipeline makes the planner walk the conversation's sequence index instead.
   const rows = await tx.superTabMessage.aggregateRaw({ pipeline: [{ $match: { tabId, conversationId, thread: { $in: roots } } },
-    { $project: { thread: 1, author: 1, mentions: 1, sequence: 1, createdAt: 1, source: 1 } }] }) as unknown as Array<Record<string, unknown>>
+    { $project: { thread: 1, author: 1, mentions: 1, sequence: 1, createdAt: 1, source: 1, recipientIds: 1 } }] }) as unknown as Array<Record<string, unknown>>
   return rows.map(row => ({ thread: row.thread as string, id: row._id as string, author: row.author as Author,
     mentions: (row.mentions ?? []) as string[], sequence: row.sequence as number, createdAt: new Date(ms(row.createdAt)),
-    agentOnly: agentOnly(row.source) })).sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
+    agentOnly: agentOnly(row.source, (row.recipientIds ?? []) as string[]) })).sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
 }

@@ -14,7 +14,7 @@ import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
+import { leadNoticeRows, loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
@@ -2126,9 +2126,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       delete group.lostAttempt
       delete worker.lostTask
       renewLease(assignment, context.now)
-      effects.messages.push(...toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
+      effects.messages.push(...leadNoticeRows(toLead(state, worker, { id: stableId(operationId, 'resumed'), conversationId: group.id, author: sender, replyTo: null,
         recipients: [], text: `${worker.displayName ?? worker.name} resumed its task after its usage limit reset.`,
-        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } }))
+        source: { kind: 'work-resumed', agentId: worker.id, assignmentId: assignment.id } })))
       break
     }
     case 'work.check': {
