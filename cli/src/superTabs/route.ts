@@ -116,13 +116,19 @@ export function liftEffort(rules: SwarmRule[], engine: string, effort: string): 
 /** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task),
  * whether idle agents come first, and whether a model on the Swarm's grid comes first. */
 interface Soft { engine: string | null; idle: boolean; grid: boolean }
+/** Kinds of build a quality-2 grid model takes first at medium difficulty: docs, copy, tests, fixtures, a small specified fix,
+ *  a mechanical refactor. */
+export const CHEAP_KINDS = ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']
 function softOf(rules: SwarmRule[], a: Assessment): Soft {
   const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
   const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
   // Simple work goes to the free models first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
   // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
   // rarely picked. Reviews keep the other model family, and the owner can opt out.
-  const grid = a.difficulty === 'low' && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
+  // Since 2026-10-29 (Ken) also medium work of a kind a strong grid model does well, which steps up when it fails (backend
+  // superTabs/stepUp.ts); the floor still keeps a small model off it.
+  const simple = a.difficulty === 'low' || (a.difficulty === 'medium' && CHEAP_KINDS.includes(a.kind ?? ''))
+  const grid = simple && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
   return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
 }
 
@@ -221,6 +227,13 @@ export function reviewRefusals(p: Probe, builder: Reviewed | null): string[] {
   if (p.gridModel) return ['A review never runs on a model served on the Swarm\'s grid.']
   if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
   return builder && familyOf(builder) === familyOf(p) ? [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`] : []
+}
+
+/** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
+ *  the same (backend superTabs/stepUp.ts stepUpRefusal). */
+export function stepUpRefusals(p: Probe, step: { floor: number } | null): string[] {
+  return step && (p.gridModel || p.quality < step.floor)
+    ? [`This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality ${step.floor}.`] : []
 }
 
 export const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const

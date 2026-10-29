@@ -3205,3 +3205,90 @@ describe('agent.stopRefused', () => {
     expect(t.member().workDecision).toBe('stop')
   })
 })
+
+// Ken, 2026-10-29: simple work runs on a grid model first, and a failed first review or a grid host that never starts the
+// agent steps it up a tier (Sonnet, then Opus), at most twice per group.
+describe('stepping up from a cheap model', () => {
+  const pr = 'https://github.com/example/project/pull/41'
+  function cheap() {
+    const f = routed(), group = f.group()
+    f.run({ type: 'conversation.agent', conversationId: group, agentId: f.lead, present: true, lead: true })
+    f.run({ type: 'work.define', conversationId: group, brief: 'Fix the docs.', checks: [{ description: 'Reviewed.', independent: true }] })
+    const builder = (name: string, model: string | null, gridModel?: string) => {
+      const id = f.add(name, 'owner', group)
+      Object.assign(f.state.agents.find(a => a.id === id)!, { configuration: { ...config, engine: 'claude', model }, ...(gridModel ? { gridModel } : {}) })
+      return id
+    }
+    const assign = (agentId: string) => {
+      const effects = f.run({ type: 'work.assign', conversationId: group, agentId })
+      return { assignmentId: effects.result.assignmentId as string, brief: effects.messages.find(m => m.recipients.includes(agentId))!.text }
+    }
+    const fail = (assignmentId: string, agentId: string) => {
+      f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: `Ready: yes. Branch fix/docs. ${pr}` }, { kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+      const check = f.state.conversations.find(c => c.id === group)!.checks[0]!
+      return f.run({ type: 'work.check', conversationId: group, assignmentId, checkId: check.id, passed: false, evidence: 'Ready: no. Two links are broken.' })
+    }
+    const g = () => f.state.conversations.find(c => c.id === group)!
+    return { f, group, builder, assign, fail, g }
+  }
+
+  it('steps a grid attempt up when its first review says Ready no: closes it, keeps the branch and findings, and wakes the Lead', () => {
+    const { f, group, builder, assign, fail, g } = cheap()
+    const kimi = builder('kimi', 'default', 'moonshotai/kimi-k3')
+    const first = assign(kimi)
+    const effects = fail(first.assignmentId, kimi)
+    expect(g().assignment).toMatchObject({ id: first.assignmentId, status: 'cancelled', result: 'Stepped up: its first review said Ready no.' })
+    expect(g().stepUp).toMatchObject({ attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1000 })
+    expect(g().stepUp!.carry).toContain(pr)
+    expect(g().stepUp!.carry).toContain('Ready: no. Two links are broken.')
+    expect(g().stepUp!.carry).toContain('Ready: yes. Branch fix/docs.')
+    expect(effects.messages.find(m => m.recipients.includes(kimi))!.text).toContain('Stop working on it.')
+    expect(effects.messages.find(m => m.recipients.includes(f.lead))!.text)
+      .toBe(`#${g().number} stepped up to attempt 2: its first review said Ready no. Route it again: the route leaves out models on the grid and below quality 2, and the new attempt's brief carries the branch, the last result and the findings.`)
+    // The next attempt may not go back to the grid; a stronger model takes the carry-over in its brief and the step in its record.
+    f.run({ type: 'agent.release', agentId: kimi, decision: 'stop' }, f.leadActor)
+    const route = (pick: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: group, decision: record({ candidates: [candidate('c0', pick)], pick: 'c0' }) } as Command, f.leadActor)
+    expect(() => route({ model: 'default', effort: 'default', quality: 2, gridModel: 'deepseek/deepseek-v4.1', gridName: 'swarm-g' }))
+      .toThrow('This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality 2. Route again.')
+    expect(() => route({ model: 'haiku', effort: 'auto', quality: 1 })).toThrow('nothing below quality 2')
+    expect(route({ model: 'sonnet', effort: 'medium', quality: 2 }).routeDecisions[0]).toMatchObject({ op: 'create', record: { stepUp: { attempt: 2, reason: 'Its first review said Ready no.' } } })
+    const sonnet = builder('sonnet', 'claude-sonnet-4-5')
+    const second = assign(sonnet)
+    expect(second.brief).toContain(`Carry-over from attempt 1:\n${g().stepUp!.carry}`)
+    expect(g().ledger!.runs!.at(-1)).toMatchObject({ assignmentId: second.assignmentId, stepUp: { attempt: 2, reason: 'Its first review said Ready no.' } })
+    // Sonnet fails its first review too: Opus next, and that is the last step.
+    fail(second.assignmentId, sonnet)
+    expect(g().stepUp).toMatchObject({ attempt: 3, floor: 3 })
+    const opus = builder('opus', 'claude-opus-4-7'), third = assign(opus)
+    expect(fail(third.assignmentId, opus).messages.some(m => m.text.includes('stepped up'))).toBe(false)
+    expect(g().assignment).toMatchObject({ id: third.assignmentId, status: 'review' })
+  })
+
+  it('stops after two steps, and never steps up work that did not start on the grid', () => {
+    const { builder, assign, fail, g } = cheap()
+    const opus = builder('opus', 'claude-opus-4-7')
+    const first = assign(opus)
+    fail(first.assignmentId, opus)
+    expect(g().stepUp).toBeUndefined()
+    expect(g().assignment!.status).toBe('review')
+    // At the cap a failed Sonnet attempt stays with its Builder.
+    const { builder: other, assign: give, fail: failIt, g: group } = cheap()
+    group().stepUp = { attempt: 3, floor: 3, reason: 'Earlier.', at: 1, carry: '' }
+    const sonnet = other('sonnet', 'claude-sonnet-4-5')
+    failIt(give(sonnet).assignmentId, sonnet)
+    expect(group().stepUp!.attempt).toBe(3)
+    expect(group().assignment!.status).toBe('review')
+  })
+
+  it('steps up a group whose grid start failed, and not one whose subscription start failed', () => {
+    const { f, group, g } = cheap()
+    const start = (id: string, gridModel?: string) => ({ id, actorKey: 'person:owner', contributorId: 'owner', membershipGeneration: f.state.people[0]!.generation,
+      request: { conversationId: group, machineId: 'mac', name: 'Builder', engine: 'claude', ...(gridModel ? { gridModel, gridName: 'swarm-g' } : {}) }, error: null })
+    f.state.starts = [start('s1'), start('s2', 'moonshotai/kimi-k3')] as never
+    f.run({ type: 'agent.startFailed', startId: 's1', error: 'Launch refused.' })
+    expect(g().stepUp).toBeUndefined()
+    const effects = f.run({ type: 'agent.startFailed', startId: 's2', error: 'Launch refused.' })
+    expect(g().stepUp).toMatchObject({ attempt: 2, floor: 2, reason: 'Its grid host did not start the agent.' })
+    expect(effects.messages.map(m => m.text)).toContain(`#${g().number} stepped up to attempt 2: its grid host did not start the agent. Route it again: the route leaves out models on the grid and below quality 2, and the new attempt's brief carries the branch, the last result and the findings.`)
+  })
+})

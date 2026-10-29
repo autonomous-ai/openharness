@@ -105,7 +105,7 @@ export function agentTarget(state: SuperTabState, worker: Agent): RunTarget {
 
 /** The policy's strength of a subscription model, as the CLI's route rates it (cli superTabs/route.ts rateFor): a Claude id by
  *  its family, a model with no row by the engine's `default` row. Null for a Claude model of no known family, or no row. */
-function strength(policy: RoutingPolicy, engine: string, model: string | null, effort: string | null): number | null {
+export function policyQuality(policy: RoutingPolicy, engine: string, model: string | null, effort: string | null): number | null {
   const name = engine === 'claude' ? FAMILY.exec((model ?? '').toLowerCase())?.[0] : model ?? 'default'
   if (!name) return null
   const rows = policy.models.filter(m => m.engine === engine)
@@ -121,7 +121,7 @@ const familyOf = (t: { engine: string; gridModel?: string }) => t.gridModel ? `g
 export function reviewRefusal(state: SuperTabState, reviewed: string | undefined, target: RunTarget, policy: RoutingPolicy): string | null {
   if (!reviewed) return null
   if (target.gridModel) return 'A review never runs on a model served on the Swarm\'s grid.'
-  const quality = strength(policy, target.engine, target.model, target.effort)
+  const quality = policyQuality(policy, target.engine, target.model, target.effort)
   if (quality !== null && quality < 2) return `A review needs a model of quality 2 or more, and ${ENGINE[target.engine] ?? target.engine} ${target.model} is ${quality}.`
   const assignment = state.conversations.find(c => c.id === reviewed)?.assignment
   const worker = assignment && state.agents.find(a => a.id === assignment.agentId)

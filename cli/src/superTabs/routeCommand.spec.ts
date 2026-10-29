@@ -1314,6 +1314,18 @@ describe('local models on the Swarm\'s grid', () => {
     expect(offlineModels({ ...t.state, localModels: { grid: GRID, enabled: false } }, routing, assessment, false)).toEqual([])
     expect(offlineModels({ ...t.state, localModels: undefined }, routing, assessment, false)).toEqual([])
   })
+  it('leaves the grid and anything under its floor out of a task that stepped up, and says why', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }] } }] })
+    Object.assign(t.state.conversations[1]!, { stepUp: { attempt: 3, floor: 3, reason: 'Its first review said Ready no.', at: 1, carry: '' } })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', kind: 'docs' } }, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus' } })
+    const why = 'This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality 3.'
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    expect(excluded.filter(e => e.reason.includes(why)).map(e => e.title)).toEqual([expect.stringMatching(/^Multiply · Claude sonnet/),
+      expect.stringMatching(/^New agent · Claude sonnet/), expect.stringMatching(/^New agent · Claude on moonshotai\/kimi-k3/)])
+  })
   it('routes a low task to a served model and starts it on the grid, with no subscription model', async () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
       machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'qwen3', name: 'Qwen 3' }] } }] })

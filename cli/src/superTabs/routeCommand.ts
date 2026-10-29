@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, reviewRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, reviewRefusals, stepUpRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -281,9 +281,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     return required.devices.every(d => Array.isArray(devices) && devices.includes(d))
   }
   const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents) : null
+  const step = finite(object(group.stepUp).floor) ? { floor: object(group.stepUp).floor as number } : null
   for (const [i, p] of probes.entries()) {
     const refusals = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),
-      ...(review ? reviewRefusals(p, builder) : [])]
+      ...(review ? reviewRefusals(p, builder) : []), ...stepUpRefusals(p, step)]
     if (refusals.length) probes[i] = { ...p, refusals: [...p.refusals, ...refusals] }
   }
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.

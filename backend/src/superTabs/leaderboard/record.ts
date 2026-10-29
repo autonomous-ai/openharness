@@ -16,7 +16,9 @@ export interface Unblock { personId: string; at: number; waitedMs: number; kind?
  *  reports none of its own. `firstVerdicts`: each independent check's first verdict during this attempt, by check id.
  *  `firstReview`: false once any of them failed, true once every independent check passed its first, absent until then. */
 export interface Run extends RanOn { assignmentId: string; at: number
-  firstVerdicts?: Record<string, boolean>; firstReview?: boolean }
+  firstVerdicts?: Record<string, boolean>; firstReview?: boolean
+  /** The step up from a cheaper model this attempt is (stepUp.ts): its attempt number and why. */
+  stepUp?: { attempt: number; reason: string } }
 /** What an agent ran on: its engine, the model (a grid model's own name, `grid` set), and its effort when it names one;
  *  absent from attempts recorded before efforts were (Lead, 2026-10-29: never guessed afterwards). */
 export interface RanOn { engine: string; model: string | null; effort?: string; grid?: true }
@@ -194,7 +196,8 @@ export function waitsNow(group: Conversation): boolean {
 
 /** An assignment records what its agent runs on (ranOn), for the board's models. */
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
-  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now }
+  const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now,
+    ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}) }
   const ledger = group.ledger ??= {}
   // A request recorded before this time was kept still has its first attempt in [runs] until 20 more roll it off; only a
   // request with no attempt yet starts now (review of #2097).

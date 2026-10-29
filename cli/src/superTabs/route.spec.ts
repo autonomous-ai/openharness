@@ -603,6 +603,17 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, simple, NOW))).toBe('qwen3')
       expect(firstOf(choose([idle, grid], policy, simple, NOW, [], [{ rule: { kind: 'preferIdle' }, text: 'Idle first.' }]))).toBe('qwen3')
     })
+    it('ranks a strong grid model first for medium docs, copy, tests, fixtures, a specified fix or a mechanical refactor (Ken, 2026-10-29)', () => {
+      const kimi = local({ machineName: 'mac', quality: 2, gridModel: 'moonshotai/kimi-k3', gridLabel: 'Kimi K3' })
+      for (const kind of ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']) {
+        expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind }, NOW))).toBe('moonshotai/kimi-k3')
+      }
+      // A small model stays under the medium floor, and other kinds keep the policy order.
+      expect(firstOf(choose([expiring, grid], policy, { ...simple, difficulty: 'medium', kind: 'docs' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'ui' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'medium', kind: 'docs', risk: 'medium' }, NOW))).toBe('opus')
+      expect(firstOf(choose([expiring, kimi], policy, { ...simple, difficulty: 'high', kind: 'docs' }, NOW))).toBe('opus')
+    })
     it('keeps the policy order for anything harder, riskier or a review', () => {
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, risk: 'medium' }, NOW))).toBe('opus')
       expect(firstOf(choose([expiring, haiku, grid], policy, { ...simple, difficulty: 'medium' }, NOW))).toBe('opus')
