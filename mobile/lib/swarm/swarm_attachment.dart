@@ -7,6 +7,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart' show AppControl;
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 
 import 'model.dart';
@@ -129,9 +131,13 @@ class _PreviewState extends State<_Preview> {
       builder: (context, constraints) {
         final width = math.min(constraints.maxWidth, _previewWidth);
         final height = width * 3 / 4;
-        final skeleton = Skeleton(width: width, height: height, radius: 10);
+        final skeleton = Skeleton(
+          width: width,
+          height: height,
+          radius: AppControl.rowRadius,
+        );
         return Padding(
-          padding: const EdgeInsets.only(top: 8),
+          padding: const EdgeInsets.only(top: AppSpace.s),
           child: FutureBuilder<File>(
             future: _local,
             builder: (context, local) {
@@ -159,7 +165,9 @@ class _PreviewState extends State<_Preview> {
                     child: file == null
                         ? skeleton
                         : ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(
+                              AppControl.rowRadius,
+                            ),
                             child: Image(
                               // Decoded at the box's size, not the picture's.
                               image: ResizeImage(
