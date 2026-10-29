@@ -205,8 +205,14 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
   `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The window's agent is
   taken only when Harness's own window for it is among the command's parent processes, so a private tmux server can't
-  pose as another agent's window. The one case it can't see is a command that deliberately detaches from its window
-  and clears its tmux variables; it reads as a person's terminal.
+  pose as another agent's window. What it can't see reads as a person's terminal, where naming an agent still works.
+  Each needs an agent deliberately evading the check:
+  - a command that detaches from its window and clears its tmux variables;
+  - a command run in a private tmux server's window, at a number no agent has;
+  - a command run through a fake tmux in the account's own `~/.local/bin`, which Harness trusts before Homebrew's.
+
+  Refusing these would also refuse people who work in their own tmux. The real fix is for the daemon to identify the
+  caller itself from its connection; that's the planned follow-up.
 - On Windows, the window is whatever the shell says it is, so any agent there could name another agent's window. Only
   Buddies are kept off Windows; other agents there are trusted as before until Windows has a real caller check.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or

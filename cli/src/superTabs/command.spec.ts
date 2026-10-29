@@ -436,3 +436,13 @@ it('takes a pane\'s harness only when the daemon\'s own pane process is among th
   expect(request).toHaveBeenCalledWith('terminal_info', { agentId: 'builder-harness' }, 10_000)
   expect(request).toHaveBeenLastCalledWith('super_tabs', expect.objectContaining({ harnessId: 'builder-harness' }), 30_000)
 })
+// Re-check 2 of #2093 at 0648a8690 (minor 8): a failed Swarm answer is no "Swarm off" on Windows' backstop either.
+it('refuses --agent from an agent\'s shell on Windows when this computer\'s Swarm cannot answer', async () => {
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list' ? { agents: [] }
+    : payload.action === 'buddyCheck' ? { error: 'SERVICE_FAILED', service: 'superTabs' } : { ok: true })
+  const print = vi.fn()
+  expect(await superTabCommand([...prefix, 'status'], { where: () => where, print, platform: 'win32', env: { HARNESS_PANE: 'p1:%3' },
+    open: async () => ({ request, close: vi.fn(), machineId: 'machine' }) })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toBe('Harness could not reach this computer\'s Swarm just now, so it did not run this. Try again in a moment.')
+  expect(request.mock.calls.filter(([type, payload]) => type === 'super_tabs' && (payload as Record<string, unknown>)?.action !== 'buddyCheck')).toEqual([])
+})

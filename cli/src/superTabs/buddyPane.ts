@@ -19,10 +19,19 @@ const UNSURE = 'Harness could not confirm whether this harness is a Buddy just n
 export const WINDOWS_BUDDY = 'This Windows computer runs a Buddy, and Harness cannot tell its pane from this one, so an agent here may not do this '
   + 'while it runs. Run it from your own terminal.'
 
-/** Whether this computer's Swarm knows of Buddies: null with the Swarm off or a daemon from before `buddyCheck`. */
+export const SWARM_UNSURE = 'Harness could not reach this computer\'s Swarm just now, so it did not run this. Try again in a moment.'
+
+/**
+ * Whether this computer's Swarm knows of Buddies: null with the Swarm off (core/serviceHost.ts answers a service off for good
+ * as unavailable, not to be retried) or a daemon from before `buddyCheck` (no Swarm service, or one that reads it as an agent's
+ * request without a Swarm: invalid). Anything else, a failure or no answer in time, throws [SWARM_UNSURE]: read as "off", it
+ * skipped the Buddy check and Windows' backstop (re-check 2 of #2093 at 0648a8690).
+ */
 export async function buddiesHere(daemon: { request: (type: string, payload?: Record<string, unknown>, ms?: number) => Promise<Record<string, unknown>> }): Promise<boolean | null> {
-  const answer = await daemon.request('super_tabs', { action: 'buddyCheck' }, 10_000)
-  return answer.ok === true ? answer.buddiesHere === true : null
+  const answer = await daemon.request('super_tabs', { action: 'buddyCheck' }, 10_000).catch(() => { throw new Error(SWARM_UNSURE) })
+  if (answer.ok === true) return answer.buddiesHere === true
+  if (answer.error === 'UNSUPPORTED' || answer.error === 'INVALID_REQUEST' || answer.error === 'SERVICE_UNAVAILABLE' && answer.retryable === false) return null
+  throw new Error(SWARM_UNSURE)
 }
 
 /** An agent's shell on Windows, as it marks itself: its Harness pane, or the engine's own variables (`outsideCaller`). */
@@ -36,7 +45,8 @@ export async function buddyRefusal(deps: {
   let daemon: Awaited<ReturnType<typeof openDaemon>>
   try { daemon = await (deps.open ?? openDaemon)(where) } catch { return null }
   try {
-    const buddies = await buddiesHere(daemon)
+    let buddies: boolean | null
+    try { buddies = await buddiesHere(daemon) } catch { return SWARM_UNSURE }
     if (buddies === null) return null
     if (platform === 'win32') return buddies && agentShell(env) ? WINDOWS_BUDDY : null
     const running = runningPane(env, deps.probe, platform)

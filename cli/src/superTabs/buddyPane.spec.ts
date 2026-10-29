@@ -84,3 +84,18 @@ it('refuses a pane whose harness\'s own pane, as the daemon reads it, is not amo
   expect(await buddyRefusal(d.deps, 'darwin'))
     .toBe('This command does not run in the Harness pane it names, so it did not run. Run it as your harness gave it, in its own pane.')
 })
+
+// Re-check 2 of #2093 at 0648a8690 (minor 8): a failed Swarm answer read as "the Swarm is off", which skipped the Buddy check
+// and Windows' backstop. Off is only a daemon without the request, or a Swarm switched off for good.
+it('refuses when the Swarm cannot say whether it is on, on every platform', async () => {
+  const UNSURE = 'Harness could not reach this computer\'s Swarm just now, so it did not run this. Try again in a moment.'
+  for (const platform of ['darwin', 'win32'] as const) {
+    for (const answer of [{ error: 'SERVICE_FAILED', service: 'superTabs' }, { error: 'SERVICE_UNAVAILABLE', service: 'superTabs', retryable: true },
+      { error: 'INTERNAL' }, { ok: false }]) {
+      expect(await buddyRefusal({ ...daemon(() => answer).deps, env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' } }, platform)).toBe(UNSURE)
+    }
+    // No answer in time.
+    const d = daemon(() => { throw new Error('Harness did not answer super_tabs in time. Try again.') })
+    expect(await buddyRefusal({ ...d.deps, env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' } }, platform)).toBe(UNSURE)
+  }
+})
