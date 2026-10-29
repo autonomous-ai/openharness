@@ -413,6 +413,13 @@ class ConversationServer {
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
   int refuseStatus = 409;
+
+  /// How many re-sends of an operation already answered lose their reply
+  /// too, as a second dropped connection does.
+  int loseResentReplies = 0;
+
+  /// Machines whose `machine.contribute` the server refuses, with its message.
+  final refuseContributions = <String, String>{};
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
@@ -751,8 +758,23 @@ class ConversationServer {
           statusCode: refuseStatus,
         );
       }
+      if (body['command']
+          case {'type': 'machine.contribute', 'machineId': final String id}
+          when refuseContributions.containsKey(id)) {
+        throw SuperTabFailure(
+          'MACHINE_NOT_FOUND',
+          refuseContributions[id]!,
+          statusCode: refuseStatus,
+        );
+      }
       final operationId = body['operationId'] as String;
-      if (receipts[operationId] case final receipt?) return receipt;
+      if (receipts[operationId] case final receipt?) {
+        if (loseResentReplies > 0) {
+          loseResentReplies--;
+          throw StateError('Connection lost again');
+        }
+        return receipt;
+      }
       final tick = parts.clock;
       final command = body['command'] as Map;
       final output = <String, dynamic>{};
