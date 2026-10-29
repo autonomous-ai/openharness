@@ -298,7 +298,11 @@ abstract final class AppPalette {
   /// Slightly deeper in dark, where the tile stands on charcoal (2.63:1 against
   /// the panel) rather than on white (5.26:1).
   static Color get avatarFill =>
-      AppTheme.pick(const Color(0xFF5369AC), const Color(0xFF4B5F9B));
+      AppTheme.pick(const Color(0xFF5369AC), avatarFillDark);
+
+  /// [avatarFill] in the dark theme. A person in a Swarm chat wears it in
+  /// both themes.
+  static const avatarFillDark = Color(0xFF4B5F9B);
 
   /// The colours a member's circle is drawn in, one per person — see
   /// `memberAvatarSlot`, which decides which of them an address takes.

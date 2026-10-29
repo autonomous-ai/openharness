@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_face.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
@@ -126,6 +127,60 @@ void main() {
     );
     expect(find.text('🚀'), findsOneWidget);
     expect(find.text('T'), findsNothing);
+  });
+
+  testWidgets('a chat avatar keeps the colour it always had, in both themes', (
+    tester,
+  ) async {
+    // The chat's colours before they came from the member palette: the PM's
+    // blue, then the six an agent takes by its id; a person's one fill.
+    const agents = [
+      Color(0xFF1D5BD6),
+      Color(0xFF0F766E),
+      Color(0xFF6D28D9),
+      Color(0xFFA65A08),
+      Color(0xFFBE123C),
+      Color(0xFF15803D),
+      Color(0xFF4E5D78),
+    ];
+    const person = Color(0xFF4B5F9B);
+    Color? fill() =>
+        (tester
+                    .widget<Container>(
+                      find.descendant(
+                        of: find.byType(SwarmChatAvatar),
+                        matching: find.byWidgetPredicate(
+                          (w) =>
+                              w is Container &&
+                              (w.decoration as BoxDecoration?)?.shape ==
+                                  BoxShape.circle,
+                        ),
+                      ),
+                    )
+                    .decoration
+                as BoxDecoration)
+            .color;
+    final previous = AppTheme.brightness.value;
+    addTearDown(() => AppTheme.brightness.value = previous);
+    for (final brightness in Brightness.values) {
+      AppTheme.brightness.value = brightness;
+      // 'a' to 'f' land on each of the six agent colours once.
+      for (final id in ['a', 'b', 'c', 'd', 'e', 'f', 'agent-lead']) {
+        await show(tester, SwarmChatAvatar(name: 'River', id: id, agent: true));
+        final sum = id.codeUnits.fold(0, (a, b) => a + b);
+        expect(fill(), agents[1 + sum % 6], reason: '$id, $brightness');
+      }
+      await show(
+        tester,
+        const SwarmChatAvatar(name: 'River', id: 'a', agent: true, pm: true),
+      );
+      expect(fill(), agents.first, reason: 'the PM, $brightness');
+      await show(
+        tester,
+        const SwarmChatAvatar(name: 'Tony', id: 'person-1', agent: false),
+      );
+      expect(fill(), person, reason: 'a person, $brightness');
+    }
   });
 
   testWidgets('a status shows its emoji and is read with the name', (

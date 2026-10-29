@@ -447,8 +447,13 @@ class SwarmChatAvatar extends StatelessWidget {
 
   static const double size = 32;
 
-  /// The member palette, its first hue (blue) kept for the [pm].
-  static const _agents = AppPalette.avatarPalette;
+  /// The member palette's hues in the order the chat has always given them,
+  /// so no one's colour moves: the [pm]'s blue first, then the six an agent
+  /// takes by its id (blue, teal, violet, amber, rose, green, slate).
+  static final _agents = [
+    for (final hue in const [0, 1, 5, 3, 4, 2, 7])
+      AppPalette.avatarPalette[hue],
+  ];
 
   final String name, id;
   final bool agent;
@@ -465,7 +470,7 @@ class SwarmChatAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fill = !agent
-        ? AppPalette.avatarFill
+        ? AppPalette.avatarFillDark
         : pm
         ? _agents.first
         : _agents[1 +

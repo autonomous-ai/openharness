@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_devices_page.dart';
+import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_models_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -202,6 +203,47 @@ void main() {
       expect(key('swarm-drawer-devices'), findsNothing, reason: 'it closed');
       expect(find.byType(SwarmDevicesPage), findsOneWidget);
       expect(find.text('Studio Mac'), findsOneWidget);
+    });
+
+    testWidgets('a drawer too short for its rows scrolls Your devices out '
+        'from under Settings', (tester) async {
+      await pump(
+        tester,
+        backend(),
+        home: SwarmPage(onSettings: (_) {}),
+        computers: _Computers(const [(name: 'Studio Mac', away: false)]),
+      );
+      // A phone shorter than the drawer's rows.
+      tester.view.physicalSize = const Size(1179, 1500);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-menu'));
+      await tester.pumpAndSettle();
+      final settings = tester.getRect(key('swarm-drawer-settings'));
+      final devices = key('swarm-drawer-devices');
+      // Below the list's end it is not even built yet.
+      expect(
+        devices.evaluate().isEmpty ||
+            tester.getRect(devices).bottom > settings.top,
+        isTrue,
+        reason: 'under the pinned Settings row at first',
+      );
+
+      await tester.scrollUntilVisible(
+        devices,
+        100,
+        scrollable: find
+            .descendant(
+              of: find.byType(SwarmDrawer),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.getRect(devices).bottom, lessThanOrEqualTo(settings.top));
+      await tester.tap(devices);
+      await tester.pumpAndSettle();
+      expect(find.byType(SwarmDevicesPage), findsOneWidget);
     });
   });
 
