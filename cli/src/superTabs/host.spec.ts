@@ -1078,11 +1078,13 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   it.each([
     ['someone else\'s machine', { ...buddyAgent, machineOwnerId: 'sam' }],
     ['a machine its read names no owner of', { ...buddyAgent, machineOwnerId: undefined }],
-  ])('lists its files but no Artifact link when it runs on %s', async (_, agent) => {
+  ])('lists its files but no Artifact link when it runs on %s, and has it tell its person so (Lead, 10-30)', async (_, agent) => {
     const { host, shot, delivered } = buddyOn({}, { agents: [agent] })
     await host.tick()
     expect(delivered[0]!.list).toMatchObject({ files: [{ path: shot }], links: [] })
-    expect(delivered[0]!.text).not.toContain('Artifact links your owner sent')
+    expect(delivered[0]!.text).not.toContain('Artifact links your owner sent here:')
+    expect(delivered[0]!.text).toContain(`Your owner sent Artifact links (${LINK}), but you run on a computer that is not theirs, so you cannot `
+      + 'open them here. Tell them so in one line, and ask for screenshots or the text instead.')
   })
 
   it('lists a message\'s files alone, and names no Artifact link when it sent none', async () => {
