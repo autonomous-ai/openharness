@@ -24,7 +24,7 @@ import 'exit_app.dart';
 import 'new_device_banner.dart';
 import 'phone_navigation.dart';
 import 'phone_shell_scope.dart';
-import 'settings_page.dart' show openPhoneSettings;
+import 'settings_page.dart' show SettingsPage, openPhoneSettings;
 import 'voice_input_controller.dart';
 import 'voice_input_scope.dart';
 import 'welcome/connect_code.dart';
@@ -537,6 +537,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               openAgent: _openAgentRequest,
             ),
             swarm: (_) => SwarmTabsPage(
+              // The phone's Settings, as the You tab.
+              settings: (_) => SettingsPage(notifier: widget.notifier),
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier),
             ),

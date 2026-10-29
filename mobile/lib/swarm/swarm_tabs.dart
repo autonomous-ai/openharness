@@ -8,6 +8,7 @@ import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 
+import 'swarm_needs_page.dart';
 import 'swarm_page.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
@@ -57,9 +58,15 @@ class SwarmTabEntry {
 }
 
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
-/// here, one entry each. [onSettings] opens Settings over them.
+/// here, one entry each. Each opens a screen the phone already has: Home,
+/// Needs you with what waits on the person counted, and [settings], the
+/// phone's Settings, as You. [onSettings] opens Settings over Home.
+///
+/// Buddies is not on the bar until its screen comes (part b of direction
+/// C): main has no list of Buddies, each is in its project.
 List<SwarmTabEntry> swarmTabs({
   void Function(BuildContext context)? onSettings,
+  required WidgetBuilder settings,
 }) => [
   SwarmTabEntry(
     tab: SwarmTab.home,
@@ -67,29 +74,20 @@ List<SwarmTabEntry> swarmTabs({
     icon: LucideIcons.house300,
     screen: (_) => SwarmPage(onSettings: onSettings),
   ),
-  const SwarmTabEntry(
-    tab: SwarmTab.buddies,
-    label: 'Buddies',
-    icon: LucideIcons.messageCircle300,
-    screen: _buddiesLater,
-  ),
-  const SwarmTabEntry(
+  SwarmTabEntry(
     tab: SwarmTab.activity,
     label: 'Activity',
     icon: LucideIcons.bell300,
-    screen: _activityLater,
+    screen: (_) => const SwarmNeedsPage(),
+    badge: (session) => (count: session.inbox.needs.length, warn: true),
   ),
-  const SwarmTabEntry(
+  SwarmTabEntry(
     tab: SwarmTab.you,
     label: 'You',
     icon: LucideIcons.circleUser300,
-    screen: _youLater,
+    screen: settings,
   ),
 ];
-
-Widget _buddiesLater(BuildContext context) => const _Later('Buddies');
-Widget _activityLater(BuildContext context) => const _Later('Activity');
-Widget _youLater(BuildContext context) => const _Later('You');
 
 /// Opens [tab] of the tabs [context] is under; false under none, as on a
 /// page pushed over them.
@@ -109,10 +107,18 @@ bool showSwarmTab(BuildContext context, SwarmTab tab) {
 /// Back on another tab goes to Home first; at Home, and while Harness covers
 /// the tabs, back is not the tabs'.
 class SwarmTabsPage extends StatefulWidget {
-  const SwarmTabsPage({super.key, this.onSettings, this.tabs});
+  const SwarmTabsPage({
+    super.key,
+    this.onSettings,
+    required this.settings,
+    this.tabs,
+  });
 
-  /// Settings over the tabs.
+  /// Settings over Home, from its drawer.
   final void Function(BuildContext context)? onSettings;
+
+  /// The phone's Settings, as the You tab.
+  final WidgetBuilder settings;
 
   /// The tabs, in the bar's order; [swarmTabs] when null.
   final List<SwarmTabEntry>? tabs;
@@ -123,7 +129,8 @@ class SwarmTabsPage extends StatefulWidget {
 
 class _SwarmTabsPageState extends State<SwarmTabsPage> {
   late final List<SwarmTabEntry> _tabs =
-      widget.tabs ?? swarmTabs(onSettings: widget.onSettings);
+      widget.tabs ??
+      swarmTabs(onSettings: widget.onSettings, settings: widget.settings);
 
   late SwarmTab _open = _tabs.first.tab;
 
@@ -315,78 +322,6 @@ class _TabButton extends StatelessWidget {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// A tab's title at the top of its screen, in the terminal's face, with
-/// maybe one button at its end ([trailing], a [SwarmIconButton]).
-class SwarmTabHeader extends StatelessWidget {
-  const SwarmTabHeader(this.title, {super.key, this.trailing});
-
-  final String title;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: 52),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpace.screenInset,
-          AppSpace.xs,
-          AppSpace.xs,
-          AppSpace.xs,
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                key: const ValueKey('swarm-title'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Tty.of(context)
-                    .style(size: 20, weight: FontWeight.w700)
-                    .copyWith(height: 1.2),
-              ),
-            ),
-            ?trailing,
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A tab whose screen is still to come: its title, and a line that says so.
-class _Later extends StatelessWidget {
-  const _Later(this.title);
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return SafeArea(
-      bottom: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SwarmTabHeader(title),
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.screenInset,
-              vertical: AppSpace.s,
-            ),
-            child: Text(
-              'Coming soon.',
-              style: AppType.body(color: AppPalette.textSecondary),
-            ),
-          ),
-        ],
       ),
     );
   }

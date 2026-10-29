@@ -6,25 +6,37 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
+import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
+import '../phone_edge/edge_fixture.dart' show edgeApp;
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of Swarm's tab bar, direction C, as Tony's prototype
-/// C1 draws it (2026-10-30): Swarm Home over the bar with a count on
-/// Buddies and Activity, a tab still to come, and each tab's touch area
-/// outlined, on a 390-point phone in both phone themes, from made-up Swarm
-/// data only, to the folder `SWARM_TABS_SHOTS` names.
+/// C1 draws it (2026-10-30), with the tabs main has screens for: Swarm Home
+/// over the bar with what waits on the person counted on Activity, each
+/// tab's touch area outlined, Activity's Needs you, and You's Settings, on a
+/// 390-point phone in both phone themes, from made-up data only, to the
+/// folder `SWARM_TABS_SHOTS` names.
 final shots = Platform.environment['SWARM_TABS_SHOTS'];
 void main() {
   setUpAll(() async {
     if (shots == null || !Platform.isMacOS) return;
+    PackageInfo.setMockInitialValues(
+      appName: 'Harness',
+      packageName: 'ai.autonomous.harness',
+      version: '1.2.3',
+      buildNumber: '456',
+      buildSignature: '',
+    );
     final sf = ByteData.sublistView(
       await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
     );
@@ -163,25 +175,13 @@ void main() {
         features: features,
         readMarks: MemoryKeyValueStore(),
       )..foreground = false;
-      // The real tabs; the counts (b) will give Buddies and Activity, made
-      // up here: two unread Buddy chats, and what waits on the person.
-      final tabs = [
-        for (final real in swarmTabs(onSettings: (_) {}))
-          SwarmTabEntry(
-            tab: real.tab,
-            label: real.label,
-            icon: real.icon,
-            screen: real.screen,
-            badge: switch (real.tab) {
-              SwarmTab.buddies => (_) => (count: 2, warn: false),
-              SwarmTab.activity => (session) => (
-                count: session.inbox.needs.length,
-                warn: true,
-              ),
-              _ => null,
-            },
-          ),
-      ];
+      // The phone's own Settings as You, for a made-up person.
+      final app = edgeApp()
+        ..currentUser = const CurrentUserProfile(
+          id: 'u',
+          name: 'Ada Lovelace',
+          email: 'ada@example.com',
+        );
       final boundary = GlobalKey();
       final targets = ValueNotifier(<Rect>[]);
       await tester.pumpWidget(
@@ -207,7 +207,10 @@ void main() {
                 ],
               ),
             ),
-            home: SwarmTabsPage(tabs: tabs),
+            home: SwarmTabsPage(
+              onSettings: (_) {},
+              settings: (_) => SettingsPage(notifier: app),
+            ),
           ),
         ),
       );
@@ -224,7 +227,7 @@ void main() {
       });
       await capture('home');
       targets.value = [
-        for (final tab in SwarmTab.values)
+        for (final tab in [SwarmTab.home, SwarmTab.activity, SwarmTab.you])
           tester.getRect(find.byKey(ValueKey('swarm-tab-${tab.name}'))),
       ];
       await tester.pump();
@@ -233,7 +236,13 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('swarm-tab-activity')));
       await tester.pumpAndSettle();
       await capture('activity');
+      await tester.tap(find.byKey(const ValueKey('swarm-tab-you')));
+      await tester.pump(const Duration(seconds: 1));
+      await capture('you');
       await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 3));
+      app.dispose();
+      await tester.pump(const Duration(seconds: 30));
       host.dispose();
       account.dispose();
       targets.dispose();
