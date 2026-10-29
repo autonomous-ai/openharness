@@ -2,10 +2,13 @@ import type { EngineLaunch } from '../facets/launch.js'
 
 const permissionModes = {
   auto: ['--approve-for-me'],
-  // A Buddy's (superTabs/start.ts): it reads in the sandbox, and Codex asks the person at its terminal before anything
-  // outside it, the person's own config notwithstanding. Ahead of readOnly, whose flags it contains: a process's argv is
-  // read back as the first mode it matches (lib/processTable.ts), so a relaunched Buddy keeps asking.
-  readOnlyAsk: ['--ask-for-approval', 'on-request', '--sandbox', 'read-only'],
+  // A Buddy's (superTabs/start.ts): it reads in the sandbox, and an approval to go outside it goes to the person at its
+  // terminal, never to Codex's own reviewer, whatever their config.toml says. Their rules files still apply: a command an
+  // `allow` rule names runs outside the sandbox unasked, which is why the backend refuses Codex Buddies for now (security
+  // review 1 of #2087). Ahead of readOnly, whose flags it contains: a process's argv is read back as the first mode it
+  // matches (lib/processTable.ts), so a relaunched Buddy keeps this mode. A Codex without its flag is never relaunched
+  // without it (lib/engineLaunch.ts KEPT_PERMISSION_MODES).
+  readOnlyAsk: ['--ask-for-approval', 'on-request', '--sandbox', 'read-only', '-c', 'approvals_reviewer="user"'],
   readOnly: ['--sandbox', 'read-only'],
   ask: [],
   full: ['--dangerously-bypass-approvals-and-sandbox'],

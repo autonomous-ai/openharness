@@ -140,7 +140,7 @@ describe('discovery', () => {
     })
 
     it('tells a Codex Buddy\'s read-only asking mode from plain read only, so a relaunch keeps it asking', () => {
-      expect(permissionModeFromArgv('codex', 'codex --ask-for-approval on-request --sandbox read-only -c tui.fullscreen_transcript=false'))
+      expect(permissionModeFromArgv('codex', 'codex --ask-for-approval on-request --sandbox read-only -c approvals_reviewer="user" -c tui.fullscreen_transcript=false'))
         .toBe('readOnlyAsk')
       expect(permissionModeFromArgv('codex', 'codex --sandbox read-only')).toBe('readOnly')
     })

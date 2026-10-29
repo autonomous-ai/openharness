@@ -157,6 +157,13 @@ function fresh() {
 }
 
 describe('adding a Buddy', () => {
+  it('is refused on Codex for now, saying why, and leaves the chat and starts as they were (security review 1 of #2087)', () => {
+    const f = fresh()
+    const starts = f.state.starts?.length ?? 0, groups = f.state.conversations.length
+    expect(() => addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')).toThrow('A Codex Buddy is not available yet')
+    expect([f.state.starts?.length ?? 0, f.state.conversations.length]).toEqual([starts, groups])
+  })
+
   it('is refused while Buddies are off', () => {
     const f = fresh()
     f.run({ type: 'tab.buddies', enabled: false })
@@ -165,14 +172,14 @@ describe('adding a Buddy', () => {
 
   it('opens the person\'s Buddy chat, read by them alone, and starts the Buddy on the machine they chose', () => {
     const f = fresh()
-    const added = addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')
+    const added = addBuddy(f, peer, f.app.projectId, 'peer-mac')
     const chat = group(f, added.result.conversationId as string)
     expect(chat).toMatchObject({ kind: 'buddy', projectId: f.app.projectId, leadId: null, agentIds: [], archived: false,
       audience: { people: [{ id: 'peer', generation: 'first' }] } })
     expect(added.messages).toEqual([])
     const start = f.state.starts!.find(s => s.id === added.result.startId)!
     expect(start).toMatchObject({ contributorId: 'peer', machineOwnerId: 'peer', poolGeneration: 'g1', dispatched: false, error: null })
-    expect(start.request).toMatchObject({ conversationId: chat.id, machineId: 'peer-mac', engine: 'codex', cwd: `/swarm/${f.app.projectId}`,
+    expect(start.request).toMatchObject({ conversationId: chat.id, machineId: 'peer-mac', engine: 'claude', cwd: `/swarm/${f.app.projectId}`,
       worktree: true, name: 'peer\'s Buddy', buddyOf: { personId: 'peer', generation: 'first' } })
     expect(start.request.role).toBeUndefined()
   })
@@ -586,13 +593,11 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
   const add = (f: ReturnType<typeof setup>, machineId: string, owner: string, engine: 'claude' | 'codex' = 'claude', projectId = f.app.projectId) =>
     f.run({ type: 'buddy.create', projectId, machineId, engine }, peer, contribution(f, machineId, owner))
 
-  it('is only its owner\'s own machine, for Claude and Codex alike: never one shared with them', () => {
+  it('is only its owner\'s own machine: never one shared with them', () => {
     const f = fresh()
     machine(f, 'owner-mac', 'owner')
-    for (const engine of ['claude', 'codex'] as const) {
-      expect(() => add(f, 'owner-mac', 'owner', engine)).toThrow('A Buddy runs only on your own machine')
-    }
-    expect(add(f, 'peer-mac', 'peer', 'codex').result.startId).toBeTruthy()
+    expect(() => add(f, 'owner-mac', 'owner')).toThrow('A Buddy runs only on your own machine')
+    expect(add(f, 'peer-mac', 'peer').result.startId).toBeTruthy()
   })
 
   it('is never a Harness Team account, not even the one on its owner\'s own Mac', () => {

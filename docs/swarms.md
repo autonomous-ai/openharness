@@ -196,15 +196,20 @@ The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turni
 any still starting, and stops their posts. Their chats stay for their owners to read.
 
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.
 - A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
-  file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
-  full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the
+  file editing is turned off, and the files in its own copy of the project are read-only. No Buddy gets the
   Harness GitHub App's token.
+- The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
+  asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
+  `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
+  it has a Codex home of its own. One started before the refusal launches in Codex's read-only sandbox with approvals
+  sent to the person, never with full permissions; a Codex too old for that mode keeps it stopped rather than
+  relaunching it without.
   Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
   broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.

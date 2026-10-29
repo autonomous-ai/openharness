@@ -14,6 +14,13 @@ import 'model.dart';
 /// The engines a Buddy runs on (spec: Buddies, 10-28).
 const kBuddyEngines = {'claude': 'Claude', 'codex': 'Codex'};
 
+/// Engines a Buddy cannot run on yet, and why, in the backend's own words
+/// (`CODEX_BUDDY_REFUSAL`, backend superTabs/commands.ts): the dialog offers
+/// them turned off, with this beside them (security review 1 of #2087).
+const kBuddyEngineRefusals = {
+  'codex': 'A Codex Buddy is not available yet: Codex would run some commands outside its sandbox without asking. Choose Claude Code.',
+};
+
 /// An engine as people read it: "Claude", "Codex".
 String buddyEngineName(String engine) =>
     kBuddyEngines[engine] ??
@@ -247,7 +254,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                             Flexible(
                               child: RadioListTile<String>(
                                 value: key,
-                                enabled: !_busy,
+                                enabled:
+                                    !_busy &&
+                                    !kBuddyEngineRefusals.containsKey(key),
                                 dense: true,
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(value),
@@ -259,6 +268,16 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
+              for (final refusal in kBuddyEngineRefusals.values) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: _labelWidth),
+                  child: Text(
+                    refusal,
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  ),
+                ),
+              ],
               if (_error case final error?) ...[
                 const SizedBox(height: 12),
                 Text(error, style: DesktopChrome.control()),

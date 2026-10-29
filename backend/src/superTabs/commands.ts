@@ -32,6 +32,8 @@ const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
 const reason = z.string().trim().min(1).max(300)
 const text = z.string().trim().min(1).max(32_000)
+/** Why a Codex Buddy is refused for now (buddy.create below); Desktop shows the same words beside a disabled Codex. */
+export const CODEX_BUDDY_REFUSAL = 'A Codex Buddy is not available yet: Codex would run some commands outside its sandbox without asking. Choose Claude Code.'
 const swarmEngine = z.string().min(1).max(80).refine((engine): boolean => engine === 'claude' || engine === 'codex', 'A Swarm agent runs only Claude Code or Codex.')
 const configuration = z.object({
   engine: z.string().min(1).max(80), model: z.string().max(200).nullable(),
@@ -1380,6 +1382,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      // Codex runs a command its rules files allow outside its sandbox without asking, and those are the person's own and
+      // Harness's, shared by all their Codex sessions: a Buddy could run harness new or send, or anything they once told
+      // Codex to always allow. Refused here, so every machine refuses whatever its CLI, until a Buddy has a Codex home of
+      // its own (security review 1 of #2087). Desktop names this reason beside a disabled Codex.
+      if (command.engine === 'codex') fail('BUDDY_ENGINE', CODEX_BUDDY_REFUSAL, 403)
       const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
       const chatId = buddyChatId(project.id, me)
       // A down Buddy is replaced (Desktop's Start again, review of #1992): its session closes in this same command, so a

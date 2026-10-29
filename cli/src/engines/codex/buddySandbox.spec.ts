@@ -63,6 +63,13 @@ describe.skipIf(!hasCodex)('the sandbox a Codex Buddy launches in, with the real
     expect(sandboxMode).toBe('read-only')
   })
 
+  it('takes the mode\'s own config overrides (approvals to the person, never Codex\'s reviewer)', async () => {
+    const overrides = buddyFlags.flatMap((flag, i) => buddyFlags[i - 1] === '-c' ? ['-c', flag] : [])
+    expect(overrides).toEqual(['-c', 'approvals_reviewer="user"'])
+    const taken = await run('codex', ['sandbox', ...overrides, '--', 'echo', 'ran'], repo, env)
+    expect([taken.status, taken.output.trim()]).toEqual([0, 'ran'])
+  })
+
   it('reads the code and its history', async () => {
     const log = await sandboxed('git', 'log', '--oneline')
     expect([log.status, log.output]).toEqual([0, expect.stringContaining('first commit')])
