@@ -51,6 +51,17 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     return refresh();
   }
 
+  /// Forgets the board: no project is open, or the reader lost it. A read in
+  /// flight is dropped, so its answer never shows.
+  void clear() {
+    _projectId = null;
+    _read++;
+    board = null;
+    error = null;
+    hide();
+    _notify();
+  }
+
   /// Stops the refresh while Humans are not shown; the board stays.
   void hide() {
     _timer?.cancel();
@@ -74,7 +85,9 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
     } on SuperTabFailure catch (failure) {
       if (read != _read) return;
       // A server from before the leaderboard has none: Humans just list names.
-      if (failure.statusCode == 404) {
+      // A project the reader may no longer read is forgotten alike, its
+      // numbers and the server's words about it.
+      if (failure.statusCode == 404 || failure.statusCode == 403) {
         board = null;
         error = null;
       } else {
@@ -95,6 +108,47 @@ class SuperTabLeaderboardReader extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _timer?.cancel();
+    super.dispose();
+  }
+}
+
+/// The board of the open conversation's project, read once for the right
+/// pane's members and the sidebar's Models, so both show one project and one
+/// week. No project open, or the project gone from the Swarm the reader
+/// sees, clears it.
+class SuperTabProjectBoard extends SuperTabLeaderboardReader {
+  /// The board moves only as work ships, is answered or runs: every five
+  /// minutes is fresh enough, and keeps every open window's reads rare.
+  SuperTabProjectBoard(
+    this.controller, {
+    super.every = const Duration(minutes: 5),
+  }) : super(tabId: controller.tabId, request: controller.request) {
+    controller.addListener(_follow);
+    _follow();
+  }
+
+  final SuperTabController controller;
+  String? _following;
+
+  /// The project whose board this is; null while none is open.
+  String? get projectId => _following;
+
+  void _follow() {
+    final projectId = controller.snapshot
+        ?.projectFor(controller.selectedId)
+        ?.id;
+    if (projectId == _following) return;
+    _following = projectId;
+    if (projectId == null) {
+      clear();
+    } else {
+      unawaited(show(projectId));
+    }
+  }
+
+  @override
+  void dispose() {
+    controller.removeListener(_follow);
     super.dispose();
   }
 }
