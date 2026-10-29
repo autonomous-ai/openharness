@@ -328,7 +328,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
     }
     if (knownDevices?.has(msg.deviceId)) {
       if (msg.lastSeenAt) knownDevices.set(msg.deviceId, msg.lastSeenAt)
-    } else if (knownDevices) {
+    } else if (knownDevices || deviceBindingsRead) {
+      // A device the copy does not hold, or a read under way that may predate it: read the bindings (again).
       void readDeviceBindings().catch((err) => logger.warn('web-ws device bindings read failed', { userId: user.sub, error: String(err) }))
     }
     sendDeviceStatuses([{ deviceId: msg.deviceId, online: msg.online === true, ...(msg.lastSeenAt ? { lastSeenAt: msg.lastSeenAt } : {}) }])

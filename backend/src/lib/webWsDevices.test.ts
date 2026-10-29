@@ -148,6 +148,22 @@ describe('a web socket\'s device feed', () => {
     expect(lastPicture(ws)).toEqual([{ deviceId: 'dial', online: false, lastSeenAt: null }])
   })
 
+  it('lists a device that reported while the first read was under way', async () => {
+    let answer: (rows: unknown) => void = () => {}
+    m.deviceFindMany.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    const ws = await opens()
+    // Paired after that read began: the read may not hold it.
+    m.deviceFindMany.mockResolvedValue(bindings({ deviceId: 'dial' }, { deviceId: 'new' }))
+    push({ deviceId: 'new', online: true })
+    answer(bindings({ deviceId: 'dial' }))
+    await flush()
+    await tick()
+    expect(lastPicture(ws)).toEqual([
+      { deviceId: 'dial', online: false, lastSeenAt: null },
+      { deviceId: 'new', online: false, lastSeenAt: null },
+    ])
+  })
+
   it('keeps the last seen time a device reported going offline', async () => {
     const ws = await opens()
     push({ deviceId: 'dial', online: false, lastSeenAt: '2026-10-29T04:00:00.000Z' })
