@@ -58,7 +58,7 @@ static char got_ids[HT_SUPERTABS_MAX][ID_MAX]; static int got_id_n;
 static ht_supertab_t got_card;
 static char got_tab[ID_MAX], got_lead[ID_MAX], got_text[2048], got_agent[ID_MAX], got_request[80], got_swarm[80];
 static char got_chat_id[ID_MAX]; static ht_chat_kind_t got_chat;
-static uint32_t got_at; static bool got_none, got_stuck, got_text_null;
+static uint32_t got_at; static bool got_none, got_stuck, got_text_null, got_thread;
 static void ui_supertabs_ids(const char ids[][ID_MAX],int n) {
     ids_calls++;got_id_n=n;memcpy(got_ids,ids,(size_t)n*ID_MAX);
 }
@@ -68,9 +68,9 @@ static void ui_supertab_recap(const char *tab,const char *lead,const char *chat_
     snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);
     snprintf(got_text,sizeof got_text,"%s",text?text:"");got_at=at;got_none=none;
 }
-static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *text,uint32_t at) {
+static bool ui_supertab_notice(const char *tab,const char *lead,ht_chat_kind_t chat,const char *chat_id,const char *text,uint32_t at,bool thread) {
     notice_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);got_chat=chat;
-    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_text,sizeof got_text,"%s",text);got_at=at;return beep_next;
+    snprintf(got_chat_id,sizeof got_chat_id,"%s",chat_id);snprintf(got_text,sizeof got_text,"%s",text);got_at=at;got_thread=thread;return beep_next;
 }
 static void ui_supertab_notice_read(const char *tab,const char *lead,const char *chat_id) {
     read_calls++;snprintf(got_tab,sizeof got_tab,"%s",tab);snprintf(got_lead,sizeof got_lead,"%s",lead);
@@ -169,7 +169,11 @@ int main(void) {
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m9\",\"text\":\"Ready to ship.\",\"at\":1792560000}");
     beep_next=false;
     assert(notice_calls==1 && beeps==beeps_before+1 && !strcmp(got_tab,"s1") && !strcmp(got_lead,"L2") && got_chat==HT_CHAT_PM);
-    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u);
+    assert(!strcmp(got_chat_id,"pm1") && !strcmp(got_text,"Ready to ship.") && got_at==1792560000u && !got_thread);
+    // A thread reply says so: the UI alerts for it even with its chat on the face (the desktop shows threads collapsed).
+    feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chat\":\"pm\",\"chatId\":\"pm1\",\"id\":\"m11\",\"text\":\"In the thread.\",\"at\":6,\"thread\":true}");
+    assert(notice_calls==2 && got_thread && !strcmp(got_text,"In the thread."));
+    notice_calls=1;
     feed(handle_supertab_notice,"{\"tab\":\"s1\",\"lead\":\"L1\",\"chat\":\"lead\",\"chatId\":\"lead-web\",\"id\":\"m10\",\"text\":\"Done.\",\"at\":5}");
     assert(notice_calls==2 && got_chat==HT_CHAT_LEAD && beeps==beeps_before+1);
     feed(handle_supertab_notice_read,"{\"tab\":\"s1\",\"lead\":\"L2\",\"chatId\":\"pm1\"}");

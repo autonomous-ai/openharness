@@ -85,6 +85,16 @@ it('posts a reply to one message with --reply-to, and rejects a bad id', () => {
     expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
   }
 })
+it('shows a thread reply in the chat too with --also-in-chat, only with --reply-to', () => {
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'm1', '--also-in-chat'], where).payload.command)
+    .toMatchObject({ type: 'message.send', replyTo: 'm1', alsoSend: true })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--also-in-chat', '--reply-to', 'm1', '--attach', 'a.png'], where).payload)
+    .toMatchObject({ attach: [resolve('a.png')], command: { replyTo: 'm1', alsoSend: true } })
+  expect(parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', '--reply-to', 'm1'], where).payload.command).not.toHaveProperty('alsoSend')
+  for (const tail of [['--also-in-chat'], ['--reply-to', 'm1', '--also-in-chat', '--also-in-chat'], ['--also-in-chat', 'm1']]) {
+    expect(() => parseSuperTabArgs([...prefix, 'post', 'lead', 'Ready', 'op-1', ...tail], where)).toThrow('harness super-tab')
+  }
+})
 it('parses repeated --attach, allows empty text with a file, and refuses empty text alone', () => {
   expect(parseSuperTabArgs([...prefix, 'post', 'lead', '', 'op-1', '--attach', 'a.png', '--reply-to', 'm1', '--attach', 'b.log'], where).payload)
     .toMatchObject({ attach: [resolve('a.png'), resolve('b.log')], command: { text: '', replyTo: 'm1' } })

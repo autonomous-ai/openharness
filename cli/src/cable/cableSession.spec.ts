@@ -4380,6 +4380,27 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    // A reply in a collapsed thread is not on the desktop's screen, so the chat being open does not read it (Lead's ruling,
+    // 10-29): the dial alerts, and says it is a thread reply so the dial alerts even with that chat on its face.
+    it('sends a thread reply\'s notice while its chat is open on the desktop, and opening that chat does not read it', async () => {
+      const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])], open: { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false } }
+      const { session, port } = await connect(cardHost(state))
+      try {
+        port.say(ROUND)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        state.cards = [card('st1', [lead(1, { chat: pmChat, notice: notice('n1', { thread: true }) })])]
+        await session.syncSwarmCards()
+        await vi.waitFor(() => expect(ofType(port, 'supertab.notice')).toEqual([{ ...noticeFrame('n1'), thread: true }]))
+        state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'g1', fromDevice: false }
+        await session.syncSwarmCards()
+        state.open = { superTabId: 'st1', projectId: 'proj1', conversationId: 'pm1', fromDevice: false }
+        await session.syncSwarmCards()
+        await new Promise((r) => setTimeout(r, 350))
+        expect(ofType(port, 'supertab.notice.read')).toEqual([])
+        expect(ofType(port, 'supertab.notice')).toHaveLength(1)
+      } finally { await session.stop() }
+    })
+
     it('sends notice.read when the desktop opens a chat with a sent notice', async () => {
       const state: Parameters<typeof cardHost>[0] = { cards: [card('st1', [lead(1, { chat: pmChat })])] }
       const { session, port } = await connect(cardHost(state))

@@ -1895,27 +1895,31 @@ static void swarm_chat_checks(const char *dir) {
 
     // A notice for the face's chat is read at once and does not beep.
     enter_at("s1", "C1");
-    assert(!ui_supertab_notice("s1", "C1", HT_CHAT_PM, "pm1", "Shall I cut the release?", 1792560000u));
+    assert(!ui_supertab_notice("s1", "C1", HT_CHAT_PM, "pm1", "Shall I cut the release?", 1792560000u, false));
     int e = swarm_entry("C1");
     assert(e >= 0 && s.notice[e].read_on_dial && !s.notice[e].question && s.notice[e].swarm == 3);
     assert(!strcmp(s.notice[e].summary, "Shall I cut the release?") && !strcmp(s.notice[e].name, "docs"));
     assert(!strcmp(s.notice[e].machine, "openharness \xc2\xb7 PM"));
+    // A thread reply for the face's chat stays unread and beeps: the desktop shows it collapsed, so nobody has seen it.
+    assert(ui_supertab_notice("s1", "C1", HT_CHAT_PM, "pm1", "Replied in the thread.", 1792560000u, true));
+    e = swarm_entry("C1");
+    assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "Replied in the thread."));
     // A notice for another chat stays unread and beeps once: the Lead chat, while the face shows the PM chat.
-    assert(ui_supertab_notice("s1", "C1", HT_CHAT_LEAD, "lead-docs", "Docs are merged.", 1792560001u));
+    assert(ui_supertab_notice("s1", "C1", HT_CHAT_LEAD, "lead-docs", "Docs are merged.", 1792560001u, false));
     e = swarm_entry("C1");
     assert(e >= 0 && !s.notice[e].read_on_dial && !strcmp(s.notice[e].summary, "Docs are merged."));
     assert(!strcmp(s.notice[e].machine, "openharness"));
     // Off the face: unread, and it beeps.
-    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is deployed.", 1792560002u));
+    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is deployed.", 1792560002u, false));
     assert(swarm_entry("C2") >= 0 && !s.notice[swarm_entry("C2")].read_on_dial);
     // One entry per Lead: a second notice replaces the text and is unread again.
     notice_mark_read(&s.notice[swarm_entry("C2")]);
-    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is rolled back.", 1792560003u));
+    assert(ui_supertab_notice("s1", "C2", HT_CHAT_LEAD, "lead-web", "Web is rolled back.", 1792560003u, false));
     { int count = 0; for (int i = 0; i < s.notice_count; i++) count += !strcmp(s.notice[i].agent_id, "C2"); assert(count == 1); }
     e = swarm_entry("C2");
     assert(!strcmp(s.notice[e].summary, "Web is rolled back.") && !s.notice[e].read_on_dial);
     // A notice for a Lead the dial does not know is nothing.
-    { int before = s.notice_count; assert(!ui_supertab_notice("s1", "nobody", HT_CHAT_LEAD, "x", "?", 1)); assert(s.notice_count == before); }
+    { int before = s.notice_count; assert(!ui_supertab_notice("s1", "nobody", HT_CHAT_LEAD, "x", "?", 1, false)); assert(s.notice_count == before); }
 
     // It stays news across the desktop's inbox snapshot: kept, and not turned into a question.
     { cable_notif_t desk = {.agent_id = "a", .name = "Payments refactor", .summary = "Shipped."}; ui_notif_replace(&desk, 1); }

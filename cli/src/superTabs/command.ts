@@ -26,7 +26,7 @@ function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolea
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID [--also-in-chat]] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
 const MAX_PROPOSAL_FILES = 5
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
@@ -64,10 +64,12 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
     Object.assign(payload, { conversationId: first, messageId: second })
   }
   else if (action === 'post' && identifier(first) && typeof second === 'string' && identifier(third)) {
-    let replyTo: string | null = null
+    let replyTo: string | null = null, alsoInChat = false
     const attach: string[] = [], mentions: string[] = []
     for (let i = 4; i < positional.length; i += 2) {
       const [flag, value] = [positional[i], positional[i + 1]]
+      // A thread reply also shown in the chat (backend alsoSend): an agent's thread replies were otherwise all thread-only (Diego, 10-29).
+      if (flag === '--also-in-chat' && !alsoInChat) { alsoInChat = true; i--; continue }
       if (flag === '--reply-to' && identifier(value) && replyTo === null) replyTo = value
       else if (flag === '--attach' && value && attach.length < 10) attach.push(resolve(value))
       // A person's id or email, as written; the service maps it to the person (spec 2026-10-24-lead-mentions).
@@ -75,9 +77,10 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
       else throw new Error(USAGE)
     }
     // A screenshot or a log may go without words.
-    if (!second.trim() && !attach.length) throw new Error(USAGE)
+    if ((!second.trim() && !attach.length) || (alsoInChat && replyTo === null)) throw new Error(USAGE)
     Object.assign(payload, { action: 'command', operationId: third, ...(attach.length ? { attach } : {}),
-      command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
+      command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}),
+        ...(alsoInChat ? { alsoSend: true } : {}) } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
   } else if (action === 'propose' && identifier(first) && second) {
