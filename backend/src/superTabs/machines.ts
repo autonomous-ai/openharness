@@ -182,6 +182,9 @@ const PRIVACY_ITEMS: Record<string, string> = {
   sentinel: 'it could read the privacy sentinel in its owner\'s home folder', 'home-listing': 'it could list its owner\'s home folder',
   gitconfig: 'it could read its owner\'s ~/.gitconfig', ssh: 'it could list its owner\'s ~/.ssh', projects: 'it could list its owner\'s project folders',
   keychain: 'it could list its owner\'s login Keychain folder', chrome: 'it could list its owner\'s Chrome profile', safari: 'it could list its owner\'s Safari folder',
+  // A Linux team account checks Firefox in place of Safari; a Windows one, Edge and the Credential Manager folders.
+  firefox: 'it could list its owner\'s Firefox profile', edge: 'it could list its owner\'s Edge profile',
+  credentials: 'it could list its owner\'s Windows Credential Manager folder',
   'standard-user': 'the team account is an administrator', unchecked: 'the check did not run',
 }
 const ONLY_OWN = 'so it runs only its owner\'s projects'
