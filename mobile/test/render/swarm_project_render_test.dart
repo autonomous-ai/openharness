@@ -15,12 +15,12 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 import '../swarm/swarm_fixture.dart';
 
-/// Renders a phone Swarm project as prototype B draws it — its project chat
-/// under the project's name with its ⋮ menu at the top right and nothing under
-/// the header, the menu with nothing or something waiting on the person, and
-/// the sheet its status opens on its Work and its Team — in light and dark, at
-/// iPhone 14 size in the system fonts, to PNGs a reviewer can look at without
-/// a phone.
+/// Renders a phone Swarm project as prototype B2 draws it — its name over its
+/// team in dots with Team at the top right, its tabs, its Chat tab and its
+/// Tasks tab with nothing or something waiting on the person, and the sheet
+/// Team opens on its Team and its Work — in light and dark, at iPhone 14 size
+/// in the system fonts, to PNGs a reviewer can look at without a phone. Made
+/// up data only.
 ///
 /// Skipped unless PHONE_RENDER_DIR names a directory to write into:
 ///
@@ -116,9 +116,61 @@ void main() {
             workerId: 'agent-tester',
             lastMessageSequence: 7,
           ),
+          groupData(
+            'g4',
+            title: 'Quiet hours setting',
+            number: 3,
+            agentIds: ['agent-lead', 'agent-builder'],
+            status: 'done',
+            workerId: 'agent-builder',
+            lastMessageSequence: 15,
+          ),
+          groupData(
+            'g5',
+            title: 'Empty state copy',
+            number: 2,
+            agentIds: ['agent-lead', 'agent-builder'],
+            status: 'done',
+            workerId: 'agent-builder',
+            lastMessageSequence: 14,
+          ),
         ],
       ),
       'members': [part(me, 1, person(me))],
+    };
+    // Fix login moved two minutes ago; two tasks finished today, their
+    // agents' last progress then.
+    final load = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+      final answer = await load(body) as Map<String, dynamic>;
+      final now = DateTime.now();
+      int ago(int minutes) =>
+          now.subtract(Duration(minutes: minutes)).millisecondsSinceEpoch;
+      final at = {'g1': ago(2), 'g4': ago(40), 'g5': ago(95)};
+      Map<String, dynamic> moved(Map<String, dynamic> row) {
+        final data = row['data'] as Map<String, dynamic>;
+        final done = (data['assignment'] as Map?)?['status'] == 'done';
+        return {
+          ...row,
+          'changedAt': ?at[row['key']],
+          if (done)
+            'data': {
+              ...data,
+              'assignment': {
+                ...data['assignment'] as Map<String, dynamic>,
+                'progressAt': at[row['key']],
+              },
+            },
+        };
+      }
+
+      return {
+        ...answer,
+        'groups': [
+          for (final row in answer['groups'] as List)
+            moved(row as Map<String, dynamic>),
+        ],
+      };
     };
     fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
         changes(cursor: 'c2', derived: derived);
@@ -140,7 +192,18 @@ void main() {
       ],
     };
     fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': <Object>[],
+      'mentions': [
+        if (waiting)
+          {
+            'id': 'm1',
+            'projectName': 'Mobile',
+            'conversationId': 'g2',
+            'conversationTitle': 'Skeleton rows on Home',
+            'messageId': 'm3',
+            'leadName': 'River',
+            'text': 'Can you check the copy?',
+          },
+      ],
     };
     Map<String, dynamic> message(
       int sequence,
@@ -247,14 +310,8 @@ void main() {
       return key;
     }
 
-    Future<void> openMenu(WidgetTester tester) async {
-      await tester.tap(find.byKey(const ValueKey('swarm-project-menu')));
-      await tester.pumpAndSettle();
-    }
-
-    Future<void> openSheet(WidgetTester tester) async {
-      await openMenu(tester);
-      await tester.tap(find.byKey(const ValueKey('swarm-project-menu-status')));
+    Future<void> tap(WidgetTester tester, String key) async {
+      await tester.tap(find.byKey(ValueKey(key)));
       await tester.pumpAndSettle();
     }
 
@@ -263,37 +320,32 @@ void main() {
       await shoot(tester, key, 'swarm-project-chat-$look');
     });
 
-    testWidgets('project chat, work waiting ($look)', skip: skip, (
+    testWidgets('its tasks ($look)', skip: skip, (tester) async {
+      final key = await page(tester);
+      await tap(tester, 'swarm-project-tab-tasks');
+      await shoot(tester, key, 'swarm-project-tasks-$look');
+    });
+
+    testWidgets('its tasks, some waiting on you ($look)', skip: skip, (
       tester,
     ) async {
       final key = await page(tester, waiting: true);
-      await shoot(tester, key, 'swarm-project-waiting-$look');
-    });
-
-    testWidgets('its menu ($look)', skip: skip, (tester) async {
-      final key = await page(tester);
-      await openMenu(tester);
-      await shoot(tester, key, 'swarm-project-menu-$look');
-    });
-
-    testWidgets('its menu, work waiting ($look)', skip: skip, (tester) async {
-      final key = await page(tester, waiting: true);
-      await openMenu(tester);
-      await shoot(tester, key, 'swarm-project-menu-waiting-$look');
-    });
-
-    testWidgets('the sheet on Work ($look)', skip: skip, (tester) async {
-      final key = await page(tester, waiting: true);
-      await openSheet(tester);
-      await shoot(tester, key, 'swarm-project-work-$look');
+      await tap(tester, 'swarm-project-tab-tasks');
+      await tap(tester, 'swarm-done-today');
+      await shoot(tester, key, 'swarm-project-tasks-waiting-$look');
     });
 
     testWidgets('the sheet on Team ($look)', skip: skip, (tester) async {
       final key = await page(tester, waiting: true);
-      await openSheet(tester);
-      await tester.tap(find.byKey(const ValueKey('swarm-sheet-team')));
-      await tester.pumpAndSettle();
+      await tap(tester, 'swarm-project-team');
       await shoot(tester, key, 'swarm-project-team-$look');
+    });
+
+    testWidgets('the sheet on Work ($look)', skip: skip, (tester) async {
+      final key = await page(tester, waiting: true);
+      await tap(tester, 'swarm-project-team');
+      await tap(tester, 'swarm-sheet-work');
+      await shoot(tester, key, 'swarm-project-work-$look');
     });
   }
 }
