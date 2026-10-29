@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 
+import '../shared/theme/app_theme.dart' as grid;
 import '../state/harness_attachments.dart';
 import '../widgets/new_harness_attachments.dart';
 import 'controller.dart';
@@ -22,7 +23,10 @@ class SuperTabComposerChips extends StatelessWidget {
     builder: (context, _) => files.isEmpty
         ? const SizedBox.shrink()
         : Padding(
-            padding: const EdgeInsets.only(bottom: 8, right: 8),
+            padding: const EdgeInsets.only(
+              bottom: grid.AppDesktop.controlGap,
+              right: grid.AppDesktop.controlGap,
+            ),
             child: NewHarnessAttachmentChips(
               attachments: files,
               enabled: !controller.saving,

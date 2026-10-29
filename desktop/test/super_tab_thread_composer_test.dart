@@ -458,6 +458,29 @@ void main() {
       expect(there.isEmpty, isTrue);
     });
 
+    test('closing a thread lets go of its empty box and keeps a box that '
+        'holds files', () async {
+      final c = threaded().controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      c.openThread('message-1');
+      final empty = c.threadAttachments('lead', 'message-1');
+      c.closeThread();
+      expect(
+        identical(empty, c.threadAttachments('lead', 'message-1')),
+        isFalse,
+      );
+
+      c.openThread('message-1');
+      final held = c.threadAttachments('lead', 'message-1')
+        ..add([
+          HarnessAttachment('a.txt', Uint8List.fromList([1])),
+        ]);
+      c.closeThread();
+      expect(identical(held, c.threadAttachments('lead', 'message-1')), isTrue);
+      await c.flush();
+    });
+
     testThread('access revoked while a file is on its way: the files are '
         'forgotten and the answer sends nothing', (tester) async {
       final server = threaded();

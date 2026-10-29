@@ -868,13 +868,17 @@ class SuperTabController extends ChangeNotifier {
     };
     _threadRows.removeWhere((root, _) => roots.contains(root));
     _threadBefore.removeWhere((root, _) => roots.contains(root));
+    final forgotten = <HarnessAttachments>[];
     _threadAttachments.removeWhere((key, files) {
       if (!gone(key.$1)) return false;
+      forgotten.add(files);
+      return true;
+    });
+    for (final files in forgotten) {
       // Files on their way for a conversation that is gone are given up.
       if (identical(_sending?.owner, files)) cancelUpload();
       files.dispose();
-      return true;
-    });
+    }
     _uploadErrors.removeWhere(
       (key, _) => key is (String, String) && gone(key.$1),
     );
@@ -887,10 +891,26 @@ class SuperTabController extends ChangeNotifier {
   bool hasEarlierReplies(String root) => _threadBefore.containsKey(root);
   bool readingEarlierReplies = false;
 
+  /// Lets go of the empty file sets of threads that are not open, which only
+  /// reading a thread's reply box made.
+  void _pruneThreadFiles() {
+    final open = openedThread;
+    _threadAttachments.removeWhere((key, files) {
+      if (!files.isEmpty ||
+          (key.$1 == open?.conversationId && key.$2 == open?.root) ||
+          identical(_sending?.owner, files)) {
+        return false;
+      }
+      files.dispose();
+      return true;
+    });
+  }
+
   /// Opens [root]'s thread of the selected conversation beside the chat.
   void openThread(String root) {
     if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
+    _pruneThreadFiles();
     _seeThread(root);
     _changed();
     unawaited(loadThread());
@@ -899,6 +919,7 @@ class SuperTabController extends ChangeNotifier {
   void closeThread() {
     if (openedThread == null) return;
     openedThread = null;
+    _pruneThreadFiles();
     _changed();
   }
 
@@ -2004,6 +2025,7 @@ class SuperTabController extends ChangeNotifier {
     }
     _moveView(to: id);
     openedThread = null;
+    _pruneThreadFiles();
     _viewVersion++;
     operationNotice = null;
     _saveSoon();
