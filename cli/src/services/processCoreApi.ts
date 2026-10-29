@@ -265,6 +265,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
         // A Lead's read of a member's terminal and its typing (superTabs/inCore/terminal.ts), answered by the core.
         screen: (agentId, scrollback) => terminalAnswer(ask('super_tab_screen', { agentId, scrollback })) as Promise<SuperTabScreen>,
         input: (agentId, text, keys) => terminalAnswer(ask('super_tab_input', { agentId, text, keys })),
+        dismissUpdate: (agentId) => terminalAnswer(ask('super_tab_dismiss_update', { agentId })),
       } satisfies SuperTabsCore,
     } : {}),
   }

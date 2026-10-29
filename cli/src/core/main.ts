@@ -889,7 +889,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // In the core's own process Share was started with it; out of it, the master starts Share's process.
         shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
         screen: (agentId, scrollback) => swarmDoors.terminal.screen(agentId, scrollback),
-        input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys) },
+        input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys),
+        dismissUpdate: (agentId) => swarmDoors.terminal.dismissUpdate(agentId) },
       // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (superTabs/inCore/cards.ts `ask`).
       superTabRequest: (payload) => swarmDoors.cards.ask(payload),
     } : {}),

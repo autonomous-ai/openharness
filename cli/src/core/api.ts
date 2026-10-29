@@ -1254,6 +1254,9 @@ export interface SuperTabsCore {
   screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
   /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
   input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
+  /** Esc on Codex's update prompt, sent only if the screen read again under the pane's write lock is still exactly that prompt
+   *  (superTabs/inCore/terminal.ts): the Swarm host's answer for an agent nobody sits at. */
+  dismissUpdate(agentId: string): Promise<SuperTabTyped>
 }
 export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
 export type SuperTabTyped = { ok: true } | { ok: false; error: string }

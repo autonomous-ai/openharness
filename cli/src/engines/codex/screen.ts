@@ -30,15 +30,22 @@ function withCodexLabels(view: PaneView): PaneView {
 }
 
 /**
- * The keys that answer Codex's update prompt with plain Skip, or null when the screen is not that prompt or has no such
- * row. Only for the Swarm's agents (superTabs/terminal.ts), who must not wait for a person: the row is found by its
- * label, so a reordered prompt can never be answered with Update now (row 1, which runs `npm install -g`) or "Skip until
- * next version" (which hides the prompt for good).
+ * The key that dismisses Codex's update prompt without updating, or null unless the capture is exactly that prompt. Only
+ * for the Swarm's agents (superTabs/terminal.ts), who must not wait for a person. It is Esc alone, never a row number and
+ * Enter: on codex-cli 0.165.0 `0` is ignored and its Enter runs `brew upgrade` on the highlighted "Update now" (measured
+ * 2026-10-29, update_prompt.rs the same in 0.164), so a Skip row misread as 0 or 1 would have updated Codex. Esc is what
+ * the prompt's own footer says skips it; the capture must show that footer and exactly these three rows in this order,
+ * so a misread or changed menu sends nothing and is left to the Lead.
  */
-export function updateSkipKeys(capture: string): string[] | null {
+export function updateDismissKeys(capture: string): string[] | null {
   if (takeover(capture, '') !== 'update') return null
-  const skip = /^\s*[›>]?\s*(\d+)\. Skip\s*$/m.exec(stripAnsi(capture).replace(/\u00a0/g, ' '))
-  return skip ? [skip[1], 'Enter'] : null
+  const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n').map(line => line.trim()).filter(Boolean)
+  const header = lines.filter(line => /^Update available\b/.test(line))
+  if (header.length !== 1) return null
+  const rows = lines.filter(line => /^[›>]?\s*\d+\./.test(line)).map(line => line.replace(/^[›>]?\s*/, ''))
+  const menu = rows.length === 3 && /^1\. Update now \(runs /.test(rows[0]) && rows[1] === '2. Skip' && rows[2] === '3. Skip until next version'
+  const footer = /^enter\s+continue\s+·\s+esc\s+skip$/.test(lines[lines.length - 1])
+  return menu && footer ? ['Escape'] : null
 }
 
 function takeover(capture: string, currentUi: string): PaneTakeover | null {

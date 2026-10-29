@@ -23,7 +23,7 @@ function setup(options: { live?: string[]; reply?: () => { status: number; body:
     account: { backend },
     agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(async () => options.screen?.() ?? { ok: true as const, text: '❯ ', hold: null }),
-      input: vi.fn(async (_harnessId: string, text: string) => { steps.push(`type ${text}`); return { ok: true as const } }) },
+      input: vi.fn(async (_harnessId: string, text: string) => { steps.push(`type ${text}`); return { ok: true as const } }), dismissUpdate: vi.fn() },
   })
   // The host's current assignment rows, read after the backend answered (host.ts reads its feed).
   const owns = vi.fn(async (tabId: string, assignmentId: string, harnessId: string) => { steps.push(`check ${tabId} ${assignmentId} ${harnessId}`); return options.owns?.() ?? true })

@@ -117,7 +117,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.
 - Morning digest: when a person asks for one, set the project's digest to their local time and time zone ("project.digest" with time "08:00" and timeZone "Asia/Ho_Chi_Minh"). When it wakes you, check that each pull request under Shipped is merged, then post one message to the people in the project chat.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
-- Codex's "Update available" screen on a worker is answered with Skip (type 2, then Enter), never Update now (it runs npm install -g) and never as a question for the owner. The host answers it for Swarm agents; if one still waits on it, type Skip yourself.
+- Codex's "Update available" screen on a worker is dismissed with Esc alone, never a number and Enter (on a misread row that runs the update) and never as a question for the owner. The host does it for Swarm agents when the screen is exactly that prompt; if one still waits on it, press Esc yourself.
 - Keep each worker supplied: have its next group ready before it finishes, so nobody waits for you.
 - Cancel a duplicate, obsolete or wrong task with a reason.
 - When a worker finishes: reuse, keep or stop. Prefer stop unless more work is coming soon.
@@ -411,7 +411,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Each time you are woken, look at active work.
 - A worker with active work that has said nothing for 20 minutes: ask it.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
-- Codex's "Update available" screen on a worker is answered with Skip (type 2, then Enter), never Update now (it runs npm install -g) and never as a question for the owner. The host answers it for Swarm agents; if one still waits on it, type Skip yourself.
+- Codex's "Update available" screen on a worker is dismissed with Esc alone, never a number and Enter (on a misread row that runs the update) and never as a question for the owner. The host does it for Swarm agents when the screen is exactly that prompt; if one still waits on it, press Esc yourself.
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.
