@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
 
 /// One row of a Swarm card ([SwarmGroup]), as the approved prototype draws
 /// it: maybe a mark at its left (an avatar, a project's tile, a need's
@@ -47,9 +49,8 @@ class SwarmRow extends StatelessWidget {
         key: key,
         maxLines: lines,
         overflow: TextOverflow.ellipsis,
-        style: TextStyle(
+        style: AppType.caption(
           color: color ?? AppPalette.textSecondary,
-          fontSize: 13.5,
           height: 1.35,
         ),
       );
@@ -66,7 +67,10 @@ class SwarmRow extends StatelessWidget {
     final row = ConstrainedBox(
       constraints: const BoxConstraints(minHeight: height),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.l,
+          vertical: AppSpace.m,
+        ),
         child: Row(
           children: [
             if (leading case final leading?) ...[
@@ -94,10 +98,8 @@ class SwarmRow extends StatelessWidget {
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
+                    style: AppType.label(
                       color: AppPalette.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
                       height: 1.3,
                     ),
                   ),

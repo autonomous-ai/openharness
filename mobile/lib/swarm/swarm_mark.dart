@@ -3,6 +3,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 
 import 'swarm_choices.dart';
 import 'swarm_page.dart';
@@ -36,7 +37,7 @@ class SwarmMark extends StatelessWidget {
                 : 'Swarm, $count ${count == 1 ? 'needs' : 'need'} you',
             onTap: () => openSwarmHome(context),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
