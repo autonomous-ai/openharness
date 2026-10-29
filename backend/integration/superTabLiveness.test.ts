@@ -1271,7 +1271,8 @@ describe('the delivery poll of an agent with a held delivery', () => {
     expect(first).toHaveLength(3)
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'claim', claimId: 'claim-1' })
     await f.timed.delivery(host, f.tab, f.lead, first[0]!.id, { type: 'hold', claimId: 'claim-1', reason: 'team_waiting_user' })
-    const page = (await f.timed.messages(owner, f.tab, 'lead', {})).messages.filter(row => expectedIds.includes(row.id))
+    // The Lead's alone, so it reads their order (people do not read them).
+    const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     f.clock.now += 1_000
     await f.timed.deliveries(host, f.tab, f.lead)
     // Stored later sequence first, so insertion order cannot stand in for the tie-break; no Swarm write, so the stamp stays.
@@ -1347,7 +1348,8 @@ describe('the push for a new delivery', () => {
     expect(first).toHaveLength(3)
     expect(new Set(first.map(row => row.messageId))).toEqual(new Set(expectedIds))
     expect(new Set(first.map(row => row.createdAt.getTime())).size).toBe(1)
-    const page = (await f.timed.messages(owner, f.tab, 'lead', {})).messages.filter(row => expectedIds.includes(row.id))
+    // The Lead's alone, so it reads their order (people do not read them).
+    const page = (await f.timed.messages(host, f.tab, 'lead', {}, f.lead)).messages.filter(row => expectedIds.includes(row.id))
     expect(page).toHaveLength(3)
     expect(page[1]!.sequence).toBe(page[0]!.sequence + 1)
     expect(page[2]!.sequence).toBe(page[1]!.sequence + 1)
