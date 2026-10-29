@@ -313,6 +313,48 @@ void main() {
       },
     );
 
+    test('forgets the board once the reader may not read the project, without naming why', () async {
+      final requests = FakeRequests();
+      final reader = SuperTabLeaderboardReader(
+        tabId: 'tab',
+        request: requests.call,
+      );
+      addTearDown(reader.dispose);
+      await reader.show('lead');
+      expect(reader.board, isNotNull);
+      requests.respond = (_) => const SuperTabFailure(
+        'FORBIDDEN',
+        'Not a member of Pilot.',
+        statusCode: 403,
+      );
+      await reader.refresh();
+      expect(reader.board, isNull);
+      expect(reader.error, isNull);
+    });
+
+    test(
+      'clears the board and drops a read in flight once no project is shown',
+      () async {
+        final late = Completer<Map<String, dynamic>>();
+        var reads = 0;
+        final reader = SuperTabLeaderboardReader(
+          tabId: 'tab',
+          request: (method, path, {body}) async {
+            reads++;
+            return reads == 1 ? answer() : late.future;
+          },
+        );
+        addTearDown(reader.dispose);
+        await reader.show('lead');
+        final inFlight = reader.refresh();
+        reader.clear();
+        expect(reader.board, isNull);
+        late.complete(answer());
+        await inFlight;
+        expect(reader.board, isNull);
+      },
+    );
+
     test(
       'drops a board read for another project once the project changes',
       () async {
