@@ -16,6 +16,8 @@ export interface Person {
   status?: import('./profile.js').PersonStatus
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
+  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
+  username?: string
 }
 export interface AgentConfiguration {
   engine: string
