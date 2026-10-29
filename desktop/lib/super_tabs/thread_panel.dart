@@ -42,12 +42,14 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
   final _focus = FocusNode();
   final _scroll = ScrollController();
   bool _alsoSend = false;
-  // Whether the list is scrolled away from its newest reply (and the reader
-  // has moved it), the replies it had when last read to its end, and the
-  // latest replies and rows (replies and those on their way): what came since
-  // is the control's count.
-  bool _away = false, _atEnd = false, _moved = false;
+  // Whether the list is scrolled away from its newest reply, the replies
+  // there were when the thread opened or was last read to its end (set once
+  // the thread's replies are known), and the latest replies and rows (replies
+  // and those on their way): what came since is the control's count.
+  bool _away = false, _atEnd = false, _baselined = false;
   int _repliesAtEnd = 0, _replies = 0, _rows = 0, _rowsMeasured = 0;
+  // Each jump to the end supersedes the one before it.
+  int _jumpRequest = 0;
 
   SuperTabController get c => widget.controller;
 
@@ -65,9 +67,10 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
       // Another thread starts from its top, with nothing counted.
       _away = false;
       _atEnd = false;
-      _moved = false;
+      _baselined = false;
       _repliesAtEnd = 0;
       _rowsMeasured = 0;
+      _jumpRequest++;
       if (_scroll.hasClients) _scroll.jumpTo(0);
       // Each thread keeps its own draft.
       _composer.text = c.threadDraft(widget.root);
@@ -77,6 +80,7 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
 
   @override
   void dispose() {
+    _jumpRequest++;
     _scroll.dispose();
     _composer.dispose();
     _focus.dispose();
@@ -99,10 +103,9 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     _rowsMeasured = _rows;
     final away = position.extentAfter >= 40;
     final atEnd = !away;
-    // What the reader opened the thread on is not new; nor is what they read
-    // to its end.
-    if (position.pixels > 0) _moved = true;
-    final repliesAtEnd = atEnd || !_moved ? _replies : _repliesAtEnd;
+    // What the thread held when it opened is not new; nor is what the reader
+    // has read to its end.
+    final repliesAtEnd = atEnd ? _replies : _repliesAtEnd;
     if (away == _away && atEnd == _atEnd && repliesAtEnd == _repliesAtEnd) {
       return;
     }
@@ -113,11 +116,31 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
     });
   }
 
+  /// Scrolls to the newest reply. A lazy list refines its extent as rows near
+  /// the end are laid out, so one jump can stop above the last reply: jump
+  /// again, a bounded number of times, until nothing is left below.
   void _jumpToLatest() {
-    if (!_scroll.hasClients) return;
-    _scroll.jumpTo(_scroll.position.maxScrollExtent);
-    // A lazy list refines its extent as rows near the end are laid out.
-    _measureAfterFrame();
+    final request = ++_jumpRequest;
+    void advance(int attempt) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || request != _jumpRequest || !_scroll.hasClients) return;
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || request != _jumpRequest || !_scroll.hasClients) {
+            return;
+          }
+          if (_scroll.position.extentAfter > 1 && attempt < 12) {
+            advance(attempt + 1);
+          } else {
+            _measure();
+          }
+        });
+        WidgetsBinding.instance.scheduleFrame();
+      });
+      WidgetsBinding.instance.scheduleFrame();
+    }
+
+    advance(0);
   }
 
   /// Where "Also send" also puts the reply, as the chat is named.
@@ -157,8 +180,13 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
         .toList();
     final count =
         c.thread(c.selectedId, widget.root)?.replies ?? replies.length;
-    _replies = replies.length;
+    _replies = count > replies.length ? count : replies.length;
     _rows = replies.length + pending.length;
+    if (!_baselined &&
+        (c.thread(c.selectedId, widget.root) != null || replies.isNotEmpty)) {
+      _baselined = true;
+      _repliesAtEnd = _replies;
+    }
     _measureAfterFrame();
     return Material(
       key: const ValueKey('super-thread-panel'),

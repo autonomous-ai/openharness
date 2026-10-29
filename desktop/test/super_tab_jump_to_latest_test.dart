@@ -213,6 +213,63 @@ void main() {
     await c.flush();
   });
 
+  testWidgets('replies that arrive while the reader stays at the root of a '
+      'long thread are counted, with no scrolling first', (tester) async {
+    final server = threadOf(30);
+    final c = await show(tester, server);
+    c.openThread('message-1');
+    await tester.pumpAndSettle();
+    for (final text in ['Reply 31: late.', 'Reply 32: later.']) {
+      server.append(text);
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1'
+        ..['author'] = peer;
+      await c.refresh();
+      await tester.pumpAndSettle();
+    }
+
+    expect(threadScroll(tester).position.pixels, 0);
+    expect(inPanel(find.text('2 new replies')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  });
+
+  testWidgets('Jump to latest on replies of mixed heights ends on the real '
+      'last reply', (tester) async {
+    final server = ConversationServer()..threads = true;
+    (server.state['people'] as List).add({
+      'id': 'peer',
+      'email': 'peer@example.com',
+      'role': 'collaborator',
+    });
+    server.append('Should we do thread replies?');
+    for (var i = 1; i <= 60; i++) {
+      // Every third reply runs to many lines, the rest to one.
+      final body = i % 3 == 0
+          ? List.filled(90, 'word$i').join(' ')
+          : 'Short reply $i.';
+      server.append('Reply $i: $body');
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1'
+        ..['author'] = peer;
+    }
+    final c = await show(tester, server);
+    c.openThread('message-1');
+    await tester.pumpAndSettle();
+    expect(inPanel(find.byKey(jump)), findsOneWidget);
+
+    await tester.tap(inPanel(find.byKey(jump)));
+    await tester.pumpAndSettle();
+
+    expect(threadScroll(tester).position.extentAfter, lessThan(1));
+    expect(inPanel(find.textContaining('Reply 60:')), findsOneWidget);
+    expect(inPanel(find.byKey(jump)), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+  });
+
   testWidgets('a reply arriving while the thread is at its end keeps it '
       'there with no control', (tester) async {
     final server = threadOf(30);
