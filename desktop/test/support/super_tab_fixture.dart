@@ -659,6 +659,21 @@ class ConversationServer {
           ..['resolvedBy'] = 'done';
         state['mentionsWaiting'] = (state['mentionsWaiting'] as int) - 1;
         revision++;
+      } else if (command['type'] == 'machine.contribute') {
+        // As the backend: the reader's machine is in the Swarm, whole.
+        state['machines'] = <dynamic>[
+          ...state['machines'] as List? ?? const [],
+          {
+            'machineId': command['machineId'],
+            'name': command['name'],
+            'contributorId': reader ?? 'owner',
+            'scope': command['scope'],
+            'engines': command['engines'],
+            'maxAgents': command['maxAgents'],
+            'availableSlots': command['maxAgents'],
+          },
+        ];
+        revision++;
       } else if (command['type'] == 'buddy.create') {
         // As the backend's Buddy create: a start for the reader's Buddy and
         // its chat, fixed per person and project. The fixture's host starts it

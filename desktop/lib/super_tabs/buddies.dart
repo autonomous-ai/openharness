@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/model_search_catalog.dart' show thisComputerName;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_select_field.dart';
+import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
+import 'machines.dart';
 import 'model.dart';
 
 /// The engines a Buddy runs on (spec: Buddies, 10-28).
@@ -64,23 +67,27 @@ String buddyMachineName(SuperTabController c, String machineId) {
       : 'another machine';
 }
 
-/// Add a Buddy: project, one of the reader's own machines, and engine.
+/// Add a Buddy: project, one of the reader's own machines, and engine. With
+/// [app], a reader with no machine in the Swarm can add this computer from
+/// the dialog.
 Future<void> showAddBuddy(
   BuildContext context,
   SuperTabController c, {
   String? projectId,
+  AppNotifier? app,
 }) => showAppDialog<void>(
   context: context,
   builder: (context) => SuperTabDialogScope(
     controller: c,
-    child: _AddBuddyDialog(controller: c, projectId: projectId),
+    child: _AddBuddyDialog(controller: c, projectId: projectId, app: app),
   ),
 );
 
 class _AddBuddyDialog extends StatefulWidget {
-  const _AddBuddyDialog({required this.controller, this.projectId});
+  const _AddBuddyDialog({required this.controller, this.projectId, this.app});
   final SuperTabController controller;
   final String? projectId;
+  final AppNotifier? app;
 
   @override
   State<_AddBuddyDialog> createState() => _AddBuddyDialogState();
@@ -94,6 +101,9 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
   String? _project, _machine;
   String _engine = 'claude';
   bool _busy = false;
+
+  /// This computer's Add machine form is open over the dialog.
+  bool _addingMachine = false;
   String? _error;
 
   @override
@@ -128,6 +138,23 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
         : machines.firstOrNull?.id;
   }
 
+  /// Runs the Add machine form for this computer, then selects what it added.
+  Future<void> _addThisComputer(AppNotifier app) async {
+    if (_busy || _addingMachine) return;
+    setState(() => _addingMachine = true);
+    String? added;
+    try {
+      added = await showContributeMachine(context, c, app);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _addingMachine = false;
+          if (added != null) _machine = added;
+        });
+      }
+    }
+  }
+
   Future<void> _submit() async {
     final project = _project, machine = _listedMachine;
     if (_busy || project == null || machine == null) return;
@@ -149,6 +176,43 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
       _busy = false;
       _error = c.operationError ?? 'Could not add the Buddy. Try again.';
     });
+  }
+
+  /// The Machine field when none of the reader's machines is in the Swarm:
+  /// this computer can be added from here.
+  Widget _noMachine() {
+    final app = widget.app;
+    if (app == null) {
+      return Text(
+        'A Buddy runs on one of your own machines. Add one of yours to this '
+        'Swarm first.',
+        style: DesktopChrome.metadata(),
+      );
+    }
+    return ListenableBuilder(
+      listenable: app,
+      builder: (context, _) {
+        final refusal = thisComputerRefusal(app, c);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'None of your machines is in this Swarm yet.',
+              style: DesktopChrome.metadata(),
+            ),
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed:
+                  _busy || _addingMachine || !c.canWrite || refusal != null
+                  ? null
+                  : () => unawaited(_addThisComputer(app)),
+              child: Text('Add ${thisComputerName()}'),
+            ),
+            if (refusal != null) Text(refusal, style: DesktopChrome.metadata()),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -203,15 +267,15 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
               ),
               const SizedBox(height: 12),
               Row(
+                // With no machine the label sits on the line it names.
+                crossAxisAlignment: machines.isEmpty
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
                 children: [
                   label('Machine'),
                   Expanded(
                     child: machines.isEmpty
-                        ? Text(
-                            'A Buddy runs on one of your own machines. Add '
-                            'one of yours to this Swarm first.',
-                            style: DesktopChrome.metadata(),
-                          )
+                        ? _noMachine()
                         : AppSelectField<String>(
                             key: const ValueKey('super-buddy-machine'),
                             value: _listedMachine ?? '',
