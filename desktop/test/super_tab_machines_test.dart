@@ -164,17 +164,23 @@ String _lineOf(WidgetTester tester, String id) =>
 
 Finder _option(String id) => find.byKey(ValueKey('swarm-machine-option-$id'));
 
-/// The number the Agent slots stepper reads.
-String? _agentSlots(WidgetTester tester) =>
-    tester.widget<Text>(find.byKey(const ValueKey('agent-slots-value'))).data;
+/// Which Agents choice machine settings hold: `memory` or `atMost`.
+String? _agentsChoice(WidgetTester tester) => tester
+    .widget<RadioGroup<String>>(find.byKey(const ValueKey('machine-agents')))
+    .groupValue;
 
-Finder _slotsStep(String direction) =>
-    find.byKey(ValueKey('agent-slots-$direction'));
+final _limitValue = find.byKey(const ValueKey('agent-limit-value'));
+
+/// The number beside At most.
+String? _limit(WidgetTester tester) => tester.widget<Text>(_limitValue).data;
+
+Finder _limitStep(String direction) =>
+    find.byKey(ValueKey('agent-limit-$direction'));
 
 /// Both ends of the range are the controls going dead, not a press that lands
 /// and does nothing.
-AppIconButton _slotsButton(WidgetTester tester, String direction) =>
-    tester.widget<AppIconButton>(_slotsStep(direction));
+AppIconButton _limitButton(WidgetTester tester, String direction) =>
+    tester.widget<AppIconButton>(_limitStep(direction));
 
 /// Saving reads preparation more than once: a new operation answers `preparing`
 /// and is only ready from a later read, a second apart — what the real daemon
@@ -2148,7 +2154,8 @@ void main() {
       expect(
         find.text(
           "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
-          'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
+          'They run without asking for permission, in projects cloned to ~/harnesses/swarms. '
+          'Agents start as memory allows.',
         ),
         findsOneWidget,
       );
@@ -2170,7 +2177,8 @@ void main() {
         'cwd': '/work/project',
         'scope': 'swarm',
         'engines': ['claude', 'codex'],
-        'maxAgents': 8,
+        // As many as memory allows: setup's own maximum (Dee, 2026-10-29).
+        'maxAgents': 16,
       });
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
       expect(tester.takeException(), isNull);
@@ -2644,53 +2652,7 @@ void main() {
   });
 
   testWidgets(
-    'Configure on a machine card reads as editing: title "Configure machine", button "Save"',
-    (tester) async {
-      final f = SuperTabLaunchFixture();
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['machines'] = [
-        {'machineId': 'm', 'contributorId': 'owner'},
-      ];
-      final c = await f.app.superTabs.open(tabId);
-      await c.refresh();
-      // Never reported, so offline: under the disclosure.
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SizedBox(
-              width: 300,
-              height: 400,
-              child: SuperTabMachines(
-                controller: c,
-                app: f.app,
-                onAddAgent: (_) {},
-              ),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await openMachineDetails(
-        tester,
-        find.byKey(const ValueKey('super-machine-m')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Configure'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Configure machine'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
-      expect(find.widgetWithText(FilledButton, 'Add machine'), findsNothing);
-
-      await tester.pumpWidget(const SizedBox());
-      await c.flush();
-      f.app.superTabs.dispose();
-      await tester.pump();
-    },
-  );
-
-  testWidgets(
-    'Add machine starts at the suggested slots and contributes the number the owner picks',
+    'Add machine has no agent-slot field and adds the machine with as many agents as its memory allows',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -2700,9 +2662,10 @@ void main() {
         'scope': 'swarm',
         'repositoryUrl': null,
       };
+      // 16 GiB: one agent for every 2 GiB is eight, the machine's own figure too.
+      f.connection.maxAvailableAgents = 8;
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
-      // 16 GiB total offers eight slots and suggests four, even with eight free.
       await _openAddMachineDialog(
         tester,
         f,
@@ -2710,10 +2673,16 @@ void main() {
         readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 8),
       );
 
-      // Total memory suggests four, so the field opens there.
-      expect(_agentSlots(tester), '4');
+      expect(find.text('Add machine'), findsWidgets);
+      expect(_limitValue, findsNothing);
+      expect(find.text('Agent slots'), findsNothing);
+      expect(find.byKey(const ValueKey('machine-agents')), findsNothing);
       expect(
-        find.text('Each new agent still needs free memory when it starts.'),
+        find.text(
+          "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
+          'They run without asking for permission, in projects cloned to ~/harnesses/swarms. '
+          'Agents start as memory allows.',
+        ),
         findsOneWidget,
       );
       // Opening the form sets nothing up on the machine — no project folder,
@@ -2727,16 +2696,6 @@ void main() {
         isEmpty,
       );
 
-      // What the owner picks is what goes out — the suggestion is only a start.
-      // Stepped off it and back, so the number that saves is the one in the
-      // field rather than the one the memory reading happened to offer.
-      await tester.tap(_slotsStep('fewer'));
-      await tester.pumpAndSettle();
-      expect(_agentSlots(tester), '3');
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-      expect(_agentSlots(tester), '4');
-
       await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
       await _settleSave(tester);
       expect(find.byType(SuperTabDetailDialog), findsNothing);
@@ -2747,7 +2706,7 @@ void main() {
         'cwd': '/work/project',
         'scope': 'swarm',
         'engines': ['claude', 'codex'],
-        'maxAgents': 4,
+        'maxAgents': 8,
       });
       expect(tester.takeException(), isNull);
 
@@ -2758,21 +2717,49 @@ void main() {
     },
   );
 
+  testWidgets(
+    'Add machine sends the machine’s own maximum from setup over this Desktop’s reading',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      // Setup measured the machine itself at save time: 32 GiB, sixteen agents.
+      f.connection.maxAvailableAgents = 16;
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 8),
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 16);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
   // Every 2 GiB of total RAM may run an agent, and every machine may offer
-  // four; the suggestion keeps its 16 (Ken, 2026-10-28).
-  for (final (totalGiB, suggested, maximum) in [
-    (32.0, 8, 16),
-    (16.0, 4, 8),
-    (64.0, 16, 32),
-    (192.0, 16, 96),
-    (8.0, 2, 4),
-    (2.0, 1, 4),
+  // four (Ken, 2026-10-28). A machine whose Harness predates the maximum in
+  // setup's answer is added with what this Desktop's reading allows.
+  for (final (totalGiB, maximum) in [
+    (32.0, 16),
+    (16.0, 8),
+    (192.0, 96),
+    (8.0, 4),
+    (2.0, 4),
   ]) {
     testWidgets(
-      'Add machine with $totalGiB GiB total offers $suggested of $maximum slots',
+      'Add machine with $totalGiB GiB total and an older Harness offers $maximum agents',
       (tester) async {
         final f = SuperTabLaunchFixture();
         f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+        f.connection.maxAvailableAgents = null;
         final c = await f.app.superTabs.open(tabId);
         await c.refresh();
         await _openAddMachineDialog(
@@ -2781,14 +2768,12 @@ void main() {
           c,
           readLocal: (_) async => _reading(totalGiB: totalGiB, freeGiB: 1),
         );
-
-        expect(_agentSlots(tester), '$suggested');
-        for (var slot = suggested; slot < maximum; slot++) {
-          await tester.tap(_slotsStep('more'));
-          await tester.pumpAndSettle();
-        }
-        expect(_agentSlots(tester), '$maximum');
-        expect(_slotsButton(tester, 'more').onPressed, isNull);
+        await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+        await _settleSave(tester);
+        expect(
+          f.connection.server.posts.single['command']!['maxAgents'],
+          maximum,
+        );
         expect(tester.takeException(), isNull);
 
         await tester.pumpWidget(const SizedBox());
@@ -2799,11 +2784,172 @@ void main() {
     );
   }
 
-  testWidgets('Configure lets a 192 GiB machine offer 96 agents', (
-    tester,
-  ) async {
+  testWidgets(
+    'a new machine an older Harness set up and no reading answered for is added with setup’s own number',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = null;
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openAddMachineDialog(tester, f, c, readLocal: (_) async => null);
+
+      // Nothing here knows the machine's memory: the 8 setup offered is the
+      // only number the machine itself gave.
+      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'machine settings show its name, Agents as memory allows, and Remove from this Swarm',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 8;
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 8},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
+      );
+
+      final name = superTabMachineName(f.app.stateOf('m')!.machine.displayName);
+      expect(
+        find.descendant(
+          of: find.byType(SuperTabDetailDialog),
+          matching: find.text(name),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Configure machine'), findsNothing);
+      // One machine's settings: no picker to switch to another.
+      expect(_picker, findsNothing);
+      expect(find.text('Agents'), findsOneWidget);
+      // Stored at the machine's maximum: that is "as memory allows".
+      expect(_agentsChoice(tester), 'memory');
+      expect(find.text('As memory allows'), findsOneWidget);
+      expect(find.text('At most'), findsOneWidget);
+      expect(
+        find.widgetWithText(TextButton, 'Remove from this Swarm'),
+        findsOneWidget,
+      );
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      expect(f.connection.server.posts.single['command'], {
+        'type': 'machine.contribute',
+        'machineId': 'm',
+        'name': f.app.stateOf('m')!.machine.displayName,
+        'cwd': '/work/project',
+        'scope': 'swarm',
+        'engines': ['claude', 'codex'],
+        'maxAgents': 8,
+      });
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'machine settings keep a stored limit below the maximum as At most, and save the new number',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(freeGiB: 16),
+      );
+
+      // The machine's own 2, not the 16 its memory allows: an owner who opens
+      // this form and saves it keeps what they had chosen.
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '2');
+      await tester.tap(_limitStep('more'));
+      await tester.pumpAndSettle();
+      await tester.tap(_limitStep('more'));
+      await tester.pumpAndSettle();
+      expect(_limit(tester), '4');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(find.byType(SuperTabDetailDialog), findsNothing);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'choosing As memory allows saves the machine’s maximum: 96 for 192 GiB',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 96;
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 192, freeGiB: 100),
+      );
+
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '16');
+      await tester.tap(find.byKey(const ValueKey('machine-agents-memory')));
+      await tester.pumpAndSettle();
+      expect(_agentsChoice(tester), 'memory');
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 96);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets('changing the At most number chooses At most', (tester) async {
     final f = SuperTabLaunchFixture();
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.maxAvailableAgents = 16;
     f.connection.server.state['machines'] = [
       {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
     ];
@@ -2813,19 +2959,21 @@ void main() {
       tester,
       f,
       c,
-      readLocal: (_) async => _reading(totalGiB: 192, freeGiB: 100),
+      readLocal: (_) async => _reading(totalGiB: 32, freeGiB: 1),
     );
 
-    expect(_agentSlots(tester), '16');
-    for (var slot = 16; slot < 96; slot++) {
-      await tester.tap(_slotsStep('more'));
-      await tester.pump();
-    }
-    expect(_agentSlots(tester), '96');
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
+    expect(_agentsChoice(tester), 'memory');
+    // At the maximum there is nothing above it: the number starts at what
+    // the machine's memory alone would suggest, half of it.
+    expect(_limit(tester), '8');
+    await tester.tap(_limitStep('fewer'));
+    await tester.pumpAndSettle();
+    expect(_agentsChoice(tester), 'atMost');
+    expect(_limit(tester), '7');
+
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await _settleSave(tester);
-    expect(f.connection.server.posts.single['command']!['maxAgents'], 96);
+    expect(f.connection.server.posts.single['command']!['maxAgents'], 7);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(const SizedBox());
@@ -2835,10 +2983,11 @@ void main() {
   });
 
   testWidgets(
-    'Configure keeps the owner’s 12 slots even when total RAM offers eight',
+    'a stored limit above what memory allows opens as As memory allows and saves the maximum',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 8;
       f.connection.server.state['machines'] = [
         {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
       ];
@@ -2851,8 +3000,36 @@ void main() {
         readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
       );
 
-      expect(_agentSlots(tester), '12');
-      expect(_slotsButton(tester, 'more').onPressed, isNull);
+      expect(_agentsChoice(tester), 'memory');
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await _settleSave(tester);
+      expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'machine settings keep the owner’s number when memory cannot be read',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
+
+      // Nothing says how much this machine's memory allows, so its own 12 is
+      // the most the field can offer, and it is kept.
+      expect(_agentsChoice(tester), 'atMost');
+      expect(_limit(tester), '12');
+      expect(_limitButton(tester, 'more').onPressed, isNull);
       await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await _settleSave(tester);
       expect(f.connection.server.posts.single['command']!['maxAgents'], 12);
@@ -2865,71 +3042,32 @@ void main() {
     },
   );
 
-  testWidgets('Configure keeps the owner’s slots when RAM cannot be read', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 12},
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
-
-    expect(_agentSlots(tester), '12');
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-    await _settleSave(tester);
-    expect(f.connection.server.posts.single['command']!['maxAgents'], 12);
-    expect(tester.takeException(), isNull);
-
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
-
   testWidgets(
-    'Configure starts at the machine’s own slots and saves the new number',
+    'machine settings read the memory the machine reported to the Swarm',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.maxAvailableAgents = 8;
       f.connection.server.state['machines'] = [
-        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 2},
+        {
+          'machineId': 'm',
+          'contributorId': 'owner',
+          'maxAgents': 8,
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'resources': {
+              'memoryUsedBytes': 4 * 1024 * 1024 * 1024,
+              'memoryTotalBytes': 16 * 1024 * 1024 * 1024,
+            },
+          },
+        },
       ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
-      // Sixteen gibibytes free would suggest 8: this machine's own 2 is what
-      // the field shows, because its own number is not a suggestion.
-      await _openConfigureDialog(
-        tester,
-        f,
-        c,
-        readLocal: (_) async => _reading(freeGiB: 16),
-      );
+      // This Desktop's own reading does not answer; the Swarm's does.
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
 
-      // The machine's own number — 2, not the 8 its memory would suggest: an
-      // owner who opens this form and saves it keeps what they had chosen.
-      expect(_agentSlots(tester), '2');
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-      expect(_agentSlots(tester), '4');
-
-      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-      await _settleSave(tester);
-      expect(find.byType(SuperTabDetailDialog), findsNothing);
-      expect(f.connection.server.posts.single['command'], {
-        'type': 'machine.contribute',
-        'machineId': 'm',
-        'name': f.app.stateOf('m')!.machine.displayName,
-        'cwd': '/work/project',
-        'scope': 'swarm',
-        'engines': ['claude', 'codex'],
-        'maxAgents': 4,
-      });
+      expect(_agentsChoice(tester), 'memory');
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox());
@@ -2940,19 +3078,16 @@ void main() {
   );
 
   testWidgets(
-    'an unconfirmed contribution is checked first, then the number on screen saves',
+    'an unconfirmed save is checked first, then the number on screen saves',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['project'] = {
-        'machineId': 'm',
-        'cwd': '/work/project',
-        'scope': 'swarm',
-        'repositoryUrl': null,
-      };
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 4},
+      ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
-      await _openAddMachineDialog(
+      await _openConfigureDialog(
         tester,
         f,
         c,
@@ -2962,19 +3097,19 @@ void main() {
       // leaves that attempt holding its own receipt — the state the next press
       // finds.
       f.connection.server.loseReply = true;
-      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await _settleSave(tester);
       expect(find.byType(SuperTabDetailDialog), findsOneWidget);
       expect(f.connection.server.posts.single['command']!['maxAgents'], 4);
 
       // The owner changes their mind before trying again.
-      await tester.tap(_slotsStep('more'));
+      await tester.tap(_limitStep('more'));
       await tester.pumpAndSettle();
-      await tester.tap(_slotsStep('more'));
+      await tester.tap(_limitStep('more'));
       await tester.pumpAndSettle();
-      expect(_agentSlots(tester), '6');
+      expect(_limit(tester), '6');
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await _settleSave(tester);
       expect(find.byType(SuperTabDetailDialog), findsNothing);
       // The stored attempt is settled first, and then the six on screen — the
@@ -2990,39 +3125,71 @@ void main() {
   );
 
   testWidgets(
-    'a new machine no reading answered for contributes what was suggested',
+    'Remove from this Swarm in machine settings asks the removal question',
     (tester) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-      f.connection.server.state['project'] = {
-        'machineId': 'm',
-        'cwd': '/work/project',
-        'scope': 'swarm',
-        'repositoryUrl': null,
-      };
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 4},
+      ];
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
-      // This machine's memory does not answer — a reading that failed or had
-      // not arrived — so the field has no suggestion of its own and sits at
-      // the floor of the range.
-      await _openAddMachineDialog(tester, f, c, readLocal: (_) async => null);
-      expect(_agentSlots(tester), '1');
+      await _openConfigureDialog(tester, f, c, readLocal: (_) async => null);
 
-      // The owner never touched it, so the 1 is not a number they chose and
-      // must not be what the machine is contributed with: preparation's own
-      // suggestion is the number the field would have shown.
-      await tester.tap(find.widgetWithText(FilledButton, 'Add machine'));
-      await _settleSave(tester);
-      expect(find.byType(SuperTabDetailDialog), findsNothing);
-      expect(f.connection.server.posts.single['command']!['maxAgents'], 8);
-      expect(tester.takeException(), isNull);
+      await tester.tap(
+        find.widgetWithText(TextButton, 'Remove from this Swarm'),
+      );
+      await tester.pumpAndSettle();
+      final name = superTabMachineName(f.app.stateOf('m')!.machine.displayName);
+      expect(find.text('Remove $name from this Swarm?'), findsOneWidget);
+      expect(find.byKey(const ValueKey('machine-agents')), findsNothing);
+      // Asking sends nothing.
+      expect(f.connection.server.posts, isEmpty);
 
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox());
       await c.flush();
       f.app.superTabs.dispose();
       await tester.pump();
     },
   );
+
+  testWidgets('only the machine’s owner sees its settings', (tester) async {
+    final f = SuperTabLaunchFixture();
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+    f.connection.server.state['machines'] = [
+      {'machineId': 'm', 'contributorId': 'teammate', 'maxAgents': 4},
+    ];
+    final c = await f.app.superTabs.open(tabId);
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 400,
+            child: SuperTabMachines(
+              controller: c,
+              app: f.app,
+              onAddAgent: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await openMachineDetails(
+      tester,
+      find.byKey(const ValueKey('super-machine-m')),
+    );
+    expect(find.widgetWithText(TextButton, 'Configure'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    f.app.superTabs.dispose();
+    await tester.pump();
+  });
 
   testWidgets(
     'a check of an earlier attempt that fails says why that attempt is unclear',
@@ -3078,89 +3245,48 @@ void main() {
     },
   );
 
-  testWidgets('a machine already set to 16 keeps that number when configured', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    // The backend accepts 16, and opening Configure must preserve that choice.
-    f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 16},
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    await _openConfigureDialog(
-      tester,
-      f,
-      c,
-      readLocal: (_) async => _reading(totalGiB: 32, freeGiB: 1),
-    );
+  testWidgets(
+    'At most stops at 1 and at the machine’s eight-agent memory limit',
+    (tester) async {
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = [
+        {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 3},
+      ];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await _openConfigureDialog(
+        tester,
+        f,
+        c,
+        readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
+      );
 
-    expect(_agentSlots(tester), '16');
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
-    expect(_slotsButton(tester, 'fewer').onPressed, isNotNull);
+      expect(_limit(tester), '3');
+      for (var i = 0; i < 5; i++) {
+        await tester.tap(_limitStep('more'));
+        await tester.pumpAndSettle();
+      }
+      expect(_limit(tester), '8');
+      // Neither end is a press that lands and does nothing: the button is dead.
+      expect(_limitButton(tester, 'more').onPressed, isNull);
+      expect(_limitButton(tester, 'fewer').onPressed, isNotNull);
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
-    await _settleSave(tester);
-    // The owner’s chosen 16 is still sent unchanged.
-    expect(f.connection.server.posts.single['command'], {
-      'type': 'machine.contribute',
-      'machineId': 'm',
-      'name': f.app.stateOf('m')!.machine.displayName,
-      'cwd': '/work/project',
-      'scope': 'swarm',
-      'engines': ['claude', 'codex'],
-      'maxAgents': 16,
-    });
-    expect(tester.takeException(), isNull);
+      for (var i = 0; i < 7; i++) {
+        await tester.tap(_limitStep('fewer'));
+        await tester.pumpAndSettle();
+      }
+      expect(_limit(tester), '1');
+      expect(_limitButton(tester, 'fewer').onPressed, isNull);
+      expect(_limitButton(tester, 'more').onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
 
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
-
-  testWidgets('Agent slots stop at 1 and the machine’s eight-slot RAM limit', (
-    tester,
-  ) async {
-    final f = SuperTabLaunchFixture();
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
-    f.connection.server.state['machines'] = [
-      {'machineId': 'm', 'contributorId': 'owner', 'maxAgents': 3},
-    ];
-    final c = await f.app.superTabs.open(tabId);
-    await c.refresh();
-    await _openConfigureDialog(
-      tester,
-      f,
-      c,
-      readLocal: (_) async => _reading(totalGiB: 16, freeGiB: 1),
-    );
-
-    expect(_agentSlots(tester), '3');
-    for (var i = 0; i < 5; i++) {
-      await tester.tap(_slotsStep('more'));
-      await tester.pumpAndSettle();
-    }
-    expect(_agentSlots(tester), '8');
-    // Neither end is a press that lands and does nothing: the button is dead.
-    expect(_slotsButton(tester, 'more').onPressed, isNull);
-    expect(_slotsButton(tester, 'fewer').onPressed, isNotNull);
-
-    for (var i = 0; i < 7; i++) {
-      await tester.tap(_slotsStep('fewer'));
-      await tester.pumpAndSettle();
-    }
-    expect(_agentSlots(tester), '1');
-    expect(_slotsButton(tester, 'fewer').onPressed, isNull);
-    expect(_slotsButton(tester, 'more').onPressed, isNotNull);
-    expect(tester.takeException(), isNull);
-
-    await tester.pumpWidget(const SizedBox());
-    await c.flush();
-    f.app.superTabs.dispose();
-    await tester.pump();
-  });
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+      await tester.pump();
+    },
+  );
 }
 
 /// A hardware reading's value in a machine's expanded readings.

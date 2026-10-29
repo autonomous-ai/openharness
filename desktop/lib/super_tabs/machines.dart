@@ -125,82 +125,125 @@ class _MachineChoice {
   final ({IconData icon, String message})? unavailable;
 }
 
-/// "Agent slots" — how many agents this machine offers the Swarm — with the one
-/// thing the number is not: a promise. Each start still checks free memory.
+/// A machine's Agents setting in its settings: as many as its memory allows
+/// (the [_maxAgentSlots] figure, stored in the same `maxAgents` every machine
+/// has), or at most a number its owner picks. Each start still checks free
+/// memory either way (Dee, 2026-10-29).
 ///
-/// A stepper rather than a number field, so no keystroke can leave the dialog
-/// holding a count the backend would refuse; both buttons go dead at the bounds
-/// rather than staying lit and doing nothing.
-class _AgentSlots extends StatelessWidget {
-  const _AgentSlots({
+/// The number is a stepper rather than a field, so no keystroke can leave the
+/// dialog holding a count the backend would refuse; both buttons go dead at
+/// the bounds rather than staying lit and doing nothing. Changing it chooses
+/// At most, the only choice it belongs to.
+class _AgentsLimit extends StatelessWidget {
+  const _AgentsLimit({
+    required this.memory,
     required this.value,
     required this.maximum,
     required this.busy,
-    required this.onChanged,
+    required this.onMemory,
+    required this.onAtMost,
   });
 
+  final bool memory;
   final int value;
   final int maximum;
   final bool busy;
-  final ValueChanged<int> onChanged;
+  final VoidCallback onMemory;
+  final ValueChanged<int> onAtMost;
 
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
     final value = this.value;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Expanded(child: Text('Agent slots', style: DesktopChrome.text())),
-            Container(
-              width: 96,
-              constraints: const BoxConstraints(
-                minHeight: grid.AppControl.height,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              decoration: BoxDecoration(
-                // The same recessed well the picker's control sits in.
-                color: grid.AppSurface.recess,
-                borderRadius: BorderRadius.circular(grid.AppControl.radius),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  AppIconButton(
-                    key: const ValueKey('agent-slots-fewer'),
-                    icon: AppIcons.minus,
-                    size: 16,
-                    tooltip: 'Fewer slots',
-                    onPressed: busy || value <= _agentSlotsMin
-                        ? null
-                        : () =>
-                              onChanged(value > maximum ? maximum : value - 1),
-                  ),
-                  Text(
-                    value.toString(),
-                    key: const ValueKey('agent-slots-value'),
-                    style: DesktopChrome.control(),
-                  ),
-                  AppIconButton(
-                    key: const ValueKey('agent-slots-more'),
-                    icon: AppIcons.plus,
-                    size: 16,
-                    tooltip: 'More slots',
-                    onPressed: busy || value >= maximum
-                        ? null
-                        : () => onChanged(value + 1),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        Padding(
+          padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+          child: Text('Agents', style: DesktopChrome.text()),
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Each new agent still needs free memory when it starts.',
-          style: DesktopChrome.metadata(),
+        const SizedBox(width: grid.AppDesktop.groupGap),
+        Expanded(
+          child: RadioGroup<String>(
+            key: const ValueKey('machine-agents'),
+            groupValue: memory ? 'memory' : 'atMost',
+            onChanged: (choice) {
+              if (busy) return;
+              choice == 'memory' ? onMemory() : onAtMost(value);
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                RadioListTile<String>(
+                  key: const ValueKey('machine-agents-memory'),
+                  value: 'memory',
+                  enabled: !busy,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('As memory allows'),
+                ),
+                RadioListTile<String>(
+                  key: const ValueKey('machine-agents-at-most'),
+                  value: 'atMost',
+                  enabled: !busy,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Row(
+                    children: [
+                      const Text('At most'),
+                      const SizedBox(width: grid.AppDesktop.controlGap),
+                      Container(
+                        constraints: const BoxConstraints(
+                          minHeight: grid.AppControl.height,
+                        ),
+                        decoration: BoxDecoration(
+                          // The same recessed well the picker's control sits in.
+                          color: grid.AppSurface.recess,
+                          borderRadius: BorderRadius.circular(
+                            grid.AppControl.radius,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AppIconButton(
+                              key: const ValueKey('agent-limit-fewer'),
+                              icon: AppIcons.minus,
+                              size: grid.AppControl.iconSize,
+                              tooltip: 'Fewer agents',
+                              onPressed: busy || value <= _agentSlotsMin
+                                  ? null
+                                  : () => onAtMost(
+                                      value > maximum ? maximum : value - 1,
+                                    ),
+                            ),
+                            Text(
+                              value.toString(),
+                              key: const ValueKey('agent-limit-value'),
+                              style: DesktopChrome.control().copyWith(
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                            AppIconButton(
+                              key: const ValueKey('agent-limit-more'),
+                              icon: AppIcons.plus,
+                              size: grid.AppControl.iconSize,
+                              tooltip: 'More agents',
+                              onPressed: busy || value >= maximum
+                                  ? null
+                                  : () => onAtMost(value + 1),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ],
     );
@@ -492,7 +535,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     super.dispose();
   }
 
-  Future<void> _contribute({Map<String, dynamic>? existing}) async {
+  /// Add machine, or with [existing] that machine's settings (its owner's).
+  Future<void> _contribute({
+    Map<String, dynamic>? existing,
+    _MachineView? view,
+  }) async {
     final app = widget.app;
     if (app == null) return;
     final isConfigure = existing != null;
@@ -549,9 +596,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     String? error;
     var busy = false;
     String? setupId;
-    // The agent slots the owner is choosing. A machine already in this Swarm
-    // starts at the number it has; a new one starts at what its total memory
-    // suggests, worked out here rather than by preparation (below).
+    // The machine's stored limit (`maxAgents`), kept until its owner saves.
     int? storedSlots(String? id) {
       final row = id == null
           ? null
@@ -561,30 +606,62 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     }
 
     // Readings this dialog has taken itself, keyed by machine. The panel's own
-    // samples stand in for a machine it already reads.
-    final suggestions = <String, int>{};
-    final maximums = <String, int>{};
-
-    /// What this machine's own memory says, once a reading has answered. Null
-    /// while one is still coming, or when it failed.
-    int? memorySuggestion(String? id) => id == null
+    // samples, then what the machine last reported to the Swarm, stand in for
+    // a machine it already reads.
+    final readings = <String, MachineResources>{};
+    MachineResources? resourcesOf(String? id) => id == null
         ? null
-        : suggestions[id] ?? _suggestedAgentSlots(_samples[id]?.$1);
+        : readings[id] ??
+              _samples[id]?.$1 ??
+              (id == view?.id ? view?.resources : null);
 
-    int maximumFor(String? id) => id == null
-        ? _agentSlotsMin
-        : maximums[id] ??
-              _maxAgentSlots(_samples[id]?.$1) ??
-              _clampAgentSlots(storedSlots(id) ?? _agentSlotsMin);
+    /// How many agents this machine's memory allows, once a reading has
+    /// answered. Null while one is still coming, or when none can.
+    int? memoryMaximum(String? id) => _maxAgentSlots(resourcesOf(id));
 
-    int slotsFor(String? id) {
-      final stored = storedSlots(id);
-      if (stored != null) return _clampAgentSlots(stored);
-      return memorySuggestion(id) ?? _agentSlotsMin;
+    // The limit an Add sends: as many as memory allows, by the machine's own
+    // figure when setup gives one (it measured the machine just now), else
+    // this Desktop's reading, else the number an older Harness's setup
+    // offered — the only one the machine itself gave.
+    int addLimit(String id, Map<String, dynamic> prepared) {
+      final offeredMaximum = prepared['maxAvailableAgents'];
+      if (offeredMaximum is num) return _clampAgentSlots(offeredMaximum);
+      final offered = prepared['maxAgents'];
+      return memoryMaximum(id) ??
+          (offered is num ? _clampAgentSlots(offered) : _agentSlotsFloor);
     }
 
-    var slots = slotsFor(machineId);
-    var slotsEdited = false;
+    // Machine settings: As memory allows, or At most a number. Until the owner
+    // touches either, both follow what is known: a stored limit at or above
+    // the maximum is as memory allows, and one below it is the owner's own.
+    // With the maximum unknown a stored number is kept as it is.
+    bool? memoryEdited;
+    int? atMostEdited;
+    bool memoryChoice() {
+      if (memoryEdited != null) return memoryEdited!;
+      final stored = storedSlots(existingId);
+      if (stored == null) return true;
+      final maximum = memoryMaximum(existingId);
+      return maximum != null && stored >= maximum;
+    }
+
+    int atMostMaximum() =>
+        memoryMaximum(existingId) ??
+        _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsMin);
+    int atMostValue() {
+      if (atMostEdited != null) return atMostEdited!;
+      final stored = storedSlots(existingId);
+      final maximum = memoryMaximum(existingId);
+      if (stored != null && (maximum == null || stored < maximum)) {
+        return _clampAgentSlots(stored);
+      }
+      final suggested = _suggestedAgentSlots(resourcesOf(existingId));
+      return (suggested ?? maximum ?? stored ?? _agentSlotsMin).clamp(
+        _agentSlotsMin,
+        atMostMaximum(),
+      );
+    }
+
     // The open dialog and its own setState, once it is built: a reading
     // answers while the form is open, and the field has to repaint when it
     // does. Both are read only while the dialog is still there — one that
@@ -593,12 +670,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     void Function(void Function())? repaint;
     final reading = <String>{};
 
-    /// Start the field where this machine's own memory says, without asking
-    /// preparation: preparation sets the project up, probes engines and takes
-    /// one of its 32 setup slots, and opening a form the owner may cancel is
-    /// no reason to do that. A configured machine still needs its RAM reading
-    /// for the stepper limit, but its chosen number is never replaced.
-    Future<void> suggestSlots() async {
+    /// Read this machine's memory without asking preparation: preparation sets
+    /// the project up, probes engines and takes one of its 32 setup slots, and
+    /// opening a form the owner may cancel is no reason to do that.
+    Future<void> readMemory() async {
       final id = machineId;
       if (id == null || !canSelect(app.stateOf(id)) || !reading.add(id)) {
         return;
@@ -609,18 +684,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       } catch (_) {
         return;
       }
-      final suggested = _suggestedAgentSlots(resources);
-      // The picker may have moved on to another machine, whose own reading is
-      // the one that belongs in the field now — or the dialog may have closed.
-      if (suggested == null || machineId != id || dialog?.mounted != true) {
+      if (resources?.memoryTotalBytes == null || dialog?.mounted != true) {
         return;
       }
-      suggestions[id] = suggested;
-      maximums[id] = _maxAgentSlots(resources)!;
-      // Repaint the limit, but never replace a number the owner chose.
-      repaint?.call(() {
-        if (!slotsEdited && storedSlots(id) == null) slots = suggested;
-      });
+      repaint?.call(() => readings[id] = resources!);
     }
 
     await showAppDialog<void>(
@@ -633,10 +700,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             builder: (context, update) {
               dialog = context;
               repaint = update;
-              // Not awaited: the form is usable immediately, and the number
+              // Not awaited: the form is usable immediately, and the limit
               // only has to be there by the time the owner reads it. Each
               // machine is read once, so a rebuild does not read again.
-              unawaited(suggestSlots());
+              unawaited(readMemory());
               Future<void> save() async {
                 if (busy ||
                     !c.canWrite ||
@@ -696,22 +763,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                       'Install Claude Code or Codex on this machine, then try again.',
                     );
                   }
-                  // A machine with no number of its own whose reading failed,
-                  // or had not answered yet, is showing the floor rather than
-                  // a suggestion. The owner never chose that, so send what
-                  // preparation offered instead — the number the field would
-                  // have shown had the reading arrived.
-                  final offered = prepared['maxAgents'];
-                  final offeredMaximum = prepared['maxAvailableAgents'];
-                  if (offeredMaximum is num) {
-                    maximums[selected] = _clampAgentSlots(offeredMaximum);
-                  }
-                  if (!slotsEdited &&
-                      storedSlots(selected) == null &&
-                      memorySuggestion(selected) == null &&
-                      offered is num) {
-                    slots = _clampAgentSlots(offered);
-                  }
+                  // As memory allows, unless the owner set At most. Read at
+                  // each press: the stored attempt below cannot know the
+                  // number changed since it was sent.
+                  final limit = isConfigure && !memoryChoice()
+                      ? atMostValue()
+                      : addLimit(selected, prepared);
                   // An earlier lost reply leaves an uncertain attempt holding
                   // its own receipt, and only one action may be in flight:
                   // check that one first, then send the number the owner is
@@ -737,7 +794,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     'cwd': prepared['cwd'],
                     if (prepared['scope'] != null) 'scope': prepared['scope'],
                     'engines': engines,
-                    'maxAgents': slots,
+                    'maxAgents': limit,
                   });
                   if (result == null) {
                     throw SuperTabFailure(
@@ -771,8 +828,74 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               final own = ownedMachines();
               final canSave =
                   machineId != null && canSelect(app.stateOf(machineId!));
+              if (isConfigure) {
+                final current = app.stateOf(existingId!);
+                final why = current == null ? null : unavailable(current);
+                return SuperTabDetailDialog(
+                  title: superTabMachineName(
+                    current?.machine.displayName ??
+                        existing['name'] as String? ??
+                        existingId,
+                  ),
+                  body: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _AgentsLimit(
+                        memory: memoryChoice(),
+                        value: atMostValue(),
+                        maximum: atMostMaximum(),
+                        busy: busy,
+                        onMemory: () => update(() => memoryEdited = true),
+                        onAtMost: (next) => update(() {
+                          memoryEdited = false;
+                          atMostEdited = next;
+                        }),
+                      ),
+                      if (view != null && _canRemove(view.id)) ...[
+                        const SizedBox(height: grid.AppDesktop.controlGap),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton(
+                            style: superTabQuietAction,
+                            onPressed: busy || _removeReason(view.id) != null
+                                ? null
+                                : () {
+                                    Navigator.pop(context);
+                                    WidgetsBinding.instance
+                                        .addPostFrameCallback((_) {
+                                          if (mounted) {
+                                            unawaited(_remove(view));
+                                          }
+                                        });
+                                  },
+                            child: const Text('Remove from this Swarm'),
+                          ),
+                        ),
+                        // Why it cannot, in words rather than a dimmed button alone.
+                        if (_removeReason(view.id) case final reason?)
+                          Text(reason, style: DesktopChrome.metadata()),
+                      ],
+                      if (!canSave && why != null) ...[
+                        const SizedBox(height: grid.AppDesktop.controlGap),
+                        Text(why.message, style: DesktopChrome.metadata()),
+                      ],
+                      if (error != null) ...[
+                        const SizedBox(height: grid.AppDesktop.controlGap),
+                        Text(error!, style: DesktopChrome.metadata()),
+                      ],
+                    ],
+                  ),
+                  actions: [
+                    FilledButton(
+                      onPressed: busy || !canSave ? null : save,
+                      child: Text(busy ? 'Saving…' : 'Save'),
+                    ),
+                  ],
+                );
+              }
               return SuperTabDetailDialog(
-                title: isConfigure ? 'Configure machine' : 'Add machine',
+                title: 'Add machine',
                 body: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -795,12 +918,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                             machineId = id;
                             setupId = null;
                             error = null;
-                            // Another machine has its own number: the one it
-                            // already offers, or its own suggestion.
-                            slots = slotsFor(id);
-                            slotsEdited = false;
                           });
-                          unawaited(suggestSlots());
+                          unawaited(readMemory());
                         },
                       )
                     else
@@ -812,7 +931,8 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     if (own.isNotEmpty) ...[
                       Text(
                         "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
-                        'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
+                        'They run without asking for permission, in projects cloned to ~/harnesses/swarms. '
+                        'Agents start as memory allows.',
                         style: DesktopChrome.text(),
                       ),
                     ] else ...[
@@ -833,18 +953,6 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                         ),
                       ),
                     ],
-                    if (own.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      _AgentSlots(
-                        value: slots,
-                        maximum: maximumFor(machineId),
-                        busy: busy,
-                        onChanged: (next) => update(() {
-                          slots = next;
-                          slotsEdited = true;
-                        }),
-                      ),
-                    ],
                     if (error != null) ...[
                       const SizedBox(height: 12),
                       Text(error!, style: DesktopChrome.metadata()),
@@ -855,11 +963,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   if (own.isNotEmpty)
                     FilledButton(
                       onPressed: busy || !canSave ? null : save,
-                      child: Text(
-                        busy
-                            ? (isConfigure ? 'Saving…' : 'Preparing…')
-                            : (isConfigure ? 'Save' : 'Add machine'),
-                      ),
+                      child: Text(busy ? 'Preparing…' : 'Add machine'),
                     ),
                 ],
               );
@@ -1538,7 +1642,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     onPressed: () {
                       Navigator.pop(context);
                       unawaited(
-                        _contribute(existing: shared ?? {'machineId': id}),
+                        _contribute(
+                          existing: shared ?? {'machineId': id},
+                          view: v,
+                        ),
                       );
                     },
                     child: const Text('Configure'),

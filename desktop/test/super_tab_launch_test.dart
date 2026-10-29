@@ -51,6 +51,10 @@ class SuperTabFixtureConnection extends WsConn {
   /// again (`cli/src/superTabs/contribution.ts`), so a client that gives up
   /// after one answer never sees anything ready.
   final prepared = <Object?>{};
+
+  /// The most agents preparation says this machine may run; null for a Harness
+  /// from before setup reported it.
+  int? maxAvailableAgents = 16;
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
@@ -171,7 +175,8 @@ class SuperTabFixtureConnection extends WsConn {
           'scope': 'swarm',
           'engines': ['claude', 'codex', 'pi'],
           'maxAgents': 8,
-          'maxAvailableAgents': 16,
+          if (maxAvailableAgents != null)
+            'maxAvailableAgents': maxAvailableAgents,
         };
       }
       if (payload['action'] == 'prepareNative' ||
