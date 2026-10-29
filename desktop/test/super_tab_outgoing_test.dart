@@ -7,6 +7,63 @@ import 'support/super_tab_fixture.dart';
 
 void main() {
   test(
+    'an older refresh cannot unlock a newer POST or retry it twice',
+    () async {
+      final s = ConversationServer();
+      final second = Completer<void>();
+      final c = SuperTabController(
+        tabId: 'tab',
+        accountId: 'owner',
+        save: s.save,
+        pollInterval: Duration.zero,
+        request: (method, path, {body}) async {
+          if (method == 'POST' && (body!['command'] as Map)['text'] == 'Second')
+            await second.future;
+          return s.request(method, path, body: body);
+        },
+      );
+      await c.refresh();
+      c.setDraft('lead', 'First');
+      final one = c.send();
+      c.setDraft('lead', 'Second');
+      final two = c.send();
+      await one;
+      expect(c.saving, isTrue);
+      expect(await c.retry(), isNull);
+      second.complete();
+      await two;
+      expect(s.posts, hasLength(2));
+      await c.flush();
+      c.dispose();
+    },
+  );
+  test('revocation drops queued text and cannot dispatch it later', () async {
+    final s = ConversationServer();
+    final gate = Completer<void>();
+    final c = SuperTabController(
+      tabId: 'tab',
+      accountId: 'owner',
+      save: s.save,
+      pollInterval: Duration.zero,
+      request: (method, path, {body}) async {
+        if (method == 'POST') await gate.future;
+        return s.request(method, path, body: body);
+      },
+    );
+    await c.refresh();
+    c.setDraft('lead', 'First');
+    final one = c.send();
+    c.setDraft('lead', 'Second');
+    final two = c.send();
+    expect(c.outgoing('lead'), hasLength(2));
+    c.revokeAccess('Access removed.');
+    gate.complete();
+    await Future.wait([one, two]);
+    expect(c.outgoing('lead'), isEmpty);
+    expect(s.posts, hasLength(1));
+    c.dispose();
+  });
+  test(
     'queued sends retain their project, workgroup and own Buddy destinations',
     () async {
       final s = ConversationServer();
