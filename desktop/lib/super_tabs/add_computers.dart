@@ -281,9 +281,25 @@ class _AddComputersState extends State<_AddComputers> {
         _errors[id] = failure.toString();
       }
     }
-    // One fresh read of the Swarm after a failure: an add whose reply was
-    // lost may be there all the same.
+    // After a failure, an add whose reply was lost is settled through the
+    // controller under its own receipt: one re-send the server answers from
+    // that receipt, never a second add. Left pending, it would hold back every
+    // later command of this Swarm (review of #2235). Then one fresh read.
     if (_errors.keys.any(ids.contains) && _alive()) {
+      final pending = _pendingAdd;
+      if (pending != null) {
+        Map<String, dynamic>? settled;
+        try {
+          settled = await c.retry();
+        } catch (_) {
+          // Still pending: the row keeps its reason, and the next add checks
+          // this one first.
+        }
+        if (settled != null && mounted) {
+          _added.add(pending);
+          _errors.remove(pending);
+        }
+      }
       try {
         await c.refresh();
       } catch (_) {
@@ -301,7 +317,17 @@ class _AddComputersState extends State<_AddComputers> {
       for (final row in _rows)
         if (row.status == AddComputerStatus.added) row.id,
     };
-    if (_alive() && ids.every(inSwarm.contains)) Navigator.pop(context);
+    if (_alive() && _pendingAdd == null && ids.every(inSwarm.contains)) {
+      Navigator.pop(context);
+    }
+  }
+
+  /// The computer of an add the controller still holds unconfirmed, if any.
+  String? get _pendingAdd {
+    final command = c.pendingCommand;
+    if (command?['type'] != 'machine.contribute') return null;
+    final id = command!['machineId'];
+    return id is String ? id : null;
   }
 
   void _close() {

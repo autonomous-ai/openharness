@@ -647,7 +647,21 @@ void main() {
       await settle(tester);
       expect(find.text('couldn’t add'), findsNothing);
       expect(find.text('Add your computers'), findsNothing);
-      expect(f.connection.server.posts, hasLength(1));
+      // The lost add is settled through the controller, under its own
+      // receipt: nothing is left pending to block what comes next.
+      expect(c.hasPendingAction, isFalse);
+      expect(
+        f.connection.server.posts.map((p) => p['operationId']).toSet(),
+        hasLength(1),
+      );
+      final conversationId = c.snapshot!.conversations.first.id;
+      final later = await c.command({
+        'type': 'message.send',
+        'conversationId': conversationId,
+        'text': 'Added my Mac.',
+      });
+      expect(later, isNotNull);
+      expect(c.hasPendingAction, isFalse);
       expect(
         (f.connection.server.state['machines'] as List).where(
           (m) => (m as Map)['machineId'] == 'm',
