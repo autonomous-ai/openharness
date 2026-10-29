@@ -22,9 +22,11 @@
  */
 import { writeFileSync } from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { runSocketScenario, shortfalls, type ScenarioResult } from './harness/socketScenario.js'
+import { offlineRetryProblems, runSocketScenario, shortfalls, type ScenarioResult } from './harness/socketScenario.js'
 
 const minutes = Number(process.env.SOCKET_SCENARIO_MINUTES ?? 3)
+/** The scenario's daemons, A and B (harness/socketScenario.ts). */
+const DAEMONS = 2
 let result: ScenarioResult
 
 /** When each web-ws select of `machineId` was sent, in order. */
@@ -54,15 +56,18 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('WebSocket phases 0 and 1
     expect(below).toEqual([])
   })
 
-  it('Phase 1: a deleted machine is selected once, by the socket that finds it gone, and never again', () => {
-    expect(selectTimes(result.machines.deleted).length).toBeLessThanOrEqual(1)
+  // Once per daemon, not once per account (Lead, 2026-10-29, #2101): A pinned the deleted machine, and B learns it from A's
+  // roster before A finds it gone, so each finds it gone once (remoteRelay.ts marks it gone) and neither dials it again. The
+  // meter cannot tell the two daemons apart; a daemon that kept dialling would fail this within a minute (main: 16 in 3).
+  it('Phase 1: a deleted machine is selected at most once by each daemon, by the socket that finds it gone, and never again', () => {
+    expect(selectTimes(result.machines.deleted).length).toBeLessThanOrEqual(DAEMONS)
   })
 
-  it('Phase 1: an offline machine is selected again only after the backend\'s retryAfterMs (30 s)', () => {
-    const times = selectTimes(result.machines.offline)
-    const gaps = times.slice(1).map((at, i) => at - times[i])
-    // A second of slack for the timers on both sides.
-    expect(Math.min(...gaps, Infinity)).toBeGreaterThanOrEqual(29_000)
+  // Per daemon (Lead, 2026-10-29, #2104): each of A and B is told the 30 s, and each waits it out; one daemon's select
+  // a few seconds after the other's is two clients, not a retry. Each must have retried at least once, through its own
+  // named entry, so the check measures something (harness/socketScenario.ts `offlineRetryProblems`).
+  it('Phase 1: each daemon selects an offline machine again only after the backend\'s retryAfterMs (30 s)', () => {
+    expect(offlineRetryProblems(result)).toEqual([])
   })
 
   it('Phase 1: no socket that selected a machine is dropped within a minute', () => {

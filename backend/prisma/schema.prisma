@@ -1169,6 +1169,9 @@ model SuperTabAttachment {
   size           Int
   objectKey      String
   usedBy         String?
+  /// The Buddy proposal that carried this file, when its owner sent it in their Buddy chat (superTabs/store.ts proposable):
+  /// each file goes with one proposal at most. Their own message keeps it as `usedBy`.
+  proposedBy     String?
   /// `avatar` for a profile picture (superTabs/profile.ts), which no message sends; absent on a chat file.
   purpose        String?
   createdAt      DateTime @default(now())
@@ -1291,6 +1294,8 @@ model SuperTabRouteDecision {
   assignmentId   String?
   outcome        String?
   outcomeAt      DateTime?
+  /// Its attempt's run: what it ran on, how it was paid, its session's token totals at start and end (superTabs/costs/attempts.ts).
+  run            Json?
   createdAt      DateTime  @default(now())
 
   @@index([tabId, createdAt])

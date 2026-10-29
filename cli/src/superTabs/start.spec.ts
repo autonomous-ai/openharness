@@ -261,8 +261,8 @@ it.each(['claude', 'codex'])('starts a %s Buddy with the built-in swarm-buddy sk
   expect(payload.prompt).not.toContain('swarm-dev')
 })
 
-it('starts a Claude Buddy in asking mode, never with full permissions, and no Buddy with the GitHub App\'s token', async () => {
-  for (const [engine, mode, bypass] of [['claude', 'ask', false], ['codex', 'full', true]] as const) {
+it('starts no Buddy with full permissions or the GitHub App\'s token: Claude asking, Codex in its read-only sandbox asking', async () => {
+  for (const [engine, mode, bypass] of [['claude', 'ask', false], ['codex', 'readOnlyAsk', false]] as const) {
     const f = fixture()
     f.start.request = { ...f.start.request, engine, buddyOf: { personId: 'peer', generation: 'g' } } as typeof f.start.request
     await startAgent({ action: 'start', tabId: 'tab', operationId: `buddy-${engine}`, request: f.start.request, hostDispatch: true, github: { requester: 'peer' } } as never,

@@ -21,6 +21,7 @@ import { teamPrivacyObserver } from '../team/observer.js'
 import { teamRelayed } from '../team/relay.js'
 import type { PrivacyObservation } from '../team/privacy.js'
 import { repositoryKey } from './route.js'
+import { usageTarget, validModelTokens, validUsageTarget, type ModelTokens } from '../lib/agentUsageWire.js'
 
 const finite = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null
 const list = (v: unknown) => Array.isArray(v) ? v.map(object) : []
@@ -192,6 +193,7 @@ export class ContributedMachines {
   private privacyRefusedUntil = 0
   /** Until when the reading leaves out its progress, which the backend refused. */
   private progressRefusedUntil = 0
+  private tokensRefusedUntil = 0
   private uncommittedRefusedUntil = 0
   /** Per running session, whether its folder had uncommitted changes when last read, and until when that stands. */
   private readonly uncommittedCache = new Map<string, { cwd: string; dirty: boolean; until: number; readAt: number; shown?: number }>()
@@ -427,9 +429,11 @@ export class ContributedMachines {
         const shown = began >= this.progressRefusedUntil ? this.deps.progress?.(running) ?? {} : {}
         const progress = Object.fromEntries(running.flatMap(id => typeof shown[id] === 'number' ? [[id, shown[id]]] : []))
         const uncommitted = began >= this.uncommittedRefusedUntil ? this.uncommitted(running, began, shown) : {}
+        const tokens = began >= this.tokensRefusedUntil ? await this.tokensOf(running) : {}
         // Only to a backend that asks for them (backend read/hostRows.ts): an older one refuses the field, and would refuse
         // every reading with it.
-        const observation = { generation: pool.generation, tools: reportedTools, ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
+        const observation = { generation: pool.generation, tools: reportedTools, ...(Object.keys(tokens).length ? { harnessTokens: tokens } : {}),
+          ...(row.capabilitiesWanted === true ? { capabilities: CAPABILITIES } : {}),
           ...(preparing.length ? { preparingStartIds: preparing } : {}),
           ...(Object.keys(uncommitted).length ? { harnessUncommitted: uncommitted } : {}),
           ...(Object.keys(progress).length ? { harnessProgress: progress } : {}), ...(localModels ? { localModels } : {}),
@@ -458,7 +462,8 @@ export class ContributedMachines {
           // readiness, progress, then privacy): a backend that takes everything else keeps the local models it reads. Their
           // boolean-only view still safely refuses an unverified tool, and a reading without privacy is never one a Team
           // machine passes on.
-          const { preparingStartIds: _preparing, ...unprepared } = observation
+          const { harnessTokens: _tokens, ...untokened } = observation
+          const { preparingStartIds: _preparing, ...unprepared } = untokened
           const { harnessUncommitted: _uncommitted, ...known } = unprepared
           const { readiness: _readiness, ...ready } = known
           const { harnessProgress: _progress, ...withoutProgress } = ready
@@ -467,7 +472,8 @@ export class ContributedMachines {
           // A backend before `starting` refuses it: it gets the models the grid lists, as before, not none at all.
           const listedOnly = localModels?.some(m => m.starting)
             ? [{ ...withoutPrivacy, localModels: localModels.filter(m => !m.starting) }] : []
-          const attempts = [...('preparingStartIds' in observation ? [observation] : []), ...('harnessUncommitted' in unprepared ? [unprepared] : []),
+          const attempts = [...('harnessTokens' in observation ? [observation] : []), ...('preparingStartIds' in untokened ? [untokened] : []),
+            ...('harnessUncommitted' in unprepared ? [unprepared] : []),
             ...('readiness' in known ? [known] : []), ready, ...('harnessProgress' in ready ? [withoutProgress] : []),
             ...('privacy' in withoutProgress ? [withoutPrivacy] : []), ...listedOnly,
             ...('toolProbeErrors' in observation || 'localModels' in observation || 'refusedModels' in observation ? [legacy] : [])]
@@ -479,7 +485,8 @@ export class ContributedMachines {
               break
             } catch (error) {
               if (!refused(error) || index === attempts.length - 1) throw error
-              if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
+              if ('harnessTokens' in attempt) this.tokensRefusedUntil = began + FIELD_REFUSED_MS
+              else if ('preparingStartIds' in attempt) this.preparingRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessUncommitted' in attempt) this.uncommittedRefusedUntil = began + FIELD_REFUSED_MS
               else if ('readiness' in attempt) this.readinessRefusedUntil = began + FIELD_REFUSED_MS
               else if ('harnessProgress' in attempt) this.progressRefusedUntil = began + FIELD_REFUSED_MS
@@ -570,6 +577,20 @@ export class ContributedMachines {
         } catch { /* Revocation or one unavailable project cannot block another contribution. */ }
       }
     } finally { local?.close() }
+  }
+  /** Each running session's token counts by model, from the daemon's last usage reading (never a transcript read): the
+   *  Swarm prices each attempt by them (backend superTabs/costs). Counts only; the reading's folders and pull requests stay
+   *  here. A session with none read yet is left out. */
+  private async tokensOf(running: readonly string[]): Promise<Record<string, Record<string, ModelTokens>>> {
+    const counted: Record<string, Record<string, ModelTokens>> = {}
+    for (const id of running) {
+      const session = this.core.agents.byAgent(id)
+      const target = session && usageTarget(session)
+      if (!target || !validUsageTarget(target)) continue
+      const models = (await this.core.usage?.(target).catch(() => null))?.models
+      if (models && Object.keys(models).length && validModelTokens(models)) counted[id] = models
+    }
+    return counted
   }
   /** Whether each running session's folder has uncommitted changes (git status), as last read, for the sessions git could
    *  read: the backend stops a worker idle for 15 minutes only when its host says it is clean (backend superTabs/tidy.ts).

@@ -205,6 +205,31 @@ describe('a worker left idle', () => {
     }
   })
 
+  it('is stopped, as a Reviewer whose newest group is asleep, with its line in the Lead conversation and the poll intact (review of #2073)', async () => {
+    const f = await swarm()
+    const review = String((await f.execute({ type: 'conversation.create', title: 'Review: Parser', brief: 'Review it', reviewOf: f.group,
+      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+    const reviewerHarness = randomUUID()
+    const reviewer = await f.add(review, 'test-host', reviewerHarness, 'Reviewer')
+    await f.started(reviewer, { role: 'reviewer' })
+    const verdict = String((await f.execute({ type: 'work.assign', conversationId: review, agentId: reviewer })).result.assignmentId)
+    await f.execute({ type: 'work.cancel', conversationId: review, assignmentId: verdict, reason: 'Verdict given' })
+    await f.delivered()
+    // Asleep but not archived, quiet for an hour, and read by the Lead's poll all the same: the review went on to another
+    // Reviewer whose attempt made progress 10 minutes ago. A post into it finds nothing.
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: review } })
+    const quiet = new Date(f.clock.now - 60 * MINUTE)
+    f.clock.now += 20 * MINUTE
+    const data = part.data as Record<string, unknown>
+    await db.swarmGroup.update({ where: { id: part.id }, data: { dormant: true, lastActivityAt: quiet, data: { ...data, dormant: true,
+      lastActivityAt: quiet.toISOString(), assignment: { ...data.assignment as object, agentId: 'another-reviewer', progressAt: f.clock.now - 10 * MINUTE } } } })
+    await f.observe('test-host', [f.harness.worker, reviewerHarness], { harnessUncommitted: { [f.harness.worker]: false, [reviewerHarness]: false } })
+    await f.timed.deliveries(host, f.tab, f.lead)
+    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === reviewer)!.workDecision).toBe('stop')
+    expect((await f.lines()).filter(m => (m.source as { agentId?: string }).agentId === reviewer))
+      .toEqual([expect.objectContaining({ conversationId: 'lead', text: 'Reviewer stopped: no work for 15 minutes.' })])
+  })
+
   it('is kept once the owner turned tidying off', async () => {
     const f = await swarm()
     await f.execute({ type: 'tab.tidy', enabled: false })
