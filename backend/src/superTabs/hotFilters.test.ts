@@ -7,14 +7,23 @@ import { describe, expect, it } from 'vitest'
 // planner bounds by an index's first field alone. On 28 Oct such reads on deliveries, native contexts and route decisions
 // scanned 50 M documents for 220 k returned. Hot Swarm reads go through the named-index helpers instead (parts/indexed.ts
 // readBy, invitedSwarms.ts, pageReads.ts, swarmRows.ts) with a plan test. This test finds every Prisma call on a hot Swarm
-// collection whose filter uses one of those operators. The ones there were when it was written are allowed
-// (hotFilters.allowed.json) and that list may only shrink: a new one fails here. It reads source, not types: a filter a
-// helper function builds and returns (parts/load.ts `or`) is not followed.
+// collection (every SuperTab and Swarm model of the schema) whose filter uses one of those operators, also through a delegate
+// alias. The ones there were when it was written are allowed (hotFilters.allowed.json) and that list may only shrink: a new
+// one fails here. It reads source, not types: a filter a helper function builds and returns (parts/load.ts `or`) is not
+// followed.
 
-/** The Prisma delegates of the Swarm collections every poll reads. */
-const HOT = new Set(['superTab', 'superTabSessionScope', 'superTabMessage', 'superTabMention', 'superTabReaction', 'superTabReadMark', 'superTabDecision',
-  'superTabAttachment', 'superTabOperation', 'superTabNativeContext', 'superTabDelivery', 'superTabRun', 'superTabAttempt', 'superTabRouteDecision',
-  'superTabStopReceipt', 'superTabTerminalRequest', 'swarmHead', 'swarmMember', 'swarmGroup', 'swarmAgent', 'swarmMachine', 'swarmStart', 'swarmProgress'])
+const ROOT = join(import.meta.dirname, '..', '..')
+const ALLOWED = join(import.meta.dirname, 'hotFilters.allowed.json')
+const SCHEMA = join(ROOT, 'prisma', 'schema.prisma')
+
+/** The Swarm models of a Prisma schema: every `SuperTab*` and `Swarm*` model. */
+export function hotModels(schema: string): string[] {
+  return [...schema.matchAll(/^model\s+((?:SuperTab|Swarm)\w*)\s*\{/gm)].map(match => match[1]!)
+}
+
+const MODELS = new Set(hotModels(readFileSync(SCHEMA, 'utf8')))
+/** Their Prisma delegates (`db.swarmGroup`). */
+const HOT = new Set([...MODELS].map(model => model[0]!.toLowerCase() + model.slice(1)))
 /** `delegate(tx, kind)` (parts/write.ts) stands for any Swarm part collection. */
 const PART_DELEGATE = 'delegate'
 const METHODS = new Set(['findMany', 'findFirst', 'findFirstOrThrow', 'findUnique', 'findUniqueOrThrow', 'count', 'aggregate', 'groupBy', 'updateMany',
@@ -26,12 +35,41 @@ export interface HotFilter { file: string; line: number; call: string; operator:
 const nameOf = (name: ts.PropertyName | ts.MemberName): string | undefined =>
   ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isPrivateIdentifier(name) ? name.text : undefined
 
-/** The hot collection a call's receiver is, if any: `x.swarmGroup`, or `delegate(tx, kind)`. */
-function hotReceiver(receiver: ts.Expression): string | undefined {
-  const inner = unwrap(receiver)
-  if (ts.isPropertyAccessExpression(inner) && HOT.has(inner.name.text)) return inner.name.text
-  if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression) && inner.expression.text === PART_DELEGATE) return 'part'
+/** The hot delegate a type names: `Prisma.SwarmGroupDelegate`, `typeof db.swarmGroup`, `PrismaClient['swarmGroup']`. */
+function hotType(type: ts.TypeNode | undefined): string | undefined {
+  for (const word of type?.getText().match(/\w+/g) ?? []) {
+    if (HOT.has(word)) return word
+    const model = word.endsWith('Delegate') ? word.slice(0, -'Delegate'.length) : undefined
+    if (model && MODELS.has(model)) return model[0]!.toLowerCase() + model.slice(1)
+  }
   return undefined
+}
+
+/**
+ * The hot collection a call's receiver is, if any: `x.swarmGroup`, `x['swarmGroup']`, `delegate(tx, kind)`, or a name bound to
+ * one (`const groups = db.swarmGroup`, `const { swarmGroup: groups } = db`, a parameter typed as a hot delegate), followed
+ * through aliases and conditionals.
+ */
+function hotReceiver(receiver: ts.Expression, seen = new Set<ts.Node>()): string | undefined {
+  const inner = unwrap(receiver)
+  if (seen.has(inner)) return undefined
+  seen.add(inner)
+  if (ts.isPropertyAccessExpression(inner) && HOT.has(inner.name.text)) return inner.name.text
+  if (ts.isElementAccessExpression(inner) && ts.isStringLiteralLike(inner.argumentExpression) && HOT.has(inner.argumentExpression.text)) {
+    return inner.argumentExpression.text
+  }
+  if (ts.isCallExpression(inner) && ts.isIdentifier(inner.expression) && inner.expression.text === PART_DELEGATE) return 'part'
+  if (ts.isConditionalExpression(inner)) return hotReceiver(inner.whenTrue, seen) ?? hotReceiver(inner.whenFalse, seen)
+  if (ts.isBinaryExpression(inner)) return hotReceiver(inner.left, seen) ?? hotReceiver(inner.right, seen)
+  if (!ts.isIdentifier(inner)) return undefined
+  const bound = declaration(inner.text, inner)
+  if (!bound) return undefined
+  if (ts.isBindingElement(bound)) {
+    const property = bound.propertyName ? nameOf(bound.propertyName as ts.PropertyName) : ts.isIdentifier(bound.name) ? bound.name.text : undefined
+    if (property && HOT.has(property)) return property
+    return bound.initializer ? hotReceiver(bound.initializer, seen) : undefined
+  }
+  return hotType(bound.type) ?? (bound.initializer ? hotReceiver(bound.initializer, seen) : undefined)
 }
 
 function unwrap(node: ts.Expression): ts.Expression {
@@ -40,13 +78,16 @@ function unwrap(node: ts.Expression): ts.Expression {
   return node
 }
 
-/** The initializer of the nearest `const`/`let` named `name` declared before `at` in a scope that holds `at`. */
-function declared(name: string, at: ts.Node): ts.Expression | undefined {
+type Binding = ts.VariableDeclaration | ts.BindingElement | ts.ParameterDeclaration
+
+/** The nearest declaration of `name` (a `const`/`let`, a destructured name or a parameter) before `at` in a scope that holds `at`. */
+function declaration(name: string, at: ts.Node): Binding | undefined {
   for (let scope: ts.Node | undefined = at.parent; scope; scope = scope.parent) {
-    let found: ts.Expression | undefined
+    let found: Binding | undefined
     const visit = (node: ts.Node) => {
       if (node.pos > at.pos) return
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && node.initializer && node.end <= at.pos) found = node.initializer
+      if ((ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.name.text === name
+        && node.end <= at.pos) found = node
       // A nested function's own declarations are not in scope here.
       if (node !== scope && (ts.isFunctionLike(node) || ts.isClassLike(node))) return
       ts.forEachChild(node, visit)
@@ -55,6 +96,12 @@ function declared(name: string, at: ts.Node): ts.Expression | undefined {
     if (found) return found
   }
   return undefined
+}
+
+/** The initializer of the nearest `const`/`let` named `name` declared before `at`. */
+function declared(name: string, at: ts.Node): ts.Expression | undefined {
+  const bound = declaration(name, at)
+  return bound && ts.isVariableDeclaration(bound) ? bound.initializer : undefined
 }
 
 /** Every filter operator `node` holds, following object literals, spreads, conditionals and local constants. */
@@ -113,9 +160,6 @@ export function hotFilters(file: string, source: string): HotFilter[] {
   return found
 }
 
-const ROOT = join(import.meta.dirname, '..', '..')
-const ALLOWED = join(import.meta.dirname, 'hotFilters.allowed.json')
-
 function sources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
     const path = join(dir, entry.name)
@@ -148,6 +192,45 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     `)
     expect(found.map(f => [f.call, f.operator])).toEqual([
       ['superTabDelivery.updateMany', 'in'], ['swarmGroup.findMany', 'in'], ['swarmGroup.findMany', 'has'], ['part.findMany', 'in']])
+  })
+
+  it('follows a delegate through aliases, destructuring, element access and typed parameters', () => {
+    const found = hotFilters('fixture.ts', `
+      const groups = db.swarmGroup
+      await groups.findMany({ where: { key: { in: ids } } })
+      const again = groups
+      await again.count({ where: { agentIds: { has: agentId } } })
+      const { superTabDelivery: deliveries, swarmMember } = tx
+      await deliveries.updateMany({ where: { status: { in: OPEN } }, data: {} })
+      await swarmMember.findMany({ where: { memberId: { in: ids } } })
+      await db['superTabRun'].findMany({ where: { id: { in: ids } } })
+      const table = delegate(tx, kind)
+      await table.deleteMany({ where: { id: { in: ids } } })
+      const either = cond ? db.superTabConfiguration : tx.superTabConfiguration
+      await either.findMany({ where: { tabId: { in: tabIds } } })
+      async function read(roles: Prisma.SuperTabRoleTextDelegate, typed: typeof db.swarmAgent) {
+        await roles.findMany({ where: { tabId: { in: tabIds } } })
+        await typed.findFirst({ where: { agentId: { in: ids } } })
+      }
+      const machines = db.machine
+      await machines.findMany({ where: { machineId: { in: ids } } })
+      async function other(groups: Prisma.MachineDelegate) { await groups.findMany({ where: { machineId: { in: ids } } }) }
+    `)
+    expect(found.map(f => [f.call, f.operator])).toEqual([
+      ['swarmGroup.findMany', 'in'], ['swarmGroup.count', 'has'], ['superTabDelivery.updateMany', 'in'], ['swarmMember.findMany', 'in'],
+      ['superTabRun.findMany', 'in'], ['part.deleteMany', 'in'], ['superTabConfiguration.findMany', 'in'], ['superTabRoleText.findMany', 'in'],
+      ['swarmAgent.findFirst', 'in']])
+  })
+
+  it('covers every SuperTab and Swarm model in the schema', () => {
+    const schema = readFileSync(SCHEMA, 'utf8')
+    const models = hotModels(schema)
+    const all = [...schema.matchAll(/^model\s+(\w+)\s*\{/gm)].map(match => match[1]!)
+    expect(models).toEqual(all.filter(model => /^(SuperTab|Swarm)/.test(model)))
+    expect(models).toEqual(expect.arrayContaining(['SuperTab', 'SuperTabConfiguration', 'SuperTabRoleText', 'SuperTabDelivery', 'SwarmGroup', 'SwarmWorkspace']))
+    expect(hotModels('model SwarmNew {\n  id String @id\n}\nmodel Machine {\n}\nmodel SuperTabLater {\n}\n')).toEqual(['SwarmNew', 'SuperTabLater'])
+    const found = hotFilters('fixture.ts', 'await db.superTabRoleText.findMany({ where: { tabId: { in: ids } } })')
+    expect(found.map(f => f.call)).toEqual(['superTabRoleText.findMany'])
   })
 
   it('allows only the uses already listed, and the list only shrinks', () => {
