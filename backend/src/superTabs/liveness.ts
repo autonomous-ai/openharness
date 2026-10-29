@@ -1,8 +1,10 @@
-import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
+import { activeWork, forRecipients, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { GRID_START_FAILED, stepUp } from './stepUp.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
@@ -46,6 +48,12 @@ const reachable = (state: SuperTabState, row: MessageDraft): MessageDraft => ({ 
   const target = state.agents.find(a => a.id === id)
   return !!target && state.people.find(p => p.id === target.contributorId)?.generation === target.membershipGeneration
 }) })
+
+/** A notice for the Lead (terminal.ts toLead): when the Lead hears it in its own chat, the copy left in the task's chat for
+ *  no one is that same notice, read by no one either. With no Lead to hear it, people read it (review of #2177). */
+export function leadNoticeRows(rows: MessageDraft[]): MessageDraft[] {
+  return rows.some(row => row.recipients.length) ? rows.map(row => row.recipients.length ? row : { ...row, source: forRecipients(row.source ?? {}) }) : rows
+}
 
 /** The agent's own progress (an assignment, a status, a check, a post) renews the lease stored on its assignment. */
 export function renewLease(assignment: Assignment, now: number): void {
@@ -142,10 +150,10 @@ function loseTask(state: SuperTabState, group: Conversation, worker: Agent, reas
       : 'Assign it to another agent now, or cancel it.')
   // Named by the loss, not the task: a task resumed after a usage limit keeps its id and can be lost again (2026-10-28).
   const loss = String(now)
-  return [...toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null, recipients: [], text: wake, source }),
-    { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
-      text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` }]
-    .map(row => reachable(state, row))
+  return [...leadNoticeRows(toLead(state, worker, { id: stableId('work-lost', assignment.id, loss), conversationId: group.id, author: sender, replyTo: null,
+    recipients: [], text: wake, source }).map(row => reachable(state, row))),
+  reachable(state, { id: stableId('work-lost', assignment.id, loss, 'agent'), conversationId: group.id, author: sender, replyTo: null, recipients: [worker.id], source,
+    text: `Your task "${group.title}" moved: ${reason}. Stop working on it; your status and results for it are no longer accepted.` })]
 }
 
 /** Loses at once the tasks of the workers `which` picks that have a reason now: an agent that just reported a usage limit,
@@ -362,16 +370,21 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
+    // Counted as a host's failure is (commands.ts agent.startFailed); the one that suspends its engine says so once.
+    const suspended = noteStartFailed(state, start, now)
     if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     // Recorded in this write: once the start has ended, no later poll loads it.
     if (group) recordTaskState(state, group, now)
+    // A grid host that never started the agent steps the work up a tier (stepUp.ts).
+    const stepped = group && start.request.gridModel && !activeWork(group) ? stepUp(state, group, GRID_START_FAILED, now, start.id) : null
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
+      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}${suspended ? `\n\n${suspended}` : ''}`,
+      ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source: { kind: 'start-timeout', startId: start.id } })]
   })
 }

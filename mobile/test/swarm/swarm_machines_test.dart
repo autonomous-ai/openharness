@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_devices_page.dart';
 import 'package:harness_mobile/swarm/swarm_machines.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -95,31 +95,23 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         builder: (_, child) => SwarmScope(notifier: host, child: child!),
-        home: const SwarmPage(),
+        home: const SwarmDevicesPage(),
       ),
     );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('swarm-menu')));
     await tester.pumpAndSettle();
   }
 
   Finder key(String s) => find.byKey(ValueKey(s));
 
   testWidgets(
-    'contributed Machines under Projects collapse without hiding projects',
+    "the Swarm's machines are on Your devices (Lead, 10-29), and collapse",
     (tester) async {
       await open(tester);
       expect(key('swarm-machine-$tab-mac-1'), findsOneWidget);
-      expect(
-        tester.getTopLeft(key('swarm-machines-$tab')).dy,
-        greaterThan(
-          tester.getTopLeft(key('swarm-drawer-project-$tab-$project')).dy,
-        ),
-      );
+      expect(find.text('Machines'), findsOneWidget);
       await tester.tap(key('swarm-machines-$tab'));
       await tester.pumpAndSettle();
       expect(key('swarm-machine-$tab-mac-1'), findsNothing);
-      expect(key('swarm-drawer-project-$tab-$project'), findsOneWidget);
       await tester.tap(key('swarm-machines-$tab'));
       await tester.pumpAndSettle();
       expect(find.text('Tony’s Mac'), findsOneWidget);

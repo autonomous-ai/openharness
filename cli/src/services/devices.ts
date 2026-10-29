@@ -19,7 +19,7 @@
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CoreApi, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
+import { DEVICES_REQUESTS, SUPER_TAB_REQUEST_PREFIX, type CardChat, type CoreApi, type SaidOnCard, type CorePorts, type DevicesPort, type RouteAnswer, type SendResult, type ServiceRequests, type WindowFocus } from '../core/api.js'
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { isLocalOnly } from '../lib/cardUpdate.js'
 import { TurnStats, type TurnStatsFields } from '../cable/turnStats.js'
@@ -83,6 +83,8 @@ export interface DevicesDeps {
 const NO_AGENT_LIST = 'no agent list yet'
 /** A Super Tab conversation id as the dials hold one (48 bytes with its NUL). */
 const CHAT_ID = /^[A-Za-z0-9_-]{1,47}$/
+/** A backend's refusal as a dial's voice error: a sentence or two, never a page. */
+const VOICE_ERROR_BYTES = 300
 const unrouted = (reason: string): RouteAnswer => ({ agentId: '', machineId: '', name: '', confidence: 0, reason, candidates: [], weighed: 0, machines: 0, via: '' })
 const sid = (id: string): string => id.slice(0, 8)
 /** A card for the dial, and the machine it came from when another machine sent it (services/fleet.ts). */
@@ -171,6 +173,16 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // The assistant's latest paragraph per agent, as the processing cards carry it; gone when the turn ends.
   const latestUpdate = new Map<string, string>()
   // The Swarm cards' requests to the Super Tab service, through the core (core/devicesLink.ts). An error is an answer too.
+  /** What became of words for a Lead, as the service answered: a refusal keeps its code and its message, cut to what a dial
+   *  shows in a voice error. */
+  const saidOf = (answer: Record<string, unknown>): SaidOnCard => {
+    if (answer.said === true) return { said: true }
+    const refused = answer.refused && typeof answer.refused === 'object' ? answer.refused as Record<string, unknown> : {}
+    if (typeof refused.code !== 'string' || typeof refused.message !== 'string') return { said: false }
+    return { said: false, refused: { code: refused.code, message: truncateUtf8(refused.message, VOICE_ERROR_BYTES) } }
+  }
+  /** A card request's chat, as the core passes it on: none for the Pro, whose requests stay as they were. */
+  const chatFlag = (chat: CardChat | undefined): { chat?: true | 'buddy' } => chat ? { chat } : {}
   const askCards = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try { return await core.superTabRequest!(payload) } catch { return { error: 'SERVICE_UNAVAILABLE' } }
   }
@@ -240,17 +252,19 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       if ((before === 0) !== (cardDevices === 0)) tellCards()
     },
     // The text is the service's to read and not validated by the core: cut here, on a character, to what the Pro takes.
-    // With `chat` (a round dial that speaks swarmChat), the chat on the face's, which must name that chat by an id: a dial
-    // never shows it for another one.
+    // With `chat` (a round dial that speaks swarmChat, or 'buddy' for swarmBuddy), the chat on that dial's face's, which must
+    // name that chat by an id: a dial never shows it for another one.
     swarmCardRecap: async (tabId, leadId, chat) => {
-      const r = await askCards({ action: 'cardRecap', tabId, leadId, ...(chat ? { chat: true } : {}) })
+      const r = await askCards({ action: 'cardRecap', tabId, leadId, ...chatFlag(chat) })
       if (r.ok !== true || typeof r.text !== 'string' || typeof r.at !== 'number' || !Number.isInteger(r.at) || r.at < 0 || typeof r.none !== 'boolean') return null
       if (chat && !(typeof r.chatId === 'string' && CHAT_ID.test(r.chatId))) return null
-      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}) }
+      return { tabId, leadId, text: truncateUtf8(r.text, 1500), at: r.at, none: r.none, ...(chat ? { chatId: r.chatId as string } : {}),
+        ...(chat === 'buddy' ? { buddy: true as const } : {}) }
     },
-    swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...(chat ? { chat: true } : {}) }) },
+    swarmCardOpen: (session, tabId, leadId, chat) => { void askCards({ action: 'cardOpen', session, tabId, leadId, ...chatFlag(chat) }) },
+    swarmCardSide: (tabId, side) => { void askCards({ action: 'cardSide', tabId, side }) },
     // An error (no service, a refused post) is not `said`: the words go to the harness instead, never lost.
-    swarmSay: async (harnessId, text, chat) => (await askCards({ action: 'cardSay', harnessId, text, ...(chat ? { chat: true } : {}) })).said === true,
+    swarmSay: async (harnessId, text, chat, chatId) => saidOf(await askCards({ action: 'cardSay', harnessId, text, ...chatFlag(chat), ...(chatId ? { chatId } : {}) })),
     // The Pro picked a Lead: the window opens that Swarm tab and project. Harmless with no window.
     superTabSelected: (superTabId, projectId) => core.clients.sendLocal({ type: 'dial_super_tab', payload: { superTabId, projectId } }),
     scrolled: (phase, dy, velocity, superTabId) => core.clients.sendLocal({ type: 'dial_scroll', payload: { phase, dy, velocity, ...(superTabId ? { superTabId } : {}) } }),

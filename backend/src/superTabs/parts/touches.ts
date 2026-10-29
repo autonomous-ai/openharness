@@ -57,6 +57,11 @@ export function touchesFor(command: Command, actor: Actor, before: SuperTabState
     case 'agent.avatar':
       leadCheck(agentProject(command.agentId))
       break
+    case 'member.username':
+      // Unique in the Swarm: a concurrent choice of the same name writes another person's part, and a join writes the head.
+      for (const person of before.people) member(person.id)
+      head()
+      break
     case 'project.report': case 'project.repository': case 'project.skills':
       leadCheck(command.projectId)
       break

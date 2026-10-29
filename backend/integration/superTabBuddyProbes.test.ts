@@ -283,21 +283,34 @@ describe('a Buddy and threads', () => {
 })
 
 // Every reader (review 1 of #2168): a reply to a row the reader may not see, an agent-only note here, names nothing of it.
+// Merged with #2177 (main): a new reply to a notice only its recipients read is saved in the chat, not the notice's thread,
+// for every reader (commands.ts). The read-side rule still covers a reply saved in such a thread earlier.
 it('gives no reader a pointer to, or reply line for, an agent-only note it may not see; its recipient keeps them', async () => {
   const f = await swarm(), { agentId } = await buddy(f)
-  // The Lead's note to itself in the project chat, then its own reply in that note's thread.
+  // The Lead's note to itself in the project chat, then its own reply to that note.
   const note = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'AGENT ONLY NOTE', replyTo: null,
     recipientIds: [f.lead], agentOnly: true }, owner, f.lead)).result.messageId)
   const reply = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Following up on my note.', replyTo: note,
     recipientIds: [] }, owner, f.lead)).result.messageId)
+  // A reply saved in the note's thread before #2177 kept such replies in the chat.
+  const sent = (await db.superTabMessage.findUnique({ where: { id: reply } }))!
+  const earlier = randomUUID().replaceAll('-', '').slice(0, 24)
+  await db.superTabMessage.create({ data: { id: earlier, tabId: f.tab, conversationId: 'lead', sequence: sent.sequence + 1,
+    author: sent.author as object, text: 'An earlier follow-up.', replyTo: note, thread: note, recipientIds: [], mentions: [] } })
 
   const lead = await f.store.messages(owner, f.tab, 'lead', {}, f.lead)
-  expect(lead.messages.find(m => m.id === reply)).toMatchObject({ thread: note, replyTo: note })
+  const leadReply = lead.messages.find(m => m.id === reply)!
+  expect(leadReply.thread ?? leadReply.id).toBe(reply)
+  expect(leadReply.replyTo).toBe(note)
+  expect(lead.messages.find(m => m.id === earlier)).toMatchObject({ thread: note, replyTo: note })
   expect(lead.threads.map(t => t.id)).toContain(note)
-  expect((await f.store.messages(owner, f.tab, 'lead', { thread: note }, f.lead)).messages.map(m => m.id)).toEqual([note, reply])
+  expect((await f.store.messages(owner, f.tab, 'lead', { thread: note }, f.lead)).messages.map(m => m.id)).toEqual([note, earlier])
   for (const [user, as] of [[owner, undefined], [peer, agentId]] as const) {
     const read = await f.store.messages(user, f.tab, 'lead', {}, as)
-    expect(read.messages.find(m => m.id === reply)).toMatchObject({ thread: null, replyTo: null })
+    const shown = read.messages.find(m => m.id === reply)!
+    expect(shown.thread ?? shown.id).toBe(reply)
+    expect(shown.replyTo).toBeNull()
+    expect(read.messages.find(m => m.id === earlier)).toMatchObject({ thread: null, replyTo: null })
     expect(JSON.stringify(read)).not.toContain(note)
     expect(await f.store.messages(user, f.tab, 'lead', { thread: note }, as)).toMatchObject({ messages: [], next: null, threads: [] })
   }
