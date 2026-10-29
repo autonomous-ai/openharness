@@ -62,6 +62,9 @@ const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
+// A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
+const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
+const noQuery = z.object({}).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
@@ -137,7 +140,8 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries }, { tellSessionViewers }] = await Promise.all([import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'),
+  const [bus, { announceSwarmDeliveries }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
+    import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
     import('./harnessLinks.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
@@ -149,6 +153,10 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       // through whichever server holds its daemon socket (stability roadmap 2.4). Both only ever drop, never fail, on Redis.
       polls: redisPollMemory(bus.pub),
       deliveriesWaiting: announceSwarmDeliveries,
+      // And each machine whose host read a commit changed, so hosts read their Swarm changes only when told (WS Phase 2a).
+      hostsChanged: announceSwarmHostChanges,
+      // And each person in the Swarm, so their apps read it when told instead of every 3–15 s (WS Phase 2a).
+      swarmChanged: announceSwarmChanges,
       // The host's answer often lands on another instance than the sender's wait.
       terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),
@@ -449,6 +457,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof messageQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages',
     { preHandler: [validateParams(messageParams), validateQuery(messageQuery)] },
     (req, reply) => respond(reply, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId)))
+  app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
+    { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
+    (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
     { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))

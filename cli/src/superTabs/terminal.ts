@@ -8,7 +8,8 @@
  * agent's lease on its task from that (docs: swarm-never-stops, v1 liveness).
  */
 import { createHash } from 'node:crypto'
-import type { CoreApi } from '../core/api.js'
+import type { CoreApi, SuperTabScreen } from '../core/api.js'
+import { updateDismissKeys } from '../engines/codex/screen.js'
 import type { MessageHold } from '../engines/facets/screen.js'
 import { backend } from './host.js'
 import { identifier, object } from './wire.js'
@@ -21,6 +22,8 @@ const SERVE_EVERY_MS = 3_000
 /** A screen read per agent; the 3-minute prompt wait does not need it finer. */
 const WATCH_EVERY_MS = 15_000
 const PROMPT_WAIT_MS = 3 * 60_000
+/** How often Skip is typed for one stuck update screen before the 3-minute alert is left to say it did not work. */
+const SKIP_TRIES = 3
 /** The spec's cap on what a screen read returns. */
 const MAX_SCREEN_BYTES = 64 * 1024
 /** What the screen reader says a prompt or a question is waiting on; a popup or a hidden prompt is not one. */
@@ -131,7 +134,7 @@ function screenDigest(text: string): string {
 }
 
 type Episode = { since: number; alerted: boolean } | null
-interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number }
+interface Watched { prompt: Episode; limit: Episode; model: Episode; retried?: number; skips?: number }
 
 export class TerminalHost {
   private nextServeAt = 0
@@ -241,6 +244,7 @@ export class TerminalHost {
       // A screen that could not be read says nothing either way.
       const read = await this.core.superTabs!.screen(agent.harnessId, 0).catch(() => null)
       if (!read?.ok) continue
+      state.skips = await this.skipUpdate(agent, read, state.skips ?? 0)
       const now = this.now()
       const digest = screenDigest(read.text), seen = this.progress.get(agent.harnessId)
       // A model being retried is not the agent's work moving, whatever else the screen shows meanwhile.
@@ -254,6 +258,21 @@ export class TerminalHost {
       // failure, so a burst that recovers before ten minutes never alerts (and its task is never lost for it).
       state.model = await this.episode(agent, 'model', state.model, retrying, now, since => state.retried! - since >= MODEL_WAIT_MS, {})
     }
+  }
+
+  /** Codex's "Update available" screen on a Swarm agent's terminal, where no one will answer it and its task waits: Esc, through
+   *  the core's door that types only while the screen is still exactly the one read here, so a screen another writer cleared
+   *  meanwhile gets nothing (superTabs/inCore/terminal.ts `inputIfScreen`). Never a row number and Enter (on a misread row
+   *  that could run the update), and only a screen read as exactly that prompt (engines/codex/screen.ts `updateDismissKeys`).
+   *  After [SKIP_TRIES] the 3-minute alert takes over. Returns the tries made for this screen, none once it is gone. The held
+   *  task goes on by itself: the mailbox types it again once the prompt is gone. */
+  private async skipUpdate(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
+    const keys = read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : null
+    if (!keys) return 0
+    if (tries >= SKIP_TRIES) return tries
+    const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
+    if (!dismissed.ok) this.log(`could not dismiss Codex's update screen for ${agent.agentId}: ${dismissed.error}`)
+    return tries + 1
   }
 
   private async episode(agent: Own, alert: 'prompt' | 'limit' | 'model', current: Episode, seen: boolean, now: number,
