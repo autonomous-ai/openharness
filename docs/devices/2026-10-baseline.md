@@ -35,12 +35,12 @@ Pro firmware that ran; numbers for them say so.
 | Ready after a USB reset | < 5 s | 6.2 to 7.1 s (90:63:E8). The 10.5 and 13.8 s resets of 55:1F:E4 on 10-29 were flashes, not plug-ins | 4.7 to 9.4 s (0.1.x) | Same, after a reset over USB (flasher or serial-line toggle). |
 | Reconnect, port back to ready | < 2 s | 30 ms median, 941 ms worst | 40 ms median, 1.6 s at p90, 8.9 s worst (all firmware) | Daemon "open on" to the device's "session up". The live unplug test will time the full replug. |
 | Reconnect after a daemon restart | < 2 s | about 2 s to first fresh data; 10 restarts on 10-29 on Diego's dial | (no Pro plugged in on 10-29) | Daemon reopened the port with no unplug; first frame after it. |
-| Longest run without a crash | 24 h | 13.7 h (55:1F:E4), 7.6 h (90:63:E8), both ended by a replug | 8.9 h (64:61) | Longest uptime in `alive` lines. The live 24 h run has not started: 55:1F:E4 was reflashed at 12:13 UTC on 10-29. |
+| Longest run without a crash | 24 h | 13.7 h (55:1F:E4), 7.6 h (90:63:E8), both ended by a replug | 8.9 h (64:61) | Longest uptime in `alive` lines. Live 24 h run on 55:1F:E4 counts from its restart at 10-29 12:16 UTC (after a dev flash at 12:13). |
 | Memory creep | none | none: internal heap flat (129,299 B over 13.7 h); PSRAM down 11 KB over 7.6 h on 90:63:E8 | none: heap flat over 8.9 h | Free heap and PSRAM in `alive` lines across the longest run. |
 | Crashes | 0 | 0 panics, 0 watchdog resets in 6 weeks | **8 watchdog resets on 0.1.7 to 0.1.13 (10-15 to 10-23, all 3 units)**; 64 panics and 20 watchdog resets on the 0.0.86, 0.0.98 and 0.0.99-pod dev builds (10-09 to 10-19) | Reset reason at boot. |
 | OTA time | (none set) | 13 to 15 s (3 updates) | 6 to 11 s (10 updates) | Daemon "offering firmware" to the device's "written and verified". |
 | OTA failure and rollback | rolls back | no failures seen | 24 failed updates on 10-11 (19 stalled, 3 flash write, 2 wrong product), all left the old image running; 3 bad images refused on magic byte | Device `fw:` and `esp_ota_ops` lines. A live failed-update test waits on Diego's yes. |
-| Daemon CPU, device plugged in | (none set) | pending | pending | The first 10-minute sample was void: the daemon was stopped during it so the dial could be flashed. To be redone. |
+| Daemon CPU, device plugged in | (none set) | 0.46% of one core for `harnessd-devices`; 4.5% for `harnessd-core`, which also serves every agent on this Mac, so it is not the device's cost | pending (no Pro plugged in) | CPU time over 10 minutes (10-29 12:18 to 12:28 UTC) with 55:1F:E4 plugged in and about 10 agents working. An earlier sample was void: the daemon was stopped mid-sample for a dial flash. |
 
 ## Ranked bug list
 
@@ -146,8 +146,8 @@ These need Diego (asked through the Lead on 10-29):
 
 ## Proposed first fix groups
 
-1. **Pro watchdog reset** (bug 1, with bug 5 as a lead). Get a backtrace first: make the hang panic
-   with a core dump instead of a silent reset. Then fix. Owns `devices/harness-pro/firmware`.
+1. **Pro watchdog reset** (bug 1, with bug 5 as a lead). First, make the hang leave each core's last PC
+   and which watchdog fired: in review as #2210. Then fix the hang it names. Owns `devices/harness-pro/firmware`.
 2. **One daemon per device on a shared Mac** (bugs 2 and 3). Confirm the second daemon holds the port.
    Then make the daemon that does not own a device let it go at once. Owns `cli/src/cable`.
 3. **Swarm frame fits** (bug 4): send Swarms in pages, not one frame. Owns `cli/src/cable` and the
