@@ -2,7 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, write
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createConfidentialPurge, purgeRecord, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { createSwarmAgents } from './agents.js'
+import { UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 // A confidential session the Swarm ended for good in a Harness Team account (#895): its data in the Team user's shared
 // engine homes goes, and the account stays held until a sweep finds nothing of it (security re-checks of #2089).
@@ -258,13 +259,26 @@ describe('a purge while its record cannot be read', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const record = purgeRecord(file)
     const purge = vi.fn(async () => ({ ok: true }))
-    const refusal = { error: 'PURGE_RECORD_UNREADABLE',
-      detail: `This machine's record of purges still to finish could not be read and was kept aside at ${file}.unreadable. Its owner checks what it names, then deletes it.` }
+    const refusal = { error: 'PURGE_RECORD_UNREADABLE', detail: UNREADABLE_DETAIL }
     for (const session of [() => null, (id: string) => ({ agentId: id, sessionId: 'pm-session', registeredAt: 5, engine: 'claude', cwd: CWD })]) {
       expect(await createConfidentialPurge({ confidential: () => true, home, session, purge, record })('pm')).toEqual(refusal)
     }
     expect(purge).not.toHaveBeenCalled()
     // Said once, where it was kept.
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([`[super-tabs] the record of purges still to finish could not be read; kept aside at ${file}.unreadable until its owner clears it`])
+    warn.mockRestore()
+  })
+
+  it('is said once, with the path only, however often its close is refused and retried (review of #2142)', async () => {
+    const home = dir(), file = join(home, 'super-tabs', 'team-purges.json')
+    mkdirSync(join(home, 'super-tabs'), { recursive: true })
+    writeFileSync(file, '{')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const purgeEnded = createConfidentialPurge({ confidential: () => true, home, session: () => null, purge: async () => ({ ok: true }), record: purgeRecord(file) })
+    const agents = createSwarmAgents({ byAgent: () => null, stoppedIds: () => [], closeAgent: async () => ({ closed: true }), purgeEnded,
+      members: { leads: () => new Set(), harnesses: () => new Set() } } as never)
+    // Each refused close fails, so its host retries and the account stays held; the host logs what it was told.
+    for (let n = 0; n < 2; n++) expect(await agents.closeMember('pm')).toEqual({ error: 'PURGE_FAILED', detail: UNREADABLE_DETAIL })
     expect(warn.mock.calls.map(([line]) => String(line))).toEqual([`[super-tabs] the record of purges still to finish could not be read; kept aside at ${file}.unreadable until its owner clears it`])
     warn.mockRestore()
   })

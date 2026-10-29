@@ -50,12 +50,9 @@ export function purgeRecord(file: string) {
       return new Map()
     }
   }
-  const keptAside = (): string | null => {
-    if (existsSync(aside)) return aside
-    // No folder yet: no record was ever kept here, let alone kept aside.
-    const names = existsSync(dirname(file)) ? readdirSync(dirname(file)) : []
-    return names.filter(name => name.startsWith(`${basename(aside)}.`)).sort().map(name => join(dirname(file), name))[0] ?? null
-  }
+  // No folder yet: no record was ever kept here, let alone kept aside.
+  const keptAside = (): boolean => existsSync(aside)
+    || (existsSync(dirname(file)) && readdirSync(dirname(file)).some(name => name.startsWith(`${basename(aside)}.`)))
   const state = { held: load() }
   const save = () => {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
@@ -65,9 +62,7 @@ export function purgeRecord(file: string) {
   return {
     pending: (): PurgeTarget[] => [...state.held.values()],
     get: (agentId: string): PurgeTarget | undefined => state.held.get(agentId),
-    unknown: (): boolean => keptAside() !== null,
-    /** The first record kept aside, while one is there. */
-    keptAside,
+    unknown: keptAside,
     put(target: PurgeTarget): void { state.held.set(target.agentId, target); save() },
     drop(agentId: string): void { if (state.held.delete(agentId)) save() },
   }
@@ -209,6 +204,11 @@ export async function sweepForSession(home: string, target: PurgeTarget, pastes:
   return null
 }
 
+/** A purge refused while the record is kept aside; the close that gets it does not say so again (inCore/agents.ts). */
+export const PURGE_RECORD_UNREADABLE = 'PURGE_RECORD_UNREADABLE'
+export const UNREADABLE_DETAIL = "This machine's record of purges still to finish could not be read and was kept aside, as the daemon's log says. "
+  + 'Its owner checks that the sessions it names left no data, then deletes it; the closes waiting on it then retry on their own.'
+
 /**
  * The purge of [agentId]'s data, once the Swarm ended it for good, when it was confidential: kept in [record] before the
  * first deletion and dropped once the sweep finds nothing. A retry finishes from the record, the session gone or not.
@@ -223,10 +223,9 @@ export function createConfidentialPurge(deps: {
 }): (agentId: string) => Promise<Record<string, unknown>> {
   return async agentId => {
     // With its record unreadable, which purges are still to finish is not known: none is answered, not even a 'skipped' for a
-    // session already gone, so the close fails and the backend keeps the account held until a person clears the record.
-    const aside = deps.record.keptAside()
-    if (aside) return { error: 'PURGE_RECORD_UNREADABLE',
-      detail: `This machine's record of purges still to finish could not be read and was kept aside at ${aside}. Its owner checks what it names, then deletes it.` }
+    // session already gone, so the close fails and the backend keeps the account held until a person clears the record. Its
+    // path was logged once, when it was kept aside; this answer, logged on every retry, names neither it nor the agent.
+    if (deps.record.unknown()) return { error: PURGE_RECORD_UNREADABLE, detail: UNREADABLE_DETAIL }
     const session = deps.session(agentId)
     let target = deps.record.get(agentId)
     if (!target) {
