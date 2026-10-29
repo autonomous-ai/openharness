@@ -46,6 +46,11 @@ beforeAll(async () => {
   }
   await db.machine.create({ data: { machineId: 'peer-team', userId: peer.sub, computerId: PEER_TEAM_COMPUTER, sessionKind: 'team', hostMachineId: 'peer-mac',
     apiKey: 'fixture-peer-team', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  // Machines in no Swarm (Dee, 10-29): peer's own laptop, a machine of peer's account given over to team work (`harness team
+  // on`, no Mac), and the owner's own laptop.
+  for (const [machineId, user, sessionKind] of [['peer-laptop', peer, 'computer'], ['peer-dedicated', peer, 'team'], ['owner-laptop', owner, 'computer']] as const) {
+    await db.machine.create({ data: { machineId, userId: user.sub, sessionKind, apiKey: `fixture-${machineId}`, managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+  }
 })
 afterAll(async () => {
   await db?.$disconnect()
@@ -464,5 +469,49 @@ describe('a person\'s post in their Buddy chat from the web (phone bug, 10-29)',
     }
     expect((await stored(f, chat)).length).toBe(before)
     expect(await delivered(f, chat)).toEqual([])
+  })
+})
+
+// A Buddy on one of its person's own machines that is in no Swarm (Dee, 10-29): the store reads whose machine it is from its
+// account row, records it Buddy-only, and only that machine's host learns of it.
+describe('a Buddy on its person\'s own machine outside the Swarm, through the store', () => {
+  const setup = { name: 'Peer Laptop', cwd: '/home/peer/swarm', engines: ['claude' as const] }
+  const add = (f: Awaited<ReturnType<typeof swarm>>, machineId: string) =>
+    f.execute({ type: 'buddy.create', projectId: 'lead', machineId, engine: 'claude', setup }, peer)
+
+  it('starts there through its host, and no one else\'s read lists the machine', async () => {
+    const f = await swarm()
+    const added = await add(f, 'peer-laptop')
+    const pool = (await poolRows(f.store, peer, 'peer-laptop')).find(p => p.tabId === f.tab)!
+    expect(pool.machine).toMatchObject({ machineId: 'peer-laptop', buddyOnly: true, contributorId: peer.sub })
+    expect(pool.buddyStarts!.map(s => s.id)).toEqual([added.result.startId])
+    expect(pool).not.toHaveProperty('localGrid')
+    await f.store.observeMachine(peer, f.tab, 'peer-laptop', { generation: pool.machine.generation, resources: { cpuPercent: 10, memoryTotalBytes: 16e9,
+      memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const host = (command: Command) => f.execute(command, peer, undefined, 'peer-laptop')
+    const startId = String(added.result.startId)
+    await host({ type: 'agent.startDispatch', startId })
+    const agentId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    for (const reader of [owner, peer]) {
+      const read = await f.store.read(reader, f.tab)
+      expect((read.state.machines ?? []).map(m => m.machineId)).not.toContain('peer-laptop')
+    }
+    expect((await f.store.read(peer, f.tab)).state.agents.find(a => a.id === agentId)).toMatchObject({ machineId: 'peer-laptop', buddyOf: { personId: peer.sub } })
+    // Removing the Buddy ends the record; its host is handed the cleanup.
+    await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
+    expect((await poolRows(f.store, peer, 'peer-laptop')).find(p => p.tabId === f.tab)).toBeUndefined()
+  })
+
+  it('is refused on someone else\'s machine and on a Team sign-in, with or without a Mac, adding nothing', async () => {
+    const f = await swarm()
+    // Someone else's machine is refused before the Buddy rule: it was never shared with peer.
+    await expect(add(f, 'owner-laptop')).rejects.toMatchObject({ code: 'HOST_REQUIRED', status: 403 })
+    for (const machineId of ['peer-team', 'peer-dedicated']) {
+      await expect(add(f, machineId)).rejects.toMatchObject({ code: 'BUDDY_OWN_MACHINE', status: 403 })
+    }
+    const read = await f.store.read(peer, f.tab)
+    expect([read.state.starts ?? [], read.state.agents.filter(a => a.buddyOf)]).toEqual([[], []])
+    expect(await poolRows(f.store, owner, 'owner-laptop')).toEqual([])
   })
 })
