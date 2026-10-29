@@ -215,9 +215,10 @@ class SwarmActivity extends ChangeNotifier {
     _want();
   }
 
-  /// That screen went, or out of sight.
+  /// That screen went, or out of sight: once none shows it, the chats still
+  /// waiting their turn for it are not read ([SwarmChatPeeks.withdraw]).
   void unwatch() {
-    if (_views > 0) _views--;
+    if (_views > 0 && --_views == 0) session.peeks.withdraw(this);
   }
 
   /// The rows of [filter]: those still to handle, newest first, then the
@@ -245,7 +246,7 @@ class SwarmActivity extends ChangeNotifier {
 
   /// The person's Try again: the project chats that failed are read again.
   void retry() => _anyChat((reader, chat) {
-    session.peeks.retry(reader, chat);
+    session.peeks.retry(reader, chat, owner: this);
     return false;
   });
 
@@ -431,6 +432,7 @@ class SwarmActivity extends ChangeNotifier {
           reader,
           chat.id,
           counter: (chat.lastMessageSequence, chat.reactionSeq),
+          owner: this,
         );
       }
     }

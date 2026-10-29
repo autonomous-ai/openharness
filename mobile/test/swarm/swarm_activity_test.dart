@@ -185,6 +185,38 @@ void main() {
       expect(chatReads(fake), 1, reason: 'its counter did not move');
     });
 
+    test('out of sight before its chats are read: what waits is taken back '
+        'and read only once Activity shows again', () async {
+      final fake = backend(page: page);
+      final session = await start(fake);
+      final reader = session.inbox.reader(tab)!;
+      // Another list's two reads hold both slots.
+      final other = Object();
+      final gates = [Completer<void>(), Completer<void>()];
+      for (final (i, gate) in gates.indexed) {
+        fake.routes['/api/super-tabs/$tab/conversations/other-$i/messages'] =
+            (_) async {
+              await gate.future;
+              return {'messages': <Object>[], 'next': null};
+            };
+        session.peeks.want(reader, 'other-$i', counter: 1, owner: other);
+      }
+      final activity = session.activity..watch();
+      await settle();
+      expect(chatReads(fake), 0);
+
+      activity.unwatch();
+      for (final gate in gates) {
+        gate.complete();
+      }
+      await settle();
+      expect(chatReads(fake), 0, reason: 'nothing starts out of sight');
+
+      activity.watch();
+      await settle();
+      expect(chatReads(fake), 1);
+    });
+
     test(
       'a thread the person is in, with a reply since they read the chat',
       () async {

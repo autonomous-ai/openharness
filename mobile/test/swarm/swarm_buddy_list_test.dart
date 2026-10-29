@@ -77,6 +77,41 @@ void main() {
     expect(reads(fake), hasLength(2), reason: 'nothing moved: nothing read');
   });
 
+  test('out of sight before its chats are read: what waits is taken back '
+      'and read only once Buddies shows again', () async {
+    final fake = buddiesBackend();
+    final session = await start(fake);
+    final reader = session.inbox.reader(tab)!;
+    // Another list's two reads hold both slots.
+    final other = Object();
+    final gates = [Completer<void>(), Completer<void>()];
+    for (final (i, gate) in gates.indexed) {
+      fake.routes[buddiesChatPath('other-$i')] = (_) async {
+        await gate.future;
+        return {'messages': <Object>[], 'next': null};
+      };
+      session.peeks.want(reader, 'other-$i', counter: 1, owner: other);
+    }
+    List<String> buddyReads() => [
+      for (final path in reads(fake))
+        if (!path.contains('/other-')) path,
+    ];
+    final list = session.buddyList..watch();
+    await settle();
+    expect(buddyReads(), isEmpty);
+
+    list.unwatch();
+    for (final gate in gates) {
+      gate.complete();
+    }
+    await settle();
+    expect(buddyReads(), isEmpty, reason: 'nothing starts out of sight');
+
+    list.watch();
+    await settle();
+    expect(buddyReads(), hasLength(2));
+  });
+
   test("each row's last message, its Buddy's name and how it stands", () async {
     final session = await start(buddiesBackend());
     final list = session.buddyList..watch();

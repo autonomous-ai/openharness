@@ -111,9 +111,10 @@ class SwarmBuddyList extends ChangeNotifier {
     _want();
   }
 
-  /// That screen went, or out of sight.
+  /// That screen went, or out of sight: once none shows it, the chats still
+  /// waiting their turn for it are not read ([SwarmChatPeeks.withdraw]).
   void unwatch() {
-    if (_views > 0) _views--;
+    if (_views > 0 && --_views == 0) session.peeks.withdraw(this);
   }
 
   /// Every project's row, newest first; those with no time after, in the
@@ -136,7 +137,7 @@ class SwarmBuddyList extends ChangeNotifier {
 
   /// The person's Try again: the Buddy chats that failed are read again.
   void retry() => _anyChat((reader, chat) {
-    session.peeks.retry(reader, chat);
+    session.peeks.retry(reader, chat, owner: this);
     return false;
   });
 
@@ -174,7 +175,13 @@ class SwarmBuddyList extends ChangeNotifier {
   void _want() {
     for (final (reader, chat) in _chats()) {
       final last = chat.mainSequence;
-      session.peeks.want(reader, chat.id, counter: last, after: last - 1);
+      session.peeks.want(
+        reader,
+        chat.id,
+        counter: last,
+        after: last - 1,
+        owner: this,
+      );
     }
   }
 
