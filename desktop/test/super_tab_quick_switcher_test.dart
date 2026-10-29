@@ -477,6 +477,58 @@ void main() {
     variant: TargetPlatformVariant.only(TargetPlatform.macOS),
   );
 
+  for (final held in [true, false]) {
+    testWidgets(
+      'Product Managers channel follows sidebar visibility (held=$held)',
+      (tester) async {
+        final (f, c) = await setup(tester);
+        f.connection.server.state['leadsConversationId'] = 'managers';
+        if (held) {
+          (f.connection.server.state['conversations'] as List).add({
+            ...conversationFixture('managers', 'Internal coordination title'),
+            'kind': 'leads',
+            'projectId': '',
+          });
+        }
+        f.connection.server.revision++;
+        await c.refresh();
+        await tester.pump();
+        expect(
+          find.text('product-managers'),
+          held ? findsOneWidget : findsNothing,
+        );
+        await open(tester);
+        await tester.enterText(
+          find.byKey(const ValueKey('swarm-quick-query')),
+          'product-managers',
+        );
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('swarm-quick-conversation:managers')),
+          held ? findsOneWidget : findsNothing,
+        );
+        if (held) {
+          expect(
+            find.descendant(
+              of: find.byKey(
+                const ValueKey('swarm-quick-conversation:managers'),
+              ),
+              matching: find.text('product-managers'),
+            ),
+            findsOneWidget,
+          );
+          await key(tester, LogicalKeyboardKey.enter);
+          await tester.pumpAndSettle();
+          expect(c.selectedId, 'managers');
+        } else {
+          await key(tester, LogicalKeyboardKey.escape);
+        }
+        await close(tester, f, c);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+  }
+
   final shots = Platform.environment['SWARM_QUICK_SWITCHER_SHOTS'];
   setUpAll(() => loadCaptureFonts(shots));
   for (final brightness in Brightness.values) {
