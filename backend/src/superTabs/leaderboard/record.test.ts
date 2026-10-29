@@ -647,6 +647,20 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
   })
 
+  it('takes the first assignment time from the kept attempts for a request recorded before it was kept (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    f.at(10_000)
+    const first = f.assign(id, worker)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: first.assignmentId, reason: 'Again.' })
+    // As a group recorded before the time was kept.
+    delete f.group(id).ledger!.firstAssignedAt
+    f.at(10_001)
+    f.assign(id, worker)
+    expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
+  })
+
   it('records the attempt a request shipped on, and keeps it through a later attempt (review of #2097)', () => {
     const f = fixture()
     f.at(5_000)
@@ -665,18 +679,37 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
   })
 
-  it('keeps who led the group when it shipped, whoever leads it later (review of #2097)', () => {
+  it('keeps who led the group and the attempt when it shipped, through a later lead and a later merge record (review of #2097)', () => {
     const f = fixture()
     const lead = f.add('lead', 'lead', true)
     const id = f.create(owner, { checks })
     expect(f.group(id).leadId).toBe(lead)
+    f.at(1_000)
     const { worker, assignmentId } = f.assign(id)
     f.passChecks(id, assignmentId)
     f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    const shippedBy = f.group(id).ledger!.shippedBy
     expect(f.group(id).ledger!.shippedLeadId).toBe(lead)
     f.group(id).leadId = 'someone-else'
+    f.at(2_000)
     f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7' })
-    expect(f.group(id).ledger!.shippedLeadId).toBe(lead)
+    expect(f.group(id).ledger).toMatchObject({ shippedAt: 2_000, shippedLeadId: lead, shippedBy })
+  })
+
+  it('keeps the shipping attempt through a later assignment before the merge is recorded (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks })
+    f.at(1_000)
+    const { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    const other = f.add('other', id)
+    f.state.agents.find(a => a.id === other)!.configuration = { ...config, model: 'sonnet' }
+    f.at(1_500)
+    f.assign(id, other)
+    f.at(2_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7' })
+    expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId, model: 'opus', at: 1_000 })
   })
 
   it('ships on the attempt that ran when the recorded merge happened', () => {

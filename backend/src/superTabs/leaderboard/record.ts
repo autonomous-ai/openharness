@@ -82,10 +82,11 @@ export function recordStatus(group: Conversation, assignment: Assignment, previo
   }
 }
 
-/** Keeps who led a request when it shipped, and the attempt it shipped on: the given one, else the last one assigned by
- *  the time it shipped. */
+/** Keeps who led a request when it first shipped, and the attempt it shipped on: the given one, else the last one
+ *  assigned by the time it shipped. Once kept, never rewritten. */
 function shipOn(group: Conversation, run?: Run): void {
   const ledger = group.ledger!
+  if (ledger.shippedLeadId !== undefined) return
   ledger.shippedLeadId = group.leadId ?? null
   const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1)
   if (!shipping) return
@@ -101,11 +102,10 @@ export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z
 export function recordMerged(group: Conversation, mergedAt: number): void {
   const ledger = group.ledger ??= {}
   ledger.mergedAt = Math.min(ledger.mergedAt ?? mergedAt, mergedAt)
-  // An earlier merge than the ship on record moves the ship to the attempt that ran then.
-  if (ledger.shippedAt !== ledger.mergedAt || !ledger.shippedBy) {
-    ledger.shippedAt = ledger.mergedAt
-    shipOn(group)
-  }
+  ledger.shippedAt = ledger.mergedAt
+  // Who led it and which attempt shipped are kept from the first time it shipped; a merge recorded later moves only the
+  // time (review of #2097).
+  shipOn(group)
 }
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
@@ -188,7 +188,9 @@ export function waitsNow(group: Conversation): boolean {
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
   const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now }
   const ledger = group.ledger ??= {}
-  ledger.firstAssignedAt ??= now
+  // A request recorded before this time was kept still has its first attempt in [runs] until 20 more roll it off; only a
+  // request with no attempt yet starts now (review of #2097).
+  ledger.firstAssignedAt ??= ledger.runs?.[0]?.at ?? now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
 }
 
