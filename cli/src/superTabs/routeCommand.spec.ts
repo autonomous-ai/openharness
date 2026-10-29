@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { heldLocalModels, localProbes, offlineModels, routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, offlineModels, routeTask, STALL_RETRY_MS, stalled } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
 import type { Assessment, Policy, Probe } from './route.js'
@@ -373,6 +373,45 @@ describe('routeTask', () => {
     await routeTask(input, stuck, where, opener())
     expect(recorded(stuck).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('remote-1'),
       reason: expect.stringContaining('last 2 starts') })]))
+  })
+  // Mac Auto, Swarm autonomous-harness, 2026-10-29: two starts failed on Harness bugs later fixed and released, and the machine
+  // stayed out of every route until a person started an agent there by hand.
+  it('lets a machine back into routes once its failed starts say nothing about it: updated since, or 30 minutes old', () => {
+    const now = Date.parse('2026-10-29T10:00:00Z')
+    const failed = (id: string, at: number, version?: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: true,
+      error: 'Mac Auto did not start it within 3 minutes', dispatchedAt: at, ...(version ? { dispatchedVersion: version } : {}) })
+    const two = [failed('s1', now - 20 * 60_000, '0.5.1'), failed('s2', now - 10 * 60_000, '0.5.1')]
+    expect(stalled(two, 'm1', { clientVersion: '0.5.1' }, now)).toBe(true)
+    // Its daemon now runs another version than the newer failure was dispatched to.
+    expect(stalled(two, 'm1', { clientVersion: '0.5.6' }, now)).toBe(false)
+    // A failure on the version it runs now still counts, whatever the one before was dispatched to.
+    expect(stalled([two[0]!, failed('s3', now - 60_000, '0.5.6')], 'm1', { clientVersion: '0.5.6' }, now)).toBe(true)
+    // Routing tries once again after the window, and a start that fails then keeps it out another window.
+    expect(stalled(two, 'm1', {}, now - 10 * 60_000 + STALL_RETRY_MS)).toBe(false)
+    expect(stalled([two[1]!, failed('s4', now + STALL_RETRY_MS, '0.5.1')], 'm1', {}, now + STALL_RETRY_MS + 60_000)).toBe(true)
+    // A start from before either was recorded counts as before; one that started an agent, or one still being created, never stalls.
+    const old = { id: 'o', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'failed' }
+    expect(stalled([old, { ...old, id: 'o2' }], 'm1', { clientVersion: '0.5.6' }, now)).toBe(true)
+    expect(stalled([two[0]!, { ...two[1]!, harnessId: 'h', error: null }], 'm1', {}, now)).toBe(false)
+    expect(stalled([two[0]!, { ...two[1]!, error: null }], 'm1', {}, now)).toBe(false)
+    // A Team account's refusal of a model its owner is not offered says the request was wrong, not the machine: it never
+    // counts, so the two failures before it decide (start.ts, Fork A's refusal before anything launches).
+    const refused = (id: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: false, requestedAt: now,
+      error: "This machine's ChatGPT account (its owner's subscription, used through the owner's relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra." })
+    expect(stalled([refused('r1'), refused('r2')], 'm1', {}, now)).toBe(false)
+    expect(stalled([two[0]!, refused('r3'), refused('r4')], 'm1', {}, now)).toBe(false)
+    expect(stalled([...two, refused('r5')], 'm1', { clientVersion: '0.5.1' }, now)).toBe(true)
+    // A start queued and never picked up is dated by its request.
+    const queued = (id: string) => ({ id, request: { machineId: 'm1' }, harnessId: null, dispatched: false, error: null, requestedAt: now - STALL_RETRY_MS - 1 })
+    expect(stalled([queued('q1'), queued('q2')], 'm1', {}, now)).toBe(false)
+  })
+  it('routes again to a machine whose last 2 starts failed more than 30 minutes ago', async () => {
+    const failed = { id: 's', request: { machineId: 'm1' }, harnessId: null, dispatched: true, error: 'The engine did not start.',
+      dispatchedAt: Date.now() - STALL_RETRY_MS - 60_000 }
+    const t = tab(); Object.assign(t.state, { starts: [failed, { ...failed, id: 's2' }] })
+    const s = scoped({ tab: t })
+    await routeTask(input, s, where, opener())
+    expect(JSON.stringify(recorded(s).command.decision.excluded ?? [])).not.toContain('last 2 starts')
   })
   it('says a listed machine without the project folder needs it cloned, not that its disk could not be verified', async () => {
     const needs = { cwd: '/repo/api' }

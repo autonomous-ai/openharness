@@ -325,6 +325,8 @@ export interface CommandContext {
   /** The tab's contributed machines whose account row is signed in as a Harness Team account (`Machine.sessionKind`),
    *  read by the store for the commands that start, assign or route work (machines.ts teamWorkCheck). */
   teamMachines?: string[]
+  /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts), read with [teamMachines]. */
+  machineVersions?: Record<string, string>
   /** The person's role in the Swarm's Workspace, read by the store for invitations (workspaces.ts); absent outside a Workspace. */
   workspaceRole?: WorkspaceRole
   /** Machines of this Swarm also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
@@ -1537,6 +1539,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         if (start.dispatched || start.error || start.harnessId) fail('START_CLAIMED', 'This native start was already requested. Read its creation status; do not start another.')
         start.dispatched = true
         start.dispatchedAt = context.now
+        const version = context.machineVersions?.[start.request.machineId]
+        if (version) start.dispatchedVersion = version
         break
       }
       if (command.type === 'agent.startSettled') {
