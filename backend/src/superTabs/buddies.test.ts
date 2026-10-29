@@ -287,13 +287,16 @@ describe('adding a Buddy', () => {
     expect(addBuddy(f, peer, f.app.projectId).result.startId).toBeTruthy()
   })
 
-  it('is refused to an agent, a viewer, and on a machine that is not in the Swarm', () => {
+  // A machine of theirs outside the Swarm takes a Buddy only with its setup (buddyMachines.test.ts).
+  it('is refused to an agent, a viewer, on someone else\'s machine, and on one outside the Swarm sent without its setup', () => {
     const f = fresh()
     expect(() => addBuddy(f, agentActor(f.pm), f.app.projectId)).toThrow('A person adds their own Buddy')
     f.state.people.find(p => p.id === 'peer')!.role = 'viewer'
     expect(() => addBuddy(f, peer, f.app.projectId)).toThrow()
     f.state.people.find(p => p.id === 'peer')!.role = 'collaborator'
-    expect(() => addBuddy(f, peer, f.app.projectId, 'elsewhere')).toThrow('Add this machine to the Swarm first')
+    expect(() => addBuddy(f, peer, f.app.projectId, 'elsewhere')).toThrow('A Buddy runs only on your own machine')
+    expect(() => f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'elsewhere', engine: 'claude' }, peer,
+      { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } })).toThrow('Update Harness, then add your Buddy again')
   })
 })
 

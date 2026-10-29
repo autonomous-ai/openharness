@@ -4,7 +4,7 @@
  *  says for workers: a Product Manager reads people's private chats. With no machine named, it waits for the first free
  *  one. Desktop's own-machine flow (project.create, a local start, agent.add) is unchanged. */
 import { admitMachineStart, failTeamWork, machineContribution, machineSlots, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
-  type ContributedMachine } from './machines.js'
+  swarmMachines, type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, stableId, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { mutableProjects, projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
@@ -157,7 +157,7 @@ export function requestLead(state: SuperTabState, project: SwarmProject, by: Per
 function candidates(state: SuperTabState, project: SwarmProject): string[] {
   const skipped = project.lead?.skipped ?? []
   const rank = (m: ContributedMachine) => [skipped.includes(m.machineId) ? 1 : 0, m.contributorId === project.ownerId ? 0 : 1, machineSlots(state, m) - m.maxAgents] as const
-  return (state.machines ?? []).filter(m => !m.hostMachineId).map(m => ({ m, r: rank(m) }))
+  return swarmMachines(state).filter(m => !m.hostMachineId).map(m => ({ m, r: rank(m) }))
     .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.r[2] - b.r[2]).map(({ m }) => m.machineId)
 }
 

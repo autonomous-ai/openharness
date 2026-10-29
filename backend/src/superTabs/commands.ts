@@ -1,4 +1,4 @@
-import { admitMachineStart, cleanupOverdue, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername } from './usernames.js'
 import { z } from 'zod'
@@ -152,7 +152,10 @@ export const commandSchema = z.discriminatedUnion('type', [
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
-  z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional() }).strict(),
+  // `setup`: one of the person's own machines outside the Swarm, prepared by the app as Add machine prepares one (its folder and
+  // engines): it is recorded Buddy-only (machines.ts ContributedMachine.buddyOnly). Ignored for a machine already listed.
+  z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional(),
+    setup: z.object({ name: title, cwd: path, engines: z.array(swarmEngine).min(1).max(2) }).strict().optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
   z.object({ type: z.literal('agent.started'), startId: id, harnessId: id, configuration,
     startedSession: z.object({ sessionId: id, createdAt: z.iso.datetime() }).strict().optional() }).strict(),
@@ -281,7 +284,9 @@ export interface CommandContext {
   /** Read from host ownership/access records by the store, never copied from the request. */
   contribution?: { machineOwnerId: string; contributorId: string; hostGrant?: string | null
     /** A Harness Team account's machine: the Mac it lives on, from its account row (machines.ts ContributedMachine). */
-    hostMachineId?: string }
+    hostMachineId?: string
+    /** The machine's account row is signed in as a Harness Team account (lib/teamSession.ts), with or without a Mac. */
+    teamSession?: true }
   /** Loaded from this tab and conversation by the store. */
   /** `thread` is the replied message's thread root, null for a message written before threads (it keeps inline replies). */
   /** `agentOnly`: a notice people cannot read (model.ts agentOnly), whose thread a reply does not join. */
@@ -747,6 +752,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const project = groupProject(state, conversation(state, conversationId))
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
+    if (state.machines?.some(m => m.machineId === (member?.machineId ?? candidate.machineId) && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
     const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines)
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
@@ -767,6 +773,35 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.agentIds = group.agentIds.filter(a => a !== target.id)
       if (group.leadId === target.id) group.leadId = null
       if (group.assignment?.agentId === target.id && activeWork(group)) group.assignment.status = 'reconciling'
+    }
+  }
+
+  /** Records [me]'s own machine [machineId], prepared by the app ([setup]), as Buddy-only (machines.ts buddyOnly): its host
+   *  then reads the Swarm, starts the Buddy and reports it, and nothing else of the Swarm runs there or reads it. */
+  const addBuddyMachine = (machineId: string, setup: NonNullable<Extract<Command, { type: 'buddy.create' }>['setup']>, me: { id: string; generation: string }) => {
+    // Its last Buddy's folders are still being deleted there: a new one would lose its own (machine.contribute does the same).
+    if (state.machineCleanups?.some(c => c.machineId === machineId)) {
+      fail('MACHINE_CLEANING', 'This machine is still cleaning up after your last Buddy there. Try again in a minute.')
+    }
+    if ((state.machines?.length ?? 0) >= 32) fail('MACHINES_FULL', 'This Swarm cannot take another machine.')
+    const pool: ContributedMachine = { machineId, name: setup.name, cwd: setup.cwd, scope: 'swarm', engines: [...new Set(setup.engines)],
+      maxAgents: 1, contributorId: me.id, membershipGeneration: me.generation, generation: operationId, paused: false, buddyOnly: true }
+    ;(state.machines ??= []).push(pool)
+    return pool
+  }
+
+  /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
+   *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). After every command, so each way a
+   *  Buddy goes (removed, failed, its person or project gone) ends it, as expireRemovals does for removals. */
+  const dropIdleBuddyMachines = () => {
+    for (const pool of state.machines?.filter(m => m.buddyOnly) ?? []) {
+      if (state.agents.some(a => a.machineId === pool.machineId)
+        || state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) continue
+      state.machines = state.machines!.filter(m => m !== pool)
+      ;(state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: operationId, machineOwnerId: pool.contributorId,
+        requestedAt: new Date(context.now).toISOString() })
+      state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
+      state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
     }
   }
 
@@ -1078,7 +1113,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
       if (command.ifMissing) {
         if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
-        if (cleaning || state.machines.some(m => m.machineId === command.machineId)) break
+        // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
+        if (cleaning || state.machines.some(m => m.machineId === command.machineId && !m.buddyOnly)) break
       }
       if (cleaning) fail('MACHINE_CLEANING', 'This machine is still cleaning up after its removal. Add it again once that finishes.')
       if (!state.machines.some(m => m.machineId === command.machineId) && state.machines.length >= 32) fail('MACHINES_FULL', 'A Super Tab can have up to 32 contributed machines.')
@@ -1532,20 +1568,23 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BUDDY_EXISTS', 'You already have a Buddy in this project. Remove it to add another.')
       }
       if (existing) removeAgent(existing)
-      // A Buddy runs where the Swarm's agents run, under that machine's own rules: its Machines list.
-      const pool = machineContribution(state, command.machineId) ?? fail('BUDDY_MACHINE', 'Add this machine to the Swarm first: a Buddy runs on one of its machines.', 403)
       const grant = context.contribution ?? fail('HOST_REQUIRED', 'Choose a machine shared with the contributor.', 403)
       // Like a Lead, a Buddy runs only on its owner's own machine, in their own account, for Claude and Codex alike: never a
-      // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28).
-      if (pool.contributorId !== me.id || grant.machineOwnerId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') {
-        fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
-      }
+      // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28). The grant is the store's reading of
+      // the machine's account row (store.ts contribution), never the request's.
+      const listed = machineContribution(state, command.machineId)
+      const notOwn = () => fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403)
+      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) notOwn()
+      // Off the Swarm's list it is recorded Buddy-only (Dee, 10-29): its host starts and watches the Buddy there, and nothing
+      // else of the Swarm reaches it.
+      const pool = listed ?? (command.setup ? addBuddyMachine(command.machineId, command.setup, me) : fail('BUDDY_MACHINE', 'Update Harness, then add your Buddy again.', 403))
+      if (pool.contributorId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') notOwn()
       // Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093): its machine
       // refused every agent's Swarm command while one ran there. None is added on Windows until a real caller check exists
-      // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop.
-      if (pool.observation?.resources.os === 'Windows') {
-        fail('BUDDY_WINDOWS', 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines from the Swarm\'s Machines list.', 403)
-      }
+      // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop, and its launch is checked again (machines.ts).
+      if (pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
+      // A slot for each of its person's Buddies there, one per project: it takes nothing else.
+      if (pool.buddyOnly) pool.maxAgents = machineSlots(state, pool) + 1
       const contributor = person(state, grant.contributorId)
       openBuddyChat(state, project.id, me)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
@@ -1863,7 +1902,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.userId === state.ownerId) fail('OWNER_REQUIRED', 'The owner cannot leave their Super Tab.')
       const member = person(state, command.userId)
       // Their machines leave the way their owner removes one, so the Swarm's folders there are deleted too.
-      for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal) ?? []) {
+      // A Buddy-only one goes silently with their Buddies, below (dropIdleBuddyMachines): no chat ever saw it.
+      for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal && !m.buddyOnly) ?? []) {
         removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm with its owner`)
       }
       // Their Buddies go with them, on whosever machine they run.
@@ -2249,6 +2289,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
+  dropIdleBuddyMachines()
   syncLeads(state)
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)
