@@ -438,7 +438,7 @@ void main() {
     );
 
     testWidgets(
-      'a removed Buddy with a chosen name keeps it in its chat\'s header',
+      'a removed Buddy with a chosen name keeps it in the sidebar and its chat\'s header',
       (tester) async {
         final server = buddySwarm();
         giveBuddy(server);
@@ -452,6 +452,14 @@ void main() {
           ..['buddyName'] = 'Sparky'
           ..['title'] = 'Sparky';
         final c = await show(tester, server);
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('Sparky')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('Buddy')),
+          findsNothing,
+        );
         await tester.tap(buddyEntry);
         await tester.pumpAndSettle();
 

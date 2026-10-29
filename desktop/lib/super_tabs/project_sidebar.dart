@@ -516,9 +516,7 @@ class ProjectSidebar extends StatelessWidget {
             when read.buddyChat != null || controller.canWrite)
           read,
     ];
-    return [
-      for (final read in listed) _buddy(read, named: listed.length > 1),
-    ];
+    return [for (final read in listed) _buddy(read, named: listed.length > 1)];
   }
 
   Widget _buddy(_ProjectReading reading, {required bool named}) {
@@ -526,10 +524,11 @@ class ProjectSidebar extends StatelessWidget {
     final project = reading.project;
     final chat = reading.buddyChat;
     final agent = controller.buddy(project.id);
-    // With no Buddy running it reads as plain "Buddy" (its chat's title names
-    // the owner, which the reader is).
+    // With no Buddy running it reads as the name the reader chose for it, or
+    // plain "Buddy" (its chat's default title names the owner, which the
+    // reader is): one name everywhere is the point of renaming (Lead, 10-29).
     final name = agent == null
-        ? 'Buddy'
+        ? chat?.buddyName ?? 'Buddy'
         : snapshot.agentName(agent.id, fallback: agent.name);
     return SuperTabBuddyRow(
       key: ValueKey('super-buddy-${project.id}'),
