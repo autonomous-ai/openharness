@@ -33,6 +33,18 @@ class _Picked extends XFile {
   Future<Uint8List> readAsBytes() async => bytes;
 }
 
+/// A file chooser that answers when the test says so.
+class _SlowPicker extends FileSelectorPlatform {
+  final answer = Completer<List<XFile>>();
+
+  @override
+  Future<List<XFile>> openFiles({
+    List<XTypeGroup>? acceptedTypeGroups,
+    String? initialDirectory,
+    String? confirmButtonText,
+  }) => answer.future;
+}
+
 class _Picker extends FileSelectorPlatform {
   _Picker(this.files);
   final List<XFile> files;
@@ -118,6 +130,12 @@ void main() {
     server.messages.last
       ..['thread'] = 'message-1'
       ..['replyTo'] = 'message-2';
+    // A second thread to switch to.
+    server.append('Second topic.');
+    server.append('Noted.');
+    server.messages.last
+      ..['thread'] = 'message-4'
+      ..['replyTo'] = 'message-4';
     return server;
   }
 
@@ -281,6 +299,78 @@ void main() {
       );
       // The chat's own box is not given the thread's file.
       expect(c.attachments('lead').isEmpty, isTrue);
+    });
+
+    testThread('a paste still being read when another thread opens goes to the '
+        'thread it was made in', (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final read = Completer<Uint8List?>();
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(
+        const MethodChannel('harness/clipboard_image'),
+        (call) async =>
+            call.method == 'readImagePng' ? await read.future : <String>[],
+      );
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        return switch (call.method) {
+          'Clipboard.getData' => null,
+          'Clipboard.hasStrings' => {'value': false},
+          _ => null,
+        };
+      });
+      addTearDown(() {
+        messenger.setMockMethodCallHandler(
+          const MethodChannel('harness/clipboard_image'),
+          null,
+        );
+        messenger.setMockMethodCallHandler(SystemChannels.platform, null);
+      });
+      final c = await openThread(tester, threaded());
+      final first = files(c);
+
+      await tester.tap(composer);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      c.openThread('message-4');
+      await tester.pumpAndSettle();
+      read.complete(_png);
+      await tester.pumpAndSettle();
+
+      expect(first.files.map((f) => f.name), [kPastedImageName]);
+      expect(identical(first, files(c)), isTrue);
+      expect(c.threadAttachments('lead', 'message-4').isEmpty, isTrue);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    testThread('a file still being picked when another thread opens is not '
+        'lost with the box', (tester) async {
+      final picker = _SlowPicker();
+      final original = FileSelectorPlatform.instance;
+      FileSelectorPlatform.instance = picker;
+      addTearDown(() => FileSelectorPlatform.instance = original);
+      final c = await openThread(tester, threaded());
+      final first = files(c);
+
+      await tester.tap(
+        find.descendant(
+          of: panel,
+          matching: find.byKey(const ValueKey('new-harness-attach')),
+        ),
+      );
+      await tester.pump();
+      c.openThread('message-4');
+      await tester.pumpAndSettle();
+      picker.answer.complete([
+        _Picked('trace.zip', Uint8List.fromList([1, 2, 3])),
+      ]);
+      await tester.pumpAndSettle();
+
+      expect(first.files.map((f) => f.name), ['trace.zip']);
+      expect(identical(first, files(c)), isTrue);
+      expect(c.threadAttachments('lead', 'message-4').isEmpty, isTrue);
     });
 
     testThread('a dropped file becomes a chip', (tester) async {

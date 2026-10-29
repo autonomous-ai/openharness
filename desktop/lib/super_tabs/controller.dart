@@ -673,10 +673,10 @@ class SuperTabController extends ChangeNotifier {
   /// [conversationId]. Like [attachments], they stay in memory, and they are
   /// forgotten with the thread when access to the conversation goes.
   HarnessAttachments threadAttachments(String conversationId, String root) =>
-      _threadAttachments.putIfAbsent(
-        (conversationId, root),
-        () => _newFiles(conversationId, (conversationId, root)),
-      );
+      _threadAttachments.putIfAbsent((
+        conversationId,
+        root,
+      ), () => _newFiles(conversationId, (conversationId, root)));
 
   /// An empty set of files for a message to [conversationId] whose upload
   /// failures are kept under [errorKey].
@@ -1021,7 +1021,9 @@ class SuperTabController extends ChangeNotifier {
   void _pruneThreadFiles() {
     final open = openedThread;
     _threadAttachments.removeWhere((key, files) {
+      // A picker, drop or paste still reading for a box will add to it.
       if (!files.isEmpty ||
+          files.isReading ||
           (key.$1 == open?.conversationId && key.$2 == open?.root) ||
           identical(_sending?.owner, files)) {
         return false;
@@ -1157,11 +1159,10 @@ class SuperTabController extends ChangeNotifier {
         _pending != null) {
       return null;
     }
-    final ids = await _uploadAll(
+    final ids = await _uploadAll(open.conversationId, owner, (
       open.conversationId,
-      owner,
-      (open.conversationId, open.root),
-    );
+      open.root,
+    ));
     if (ids == null) return null;
     final before = _pending;
     final sending = command({
