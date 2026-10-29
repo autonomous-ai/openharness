@@ -4,7 +4,7 @@
  * scenario first proves it ran (harness/socketScenario.ts `shortfalls`), and these are the ways it can fail to.
  */
 import { describe, expect, it } from 'vitest'
-import { shortfalls, type ScenarioResult } from './harness/socketScenario.js'
+import { offlineRetryProblems, shortfalls, type ScenarioResult } from './harness/socketScenario.js'
 import type { SocketRecord } from './harness/socketMeter.js'
 
 const A = 'a'.repeat(32), B = 'b'.repeat(32), X = 'c'.repeat(32), Y = 'd'.repeat(32)
@@ -55,5 +55,40 @@ describe('the socket scenario proves it ran', () => {
     const tabOnly = ran()
     tabOnly.sockets = tabOnly.sockets.filter((s) => !(s.client !== 'web' && s.selects[0].machineId === B))
     expect(shortfalls(tabOnly)).toEqual(['machine B was never accepted through a daemon relay'])
+  })
+})
+
+describe('the offline check measures each daemon\'s own retries', () => {
+  const offlineSelect = (via: string | null, at: number, outcome = 'MACHINE_OFFLINE'): SocketRecord => ({
+    ...socket('relay', Y, outcome), via, selects: [{ machineId: Y, at, outcome }],
+  })
+  const withOffline = (...sockets: SocketRecord[]): ScenarioResult => {
+    const result = ran()
+    result.sockets = [...result.sockets.filter((s) => s.selects[0].machineId !== Y), ...sockets]
+    return result
+  }
+
+  it('passes when each daemon waited 30 s between its own refusals, however close the two daemons are', () => {
+    expect(offlineRetryProblems(withOffline(offlineSelect('a', at), offlineSelect('b', at + 1),
+      offlineSelect('a', at + 30_000), offlineSelect('b', at + 30_001)))).toEqual([])
+  })
+
+  // Review of #2104: one select per daemon, a millisecond apart, passed, since an empty list of gaps has no minimum.
+  it('fails when a daemon never retried, or never asked', () => {
+    expect(offlineRetryProblems(withOffline(offlineSelect('a', at), offlineSelect('b', at + 1)))).toEqual([
+      'daemon a was refused the offline machine 1 time(s): no retry to measure',
+      'daemon b was refused the offline machine 1 time(s): no retry to measure',
+    ])
+    expect(offlineRetryProblems(withOffline(offlineSelect('a', at), offlineSelect('a', at + 30_000)))).toEqual([
+      'daemon b was refused the offline machine 0 time(s): no retry to measure',
+    ])
+  })
+
+  it('fails on a quick retry, and on a select no daemon is named for', () => {
+    expect(offlineRetryProblems(withOffline(offlineSelect('a', at), offlineSelect('a', at + 15_000),
+      offlineSelect('b', at), offlineSelect('b', at + 30_000), offlineSelect(null, at + 40_000)))).toEqual([
+      '1 select(s) of the offline machine came through no named daemon',
+      'daemon a asked the offline machine again after 15.0 s',
+    ])
   })
 })

@@ -166,6 +166,33 @@ export interface ScenarioResult {
 }
 
 /**
+ * Why the offline machine's retries break the backend's 30 s retry-after, per daemon; empty when they do not. Every
+ * select of it must come through a named daemon's meter entry, and each daemon must have been refused it at least twice
+ * (review of #2104: a daemon that asked once has no gap to measure, and an empty list of gaps passes any minimum).
+ */
+export function offlineRetryProblems(result: ScenarioResult, daemons: readonly string[] = ['a', 'b']): string[] {
+  const problems: string[] = []
+  const selects = result.sockets.filter((s) => s.endpoint === '/api/web-ws').flatMap((s) => s.selects
+    .filter((select) => select.machineId === result.machines.offline).map((select) => ({ ...select, via: s.via })))
+  const unnamed = selects.filter((select) => select.via === null || !daemons.includes(select.via)).length
+  if (unnamed) problems.push(`${unnamed} select(s) of the offline machine came through no named daemon`)
+  for (const daemon of daemons) {
+    const times = selects.filter((select) => select.via === daemon && select.outcome === 'MACHINE_OFFLINE')
+      .map((select) => select.at).sort((x, y) => x - y)
+    if (times.length < 2) {
+      problems.push(`daemon ${daemon} was refused the offline machine ${times.length} time(s): no retry to measure`)
+      continue
+    }
+    // A second of slack for the timers on both sides.
+    for (let i = 1; i < times.length; i++) {
+      const gap = times[i] - times[i - 1]
+      if (gap < 29_000) problems.push(`daemon ${daemon} asked the offline machine again after ${(gap / 1000).toFixed(1)} s`)
+    }
+  }
+  return problems
+}
+
+/**
  * What a run is missing to prove anything; empty when it did everything it should. Each check on the run also
  * passes when nothing happened (no deleted-machine select, no quick redial), so a run that never reached a machine
  * through A's relay, never opened the tab's session, was never refused X or selected Y once must fail, loudly.
