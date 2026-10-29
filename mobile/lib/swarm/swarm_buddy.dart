@@ -102,6 +102,28 @@ class SwarmBuddies {
   ];
 }
 
+/// Each read's Buddies, by agent id, kept with its snapshot: the read's
+/// [SwarmBuddies], marked on the UI isolate as the read is shown
+/// ([swarmMarkBuddies]), since a snapshot worked out on another isolate
+/// arrives without what was kept with it.
+final _buddiesOf = Expando<Set<String>>('swarm buddies');
+
+/// Marks [snapshot]'s Buddies as [buddies], read from the same state, for
+/// [swarmIsBuddy].
+void swarmMarkBuddies(SuperTabSnapshot snapshot, SwarmBuddies buddies) =>
+    _buddiesOf[snapshot] = buddies.buddyOwners.keys.toSet();
+
+/// Whether agent [agentId] of [snapshot] is someone's Buddy: a person's own
+/// helper, never one of the team (Ken, 10-29). The phone's Agents lists and
+/// their counts leave it out; the person's own shows only under Buddies.
+bool swarmIsBuddy(SuperTabSnapshot snapshot, String agentId) =>
+    _buddiesOf[snapshot]?.contains(agentId) ?? false;
+
+/// [snapshot]'s agents without its Buddies ([swarmIsBuddy]): the team, as
+/// its lists and counts show it.
+Iterable<SuperTabAgent> swarmTeamAgents(SuperTabSnapshot snapshot) =>
+    snapshot.agents.where((a) => !swarmIsBuddy(snapshot, a.id));
+
 /// The person's own Buddy chat in [projectId]; null while the read holds none
 /// (none opened yet, or quiet for a day and left out of a first load).
 SuperTabConversation? swarmBuddyChat(SwarmReader reader, String projectId) =>

@@ -1,4 +1,5 @@
 import 'model.dart';
+import 'swarm_buddy.dart';
 
 /// An agent's state on the phone. Read from the Swarm alone: the phone sees
 /// no agent's computer, so the work an agent holds is the work it is doing
@@ -59,7 +60,7 @@ const _finished = {'done', 'stopped', 'cancelled'};
 
 /// The team of [snapshot], or of its project [projectId]: an agent is in the
 /// project it records, else in the one whose work it is in (the desktop's
-/// roster rule).
+/// roster rule). A Buddy is no one's team ([swarmTeamAgents]).
 ///
 /// Counted once per read and project: Home, the drawer and the project's page
 /// share one glance until the read is replaced, or until [now] crosses an
@@ -106,7 +107,7 @@ class _ReadGlances {
   _Kept count(SuperTabSnapshot snapshot, String? projectId, DateTime at) {
     final agents =
         [
-          for (final agent in snapshot.agents)
+          for (final agent in swarmTeamAgents(snapshot))
             if (projectId == null || _projectOfAgent(agent) == projectId)
               _glance(snapshot, agent, _taskOf[agent.id], at),
         ]..sort((a, b) {

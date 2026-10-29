@@ -112,10 +112,12 @@ class SwarmInbox extends ChangeNotifier {
       } on FormatException {
         continue;
       }
+      final buddies = SwarmBuddies.read(swarm.view.state, accountId);
+      swarmMarkBuddies(snapshot, buddies);
       _readers.putIfAbsent(swarm.id, () => _open(swarm.id))
         ..snapshot = snapshot
         ..partners = swarm.view.partners
-        ..buddies = SwarmBuddies.read(swarm.view.state, accountId);
+        ..buddies = buddies;
       shown.add((id: swarm.id, name: swarm.name));
     }
     swarms = List.unmodifiable(shown);

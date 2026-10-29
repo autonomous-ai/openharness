@@ -10,6 +10,7 @@ import '../shared/theme/app_theme.dart';
 import '../shared/theme/app_type.dart';
 import 'identity.dart';
 import 'model.dart';
+import 'swarm_buddy.dart';
 import 'swarm_reader.dart';
 import 'swarm_style.dart';
 import 'team_glance.dart';
@@ -400,7 +401,7 @@ class _MachineView {
     required bool refreshing,
   }) {
     final pool = snapshot.pool(id);
-    agents = snapshot.agents
+    agents = swarmTeamAgents(snapshot)
         .where(
           (a) => snapshot.placeOf(a.machineId) == id && a.downSince == null,
         )

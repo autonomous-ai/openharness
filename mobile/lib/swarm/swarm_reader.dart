@@ -275,6 +275,7 @@ class SwarmReader extends ChangeNotifier {
     snapshot = view.snapshot;
     partners = view.partners;
     buddies = view.buddies;
+    swarmMarkBuddies(view.snapshot, view.buddies);
     _views++;
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
+import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
 
 import 'swarm_fixture.dart';
@@ -295,6 +296,79 @@ void main() {
       expect(swarmTeamGlance(after, now: now).agents.map((a) => a.agent.id), [
         'mine',
       ]);
+    });
+  });
+  // Ken, 10-29: a Buddy is a person's own helper, never one of the team. The
+  // phone's Agents lists and their counts leave every Buddy out, the person's
+  // own included (it shows only under Buddies).
+  group('with three Buddies running', () {
+    final buddies = [
+      buddyData('agent-wren', displayName: 'Wren'),
+      buddyData('agent-ivy', owner: 'person-dee', displayName: 'Ivy'),
+      {
+        ...buddyData('agent-oak', owner: 'person-kai', displayName: 'Oak'),
+        'downSince': '2026-10-27T08:00:00Z',
+      },
+    ];
+    final team = [
+      agent('agent-lead', name: 'Lead', displayName: 'River'),
+      agent('agent-ana', displayName: 'Ana'),
+    ];
+
+    Future<SuperTabSnapshot> read(List<Map<String, dynamic>> groups) async {
+      final fake = FakeSwarm();
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        agents: [...team, ...buddies],
+        groups: [
+          ...groups,
+          buddyChatData('buddy-me', agentIds: ['agent-wren']),
+          buddyChatData(
+            'buddy-dee',
+            owner: 'person-dee',
+            agentIds: ['agent-ivy'],
+          ),
+          buddyChatData(
+            'buddy-kai',
+            owner: 'person-kai',
+            agentIds: ['agent-oak'],
+          ),
+        ],
+      );
+      final r = SwarmReader(tabId: tab, accountId: me, request: fake.request);
+      addTearDown(r.dispose);
+      await r.refresh();
+      return r.snapshot!;
+    }
+
+    test('the team and its counts leave every Buddy out', () async {
+      final snapshot = await read([working('agent-ana', 'working')]);
+
+      for (final glance in [
+        swarmTeamGlance(snapshot, now: now),
+        swarmTeamGlance(snapshot, projectId: project, now: now),
+      ]) {
+        expect(
+          [for (final a in glance.agents) a.agent.id],
+          ['agent-ana', 'agent-lead'],
+        );
+        expect(glance.line, '1 working', reason: "Oak's being down counts not");
+      }
+    });
+
+    test('a Swarm read off the UI isolate leaves them out too', () async {
+      final snapshot = await read([
+        working('agent-ana', 'working'),
+        for (var i = 0; i < swarmParseOffThreadParts; i++)
+          groupData('g$i', title: 'Work $i'),
+      ]);
+
+      expect(
+        [
+          for (final a in swarmTeamGlance(snapshot, now: now).agents)
+            a.agent.id,
+        ],
+        ['agent-ana', 'agent-lead'],
+      );
     });
   });
 }

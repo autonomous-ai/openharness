@@ -159,6 +159,40 @@ void main() {
     },
   );
 
+  testWidgets("a machine's agents leave Buddies out (Ken, 10-29)", (
+    tester,
+  ) async {
+    await open(
+      tester,
+      agents: [
+        agent('agent-lead', name: 'Lead', displayName: 'River'),
+        buddyData('agent-wren', displayName: 'Wren'),
+        buddyData('agent-ivy', owner: 'person-dee', displayName: 'Ivy'),
+        buddyData('agent-oak', owner: 'person-kai', displayName: 'Oak'),
+      ],
+    );
+    expect(find.text('1 agent'), findsOneWidget);
+
+    await tester.tap(key('swarm-machine-$tab-mac-1'));
+    await tester.pumpAndSettle();
+    for (final name in ['Wren', 'Ivy', 'Oak']) {
+      expect(
+        find.descendant(
+          of: find.byType(SwarmMachineSheet),
+          matching: find.text(name),
+        ),
+        findsNothing,
+      );
+    }
+    expect(
+      find.descendant(
+        of: find.byType(SwarmMachineSheet),
+        matching: find.text('River'),
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Team account folds into Mac; its readings shown to teammates', (
     tester,
   ) async {
