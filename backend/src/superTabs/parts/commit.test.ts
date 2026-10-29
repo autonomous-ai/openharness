@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, plainHost, sameData, visibilityChanged } from './commit.js'
+import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {
   it('keeps the newest 200 released harnesses of each machine and drops the oldest', () => {
@@ -70,6 +71,99 @@ describe('what a write tells host reads (review round 1)', () => {
     const machineOf = new Map([['leaving', 'm1'], ['staying', 'm2']])
     expect(hostMarker('group', group(['leaving', 'staying'], 'm3'), group(['staying']), machineOf, 9)).toEqual({ host: { hostMachineIds: ['m1', 'm2', 'm3'] } })
     expect(hostMarker('agent', {}, {}, machineOf, 9)).toEqual({})
+  })
+})
+
+describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
+  // Mac A lends a pool and runs agent a1; the team account B follows Mac A; Mac C runs agent c1 only.
+  const swarm = () => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    state.machines = [{ machineId: 'A' }, { machineId: 'B', hostMachineId: 'A' }] as never
+    state.agents = [{ id: 'a1', machineId: 'A' }, { id: 'c1', machineId: 'C' }] as never
+    return state
+  }
+  const update = (kind: PartWrite['kind'], key: string, data: unknown, host?: object): PartWrite => ({ op: 'update', kind, key, seen: 1, data, ...(host ? { host } : {}) })
+  const tell = (writes: PartWrite[]) => hostsToTell(writes, swarm(), swarm()).sort()
+
+  it('tells every host of the Swarm when its head or members change', () => {
+    expect(tell([update('head', 'head', {})])).toEqual(['A', 'B', 'C'])
+    expect(tell([update('member', 'owner', {})])).toEqual(['A', 'B', 'C'])
+  })
+
+  it('tells only the machine an agent or a start is on', () => {
+    expect(tell([update('agent', 'c1', { machineId: 'C' })])).toEqual(['C'])
+    expect(tell([update('start', 's', { request: { machineId: 'A' } })])).toEqual(['A'])
+  })
+
+  it('tells the machines a group\'s marker names, and none for a group write without one', () => {
+    expect(tell([update('group', 'g', {}, { hostMachineIds: ['C'] })])).toEqual(['C'])
+    expect(tell([update('group', 'g', {})])).toEqual([])
+  })
+
+  it('tells a machine whose settings changed, the Mac it follows and the team accounts that follow it, never for its reading alone', () => {
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+    expect(tell([update('machine', 'B', { machineId: 'B', contribution: { hostMachineId: 'A' } }, { hostChangedAt: new Date(9) })])).toEqual(['A', 'B'])
+    expect(tell([update('machine', 'A', { machineId: 'A', contribution: {} })])).toEqual([])
+  })
+
+  it('tells nobody for touches or progress', () => {
+    expect(tell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }, update('progress', 'p', {})])).toEqual([])
+  })
+
+  it('tells a machine the commit removed from the Swarm', () => {
+    const after = swarm()
+    after.agents = after.agents.filter(a => a.machineId !== 'C')
+    expect(hostsToTell([update('head', 'head', {})], swarm(), after).sort()).toEqual(['A', 'B', 'C'])
+  })
+})
+
+// Review of #2113: the host read (read/host.ts) and the push (hostsToTell) share one rule, so they cannot drift apart.
+describe('which host a part concerns from its data alone', () => {
+  it('is every host for the head and the Swarm\'s people, an agent\'s or a start\'s machine, and none for other kinds', () => {
+    expect(plainHost('head', {})).toBe('all')
+    expect(plainHost('member', {})).toBe('all')
+    expect(plainHost('agent', { machineId: 'A' })).toBe('A')
+    expect(plainHost('start', { request: { machineId: 'B' } })).toBe('B')
+    expect(plainHost('agent', null)).toBeNull()
+    expect(plainHost('start', { request: {} })).toBeNull()
+    expect(plainHost('group', { agentIds: [] })).toBeNull()
+    expect(plainHost('machine', { machineId: 'A' })).toBeNull()
+  })
+})
+
+describe('which people a commit tells (WS roadmap Phase 2a, client reads)', () => {
+  const swarm = (...people: string[]) => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    for (const id of people) state.people.push({ ...state.people[0]!, id, email: `${id}@example.com`, role: 'collaborator' })
+    return state
+  }
+  const update = (kind: PartWrite['kind'], key: string, data: unknown, host?: object): PartWrite => ({ op: 'update', kind, key, seen: 1, data, ...(host ? { host } : {}) })
+
+  it('tells every person in the Swarm, before or after, that its main parts changed', () => {
+    const told = membersToTell([update('group', 'g', {})], swarm('kim'), swarm('kim', 'lee'))
+    expect(told.userIds.sort()).toEqual(['kim', 'lee', 'owner'])
+    expect(told.parts).toEqual(['main'])
+  })
+
+  it('tells a person the commit removed, so their app reads and finds it gone', () => {
+    expect(membersToTell([update('member', 'kim', {})], swarm('kim'), swarm()).userIds.sort()).toEqual(['kim', 'owner'])
+  })
+
+  it('says a machine\'s reading alone changed only the machine parts, and both when a setting changed too', () => {
+    expect(membersToTell([update('machine', 'A', {})], swarm(), swarm()).parts).toEqual(['machine'])
+    expect(membersToTell([update('machine', 'A', {}), update('machine', 'B', {}, { hostChangedAt: new Date(9) })], swarm(), swarm()).parts)
+      .toEqual(['main', 'machine'])
+  })
+
+  // The Lead's rule (2026-10-29): someone who can see a Swarm without being in it keeps today's timers.
+  it('tells nobody who is not a person in the Swarm, an invited email included', () => {
+    const invited = swarm('kim')
+    invited.invitations.push({ email: 'stranger@example.com' } as never)
+    expect(membersToTell([update('head', 'head', {})], invited, invited).userIds.sort()).toEqual(['kim', 'owner'])
+  })
+
+  it('tells nobody for a commit that only touches', () => {
+    expect(membersToTell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }], swarm('kim'), swarm('kim'))).toEqual({ userIds: [], parts: [] })
   })
 })
 

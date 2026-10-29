@@ -1,7 +1,9 @@
 import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
+import { GRID_START_FAILED, stepUp } from './stepUp.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
@@ -104,8 +106,8 @@ function limitReason(worker: Agent, now: number): string | null {
 /** Why a worker has lost its task now, or null while it still holds it. Only a machine that has reported can be offline. */
 function lostReason(state: SuperTabState, group: Conversation, worker: Agent, assignment: Assignment, now: number): string | null {
   const pool = state.machines?.find(m => m.machineId === worker.machineId)
-  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return `its session on ${pool.name} stopped`
-  if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return `its machine ${pool.name} has been offline for 2 minutes`
+  if (pool?.observation?.stoppedHarnessIds.includes(worker.harnessId)) return sessionStopped(pool.name)
+  if (pool?.observation && now - pool.observation.receivedAt > OFFLINE_LOST_MS) return machineOffline(pool.name)
   const limited = limitReason(worker, now)
   if (limited) return limited
   // Its host alerts only after ten minutes of retries without an answer (cli superTabs/terminal.ts MODEL_WAIT_MS), so a
@@ -367,10 +369,12 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     const group = state.conversations.find(c => c.id === start.request.conversationId)
     // Recorded in this write: once the start has ended, no later poll loads it.
     if (group) recordTaskState(state, group, now)
+    // A grid host that never started the agent steps the work up a tier (stepUp.ts).
+    const stepped = group && start.request.gridModel && !activeWork(group) ? stepUp(state, group, GRID_START_FAILED, now, start.id) : null
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: failureNotice(start.request.name, start.error), source: { kind: 'start-timeout', startId: start.id } })]
+      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}`, source: { kind: 'start-timeout', startId: start.id } })]
   })
 }

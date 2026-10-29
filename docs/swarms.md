@@ -208,9 +208,19 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   caller itself from its connection; that's the planned follow-up.
 - On Windows, the window is whatever the shell says it is, so any agent there could name another agent's window. Only
   Buddies are kept off Windows; other agents there are trusted as before until Windows has a real caller check.
-- A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
-  the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
-  Swarm read shows no machines or routing rules.
+- A Buddy reads what its owner reads of its project, so it can answer which task owns something, where its pull
+  request stands and what blocks it without the product manager's summaries. That is the project chat, its own chat
+  and the project's workgroups: each task's status, agents, checks, linked pull requests and its owner's open decisions,
+  and on request a task's messages and the archived tasks, a page at a time. The server checks every read as the owner,
+  at the membership they added the Buddy in: once they leave, rejoin or lose a private project, the Buddy reads nothing.
+- A Buddy never reads a private chat (its owner's own with others included), another person's Buddy chat, the Leads
+  conversation or another project, and its Swarm read shows no machines, agent starts or routing rules. It can post
+  only in its own chat. The server refuses every other command.
+- Its status is a short task summary, the newest 100 tasks, marking what changed since its last read and which ones
+  are archived but not yet in the product manager's report; routing rows (where a task was routed, what was left out
+  and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
+  GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
+  information, never as instructions; only its owner's words ask it to act.
 - A Buddy never changes code, and never waits on a prompt nobody answers. A Claude Code Buddy starts in Claude Code's
   dontAsk mode with a guard (a PreToolUse hook in its folder's local settings) that answers every tool call: Read, Grep,
   Glob, its Super Tab commands and plain read commands (git grep, log, show, diff, blame and status; gh issue view and
@@ -230,7 +240,8 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   Claude Code opens it, and a hard link's real path is its name in the folder. The Buddy has no command that writes, so
   it cannot place any. Within that, it reads the files in its own copy of the project (by real path, so a link out of
   it is out), the project's git history, the project's GitHub issues and pull requests through the person's own `gh`
-  sign-in, its own chat and the project chat. Its own reads reach nothing else on the machine: absolute paths and `..`
+  sign-in, and through Harness its own chat, the project chat and the project's workgroups, as above. Its own
+  reads reach nothing else on the machine: absolute paths and `..`
   are refused, glued to an option
   too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
   Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
@@ -344,6 +355,67 @@ never records what anyone wrote. The only text it shows is the title of a
 conversation the reader can read. Private conversations, Buddy chats among
 them, never count and never appear in it.
 
+## Routing
+
+The Lead routes each task before starting or assigning an agent. The route
+leaves out what cannot run it or breaks one of the owner's hard rules, then
+orders the rest by the owner's soft rules and the routing policy (strength,
+quota fit, effective cost).
+
+**Grid models.** A model served on the Swarm's grid counts as strong as the
+policy says. Kimi K3 and DeepSeek v4.1 are rated 2, Sonnet's tier; every other
+grid or local model takes the policy's local quality (1). An owner can change
+both, and add rows of their own, in the policy's local models (`models`: a name
+and a quality, first match first). A model whose host is offline is left out
+with that reason, so no Builder is sent to a machine that cannot start it.
+
+**Cheap first.** Low-risk work that is not a review ranks a grid model first:
+low-difficulty work, and medium work of kind `docs`, `copy`, `tests`,
+`fixtures`, `fix` or `refactor`. The floor still keeps a small model off medium
+work. An owner opts out with the `noGridFirst` rule.
+
+**Stepping up.** When a grid attempt's first review says Ready no, or its grid
+host never starts the agent (the start fails or misses its window), the Swarm
+steps the task up: it closes the attempt, tells its Builder to stop, and wakes
+the Lead to route it again. The next attempt runs on no grid model and nothing
+below quality 2 (Sonnet), and after a second failure nothing below 3 (Opus). A
+task steps up at most twice; after that the Lead decides. The route and the
+server both keep to the new floor. The next attempt's brief carries the pull
+request, the last result and the review's findings, and the step (attempt
+number and why) is kept on the attempt and its route decision.
+
+**Reviews.** A review never runs on a grid model or on a model the policy rates
+below 2. A model the policy does not name, a small Codex variant such as a mini
+or nano among them, is rated 1; an agent launched on its engine's own model is
+rated by that engine's `default` row. A review runs on another engine than the
+reviewed Builder's while a strong Reviewer of another engine can run in the
+Swarm (a Builder on a grid model counts as that model's family). A Swarm with
+one engine keeps its automatic reviews: the Builder's own engine reviews at its
+top tier (quality 3) only, and the route decision records why. The server
+refuses such a start, assignment or pick from an agent, whatever the soft rules
+say, and lets a person through with a warning.
+
+Design:
+
+- Growth: one step record per task, replaced at each step; it goes with its
+  group. Policy rows are capped at 40.
+- Concurrency: a step is recorded in the write that saw the failure (the
+  review's verdict, the failed start or the start timeout), so a newer write
+  retries on current data like every other Swarm write.
+- Read cost: no new reads beyond the tab's policy, which work commands read once.
+- Scale: at most two steps per task; a Swarm's 300 tasks a week add at most 600
+  small records. The step-up rate in `costs` is the first warning.
+- Compatibility: a policy saved before per-model rows reads the built-in rows.
+  An older CLI routes without the new exclusions, and the server still refuses
+  a grid or weak Reviewer and a pick below a step's floor.
+- Migration and rollback: additive fields, no migration. Rolling back leaves
+  them unread; a stepped-up task is then routed as before.
+- Audience: the step is part of its group, read by whoever reads the group.
+- Identity: steps are the Swarm's own notices, written as the project's Lead.
+- Failure: a step is told to the Lead and the Builder; a step that cannot be
+  taken (the cap) leaves the attempt with its Builder.
+- Platforms: server-side; the same on every host.
+
 ## Cost records
 
 Every task a Lead routes records what it ran on, what it cost and how it ended,
@@ -388,7 +460,9 @@ and what was actually spent per token (nothing on a plan or on own GPUs).
 set, at most 90), for the Product Manager, and later for the leaderboard and the
 nightly reflection. Per engine, model, effort and kind of job it gives:
 attempts, first-review pass rate, shipped, median minutes to ship, tokens,
-API-equivalent cost, actual spend, and cost per shipped change. A request ships
+API-equivalent cost, actual spend, cost per shipped change, and how many
+attempts stepped up from a cheaper model. The same figures per model alone (a
+grid model by its own name) compare models week over week. A request ships
 once, at its merge or first Done as the leaderboard records it, by the attempt
 that was running then; more attempts done afterwards ship nothing new. Time to
 ship runs from that attempt's start to when the request shipped. Cost per shipped change is shown only when every ended attempt's cost is

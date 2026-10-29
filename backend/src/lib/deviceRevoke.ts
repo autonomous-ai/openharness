@@ -1,6 +1,6 @@
 import { deviceService } from '../services/index.js'
 import { pushDeviceRevoked } from './hub.js'
-import { publishDeviceControl } from './bus.js'
+import { publishDeviceControl, publishDeviceStatus } from './bus.js'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -27,6 +27,8 @@ export async function revokeDeviceForUser(deviceId: string, userId: string): Pro
   for (const machineId of revoked.machineIds) pushDeviceRevoked(machineId, revoked.deviceId)
   // Duplicate delivery is harmless — the first frame reboots the device.
   void publishDeviceControl(revoked.deviceId, { action: 'revoked' })
+  // The owner's open web sockets keep their own copy of the account's devices (lib/webWs.ts) and drop it on this.
+  void publishDeviceStatus(userId, { deviceId: revoked.deviceId, online: false, removed: true })
   logger.info('device revoked', { deviceId: revoked.deviceId, machines: revoked.machineIds.length, by: userId })
   return true
 }

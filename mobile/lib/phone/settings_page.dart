@@ -18,6 +18,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/appearance_prefs_store.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/state/app_state.dart';
+import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmIntroPage;
 import 'package:harness_mobile/terminal/terminal_font_store.dart';
 import 'package:harness_mobile/terminal/terminal_theme_store.dart';
 
@@ -679,6 +680,13 @@ class _ExperimentRow extends StatelessWidget {
       final on = store.isOn(experiment);
       void toggle(bool next) {
         HapticFeedback.selectionClick();
+        // Swarm is turned on from its page, which says first what it does; off, it goes at once.
+        if (next && experiment == PhoneExperiment.swarm) {
+          unawaited(
+            Navigator.of(context).push(phoneRoute((_) => SwarmIntroPage(features: store))),
+          );
+          return;
+        }
         unawaited(store.set(experiment, next));
       }
 

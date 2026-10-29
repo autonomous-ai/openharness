@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
 import type { Assessment, Policy, Probe } from './route.js'
@@ -249,6 +249,51 @@ describe('routeTask', () => {
     expect(fresh.next).toContain('"name":"Reviewer","role":"reviewer"')
     expect((await offered(false, false)).next).not.toContain('"role"')
   })
+  it('leaves out of a review the reviewed Builder\'s engine while another engine can review, and says why', async () => {
+    const t = tab(); t.state.agents = agents.map(a => a.id === 'a1' ? { ...a, role: 'reviewer' } : a)
+    t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+      assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'g0' })
+    // Codex is on in the policy, so a Codex Reviewer can run.
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const context = { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [{ machineId: 'm1', name: 'remote-1' }] } }
+    const twoEngines = await routeTask(input, scoped({ context }), where as never, opener(id => daemon(id, { agents: ['h1'],
+      engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] })), () => 'op')
+    expect(twoEngines).toMatchObject({ ok: true, pick: { engine: 'codex' } })
+    // A Claude-only Swarm reviews a Claude Builder's work on its top tier alone.
+    const s = scoped({ tab: t })
+    expect(await routeTask(input, s, where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'new', engine: 'claude', model: 'opus' } })
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([{ title: 'Multiply · Claude sonnet medium · remote-1',
+      reason: 'A review on the reviewed Builder\'s engine, Claude, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.' }]))
+    // A Builder still in the Swarm is read from its agent: on a grid model, Claude may review it.
+    t.state.agents.push({ id: 'b1', name: 'Kimi', machineId: 'm1', harnessId: 'hb', configuration: { engine: 'claude', model: 'default', effort: 'default' }, gridModel: 'moonshotai/kimi-k3' } as never)
+    Object.assign(t.state.conversations[2]!, { assignment: { id: 'b', agentId: 'b1', status: 'review' } })
+    expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true, pick: { kind: 'member', agentId: 'a1' } })
+    // Nothing reviewed yet, nothing to keep apart.
+    Object.assign(t.state.conversations[2]!, { assignment: null })
+    expect(await routeTask(input, scoped({ tab: t }), where as never, opener(), () => 'op')).toMatchObject({ ok: true })
+  })
+  it('lets the Builder\'s engine review at its top tier when the only other engine is on a machine the task may not use', async () => {
+    const pool = (machineId: string, engines: string[], patch: Record<string, unknown> = {}) => ({ machineId, name: machineId, cwd: '/w', engines, paused: false, contributorId: 'owner',
+      observation: { receivedAt: Date.now(), resources: { memoryTotalBytes: 32e9, memoryUsedBytes: 2e9, projectDiskFreeBytes: 200e9 }, tools: { git: true }, runningHarnessIds: [],
+        quotas: engines.map(engine => ({ engine, known: true, windows: [{ name: '5-hour', usedPercent: 20, resetsAt: Date.now() + 3600000 }, { name: 'weekly', usedPercent: 10, resetsAt: Date.now() + 5 * 86400000 }] })) }, ...patch })
+    const both = { ...policy, models: policy.models.map(m => ({ ...m, enabled: true })) }
+    const routeWith = async (codexBox: Record<string, unknown>, requires?: string[]) => {
+      const t = tab(); t.state.agents = [agents[1]] as never
+      t.state.conversations.push({ id: 'g0', title: 'Built', leadId: 'lead', agentIds: ['lead'], archived: false, brief: '', checks: [],
+        assignment: { id: 'b', agentId: 'gone', status: 'review', configuration: { engine: 'claude' } } } as never)
+      Object.assign(t.state.conversations[1]!, { reviewOf: 'g0', ...requires ? { task: { goal: 'g', changes: 'c', constraints: 'k', owns: [], requires: { machines: requires } } } : {} })
+      Object.assign(t.state, { machines: [pool('m1', ['claude']), codexBox] })
+      const s = scoped({ context: { ok: true, value: { agentId: 'lead', tab: t, policy: { policy: both, warnings: [] }, machines: [] } } })
+      return routeTask(input, s, where as never, opener(), () => 'op')
+    }
+    // Codex on m2 reviews, so Claude may not.
+    expect(await routeWith(pool('m2', ['codex']))).toMatchObject({ ok: true, pick: { engine: 'codex', machineId: 'm2' } })
+    // The task runs only on m1, or m2 may not take a teammate's project: Claude reviews at its top tier on m1.
+    expect(await routeWith(pool('m2', ['codex']), ['m1'])).toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+    expect(await routeWith(pool('m2', ['codex'], { contributorId: 'mate', teamWork: { allowed: false, code: 'TEAM_ACCOUNT_REQUIRED', reason: 'Not a Team machine.' } })))
+      .toMatchObject({ ok: true, pick: { engine: 'claude', model: 'opus', machineId: 'm1' } })
+  })
   it('tells the Lead how to assign a member or start a new agent with the decision', async () => {
     const member = await routeTask(input, scoped(), where as never, opener(), () => 'op')
     // Cheapest first: the member on sonnet.
@@ -447,13 +492,18 @@ describe('routeTask', () => {
       { id: 'a1', name: 'Opus hand', machineId: 'm1', harnessId: 'h1', configuration: { engine: 'claude', model: 'claude-opus-4-7', effort: 'high' } },
       { id: 'a3', name: 'Sonnet hand', machineId: 'm1', harnessId: 'h3', configuration: { engine: 'claude', model: 'claude-sonnet-4-5[1m]', effort: 'medium' } },
       { id: 'a4', name: 'Codex hand', machineId: 'm1', harnessId: 'h4', configuration: { engine: 'codex', model: 'gpt-5.5', effort: 'high' } },
+      { id: 'a5', name: 'Mini hand', machineId: 'm1', harnessId: 'h5', configuration: { engine: 'codex', model: 'gpt-5.5-mini', effort: 'high' } },
       agents[1]] as never
+    // Codex hand was launched on the engine's own model, which it reports by its slug; Mini hand was launched on a model the
+    // policy does not name (review of #2137).
+    Object.assign(working.state, { starts: [{ harnessId: 'h4', request: { model: 'default' } }, { harnessId: 'h5', request: { model: 'gpt-5.5-mini' } }] })
     const s = scoped({ tab: working })
-    const open = opener(id => daemon(id, { agents: id === 'm1' ? ['h1', 'h3', 'h4'] : [], usage: { providers: [] }, engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
-    await routeTask(input, s, where as never, open)
+    const open = opener(id => daemon(id, { agents: id === 'm1' ? ['h1', 'h3', 'h4', 'h5'] : [], usage: { providers: [] }, engines: [{ engine: 'claude', installed: true, signedIn: true }, { engine: 'codex', installed: true, signedIn: true }] }))
+    // Low work, so a model rated 1 is shown too.
+    await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, open)
     const rated = Object.fromEntries((recorded(s).command.decision.candidates as Array<{ title: string; quality: number; cost: number }>)
       .filter(c => /hand/.test(c.title)).map(c => [c.title.split(' · ')[0], [c.quality, c.cost]]))
-    expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2] })
+    expect(rated).toEqual({ 'Opus hand': [3, 3], 'Sonnet hand': [2, 2], 'Codex hand': [3, 2], 'Mini hand': [1, 1] })
   })
   it('counts the quota open picks hold on the same account, and tells the Lead when nobody is expected to cover the task', async () => {
     const pick = { conversationId: 'g1', title: 'Pick', outcome: null, assignmentId: 'as1', createdAt: new Date().toISOString(), final: { kind: 'new', engine: 'claude', model: 'opus' } }
@@ -1224,6 +1274,13 @@ describe('local models on the Swarm\'s grid', () => {
     const unnamed = state({ machines: [served([{ grid: GRID, model: 'qwen3' }])] })
     expect(offered(unnamed)[0]).toMatchObject({ quality: 1, gridLabel: 'qwen3' })
   })
+  it('rates each served model by the policy\'s named rows: Kimi K3 and DeepSeek v4.1 at 2, a small Qwen at the local quality', () => {
+    const models = [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }]
+    const three = state({ machines: [served([{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }, { grid: GRID, model: 'deepseek/deepseek-v4.1-flash-1017', kind: 'api' },
+      { grid: GRID, model: 'qwen3:4b', name: 'Qwen 3 4B' }])] })
+    const rows = offered(three, { policy: { ...routing, localModels: { quality: 1, enabled: true, models } } })
+    expect(rows.map(r => [r.gridModel, r.quality])).toEqual([['moonshotai/kimi-k3', 2], ['deepseek/deepseek-v4.1-flash-1017', 2], ['qwen3:4b', 1]])
+  })
   it('offers nothing with the add-on off, for a review, or when the owner turned local models off and nobody asked for one', () => {
     expect(offered(state({ localModels: undefined }))).toEqual([])
     expect(offered(state({ localModels: { grid: GRID, enabled: false } }))).toEqual([])
@@ -1294,6 +1351,43 @@ describe('local models on the Swarm\'s grid', () => {
       { model: 'llama3.2:3b', label: 'llama3.2:3b', kind: 'local', holders: [], refused: why },
       { model: 'tiny', label: 'Tiny 1B', kind: 'local', holders: [], refused: 'small' },
     ])
+  })
+  it('leaves out a model whose host is offline, with that reason, unless another host serves it', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true }, machines: [
+      { machineId: 'm1', name: 'remote-1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }] } },
+      { machineId: 'rig', name: '2x 4090 Rig', observation: { receivedAt: Date.now() - 10 * 60_000, localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', name: 'Kimi K3' },
+        { grid: GRID, model: 'deepseek/deepseek-v4.1', kind: 'api' }, { grid: GRID, model: 'starting', starting: true }, { grid: 7, model: 'odd' }] } },
+      { machineId: 'old', observation: { receivedAt: 'never', localModels: [{ grid: GRID, model: 'unnamed-host' }] } }] })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low' } }, s, where as never, opener(), () => 'op')
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    expect(excluded.filter(e => /offline/.test(e.reason))).toEqual([
+      { title: 'Kimi K3', reason: 'Its host 2x 4090 Rig is offline, so a Builder on it would never start.' },
+      { title: 'unnamed-host', reason: 'Its host, a machine of this Swarm, is offline, so a Builder on it would never start.' },
+    ])
+    expect(result).toMatchObject({ ok: true, pick: { gridModel: 'deepseek/deepseek-v4.1' } })
+    // Nothing offline is said for a review, which never runs on the grid, or with the add-on off.
+    Object.assign(t.state.conversations[1]!, { reviewOf: 'lead' })
+    const review = scoped({ tab: t })
+    await routeTask(input, review, where as never, opener(), () => 'op')
+    expect(JSON.stringify(recorded(review).command.decision.excluded)).not.toContain('offline, so a Builder')
+    const off = { ...routing, localModels: { quality: 1, enabled: false } }
+    expect(offlineModels(t.state, off, assessment, false)).toEqual([])
+    expect(offlineModels(t.state, off, { ...assessment, local: true }, false)).toHaveLength(2)
+    expect(offlineModels({ ...t.state, localModels: { grid: GRID, enabled: false } }, routing, assessment, false)).toEqual([])
+    expect(offlineModels({ ...t.state, localModels: undefined }, routing, assessment, false)).toEqual([])
+  })
+  it('leaves the grid and anything under its floor out of a task that stepped up, and says why', async () => {
+    const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },
+      machines: [{ machineId: 'm1', observation: { receivedAt: Date.now(), localModels: [{ grid: GRID, model: 'moonshotai/kimi-k3', kind: 'api' }] } }] })
+    Object.assign(t.state.conversations[1]!, { stepUp: { attempt: 3, floor: 3, reason: 'Its first review said Ready no.', at: 1, carry: '' } })
+    const s = scoped({ tab: t })
+    const result = await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'low', kind: 'docs' } }, s, where as never, opener(), () => 'op')
+    expect(result).toMatchObject({ ok: true, pick: { model: 'opus' } })
+    const why = 'This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality 3.'
+    const excluded = recorded(s).command.decision.excluded as Array<{ title: string; reason: string }>
+    expect(excluded.filter(e => e.reason.includes(why)).map(e => e.title)).toEqual([expect.stringMatching(/^Multiply · Claude sonnet/),
+      expect.stringMatching(/^New agent · Claude sonnet/), expect.stringMatching(/^New agent · Claude on moonshotai\/kimi-k3/)])
   })
   it('routes a low task to a served model and starts it on the grid, with no subscription model', async () => {
     const t = tab(); Object.assign(t.state, { localModels: { grid: GRID, enabled: true },

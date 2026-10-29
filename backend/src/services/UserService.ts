@@ -75,8 +75,12 @@ export const userService = {
    * Mirror an authenticated SSO profile. Email is the account identity; the selected environment
    * decides which SSO subject field is refreshed. Production additionally claims a device-created
    * provisional row whose externalId already equals the authenticated subject.
+   *
+   * `looked`: what the caller's own lookup just found for this profile — the row by email, else (production) the
+   * provisional row by subject, else null — so a sign-in reads its user once (DB optimization roadmap, Phase 2
+   * item 7). Read in this same request, never kept: another server may change the account at any moment.
    */
-  async upsertFromSso(input: SsoUserInput): Promise<User> {
+  async upsertFromSso(input: SsoUserInput, looked?: { existing: User | null }): Promise<User> {
     const externalId = input.externalId.trim()
     const em = normalizeUserEmail(input.email)
     if (!externalId || !em) throw new Error('SSO profile is missing its subject or email')
@@ -84,9 +88,9 @@ export const userService = {
       ? { signUpAttribution: { ...input.signUpAttribution, recordedAt: new Date() } }
       : {}
     const wantAdmin = input.roles?.includes('admin') || ADMIN_EMAILS.has(em)
-    let existing = await prisma.user.findUnique({ where: { email: em } })
+    let existing = looked ? looked.existing : await prisma.user.findUnique({ where: { email: em } })
 
-    if (!existing && input.autonomousEnv === 'prod') {
+    if (!looked && !existing && input.autonomousEnv === 'prod') {
       const byExternal = await prisma.user.findUnique({ where: { externalId } })
       if (byExternal && isProvisionalUserEmail(byExternal.email)) existing = byExternal
     }
