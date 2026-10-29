@@ -72,6 +72,10 @@ export interface Derived {
   decisionsWaiting?: number
   /** A person only: a digest of which decisions are open, moving when they change though the count may not. */
   decisionsDigest?: string
+  /** A person only: their own read marks (readMarks.ts), the newest message sequence read by conversation. A first load has
+   *  every one of the conversations it holds; a changes read only those moved since its cursor, kept by the client as the
+   *  higher of the two. Never another person's. */
+  readMarks?: Record<string, number>
   /** Present, and false, only in a Swarm Harness Team accounts are not tried in yet (machines.ts teamAccountSwarm): this
    *  Mac's daemon and Desktop then offer no team account for it. Absent is every older backend's "yes". */
   teamAccounts?: false
@@ -229,11 +233,15 @@ export interface HostPool {
   starts: AgentStart[]
   /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
   buddyStarts?: AgentStart[]
+  /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
+  leadStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>
   harnessIds: string[]
   githubApp?: true
+  /** The host may say what it launches beyond workers in its readings (leadStart.ts). */
+  capabilitiesWanted?: true
 }
 
 /** HTTP 426 on GET /api/super-tabs, /:tabId, /hosts/:m, /hosts/:m/pools and /hosts/:m/assignments. */

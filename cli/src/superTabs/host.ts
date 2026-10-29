@@ -25,8 +25,12 @@ import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 
 type Json = Record<string, unknown>
-const agentCommandOf = (entry: Entry, prefix: string) => `${prefix} --tab ${shellQuote(entry.tabId)} --agent ${shellQuote(entry.agentId)}`
-const readCommand = (entry: Entry, prefix: string, group: string, id: string) => `${agentCommandOf(entry, prefix)} message ${shellQuote(group)} ${shellQuote(id)}`
+// A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its guard
+// refuses any --agent, so it can never act as another agent (security review 2 of #2092, lib/buddyGuard.ts).
+const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
+  `${prefix} --tab ${shellQuote(entry.tabId)}${buddy ? '' : ` --agent ${shellQuote(entry.agentId)}`}`
+const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>
+  `${agentCommandOf(entry, prefix, buddy)} message ${shellQuote(group)} ${shellQuote(id)}`
 export { backend, identifier, object, SuperTabHostError } from './wire.js'
 import { backend, ENDED_WORK, identifier, object, SuperTabHostError } from './wire.js'
 import { recordSwarmSkillNotice, refreshSwarmSkill, type SkillRefresh, type SwarmSkillGrant, type SwarmSkillMode } from '../lib/swarmSkills.js'
@@ -391,9 +395,17 @@ export class SuperTabHost {
       if (!this.stopped && (this.pushAll || this.pushes.size)) void this.tick()
     })
   }
-  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. */
+  /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. Or that a commit changed
+   *  what this host reads (WS roadmap Phase 2a): a pass now if its feed reads now, else on the tick after its one-second gap. */
   private pushed(notice: BackendNotice): void {
-    if (notice.type !== 'super_tab_deliveries' || this.stopped) return
+    if (this.stopped) return
+    if (notice.type === 'swarm_host_changed') {
+      this.sources.feed.heard(notice)
+      // A pass reads every busy agent's list again: started only when the feed reads now, else the next tick reads it.
+      if (this.sources.feed.readsNow) void this.tick()
+      return
+    }
+    if (notice.type !== 'super_tab_deliveries') return
     this.pushUntil = this.now() + PUSH_LEASE_MS
     if (identifier(notice.tabId) && identifier(notice.agentId)) this.pushes.add(`list:${notice.tabId}:${notice.agentId}`)
     else this.pushAll = true
@@ -606,7 +618,8 @@ export class SuperTabHost {
     return retry
   }
   private async poll(): Promise<void> {
-    const data = (await this.sources.feed.refresh()).roster
+    // Each second, unless the server pushes Swarm changes: then when told, and in full each minute (hostFeed.ts due).
+    const data = (await this.sources.feed.due()).roster
     if (this.stopped) return
     // Taken once the roster is in: a push heard from here on is read by the next poll, which follows this one at once.
     const pushes = new Set(this.pushes), pushAll = this.pushAll || this.now() >= this.pushUntil
@@ -1131,7 +1144,7 @@ export class SuperTabHost {
     const at = typeof quoted.createdAt === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d/.test(quoted.createdAt) ? ` (${quoted.createdAt.slice(0, 16).replace('T', ' ')} UTC)` : ''
     const names = attachmentsOf(quoted).map(a => a.name)
     // About 600 characters keeps a long plan from crowding out the answer; the cut says where the rest is.
-    const text = quoted.text.length > 600 ? `${quoted.text.slice(0, 600)}… (cut; read it all: ${readCommand(entry, prefix, group, id)})` : quoted.text
+    const text = quoted.text.length > 600 ? `${quoted.text.slice(0, 600)}… (cut; read it all: ${readCommand(entry, prefix, group, id, this.isBuddy(entry))})` : quoted.text
     return `Replying to ${String(object(quoted.author).name ?? 'a collaborator')}${at}: ${text}\n`
       + (names.length ? `Its attachments: ${names.join(', ')}\n` : '') + '\n'
   }
@@ -1157,11 +1170,17 @@ export class SuperTabHost {
     } catch (error) { this.log(error instanceof Error ? error.message : String(error)) }
   }
 
+  /** Whether the session a delivery goes to is a Buddy's, as its saved skill says. */
+  private isBuddy(entry: Entry): boolean {
+    return this.core.agents.byAgent(entry.harnessId)?.swarmSkill?.role === 'buddy'
+  }
+
   private prompt(entry: Entry, message: Json, files: string, prefix: string, quote: string): string {
-    const command = agentCommandOf(entry, prefix)
+    const buddy = this.isBuddy(entry)
+    const command = agentCommandOf(entry, prefix, buddy)
     const group = message.conversationId as string
     const reply = quote || (identifier(message.replyTo)
-      ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo)}\n\n`
+      ? `In reply to message ${message.replyTo}. Read it before interpreting the answer: ${readCommand(entry, prefix, group, message.replyTo, buddy)}\n\n`
       : '')
     const source = object(message.source)
     // A notice for this agent alone (a skill update): nobody else sees it, so nothing invites a reply in the conversation.

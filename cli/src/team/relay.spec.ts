@@ -6,8 +6,10 @@ import { CODEX_RELAY_ACCOUNT, type SubscriptionRelay } from '../lib/subscription
 import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher, prepareCodexHome, installedCodexVersion, CODEX_CLIENT_VERSION_FALLBACK,
-  type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps,
+  publishTeamRelay, publishWindowsTeamRelay, readTeamRelay, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
+  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
+  CODEX_CLIENT_VERSION_FALLBACK,
+  type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
 const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
@@ -146,6 +148,88 @@ describe('the team daemon, reading its owner\'s relay', () => {
   })
 })
 
+describe('on Linux', () => {
+  const linuxConfig = { user: 'harnessteam', owner: 'owner', ownerHome: '/home/owner' } as TeamConfig
+
+  it('names the owner\'s folder setup made under /var/lib/harness', () => {
+    expect(teamRelayDir('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner')
+    expect(teamRelayFile('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner/relay.json')
+    expect(teamRelayPublished(linuxConfig, (path) => path === '/var/lib/harness/team-relay-owner/relay.json', 'linux')).toBe(true)
+  })
+
+  it('sets the folder\'s and the file\'s whole ACL with setfacl: the owner, and harnessteam reading, nobody else', async () => {
+    const calls: string[][] = []
+    const grant = setfaclGrant(async (file, args) => { calls.push([file, ...args]) })
+    const dir = join(mkdtempSync(join(tmpdir(), 'team-relay-')), 'relay')
+    cleanup.push(dir)
+    await publishTeamRelay(linuxConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, process.getuid!(), grant, dir)
+    expect(calls).toEqual([
+      ['setfacl', '--set', 'u::rwx,g::---,o::---,u:harnessteam:r-x', dir],
+      ['setfacl', '--set', 'u::rw-,g::---,o::---,u:harnessteam:r--', expect.stringMatching(/\.next$/)],
+    ])
+    await expect(setfaclGrant(async () => { throw new Error('exit 1') })(dir, 'harnessteam', 'read,readattr')).rejects.toThrow('could not let harnessteam read')
+  })
+
+  it('the team side reads it only from the configured owner, allowing the group bits an ACL shows', () => {
+    const entry = (uid: number, mode: number, dir: boolean) => ({ uid, mode, isDirectory: () => dir, isFile: () => !dir })
+    const reader = (over: { dir?: ReturnType<typeof entry>; file?: ReturnType<typeof entry> } = {}): TeamRelayReadDeps => ({
+      platform: 'linux', ownerUid: () => 1001,
+      // With an ACL entry, the group bits are the ACL's mask: r-x on the folder, r-- on the file.
+      lstat: (path) => path.endsWith('relay.json') ? over.file ?? entry(1001, 0o100640, false) : over.dir ?? entry(1001, 0o40750, true),
+      read: (path) => { expect(path).toBe('/var/lib/harness/team-relay-owner/relay.json'); return JSON.stringify({ url: 'http://127.0.0.1:9', token: TOKEN }) },
+    })
+    expect(readTeamRelay(linuxConfig, reader())).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    for (const over of [
+      { dir: entry(1002, 0o40750, true) }, { file: entry(1002, 0o100640, false) }, { dir: entry(0, 0o40750, true) },
+      { dir: entry(1001, 0o40770, true) }, { file: entry(1001, 0o100660, false) }, { file: entry(1001, 0o100644, false) },
+    ]) expect(readTeamRelay(linuxConfig, reader(over)), JSON.stringify(over)).toBeNull()
+  })
+})
+
+describe('on Windows', () => {
+  const OWNER_SID = 'S-1-5-21-1-2-3-1001'
+  const DIR = 'C:\\ProgramData\\Harness\\team-relay-DELL'
+  const winConfig = { user: 'harnessteam', owner: 'DELL', ownerSid: OWNER_SID, ownerHome: 'C:\\Users\\DELL' } as TeamConfig
+  const entry = (kind: 'file' | 'dir' | 'link') => ({ isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link' })
+  function windowsFs(over: Partial<WindowsRelayFs> = {}, owners: Record<string, string> = { [DIR]: OWNER_SID, [`${DIR}\\relay.json`]: OWNER_SID }) {
+    const files: Record<string, string> = {}
+    const fs: WindowsRelayFs = {
+      lstat: (path) => path === DIR ? entry('dir') : path in files ? entry('file') : (() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })(),
+      ownerSid: (path) => owners[path] ?? null,
+      setAcl: vi.fn(async () => {}),
+      write: (path, text) => { files[path] = text },
+      rename: (from, to) => { files[to] = files[from]!; delete files[from] },
+      read: (path) => files[path] ?? '',
+      ...over,
+    }
+    return { fs, files }
+  }
+
+  it('names the owner\'s folder setup made under C:\\ProgramData\\Harness', () => {
+    expect(teamRelayDir('DELL', 'win32')).toBe(DIR)
+  })
+
+  it('the owner\'s daemon sets the folder\'s ACL with icacls and writes the grant, only in a folder that is the owner\'s', async () => {
+    const f = windowsFs()
+    await publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, f.fs, DIR)
+    expect(f.fs.setAcl).toHaveBeenCalledWith(DIR, OWNER_SID, 'harnessteam')
+    expect(JSON.parse(f.files[`${DIR}\\relay.json`]!)).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    await expect(publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, windowsFs({}, { [DIR]: 'S-1-5-21-9-9-9-1002' }).fs, DIR))
+      .rejects.toThrow(/not this account's/)
+    await expect(publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, windowsFs({ lstat: () => entry('link') }).fs, DIR))
+      .rejects.toThrow(/not this account's/)
+  })
+
+  it('the team side reads it only when the folder and the file are the configured owner\'s', async () => {
+    const f = windowsFs()
+    await publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, f.fs, DIR)
+    expect(readWindowsTeamRelay(winConfig, f.fs, DIR)).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    expect(readWindowsTeamRelay(winConfig, { ...f.fs, ownerSid: (path) => path === DIR ? OWNER_SID : 'S-1-5-21-9-9-9-1002' }, DIR)).toBeNull()
+    expect(readWindowsTeamRelay({ ...winConfig, ownerSid: undefined }, f.fs, DIR)).toBeNull()
+    expect(readWindowsTeamRelay(winConfig, { ...f.fs, read: () => '{"url":"http://evil.example","token":"x"}' }, DIR)).toBeNull()
+  })
+})
+
 describe('a launch in the team account', () => {
   const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
   const launchDeps = (over: Partial<TeamRelayLaunchDeps> = {}): TeamRelayLaunchDeps => ({
@@ -156,7 +240,7 @@ describe('a launch in the team account', () => {
     const deps = launchDeps()
     expect(await teamRelayLaunch('claude', deps)).toEqual({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: TOKEN }, args: [] })
     expect(deps.onboarded).toHaveBeenCalledWith('claude')
-    const codex = await teamRelayLaunch('codex', deps)
+    const codex = await teamRelayLaunch('codex', deps) as OwnerRelayLaunch | null
     expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
     expect(codex?.args).toContain('model_provider="harness_owner"')
     // Its home is made ready first (the owner's model list), and Codex stays an API-key provider of the relay.
@@ -164,10 +248,47 @@ describe('a launch in the team account', () => {
     expect(codex?.args).toContain('model_providers.harness_owner.env_key="HARNESS_RELAY_TOKEN"')
     expect(codex?.args.join(' ')).not.toContain('requires_openai_auth')
     // A home that could not be made ready still launches, as before.
-    expect((await teamRelayLaunch('codex', launchDeps({ codexHome: async () => { throw new Error('read-only') } })))?.args).toContain('model_provider="harness_owner"')
+    expect((await teamRelayLaunch('codex', launchDeps({ codexHome: async () => { throw new Error('read-only') } })) as OwnerRelayLaunch | null)?.args).toContain('model_provider="harness_owner"')
     // A first-run screen that cannot be recorded is left for the engine to ask.
     expect(await teamRelayLaunch('claude', launchDeps({ onboarded: () => { throw new Error('read-only') } }))).not.toBeNull()
     expect(await teamRelayLaunch('codex', launchDeps({ signedIn: async () => { throw new Error('keychain') } }))).not.toBeNull()
+  })
+
+  // Security re-check of #2089: a Codex Product Manager in a Team account runs in an engine home of its own (superTabs/
+  // teamDaemon.ts pmEngineHome). Whether it is signed in, and the owner's model list, are that home's, not the daemon's: it
+  // started signed out when the Team user had a Codex sign-in of its own, and without the owner's models.
+  it('for a launch in a Codex home of its own, asks that home whether it is signed in and readies that home', async () => {
+    const signedIn = vi.fn(async (_engine: 'claude' | 'codex', home?: string) => home === undefined)
+    const deps = launchDeps({ signedIn })
+    const codex = await teamRelayLaunch('codex', deps, '/Users/team/.harness-pm-homes/super-1/codex') as OwnerRelayLaunch | null
+    expect(signedIn).toHaveBeenCalledWith('codex', '/Users/team/.harness-pm-homes/super-1/codex')
+    expect(deps.codexHome).toHaveBeenCalledWith(grant, '/Users/team/.harness-pm-homes/super-1/codex')
+    expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
+    // The daemon's own Codex home, signed in itself, still launches on its own sign-in.
+    expect(await teamRelayLaunch('codex', deps)).toBeNull()
+  })
+
+  // Security re-check 2 of 9e49723b8: a launch in a Codex home of its own holds no sign-in there, so with no relay it is refused
+  // with why (create.ts and launchOverrides.ts honour it), never started signed out.
+  it('refuses a launch in a Codex home of its own that no relay and no sign-in there can sign in', async () => {
+    const home = '/Users/team/.harness-pm-homes/super-1/codex'
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }), home)).toEqual({ refused: NO_PM_RELAY })
+    expect(await teamRelayLaunch('codex', launchDeps({ config: () => null }), home)).toEqual({ refused: NO_PM_RELAY })
+    expect(NO_PM_RELAY).toBe('The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.')
+    // Signed in in that home, or not a Team daemon, or no home of its own: nothing to refuse.
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, signedIn: async () => true }), home)).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, team: () => false }), home)).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }))).toBeNull()
+  })
+
+  it('readies a Product Manager\'s own Codex home with the owner\'s models, and leaves the daemon\'s alone', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'team-pm-')), pm = join(root, '.harness-pm-homes', 'super-1', 'codex'), own = join(root, '.codex')
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }), { status: 200 }))
+    const codex = await teamRelayLaunch('codex', launchDeps({ codexHome: (g, home) => prepareCodexHome(home ?? own, g, { fetch: fetch as never, version: () => '0.165.0', now: () => 0 }) }), pm) as OwnerRelayLaunch | null
+    expect(codex?.args).toContain('model_provider="harness_owner"')
+    expect(JSON.parse(readFileSync(join(pm, 'models_cache.json'), 'utf8')).models).toEqual([{ slug: 'gpt-6.1-sol', visibility: 'list' }])
+    expect(existsSync(own)).toBe(false)
   })
 
   it('adds nothing elsewhere: another engine, the owner\'s own daemon, no team account, its own sign-in, no relay', async () => {

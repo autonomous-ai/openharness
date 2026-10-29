@@ -903,6 +903,16 @@ describe('the super-tab command in delivered input', () => {
     expect(agentCommand).toHaveBeenCalledTimes(1)
     expect(agentCommand).toHaveBeenCalledWith(t.core, 'machine-1')
   })
+  it('names a Buddy\'s commands without --agent: its pane says who it is, and its guard refuses any --agent (review 2 of #2092)', async () => {
+    const t = setup({ replyTo: 'earlier' })
+    vi.mocked(t.core.agents.byAgent).mockReturnValue({ agentId: 'harness', swarmSkill: { role: 'buddy', key: 'k' } } as never)
+    const host = new SuperTabHost(t.core, 'machine-1', { log: vi.fn(), agentCommand: vi.fn(async () => 'harness super-tab') }); hosts.push(host)
+    await host.tick()
+    const text = String(vi.mocked(t.core.turns.deliver).mock.calls[0]?.[1])
+    expect(text).toContain(`Read its state: harness super-tab --tab 'tab' status`)
+    expect(text).toContain(`harness super-tab --tab 'tab' message 'lead' 'earlier'`)
+    expect(text).not.toContain('--agent')
+  })
   it('falls back to the full command when the lookup fails, and does not ask again', async () => {
     const t = setup()
     const agentCommand = vi.fn(async () => { throw new Error('no shell') })
@@ -972,7 +982,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -1009,7 +1019,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -1619,7 +1629,7 @@ describe('the members a host lets watch its agents', () => {
       if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -1664,7 +1674,7 @@ describe('the members a host lets watch its agents', () => {
     let rows: unknown[] = [lead(true)], clock = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) =>
       ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const source = observerSource(dir, () => 'machine-1', () => clock)
@@ -2448,5 +2458,104 @@ describe('deliveries the server pushes', () => {
     await host.tick()
     await seconds(t, host, 1)
     expect(reads(t)).toBe(1)
+  })
+})
+
+// WS roadmap Phase 2a: every host read its Swarm changes each second. A server that pushes (backend lib/swarmHostPushes.ts)
+// tells it when a commit changed what it reads; the full read each minute stays as the safety net, and the read each
+// second comes back whenever the server has not said it pushes for 5 minutes, or on a new host after a reconnect.
+describe('Swarm changes the server pushes', () => {
+  const feedReads = (t: ReturnType<typeof setup>) => vi.mocked(t.call).mock.calls.filter(([, path]) => path.includes('/hosts/')).length
+  const pushes: BackendNotice = { type: 'swarm_host_changed' }
+  const changed: BackendNotice = { type: 'swarm_host_changed', tabId: 'tab', lastChangedAt: 1 }
+  async function seconds(t: ReturnType<typeof setup>, host: SuperTabHost, count: number) {
+    for (let i = 0; i < count; i++) { t.wait(1_000); await host.tick() }
+  }
+
+  it('reads its Swarm changes each second while the server has not said it pushes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push({ type: 'super_tab_deliveries' })
+    await host.tick()
+    await seconds(t, host, 10)
+    expect(feedReads(t)).toBe(11)
+  })
+
+  it('reads them only when told once the server pushes, and in full each minute', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(pushes)
+    await host.tick()
+    await seconds(t, host, 10)
+    expect(feedReads(t)).toBe(1)
+    t.push(changed)
+    await vi.waitFor(() => expect(feedReads(t)).toBe(2))
+    // This fixture's server answers every read in full, so the minute's full read is due a minute after the told one.
+    t.wait(59_000)
+    await host.tick()
+    expect(feedReads(t)).toBe(2)
+    t.wait(1_000)
+    await host.tick()
+    expect(feedReads(t)).toBe(3)
+  })
+
+  // Review of #2113: each push started a host pass, and each pass reads every busy agent's delivery list again: 5 pushes in
+  // 250 ms were 5 extra list reads. A push inside the feed's one-second gap is left to the next tick.
+  it('starts no host pass for a push its feed will not read yet, so a busy list is not read again per push', async () => {
+    const t = setup(), host = t.open()
+    const lists = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
+    t.push(pushes)
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const [listed, read] = [lists(), feedReads(t)]
+    for (let i = 0; i < 5; i++) {
+      t.wait(50)
+      t.push(changed)
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(lists()).toBe(listed)
+    expect(feedReads(t)).toBe(read)
+    // The next tick, a second after the last read, reads the change once.
+    t.wait(750)
+    await host.tick()
+    expect(feedReads(t)).toBe(read + 1)
+  })
+
+  it('starts a host pass at once for a push its feed reads now', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(pushes)
+    await host.tick()
+    const read = feedReads(t)
+    t.wait(2_000)
+    t.push(changed)
+    await vi.waitFor(() => expect(feedReads(t)).toBe(read + 1))
+  })
+
+  // The Lead's rule (2026-10-29): pushes can be missed, so a reconnect reads at once, and the old reading each second
+  // comes back until the new socket's server says it pushes.
+  it('reads at once and each second again on the new host a reconnect starts', async () => {
+    const t = setup(), first = t.open()
+    t.push(pushes)
+    await first.tick()
+    first.stop()
+    const before = feedReads(t)
+    const second = t.open()
+    await second.tick()
+    expect(feedReads(t)).toBe(before + 1)
+    await seconds(t, second, 2)
+    expect(feedReads(t)).toBe(before + 3)
+  })
+
+  it('goes back to reading each second once the server has not said it pushes for 5 minutes', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(pushes)
+    await host.tick()
+    t.wait(5 * 60_000 - 1_000)
+    await host.tick()
+    const quiet = feedReads(t)
+    await seconds(t, host, 3)
+    expect(feedReads(t)).toBe(quiet + 3)
   })
 })

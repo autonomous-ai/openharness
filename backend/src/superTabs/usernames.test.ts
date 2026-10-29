@@ -205,6 +205,21 @@ describe('member.username', () => {
     expect(f.name('river')).toBe('river')
   })
 
+  it('reaches a Buddy as each person’s username, beside its own read limits (#2115)', () => {
+    const f = fixture()
+    f.join(person('peer', 'ken@example.com'))
+    f.run({ type: 'agent.add', conversationId: 'lead', harnessId: 'pm', machineId: 'machine', name: 'River', configuration, lead: true },
+      owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner' } })
+    const generation = f.state.people[0]!.generation
+    f.state.agents.push({ id: 'buddy', projectId: 'lead', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'owner',
+      contributorId: 'owner', membershipGeneration: generation, name: 'Pal', configuration, buddyOf: { personId: 'owner', generation } })
+    const view = readerView(split(f.state, { tabId: 'tab', version: 1, now: NOW }), { kind: 'agent', agentId: 'buddy', machineOwnerId: 'owner' },
+      NOW, { teamMachines: [] })
+    expect(Object.fromEntries(view.parts.members.map(m => [m.key, m.data.username]))).toEqual({ owner: 'ken15', peer: 'ken' })
+    // Its person's machines stay out of what it reads.
+    expect(view.parts.agents.map(a => a.data.machineId)).not.toContain('machine')
+  })
+
   it('reaches readers as each person’s username whatever order the members are read in', () => {
     const f = fixture()
     f.join(person('earlier', 'ken@example.com'))

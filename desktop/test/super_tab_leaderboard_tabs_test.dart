@@ -259,7 +259,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.byKey(ValueKey('leaderboard-crown-$opus')), findsOneWidget);
+      // Crowns are for people and agents, not models (full review of #2097).
+      expect(find.byKey(ValueKey('leaderboard-crown-$opus')), findsNothing);
       // Workers are never named: no agent's name in the list.
       for (final id in [opus, codex, reviewer]) {
         expect(inRow(id, find.textContaining('River')), findsNothing);

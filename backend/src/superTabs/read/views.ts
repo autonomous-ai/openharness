@@ -3,8 +3,8 @@
  * plus the private-conversation check, each record sent in its part's envelope. Time-based and cross-part values go only
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
-import { isBuddyChat } from '../buddies.js'
-import { isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { isBuddyChat, isBuddyReader } from '../buddies.js'
+import { agentWithoutMachine, groupWithoutMachines, isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
@@ -85,6 +85,7 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
   const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
+  const buddy = isBuddyReader(state, actor)
   return {
     state,
     parts: {
@@ -92,8 +93,9 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
       // Each person's username as the Swarm shows it, worked out in join order (the reassembled state's), never the order
       // member parts happen to load in.
       members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...withAvatarView(m.data!), username: names.get(m.key) } as MemberView)),
-      agents: visible.agents.map(a => envelope(agentPart(a.id), agentView(state.agents.find(s => s.id === a.id)!))),
-      groups: groups.map(g => envelope(groupPart(g.id), groupView(g, seen))),
+      agents: visible.agents.map(a => envelope(agentPart(a.id), buddy ? agentWithoutMachine(agentView(state.agents.find(s => s.id === a.id)!))
+        : agentView(state.agents.find(s => s.id === a.id)!))),
+      groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupWithoutMachines(g) : g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
       progress: parts.progress.filter(p => !p.deleted && projects.has(p.key)).map(p => envelope(p, progressView(p.data!))),

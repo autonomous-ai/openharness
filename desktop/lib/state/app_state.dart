@@ -1956,10 +1956,22 @@ class AppNotifier extends ChangeNotifier {
     return result;
   }
 
-  /// Whether this is a Mac, as the Harness Team account offer reads it. Off
-  /// under test, on a Mac too, unless a test sets it.
+  /// Whether the Harness Team account can be made on this computer's system,
+  /// as the offer reads it. Off under test, on a Mac too, unless a test sets
+  /// it.
   @visibleForTesting
-  bool? macOSForTest;
+  bool? teamAccountHereForTest;
+
+  /// The systems the Harness Team account is made on, by
+  /// [RuntimePlatform.operatingSystem]: a Mac, Linux and Windows
+  /// (cli/src/team/layout.ts; Windows' daemon sets it up behind User Account
+  /// Control); never a phone, a tablet or a browser.
+  static bool teamAccountOn(String operatingSystem) =>
+      const {'macos', 'linux', 'windows'}.contains(operatingSystem);
+
+  bool get _teamAccountSystem =>
+      teamAccountHereForTest ??
+      (teamAccountOn(RuntimePlatform.operatingSystem) && !kUnderTest);
 
   /// How long before asking again a daemon that could not answer the start
   /// offer; each further try waits one more step.
@@ -1996,15 +2008,16 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// The Harness Team account on this Mac (cli/src/team/autoSetup.ts),
+  /// The Harness Team account on this computer (cli/src/team/autoSetup.ts),
   /// offered while the person is here: as they join a Swarm ([reason]
-  /// `join`), add this Mac to one (`contribute`), or open the app
-  /// (`startup`). This Mac's own daemon decides whether it is wanted: no
-  /// account yet, not declined before, and at start only while this Mac is in
-  /// a Swarm with other people in it. It is then explained before macOS asks
-  /// ([teamSetupAsks]): macOS's prompt is titled "osascript", which nobody
-  /// recognised as Harness (2026-10-27). Nothing on Windows or Linux, and never
-  /// for another machine, where nobody may be at it.
+  /// `join`), add this computer to one (`contribute`), or open the app
+  /// (`startup`). This computer's own daemon decides whether it is wanted: no
+  /// account yet, not declined before, and at start only while this computer
+  /// is in a Swarm with other people in it. It is then explained before the
+  /// system asks ([teamSetupAsks]): macOS's prompt is titled "osascript",
+  /// which nobody recognised as Harness (2026-10-27). On a Mac, Linux and
+  /// Windows ([teamAccountOn]), and never for another machine, where nobody
+  /// may be at it.
   ///
   /// [tabId]: the Swarm joined or added to, so a Swarm its server does not
   /// try team accounts in yet asks nothing (the daemon reads it).
@@ -2046,7 +2059,7 @@ class AppNotifier extends ChangeNotifier {
   /// a reconnect to it neither restarts the count nor cuts the wait short.
   Future<void> _offerTeamAccountAtStart() async {
     if (_disposed || _teamOfferBusy) return;
-    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return;
+    if (!_teamAccountSystem) return;
     _teamOfferBusy = true;
     try {
       final daemon = await _daemonIdentity();
@@ -2088,9 +2101,10 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// This Mac's own machine, when the Harness Team account can be made here.
+  /// This computer's own machine, when the Harness Team account can be made
+  /// here: never a machine shared with this account.
   String? _teamAccountHere() {
-    if (!(macOSForTest ?? (Platform.isMacOS && !kUnderTest))) return null;
+    if (!_teamAccountSystem) return null;
     return machineStates.values
         .where(
           (state) => state.isLocalMachine && !state.machine.isSharedMachine,
@@ -20989,6 +21003,17 @@ class AppNotifier extends ChangeNotifier {
     final payload = (event['payload'] as Map<String, dynamic>?) ?? {};
     if (type == 'orchestrator_changed') {
       _orchestratorProjects['$machineId/${payload['id']}']?.changed();
+      return;
+    }
+    // A Swarm this account is in changed, or (naming none) the server pushes
+    // (backend lib/swarmClientPushes.ts). On a computer only its own daemon
+    // relays the server's word (CLI backendSocket.ts): another machine's
+    // connection could forge it, and quiet this window's Swarm polls. A browser
+    // hears it from the server on its own sockets.
+    if (type == 'swarm_changed') {
+      if (viewer != null || machine.isLocalMachine) {
+        superTabs.swarmChanged(payload);
+      }
       return;
     }
     // Window frames come only from this computer's own daemon; another

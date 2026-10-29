@@ -1084,10 +1084,17 @@ model SuperTabMessage {
   recipientIds    String[]
   /// People a Lead tagged (superTabs/mentions.ts); absent on older rows.
   mentions        String[]
+  /// The thread's root (superTabs/threads.ts): a top-level message's own id, a reply's root. Absent on rows written before
+  /// threads, whose replies stay inline quotes.
+  thread          String?
+  /// A thread reply also shown in the conversation's main stream.
+  alsoInChat      Boolean?
   createdAt       DateTime @default(now())
 
   /// Pages read by (sequence, id): older rows of one command share a sequence.
   @@index([tabId, conversationId, sequence, id])
+  /// One thread's page, and a page's thread summaries (superTabs/pageReads.ts pageThreads).
+  @@index([tabId, conversationId, thread, sequence])
 }
 
 /// A Lead's tag of a person, waiting until they reply in that conversation or mark it done (superTabs/mentions.ts).
@@ -1125,6 +1132,22 @@ model SuperTabReaction {
   createdAt      DateTime @default(now())
 
   @@index([tabId, messageId])
+}
+
+/// How far one person has read one conversation (superTabs/readMarks.ts): the newest message sequence they have seen there.
+/// Kept out of the tab state so a read never wakes other readers, and read only by that person's own clients. The id is
+/// derived from all three, so one row per person and conversation; it only ever moves forward.
+model SuperTabReadMark {
+  id             String   @id @map("_id")
+  tabId          String
+  personId       String
+  conversationId String
+  sequence       Int
+  updatedAt      DateTime
+
+  @@index([tabId, personId, updatedAt])
+  /// A mark untouched this long goes (superTabs/readMarks.ts ensureReadMarkExpiry). Declared so db push keeps the index.
+  @@index([updatedAt], map: "read_mark_expiry")
 }
 
 /// A question to one person, with options and a recommendation (backend/src/superTabs/decisions.ts). Kept out of the tab

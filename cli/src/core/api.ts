@@ -1209,6 +1209,8 @@ export interface SwarmLaunch {
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
   prepare(cwd: string, skill: SwarmSkill): { instructions: string }
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+  /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
+  args(engine: string): string[]
 }
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
@@ -1252,6 +1254,9 @@ export interface SuperTabsCore {
   screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
   /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
   input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
+  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen` (superTabs/inCore/
+   *  terminal.ts): for a caller that read the screen earlier and must not type into a different one. */
+  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<SuperTabTyped>
 }
 export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
 export type SuperTabTyped = { ok: true } | { ok: false; error: string }
@@ -1491,6 +1496,26 @@ export const WIFI_FALLBACKS: PortFallbacks<WifiPort> = {
 /** What a remote client proved with its E2EE session: an owner's app or browser, or a device. */
 export type RemoteRole = 'web' | 'device'
 
+/**
+ * What the account's own apps away from this desk may ask of this machine and hear from it, beyond what an owner may
+ * (backendSocket.ts `remoteAppPolicy`). Set only on a Harness Team daemon, by the Swarm (superTabs/inCore/teamApps.ts):
+ * there the account is the Mac's owner's, and another person's Product Manager may run, holding people's private chats.
+ */
+export interface RemoteAppPolicy {
+  /** Why a request is refused, or null to answer it as for any owner. */
+  refuse(type: string, payload: Record<string, unknown>): { error: string; message: string } | null
+  /** A reply's payload as the apps may see it. */
+  reply(type: string, payload: Record<string, unknown>): Record<string, unknown>
+  /** An up-frame as the apps may hear it, or null to withhold it. */
+  event<F extends { agentId?: unknown; payload?: unknown }>(frame: F): F | null
+  /** Whether the apps' terminal streams only watch now: no input, paste or resize reaches a terminal, binary frames included
+   *  (lib/terminalStreamManager.ts `watchOnly`). */
+  watchOnly(): boolean
+  /** Whether a session, by its agent id or its engine's session id, is closed to the apps: its open terminal streams close
+   *  (lib/terminalStreamManager.ts `closedTo`). */
+  isConfidential(id: string): boolean
+}
+
 /** A remote client the gateway holds a session with, as the core may know it: its role, the label its
  *  identity was paired under (null for none) for naming it to the person, its identity's public key (the
  *  Wi-Fi device's requests are kept apart by it), and whether it is on a device's direct link rather than
@@ -1523,6 +1548,12 @@ export type BackendNotice =
   /** Work waits for an agent of this machine's (backend lib/adapterWs.ts): its Swarm host reads that agent's deliveries now.
    *  Naming none, the server says it pushes them, and every list is read once (superTabs/host.ts PUSH_LEASE_MS). */
   | { type: 'super_tab_deliveries'; tabId?: string; agentId?: string }
+  /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
+   *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
+  | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }
+  /** A Swarm the account is in changed (backend lib/swarmClientPushes.ts): this computer's windows read it again. Naming none,
+   *  the server says it pushes them (desktop super_tabs/swarm_pushes.dart). */
+  | { type: 'swarm_changed'; tabId?: string; lastChangedAt?: number; parts?: Array<'main' | 'machine'> }
 
 /** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
