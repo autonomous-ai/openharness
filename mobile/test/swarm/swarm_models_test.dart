@@ -180,4 +180,39 @@ void main() {
     );
     expect(swarmModelList(swarm, now: now)!.local, hasLength(3));
   });
+
+  test('lent by one person: a Harness Team account\'s pool is left out by '
+      'its own mark, also once the Mac it names has left the Swarm, or '
+      'when only its reading says Team', () {
+    // Read as signed in as a Team account, with no Mac named.
+    final teamMini = machine('team-2', 'Team Mini', [
+      {'grid': 'swarm-grid', 'model': 'gemma-4', 'name': 'Gemma 4'},
+    ]);
+    (teamMini['observation'] as Map)['sessionKind'] = 'team';
+    final swarm = snapshot(
+      machines: [
+        {
+          ...machine('mac-1', 'Studio', [
+            {'grid': 'swarm-grid', 'model': 'qwen3-coder', 'name': 'Qwen3'},
+          ]),
+          'contributorId': me,
+        },
+        {
+          // Its Mac is no longer in the Swarm.
+          ...machine('team-1', 'Harness Team', [
+            {'grid': 'swarm-grid', 'model': 'phi-5', 'name': 'Phi 5'},
+          ]),
+          'contributorId': me,
+          'hostMachineId': 'mac-gone',
+        },
+        {...teamMini, 'contributorId': me},
+      ],
+    );
+
+    final mine = swarmModelList(swarm, now: now, lentBy: me)!;
+    expect(
+      [for (final m in mine.local) (m.name, m.machine)],
+      [('Qwen3', 'Studio')],
+    );
+  });
 }

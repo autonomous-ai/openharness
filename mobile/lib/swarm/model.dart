@@ -605,9 +605,22 @@ typedef SuperTabLocalModelRow = ({
   String kind,
 });
 
+/// Whether [pool] is a Harness Team account's: stamped with the Mac it runs on (`hostMachineId`), whether or not that
+/// Mac is still in the Swarm, or read as signed in as a Team account (`sessionKind`), as the backend tells them
+/// (superTabs/machines.ts).
+bool superTabTeamAccountPool(Map<String, dynamic> pool) =>
+    switch (pool['hostMachineId']) {
+      final String host when host.isNotEmpty => true,
+      _ => false,
+    } ||
+    switch (pool['observation']) {
+      {'sessionKind': 'team'} => true,
+      _ => false,
+    };
+
 /// Every model the Swarm can use now, once each, from the machines' fresh readings (backend `MACHINE_FRESH_MS`). With
-/// [lentBy], only those of the machines that person lends the Swarm: never a teammate's, nor a Harness Team account's,
-/// which runs teammates' work.
+/// [lentBy], only those of the machines that person lends the Swarm: never a teammate's, nor a Harness Team account's
+/// ([superTabTeamAccountPool]), which runs teammates' work.
 List<SuperTabLocalModelRow> superTabLocalModelRows(
   SuperTabSnapshot? snapshot, {
   required DateTime now,
@@ -619,8 +632,7 @@ List<SuperTabLocalModelRow> superTabLocalModelRows(
   final rows = <SuperTabLocalModelRow>[];
   for (final pool in snapshot!.machines) {
     if (lentBy != null &&
-        (pool['contributorId'] != lentBy ||
-            snapshot.placeOf('${pool['machineId']}') != pool['machineId'])) {
+        (pool['contributorId'] != lentBy || superTabTeamAccountPool(pool))) {
       continue;
     }
     final observation = pool['observation'];

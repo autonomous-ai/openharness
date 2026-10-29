@@ -125,6 +125,57 @@ void main() {
     ]);
   });
 
+  test('tells when only what makes a computer the person\'s own changes — '
+      'shared, a Team account, waiting for a link — its name and whether it '
+      'is away the same', () async {
+    final rig = viewerApp();
+    addTearDown(rig.app.dispose);
+    final computers = AppSwarmComputers(rig.app);
+    addTearDown(computers.dispose);
+    Machine machine(String id, {bool shared = false, String? kind}) => Machine(
+      machineId: id,
+      authMode: MachineAuthMode.remote,
+      name: id,
+      status: 'online',
+      shared: shared,
+      sessionKind: kind,
+    );
+    rig.api.onMachines = () async => [machine('a'), machine('b'), machine('c')];
+    await rig.app.bootstrap();
+    await settle();
+    final listed = computers.computers;
+    var told = 0;
+    computers.addListener(() => told++);
+
+    rig.api.onMachines = () async => [
+      machine('a', shared: true),
+      machine('b'),
+      machine('c'),
+    ];
+    await rig.app.refreshMachines();
+    await settle();
+    expect(computers.computers, listed, reason: 'names and away the same');
+    expect(told, 1, reason: 'shared');
+    expect([for (final c in computers.own) c.id], ['b', 'c']);
+
+    rig.api.onMachines = () async => [
+      machine('a', shared: true),
+      machine('b', kind: 'team'),
+      machine('c'),
+    ];
+    await rig.app.refreshMachines();
+    await settle();
+    expect(told, 2, reason: 'a Team account');
+    expect([for (final c in computers.own) c.id], ['c']);
+
+    rig.app.machineStates['c']!.needsLink = true;
+    await rig.app.refreshMachines();
+    await settle();
+    expect(computers.computers, listed, reason: 'names and away the same');
+    expect(told, 3, reason: 'waiting for a link');
+    expect(computers.own, isEmpty);
+  });
+
   test('Try again reads the list again', () async {
     final rig = await signedInWith({'a': []});
     addTearDown(rig.app.dispose);
