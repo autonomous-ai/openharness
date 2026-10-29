@@ -452,6 +452,51 @@ void main() {
     },
   );
 
+  // Security review 1 of #2234: a Buddy's machine outside the Swarm is its
+  // person's alone. Their own Buddy row names it and another person's reaches
+  // them with no machine; neither makes a row here.
+  testWidgets('no Buddy adds a machine row: not its person\'s private machine, '
+      'not another person\'s hidden one', (tester) async {
+    final server = ConversationServer();
+    Map<String, dynamic> buddy(String id, String machineId, String person) => {
+      'id': id,
+      'name': 'Buddy',
+      'displayName': 'Buddy',
+      'machineId': machineId,
+      'harnessId': 'native-$id',
+      'contributorId': person,
+      'configuration': {'engine': 'claude'},
+      'buddyOf': {'personId': person, 'generation': 'fixture'},
+    };
+    server.state['agents'] = [
+      buddy('mine', 'private-laptop', 'owner'),
+      buddy('theirs', '', 'maya'),
+    ];
+    server.state['machines'] = [
+      {'machineId': 'm', 'name': 'Studio Mac', 'contributorId': 'owner'},
+    ];
+    final c = server.controller();
+    await c.refresh();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SuperTabMachines(controller: c, onAddAgent: (_) {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('super-machine-m')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('super-machine-private-laptop')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('super-machine-')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await c.flush();
+    c.dispose();
+  });
+
   group('an expanded machine shows its agents as one count', () {
     Future<dynamic> mount(
       WidgetTester tester,

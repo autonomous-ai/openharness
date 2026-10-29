@@ -2,9 +2,11 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
 import 'package:harness/super_tabs/buddies.dart';
 import 'package:harness/super_tabs/buddy_machines.dart';
 import 'package:harness/super_tabs/controller.dart';
@@ -14,17 +16,42 @@ import 'package:harness/super_tabs/view.dart';
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
 
-/// The Buddy picker offers the Mac running Harness (Dee, 10-29): when it is
-/// the reader's own and not in the Swarm yet, Start adds it and then starts the
-/// Buddy there, in one click.
+/// The Buddy pickers list every machine of the reader's own (Dee, 10-29: "I
+/// just wanted to create my buddy. I don't want to add my machine to the
+/// swarm."): this Mac first and picked, offline ones listed but not pickable.
+/// A Buddy on one outside the Swarm sends its prepared setup, and nothing ever
+/// adds the machine to the Swarm.
 /// Set to a folder to write the PR's pictures there.
 final shots = Platform.environment['SUPER_TAB_BUDDY_SHOTS'];
 
 void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
-  const notInSwarm = 'Not in this Swarm yet: Start adds it';
-  const notInSwarmDialog = 'Not in this Swarm yet: Add Buddy adds it';
+  /// Machines of the reader's account outside the Swarm: online, offline,
+  /// shared with them by someone else, and a Harness Team account.
+  void accountMachines(SuperTabLaunchFixture f) {
+    MachineState remote(
+      String id,
+      String name, {
+      bool online = true,
+      bool shared = false,
+      String? kind,
+    }) => MachineState(
+      Machine(
+        machineId: id,
+        authMode: MachineAuthMode.remote,
+        name: name,
+        status: online ? 'online' : 'offline',
+        isShared: shared,
+        sessionKind: kind,
+      ),
+    )..nodeOnline = online;
+    f.app.machineStates
+      ..['studio'] = remote('studio', 'Studio')
+      ..['air'] = remote('air', 'MacBook Air', online: false)
+      ..['lent'] = remote('lent', 'Lent Mac', shared: true)
+      ..['team'] = remote('team', 'Team account', kind: 'team');
+  }
 
   /// Another machine of the reader's, already in the Swarm.
   Map<String, dynamic> rig() => {
@@ -35,6 +62,9 @@ void main() {
     'engines': <dynamic>['claude'],
     'maxAgents': 4,
     'availableSlots': 4,
+    // Reporting now: it is in no account list here, so only this says it is
+    // there (buddyMachines).
+    'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
   };
 
   Future<({SuperTabLaunchFixture f, SuperTabController c, String mac})> open(
@@ -120,17 +150,34 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  /// What reached the server: a Buddy's start, and whether it carried a
+  /// setup; any machine add, which must never happen.
   List<String> sent(SuperTabLaunchFixture f) => [
     for (final post in f.connection.server.posts)
       if ((post['command'] as Map)['type'] case final String type
           when type == 'machine.contribute' || type == 'buddy.create')
-        '$type ${(post['command'] as Map)['machineId']}',
+        '$type ${(post['command'] as Map)['machineId']}'
+            '${(post['command'] as Map)['setup'] != null ? ' +setup' : ''}',
+  ];
+  Map<String, dynamic>? setupSent(SuperTabLaunchFixture f) =>
+      (f.connection.server.posts.lastWhere(
+                (p) => (p['command'] as Map)['type'] == 'buddy.create',
+              )['command']
+              as Map)['setup']
+          as Map<String, dynamic>?;
+
+  /// The machines preparation was asked on, in order.
+  List<Object?> prepares(SuperTabLaunchFixture f) => [
+    for (final call in f.connection.calls)
+      if (call.$2['action'] == 'prepareContribution') call.$2['operationId'],
   ];
 
   final barMachine = find.byKey(const ValueKey('super-buddy-start-machine'));
   final dialogMachine = find.byKey(const ValueKey('super-buddy-machine'));
   final start = find.widgetWithText(FilledButton, 'Start');
   final addBuddy = find.widgetWithText(FilledButton, 'Add Buddy');
+  Finder option(String id) =>
+      find.byKey(ValueKey('super-buddy-machine-option-$id'));
 
   /// The open menu's rows, top to bottom.
   List<String> menuRows(WidgetTester tester, List<String> names) =>
@@ -142,116 +189,125 @@ void main() {
       ));
 
   group('the Start bar', () {
-    testWidgets('lists this Mac first, picked, with what Start does', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+    testWidgets(
+      'lists this Mac first and picked, then the online, then the offline: '
+      'never a machine shared with them or a Team account',
+      (tester) async {
+        final (:f, :c, :mac) = await open(
+          tester,
+          machines: [rig()],
+          prepare: accountMachines,
+        );
 
-      expect(
-        find.descendant(of: barMachine, matching: find.text('This Mac · $mac')),
-        findsOneWidget,
+        expect(
+          find.descendant(of: barMachine, matching: find.text(mac)),
+          findsOneWidget,
+        );
+        await tester.tap(barMachine);
+        await tester.pumpAndSettle();
+        expect(find.text(kBuddyOwnMachines), findsOneWidget);
+        expect(
+          menuRows(tester, [mac, '2x 4090 Rig', 'Studio', 'MacBook Air']),
+          [mac, '2x 4090 Rig', 'Studio', 'MacBook Air'],
+        );
+        expect(find.text('Lent Mac'), findsNothing);
+        expect(find.text('Team account'), findsNothing);
+        expect(find.textContaining('Swarm'), findsNothing);
+        expect(
+          find.descendant(
+            of: option('air'),
+            matching: find.text(kBuddyMachineOffline),
+          ),
+          findsOneWidget,
+        );
+        await close(tester, f, c);
+      },
+    );
+
+    // Review of #2240: a Swarm row no account record confirms read as online.
+    testWidgets('a Swarm machine in no account list and not reporting is '
+        'offline, never picked by default', (tester) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [
+          {...rig(), 'observation': null},
+        ],
+        prepare: (f) => f.app.machineStates['m']!.nodeOnline = false,
       );
+
+      expect(tester.widget<FilledButton>(start).onPressed, isNull);
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      // Beside the Mac's row in the menu, as well as under the bar.
-      expect(find.text(notInSwarm), findsNWidgets(2));
-      expect(menuRows(tester, ['This Mac · $mac', '2x 4090 Rig']), [
-        'This Mac · $mac',
-        '2x 4090 Rig',
-      ]);
+      expect(
+        find.descendant(
+          of: option('rig'),
+          matching: find.text(kBuddyMachineOffline),
+        ),
+        findsOneWidget,
+      );
       await close(tester, f, c);
     });
 
-    testWidgets('says Start adds this Mac before the menu is opened', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+    testWidgets('an offline machine cannot be picked', (tester) async {
+      final (:f, :c, :mac) = await open(tester, prepare: accountMachines);
 
-      expect(find.text(notInSwarm), findsOneWidget);
-      // Under the bar's row, not inside the field.
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(tester.widget<MenuItemButton>(option('air')).onPressed, isNull);
+      await tester.tap(find.text('MacBook Air').last, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      // The tap picked nothing, so the menu is still open: close it to read the field.
+      expect(find.text(kBuddyOwnMachines), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
       expect(
-        tester.getTopLeft(find.text(notInSwarm)).dy,
-        greaterThan(tester.getBottomLeft(barMachine).dy),
+        find.descendant(of: barMachine, matching: find.text(mac)),
+        findsOneWidget,
       );
       await close(tester, f, c);
     });
 
     testWidgets(
-      'says nothing when the picked machine is already in the Swarm',
+      'Start on this Mac prepares it and starts the Buddy with its setup, '
+      'adding nothing to the Swarm',
       (tester) async {
         final (:f, :c, :mac) = await open(tester, machines: [rig()]);
 
-        await tester.tap(barMachine);
-        await tester.pumpAndSettle();
-        await tester.tap(find.text('2x 4090 Rig').last);
-        await tester.pumpAndSettle();
+        await tester.tap(start);
+        await settle(tester);
 
-        expect(find.text(notInSwarm), findsNothing);
+        expect(sent(f), ['buddy.create m +setup']);
+        expect(setupSent(f), {
+          'name': f.app.stateOf('m')!.machine.displayName,
+          'cwd': '/work/project',
+          'engines': ['claude', 'codex'],
+        });
+        expect(c.buddy('lead'), isNotNull);
+        // Named by the account, though no Swarm list has it.
+        expect(find.textContaining('another machine'), findsNothing);
+        expect(find.textContaining('on $mac'), findsWidgets);
         await close(tester, f, c);
       },
     );
 
-    testWidgets('a retry while setup is still running joins that setup', (
+    testWidgets('another own machine outside the Swarm starts the same way', (
       tester,
     ) async {
-      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
-      f.connection.keepPreparing = true;
-      List<Object?> setups() => [
-        for (final call in f.connection.calls)
-          if (call.$2['action'] == 'prepareContribution')
-            call.$2['operationId'],
-      ];
+      final (:f, :c, :mac) = await open(tester, prepare: accountMachines);
 
-      await tester.tap(start);
-      await settle(tester);
-      for (var i = 0; i < 6; i++) {
-        await tester.pump(const Duration(seconds: 60));
-      }
+      await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(find.textContaining('still running'), findsOneWidget);
-      final first = setups().toSet();
-      expect(first, hasLength(1));
-
-      f.connection.keepPreparing = false;
+      await tester.tap(find.text('Studio').last);
+      await tester.pumpAndSettle();
       await tester.tap(start);
       await settle(tester);
 
-      // The same setup was asked again, not a second one started.
-      expect(setups().toSet(), first);
-      expect(sent(f), ['machine.contribute m', 'buddy.create m']);
+      expect(sent(f), ['buddy.create studio +setup']);
+      expect(setupSent(f)!['name'], 'Studio');
       await close(tester, f, c);
     });
 
-    testWidgets('Start adds this Mac, then starts the Buddy on it', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
-
-      await tester.tap(start);
-      await settle(tester);
-
-      expect(sent(f), ['machine.contribute m', 'buddy.create m']);
-      expect(c.buddy('lead'), isNotNull);
-      await close(tester, f, c);
-    });
-
-    testWidgets('with no other machine, this Mac is the one to start on', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(tester);
-
-      expect(
-        find.text('None of your machines is in this Swarm yet.'),
-        findsNothing,
-      );
-      await tester.tap(start);
-      await settle(tester);
-
-      expect(sent(f), ['machine.contribute m', 'buddy.create m']);
-      await close(tester, f, c);
-    });
-
-    testWidgets('another machine picked starts there and adds nothing', (
+    testWidgets('a machine already in the Swarm starts with no setup', (
       tester,
     ) async {
       final (:f, :c, :mac) = await open(tester, machines: [rig()]);
@@ -264,10 +320,36 @@ void main() {
       await settle(tester);
 
       expect(sent(f), ['buddy.create rig']);
+      expect(prepares(f), isEmpty);
       await close(tester, f, c);
     });
 
-    testWidgets('an add that fails shows its error and starts nothing', (
+    testWidgets('a retry while setup is still running joins that setup', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+      f.connection.keepPreparing = true;
+
+      await tester.tap(start);
+      await settle(tester);
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(seconds: 60));
+      }
+      await tester.pumpAndSettle();
+      expect(find.textContaining('still running'), findsOneWidget);
+      final first = prepares(f).toSet();
+      expect(first, hasLength(1));
+
+      f.connection.keepPreparing = false;
+      await tester.tap(start);
+      await settle(tester);
+
+      expect(prepares(f).toSet(), first);
+      expect(sent(f), ['buddy.create m +setup']);
+      await close(tester, f, c);
+    });
+
+    testWidgets('a refused start shows its error and stays to try again', (
       tester,
     ) async {
       final (:f, :c, :mac) = await open(tester, machines: [rig()]);
@@ -276,21 +358,18 @@ void main() {
       await tester.tap(start);
       await settle(tester);
 
-      expect(sent(f).where((s) => s.startsWith('buddy.create')), isEmpty);
-      expect(
-        find.byKey(const ValueKey('super-buddy-start-error')),
-        findsOneWidget,
-      );
-      // Still there to try again, and still this Mac.
+      expect(c.buddy('lead'), isNull);
       expect(tester.widget<FilledButton>(start).onPressed, isNotNull);
       expect(
-        find.descendant(of: barMachine, matching: find.text('This Mac · $mac')),
+        find.descendant(of: barMachine, matching: find.text(mac)),
         findsOneWidget,
       );
       await close(tester, f, c);
     });
 
-    testWidgets('a second click while it adds sends one add', (tester) async {
+    testWidgets('a second click while it prepares sends one start', (
+      tester,
+    ) async {
       final (:f, :c, :mac) = await open(tester, machines: [rig()]);
 
       await tester.tap(start);
@@ -298,112 +377,51 @@ void main() {
       expect(tester.widget<FilledButton>(start).onPressed, isNull);
       await settle(tester);
 
-      expect(sent(f), ['machine.contribute m', 'buddy.create m']);
+      expect(sent(f), ['buddy.create m +setup']);
+      await close(tester, f, c);
+    });
+
+    testWidgets('access revoked while it prepares starts nothing', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+
+      await tester.tap(start);
+      await tester.pump();
+      for (final person in f.connection.server.state['people'] as List) {
+        if ((person as Map)['id'] == 'owner') person['role'] = 'viewer';
+      }
+      await c.refresh();
+      await settle(tester);
+
+      expect(c.canWrite, isFalse);
+      expect(sent(f), isEmpty);
       await close(tester, f, c);
     });
 
     testWidgets(
-      'access revoked while it adds adds nothing and starts nothing',
-      (tester) async {
-        final (:f, :c, :mac) = await open(tester, machines: [rig()]);
-
-        await tester.tap(start);
-        await tester.pump();
-        for (final person in f.connection.server.state['people'] as List) {
-          if ((person as Map)['id'] == 'owner') person['role'] = 'viewer';
-        }
-        await c.refresh();
-        await settle(tester);
-
-        expect(c.canWrite, isFalse);
-        expect(sent(f), isEmpty);
-        await close(tester, f, c);
-      },
-    );
-
-    testWidgets(
-      'a Mac already in the Swarm is listed first by name, the rest follow',
+      'a Mac already in the Swarm comes first by the name its person gave it, and starts with no setup',
       (tester) async {
         final (:f, :c, :mac) = await open(
           tester,
           machines: [
             rig(),
-            {
-              'machineId': 'm',
-              'name': 'Office.local',
-              'contributorId': 'owner',
-              'scope': 'swarm',
-              'engines': <dynamic>['claude'],
-              'maxAgents': 4,
-              'availableSlots': 4,
-            },
+            {...rig(), 'machineId': 'm', 'name': 'Office.local'},
           ],
         );
 
         expect(
-          find.descendant(of: barMachine, matching: find.text('Office')),
+          find.descendant(of: barMachine, matching: find.text(mac)),
           findsOneWidget,
         );
-        await tester.tap(barMachine);
-        await tester.pumpAndSettle();
-        expect(find.textContaining('This Mac'), findsNothing);
-        expect(find.text(notInSwarm), findsNothing);
-        expect(menuRows(tester, ['Office', '2x 4090 Rig']), [
-          'Office',
-          '2x 4090 Rig',
-        ]);
+        await tester.tap(start);
+        await settle(tester);
+        expect(sent(f), ['buddy.create m']);
         await close(tester, f, c);
       },
     );
 
-    testWidgets('a Mac that cannot be added now is not offered', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(
-        tester,
-        machines: [rig()],
-        prepare: (f) => f.app.machineStates['m']!.nodeOnline = false,
-      );
-
-      expect(
-        find.descendant(of: barMachine, matching: find.text('2x 4090 Rig')),
-        findsOneWidget,
-      );
-      await tester.tap(barMachine);
-      await tester.pumpAndSettle();
-      expect(find.textContaining('This Mac'), findsNothing);
-      await close(tester, f, c);
-    });
-
-    testWidgets('a Mac someone else already added is not offered again', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(
-        tester,
-        machines: [
-          rig(),
-          {
-            ...rig(),
-            'machineId': 'm',
-            'name': 'Office.local',
-            'contributorId': 'other',
-          },
-        ],
-      );
-
-      expect(
-        find.descendant(of: barMachine, matching: find.text('2x 4090 Rig')),
-        findsOneWidget,
-      );
-      await tester.tap(barMachine);
-      await tester.pumpAndSettle();
-      expect(find.textContaining('This Mac'), findsNothing);
-      expect(find.text('Office'), findsNothing);
-      expect(find.text(notInSwarm), findsNothing);
-      await close(tester, f, c);
-    });
-
-    testWidgets("a Mac signed in to another account is never offered", (
+    testWidgets('a Mac signed in to another account is never offered', (
       tester,
     ) async {
       final (:f, :c, :mac) = await open(
@@ -422,7 +440,7 @@ void main() {
 
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(find.textContaining('This Mac'), findsNothing);
+      expect(option('m'), findsNothing);
       await close(tester, f, c);
     });
 
@@ -436,54 +454,50 @@ void main() {
         find.byKey(const ValueKey('super-buddy-start')),
       );
       expect(field, lessThan(bar.width / 2));
-      // And wide enough to read the longest name whole.
-      expect(
-        tester.getSize(find.text('This Mac · $mac').last).width,
-        lessThan(field),
-      );
+      expect(tester.getSize(find.text(mac).last).width, lessThan(field));
       await close(tester, f, c);
     });
-  });
-
-  testWidgets('the field fits its longest name at large text', (tester) async {
-    final (:f, :c, :mac) = await open(tester, machines: [rig()]);
-    tester.platformDispatcher.textScaleFactorTestValue = 2;
-    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-    await tester.pumpAndSettle();
-
-    final text = tester.widget<Text>(
-      find.descendant(of: barMachine, matching: find.text('This Mac · $mac')),
-    );
-    final painter = TextPainter(
-      text: TextSpan(text: text.data, style: text.style),
-      textDirection: TextDirection.ltr,
-      textScaler: const TextScaler.linear(2),
-    )..layout();
-    // Whole, not cut to an ellipsis.
-    expect(
-      tester.getSize(find.text('This Mac · $mac').last).width,
-      closeTo(painter.width, 1),
-    );
-    await close(tester, f, c);
   });
 
   group('Add a Buddy', () {
-    testWidgets('says Add Buddy adds this Mac before the menu is opened', (
+    testWidgets('lists this Mac first and picked, under its heading alone', (
       tester,
     ) async {
-      final (:f, :c, :mac) = await open(tester, machines: [rig()], bar: false);
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [rig()],
+        bar: false,
+        prepare: accountMachines,
+      );
 
-      expect(find.text(notInSwarmDialog), findsOneWidget);
-      expect(find.text(notInSwarm), findsNothing);
+      expect(
+        find.descendant(of: dialogMachine, matching: find.text(mac)),
+        findsOneWidget,
+      );
+      expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
       await tester.tap(dialogMachine);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('2x 4090 Rig').last);
-      await tester.pumpAndSettle();
-      expect(find.text(notInSwarmDialog), findsNothing);
+      expect(find.text(kBuddyOwnMachines), findsOneWidget);
+      // No note: the picker has only its headings, names and state (Dee).
+      expect(find.textContaining("read the chat"), findsNothing);
+      expect(find.textContaining('Swarm'), findsNothing);
       await close(tester, f, c);
     });
 
-    testWidgets('write access lost while it adds says so and adds nothing', (
+    testWidgets('Add Buddy starts the Buddy on this Mac with its setup', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, bar: false);
+
+      await tester.tap(addBuddy);
+      await settle(tester);
+
+      expect(sent(f), ['buddy.create m +setup']);
+      expect(find.text('Add a Buddy'), findsNothing);
+      await close(tester, f, c);
+    });
+
+    testWidgets('write access lost while it prepares sends nothing', (
       tester,
     ) async {
       final (:f, :c, :mac) = await open(tester, machines: [rig()], bar: false);
@@ -496,15 +510,13 @@ void main() {
       await c.refresh();
       await settle(tester);
 
-      // The dialog's scope swaps the form for its own message, so the person
-      // is not left looking at Adding….
       expect(sent(f), isEmpty);
       expect(find.text('This action is no longer available.'), findsOneWidget);
       expect(find.text('Adding…'), findsNothing);
       await close(tester, f, c);
     });
 
-    testWidgets('an add that loses write access gives the reason', (
+    testWidgets('a setup that loses write access gives the reason', (
       tester,
     ) async {
       final (:f, :c, :mac) = await open(tester, machines: [rig()]);
@@ -515,48 +527,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(c.canWrite, isFalse);
 
-      final (:id, :error) = await BuddyMachineAdder(
+      final (:id, :setup, :error) = await BuddyMachineAdder(
         c,
         f.app,
       ).resolve(buddyMachines(c, app: f.app).first, alive: () => true);
 
-      expect(id, isNull);
-      expect(error, kBuddyAccessLost);
+      expect([id, setup, error], [null, null, kBuddyAccessLost]);
       expect(sent(f), isEmpty);
       await close(tester, f, c);
     });
 
-    testWidgets('lists this Mac first and picked', (tester) async {
-      final (:f, :c, :mac) = await open(tester, machines: [rig()], bar: false);
-
-      expect(
-        find.descendant(
-          of: dialogMachine,
-          matching: find.text('This Mac · $mac'),
-        ),
-        findsOneWidget,
-      );
-      expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
-      await tester.tap(dialogMachine);
-      await tester.pumpAndSettle();
-      expect(find.text(notInSwarmDialog), findsNWidgets(2));
-      await close(tester, f, c);
-    });
-
-    testWidgets('Add Buddy adds this Mac, then starts the Buddy on it', (
-      tester,
-    ) async {
-      final (:f, :c, :mac) = await open(tester, bar: false);
-
-      await tester.tap(addBuddy);
-      await settle(tester);
-
-      expect(sent(f), ['machine.contribute m', 'buddy.create m']);
-      expect(find.text('Add a Buddy'), findsNothing);
-      await close(tester, f, c);
-    });
-
-    testWidgets('an add that fails keeps the dialog open with its error', (
+    testWidgets('a refused start keeps the dialog open with its error', (
       tester,
     ) async {
       final (:f, :c, :mac) = await open(tester, bar: false);
@@ -565,38 +546,37 @@ void main() {
       await tester.tap(addBuddy);
       await settle(tester);
 
-      expect(sent(f).where((s) => s.startsWith('buddy.create')), isEmpty);
       expect(find.text('Add a Buddy'), findsOneWidget);
       expect(find.byKey(const ValueKey('super-buddy-error')), findsOneWidget);
       await close(tester, f, c);
     });
   });
 
-  group('a Mac that cannot be added, and no other machine', () {
+  group('every machine offline', () {
     Future<({SuperTabLaunchFixture f, SuperTabController c, String mac})>
     offline(WidgetTester tester, {required bool bar}) => open(
       tester,
       bar: bar,
       prepare: (f) => f.app.machineStates['m']!.nodeOnline = false,
     );
-    const reason = 'Offline. Open Harness on this computer to add it.';
 
-    testWidgets('the Start bar says why and offers no Start', (tester) async {
+    testWidgets('the Start bar lists them, says why, and cannot start', (
+      tester,
+    ) async {
       final (:f, :c, :mac) = await offline(tester, bar: true);
 
-      expect(
-        find.text('None of your machines is in this Swarm yet.'),
-        findsOneWidget,
-      );
-      expect(find.text(reason), findsOneWidget);
-      expect(start, findsNothing);
+      expect(find.text(kBuddyAllOffline), findsOneWidget);
+      expect(tester.widget<FilledButton>(start).onPressed, isNull);
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(find.text(mac), findsOneWidget);
       await close(tester, f, c);
     });
 
     testWidgets('Add a Buddy says why and cannot be submitted', (tester) async {
       final (:f, :c, :mac) = await offline(tester, bar: false);
 
-      expect(find.text(reason), findsOneWidget);
+      expect(find.text(kBuddyAllOffline), findsOneWidget);
       expect(tester.widget<FilledButton>(addBuddy).onPressed, isNull);
       await close(tester, f, c);
     });
@@ -612,6 +592,7 @@ void main() {
         tester,
         machines: [rig()],
         brightness: brightness,
+        prepare: accountMachines,
       );
       await captureWindow(tester, shots, 'buddy-start-${brightness.name}');
       await tester.tap(barMachine);
@@ -624,11 +605,16 @@ void main() {
         machines: [rig()],
         bar: false,
         brightness: brightness,
+        prepare: accountMachines,
       );
       await captureWindow(tester, shots, 'buddy-add-${brightness.name}');
       await tester.tap(dialogMachine);
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, 'buddy-add-menu-${brightness.name}');
+      // A phone-width window (375 points): the dialog and its menu still fit.
+      await tester.binding.setSurfaceSize(const Size(375, 760));
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, 'buddy-add-375-${brightness.name}');
       await close(tester, f, c);
     });
   }

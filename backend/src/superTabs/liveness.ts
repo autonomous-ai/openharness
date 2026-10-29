@@ -6,7 +6,7 @@ import { agentDisplayName } from './agentNames.js'
 import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { GRID_START_FAILED, stepUp } from './stepUp.js'
 import { leadOf, toLead } from './terminal.js'
-import { MACHINE_FRESH_MS } from './machines.js'
+import { dropIdleBuddyMachines, MACHINE_FRESH_MS } from './machines.js'
 import { leadStartFailed } from './leadStart.js'
 import { ledProject, projectsOf } from './projects.js'
 import { waitedOn } from './leaderboard/record.js'
@@ -233,7 +233,10 @@ function leadNotice(state: SuperTabState, start: AgentStart, text: string | null
 /** The time checks, run on the Lead's poll and on any machine's report: every worker task with a reason is lost, and
  *  every start dispatched over 3 minutes ago that is not running fails, unless its machine is still preparing it. */
 export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[] {
-  return [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+  const drafts = [...loseTasks(state, now), ...failStalledStarts(state, now), ...unpurged(state, now)]
+  // A Buddy start that timed out may have been the last on its Buddy-only machine (security review 1 of #2234).
+  dropIdleBuddyMachines(state, now)
+  return drafts
 }
 
 /** How long a removed confidential session's data may take to be deleted in its Team account before the Swarm says so. */

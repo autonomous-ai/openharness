@@ -332,7 +332,9 @@ export interface SuperTabState {
   /** `heldFor`: a confidential session in a Harness Team account, whose project the account keeps serving alone until its
    *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
    *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
-  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true }>
+  /** `buddyOnly`: a Buddy's session on a Buddy-only machine, kept from every reader as its machine is (read/changes.ts). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true
+    buddyOnly?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
@@ -424,6 +426,12 @@ export const agentOnly = (source: unknown, recipients: readonly string[]): boole
 }
 /** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
 /** A lost task's reason without the machine it ran on (lostReason.ts). */
+/** Whether [target]'s machine is kept from [actor]: one Buddy-only (machines.ts buddyOnly), which only the Buddy's person and
+ *  the Buddy itself read where it runs (security review 1 of #2234). */
+export const machineHiddenFrom = (state: SuperTabState, actor: Actor, target: Agent): boolean =>
+  !!target.buddyOf && !!state.machines?.some(m => m.buddyOnly && m.machineId === target.machineId)
+  && !(actor.kind === 'person' ? actor.userId === target.buddyOf?.personId : actor.agentId === target.id)
+
 export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harnessId' | 'replacement' | 'lostTask'>>(target: T): T => {
   const { replacement: _replacement, ...rest } = target
   return { ...rest, machineId: '', harnessId: '',
@@ -609,6 +617,11 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
+  // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
+  if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
+  // Nor its id, which a Buddy's row carries (machineHiddenFrom).
+  visible.agents = visible.agents.map(a => machineHiddenFrom(state, actor, a) ? agentWithoutMachine(a) : a)
   // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
   visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)
