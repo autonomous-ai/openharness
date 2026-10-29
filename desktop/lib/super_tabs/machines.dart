@@ -23,6 +23,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_subscription_usage.dart';
+import 'add_computers.dart';
 import 'agent_details.dart';
 import 'controller.dart';
 import 'detail_dialog.dart';
@@ -580,6 +581,7 @@ Future<bool> _sendContribution(
   List<String> engines, {
   required int maxAgents,
   required bool Function() alive,
+  bool teamAccountOnly = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -605,6 +607,7 @@ Future<bool> _sendContribution(
     if (prepared['scope'] != null) 'scope': prepared['scope'],
     'engines': engines,
     'maxAgents': maxAgents,
+    if (teamAccountOnly) 'teamAccountOnly': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -626,13 +629,18 @@ Future<bool> _sendContribution(
 /// suggests, else what preparation offered. Resolves to [machineId], null when
 /// [alive] ended first. Throws a [SuperTabFailure] saying why it could not.
 /// [setupId] is the caller's to keep between tries: a setup still running
-/// answers the next try with the same one.
+/// answers the next try with the same one. With [teamAccountOnly], teammates'
+/// work reaches it only through its Harness Team account once that passes its
+/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`).
+/// [readResources] stands in for [AppNotifier.readMachineResources].
 Future<String?> contributeComputer(
   SuperTabController c,
   AppNotifier app,
   String machineId, {
   required String setupId,
   required bool Function() alive,
+  bool teamAccountOnly = false,
+  Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
     c,
@@ -645,7 +653,7 @@ Future<String?> contributeComputer(
   final engines = _contributedEngines(prepared);
   MachineResources? resources;
   try {
-    resources = await app.readMachineResources(machineId);
+    resources = await (readResources ?? app.readMachineResources)(machineId);
   } catch (_) {
     // The suggestion only sizes the offer; preparation's own number stands in.
   }
@@ -662,6 +670,7 @@ Future<String?> contributeComputer(
     engines,
     maxAgents: slots,
     alive: alive,
+    teamAccountOnly: teamAccountOnly,
   );
   return added ? machineId : null;
 }
@@ -2450,7 +2459,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       SuperTabSectionHeading(
         'Machines',
         onAdd: c.canWrite && widget.app != null
-            ? () => unawaited(_contribute())
+            ? () => unawaited(
+                showAddComputers(
+                  context,
+                  c,
+                  widget.app!,
+                  readResources: widget.readLocal,
+                ),
+              )
             : null,
         addTooltip: 'Add machine',
         // Only a Swarm that can't be read is news; a live one says nothing.

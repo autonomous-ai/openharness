@@ -413,6 +413,9 @@ class ConversationServer {
   // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
   int refuseStatus = 409;
+
+  /// Machines whose `machine.contribute` the server refuses, with its message.
+  final refuseContributions = <String, String>{};
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
@@ -748,6 +751,16 @@ class ConversationServer {
         throw SuperTabFailure(
           refusal['code']!,
           refusal['message']!,
+          statusCode: refuseStatus,
+        );
+      }
+      if (body['command'] case {
+        'type': 'machine.contribute',
+        'machineId': final String id,
+      } when refuseContributions.containsKey(id)) {
+        throw SuperTabFailure(
+          'MACHINE_NOT_FOUND',
+          refuseContributions[id]!,
           statusCode: refuseStatus,
         );
       }
