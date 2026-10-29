@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/launch_setup.dart';
 import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/app_state.dart';
@@ -53,6 +54,10 @@ class SuperTabFixtureConnection extends WsConn {
   /// again (`cli/src/superTabs/contribution.ts`), so a client that gives up
   /// after one answer never sees anything ready.
   final prepared = <Object?>{};
+
+  /// Preparation never finishes: every ask is answered `preparing`, as a setup
+  /// still running on the machine answers.
+  bool keepPreparing = false;
 
   /// The most agents preparation says this machine may run; null for a Harness
   /// from before setup reported it.
@@ -173,7 +178,7 @@ class SuperTabFixtureConnection extends WsConn {
       }
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
-        if (prepared.add(payload['operationId'])) {
+        if (prepared.add(payload['operationId']) || keepPreparing) {
           return {'ok': true, 'state': 'preparing'};
         }
         return {
@@ -379,6 +384,7 @@ class SuperTabLaunchFixture {
     SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
     LocalCliDiscovery? discovery,
     SystemNotifications? systemNotifications,
+    Future<String> Function(ProjectFolderRequest request)? prepareFolder,
   }) {
     connection =
         connectionFactory?.call(store) ??
@@ -389,6 +395,7 @@ class SuperTabLaunchFixture {
       connected: true,
       localCliDiscovery: discovery,
       systemNotifications: systemNotifications,
+      prepareFolder: prepareFolder,
     );
     app.machineStates['m']!
       ..localOnly = true
@@ -674,7 +681,8 @@ void main() {
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
       final machines = box.integration!.leadMachines!;
-      expect(machines.map((m) => m.id), ['m', 'rig', 'laptop', 'old']);
+      // Your own first, the unavailable ones included.
+      expect(machines.map((m) => m.id), ['m', 'laptop', 'rig', 'old']);
       final studio = machines.first;
       expect(studio.name, 'Mac Studio');
       expect(studio.startable, isTrue);
@@ -687,36 +695,49 @@ void main() {
       expect(studio.folders, {
         'github.com/autonomous-ai/autonomous-os': '/swarm/m/p1',
       });
-      expect(machines[1].unavailable, 'Another person’s machine');
-      expect(machines[2].maySleep, isTrue);
-      expect(machines[2].unavailable, 'Not connected to this computer');
+      expect(machines[1].maySleep, isTrue);
+      expect(machines[1].unavailable, 'Not connected to this computer');
+      // Its Team account's host has not said it can start a PM.
+      expect(
+        machines[2].unavailable,
+        'Update Harness on 2x 4090 Rig to run a Product Manager there.',
+      );
       expect(machines[3].online, isFalse);
       expect(bestLeadMachine(machines, null)?.id, 'm');
     },
   );
 
-  test('New Project refuses a machine its list cannot start', () async {
-    final f = SuperTabLaunchFixture();
-    f.connection.server.state['machines'] = [
-      {
-        'machineId': 'm',
-        'name': 'Mac Studio',
-        'contributorId': 'owner',
-        'maxAgents': 2,
-        'paused': false,
-        'observation': {
-          'receivedAt': DateTime.now().millisecondsSinceEpoch,
-          'runningHarnessIds': ['a', 'b'],
+  test(
+    'with its only machine full, New Project queues, and needs a remote',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [
+        {
+          'machineId': 'm',
+          'name': 'Mac Studio',
+          'contributorId': 'owner',
+          'maxAgents': 2,
+          'paused': false,
+          'observation': {
+            'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            'runningHarnessIds': ['a', 'b'],
+          },
         },
-      },
-    ];
-    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-    final box = await f.box(newProject: true);
-    expect(box.integration!.leadMachines!.single.startable, isFalse);
-    expect(await box.create(), NewHarnessOutcome.failed);
-    expect(box.error, 'Mac Studio has no free agents. Choose another machine.');
-    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
-  });
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      expect(box.integration!.leadMachines!.single.startable, isFalse);
+      expect(box.leadQueued, isTrue);
+      expect(await box.create(), NewHarnessOutcome.failed);
+      // The Swarm clones the repo wherever it starts the PM.
+      expect(
+        box.error,
+        'Choose a repo with a remote, so the Swarm can clone it for the Product Manager.',
+      );
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      expect(f.connection.server.posts, isEmpty);
+    },
+  );
 
   Map<String, dynamic> studioPool({
     int available = 3,
@@ -736,6 +757,297 @@ void main() {
       'runningHarnessIds': [for (var i = 0; i < running; i++) 'h$i'],
     },
   };
+
+  /// A machine row as the Swarm read sends it, with its derived figures.
+  Map<String, dynamic> machineRow(
+    String id,
+    String name, {
+    String contributor = 'diego',
+    String? host,
+    String kind = 'computer',
+    int available = 4,
+    bool lead = false,
+    Map<String, dynamic> teamWork = const {'allowed': true},
+  }) => {
+    'machineId': id,
+    'name': name,
+    'cwd': '/swarm/$id',
+    'contributorId': contributor,
+    'maxAgents': 8,
+    'availableSlots': available,
+    'paused': false,
+    'hostMachineId': ?host,
+    'teamWork': teamWork,
+    'observation': {
+      'receivedAt': DateTime.now().millisecondsSinceEpoch,
+      'sessionKind': kind,
+      'runningHarnessIds': <String>[],
+      if (lead) 'capabilities': ['leadStart'],
+    },
+  };
+
+  void addDiego(SuperTabLaunchFixture f) =>
+      (f.connection.server.state['people'] as List).add({
+        'id': 'diego',
+        'email': 'diego@example.com',
+        'role': 'collaborator',
+      });
+
+  test('a teammate’s Mac takes the PM in its Team account', () async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('diego-mac', 'Diego MacBook'),
+      machineRow(
+        'diego-team',
+        'Diego MacBook',
+        host: 'diego-mac',
+        kind: 'team',
+        available: 3,
+        lead: true,
+      ),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final diego = box.integration!.leadMachines!
+        .where((m) => m.id == 'diego-mac')
+        .single;
+    expect(diego.unavailable, isNull);
+    expect(diego.startable, isTrue);
+    expect(diego.freeAgents, 3);
+    expect(diego.own, isFalse);
+    expect(diego.native, isFalse);
+    expect(diego.team, isTrue);
+  });
+
+  for (final (what, rows, reason) in [
+    (
+      'has no Team account',
+      [machineRow('rig', '2x 4090 Rig', lead: true)],
+      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+    ),
+    (
+      'fails its Team account’s privacy check',
+      [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+          teamWork: {
+            'allowed': false,
+            'code': 'PRIVACY_CHECK_FAILED',
+            'reason': 'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+          },
+        ),
+      ],
+      'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
+    ),
+    (
+      'runs an older Harness',
+      [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+        ),
+      ],
+      'Update Harness on Diego MacBook to run a Product Manager there.',
+    ),
+  ]) {
+    test('a teammate’s machine that $what says why', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows;
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      final row = box.integration!.leadMachines!.where((m) => !m.own).single;
+      expect(row.unavailable, reason);
+      expect(row.startable, isFalse);
+    });
+  }
+
+  test('your own machines come before a teammate’s with more room', () async {
+    final f = SuperTabLaunchFixture();
+    addDiego(f);
+    f.connection.server.state['machines'] = [
+      machineRow('diego-mac', 'Diego MacBook'),
+      machineRow(
+        'diego-team',
+        'Diego MacBook',
+        host: 'diego-mac',
+        kind: 'team',
+        available: 30,
+        lead: true,
+      ),
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 2),
+      // Yours, but this Desktop has no connection to it: the Swarm starts it.
+      machineRow('far', 'Office Mini', contributor: 'owner', lead: true),
+      machineRow('old', 'Old Mini', contributor: 'owner'),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final machines = box.integration!.leadMachines!;
+    expect(machines.map((m) => m.id).take(3), ['m', 'far', 'diego-mac']);
+    expect(machines.first.native, isTrue);
+    final far = machines[1];
+    expect((far.native, far.startable, far.team), (false, true, false));
+    final old = machines.where((m) => m.id == 'old').single;
+    expect(old.unavailable, 'Not connected to this computer');
+  });
+
+  /// Your machine knows the project folder's remote: an agent ran there.
+  void knownRepo(SuperTabLaunchFixture f) =>
+      f.app.machineStates['m']!.agents = [
+        const Agent(
+          id: 'earlier',
+          name: 'Earlier',
+          engine: 'codex',
+          terminalAvailable: true,
+          project: AgentProject(
+            name: 'project',
+            cwd: '/work/project',
+            root: '/work/project',
+            remote: 'git@github.com:autonomous-ai/lamp-os.git',
+          ),
+        ),
+      ];
+
+  List<Map> commandsOf(SuperTabLaunchFixture f, String type) => [
+    for (final post in f.connection.server.posts)
+      if ((post['command'] as Map)['type'] == type) post['command'] as Map,
+  ];
+
+  test(
+    'New Project asks the Swarm to start the PM in a teammate’s Team account',
+    () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.leadThroughSwarm, isTrue);
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      final project = commandsOf(f, 'project.create').single;
+      expect(project['brief'], 'Discuss the architecture.');
+      final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+      // The PM the Swarm starts reads its request in its project's chat.
+      final task = commandsOf(f, 'message.send').single;
+      expect(task['conversationId'], created.leadConversationId);
+      expect(task['text'], 'Discuss the architecture.');
+      final start = commandsOf(f, 'lead.start').single;
+      expect(start, {
+        'type': 'lead.start',
+        'projectId': created.id,
+        'machineId': 'diego-mac',
+        'engine': 'codex',
+        'repositoryUrl': 'git@github.com:autonomous-ai/lamp-os.git',
+      });
+      expect(created.name, 'project');
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+      expect(
+        f.app.superTabs.peek(tabId)!.selectedId,
+        created.leadConversationId,
+      );
+    },
+  );
+
+  test('with no machine free New Project queues the PM', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
+    ];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.leadQueued, isTrue);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final start = commandsOf(f, 'lead.start').single;
+    expect(start['machineId'], isNull);
+    expect(start.containsKey('machineId'), isTrue);
+    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+  });
+
+  test(
+    'a refused Swarm start says why, and a retry posts the task once',
+    () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = [
+        machineRow('diego-mac', 'Diego MacBook'),
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+      ];
+      f.connection.server.leadRefusal = {
+        'code': 'TEAM_ACCOUNT_REQUIRED',
+        'message': 'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+      };
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      box.chooseLeadMachine('diego-mac');
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Harness Team accounts take no work in this Swarm yet, so Diego MacBook runs only its owner’s projects.',
+      );
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(commandsOf(f, 'project.create'), hasLength(1));
+      expect(commandsOf(f, 'message.send'), hasLength(1));
+      final starts = [
+        for (final post in f.connection.server.posts)
+          if ((post['command'] as Map)['type'] == 'lead.start')
+            post['operationId'],
+      ];
+      expect(starts, hasLength(2));
+      expect(starts.toSet(), hasLength(2), reason: 'a refusal wrote nothing');
+    },
+  );
+
+  test('files go to the PM’s chat with the task', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    f.connection.server.state['machines'] = [
+      machineRow('m', 'Mac Studio', contributor: 'owner', available: 0),
+    ];
+    SuperTabLaunch.uploadForTest = f.connection.server.upload;
+    addTearDown(() => SuperTabLaunch.uploadForTest = null);
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final files = HarnessAttachments()
+      ..add([
+        HarnessAttachment('plan.md', Uint8List.fromList([1, 2, 3])),
+      ]);
+    final box = await f.box(newProject: true, attachments: files);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    final created = f.app.superTabs.peek(tabId)!.snapshot!.projects.last;
+    expect(
+      f.connection.server.uploads.single['conversationId'],
+      created.leadConversationId,
+    );
+    expect(commandsOf(f, 'message.send').single['attachmentIds'], [
+      'attachment-1',
+    ]);
+  });
 
   test('free agents are the server’s count, not slots minus running', () async {
     final f = SuperTabLaunchFixture();
@@ -918,6 +1230,36 @@ void main() {
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
     },
   );
+
+  test('a PM’s forced worktree is not saved as the person’s setting', () async {
+    final prepared = <ProjectFolderRequest>[];
+    final f = SuperTabLaunchFixture(
+      prepareFolder: (request) async {
+        prepared.add(request);
+        return '/work/project-pm';
+      },
+    );
+    f.app.gitProjectReaderForTest = (_, _) async => {
+      'isGit': true,
+      'refreshed': true,
+      'branch': 'main',
+      'branches': [
+        {'ref': 'refs/heads/main', 'name': 'main'},
+      ],
+    };
+    f.app.agentPreference.successfulWorktree = false;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    // What the form does when it opens: Desktop choices read Git there.
+    box.useDesktopChoices(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(box.isGitProject, isTrue);
+    expect(box.worktree, isTrue);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(prepared.single.createsWorktree, isTrue);
+    // Their next New Harness keeps their own setting.
+    expect(f.app.agentPreference.successfulWorktree, isFalse);
+  });
 
   test('a new Swarm keeps choosing among the person’s own machines', () async {
     final f = SuperTabLaunchFixture();

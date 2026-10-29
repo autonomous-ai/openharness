@@ -3,6 +3,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/project_folder.dart';
 import 'package:harness/measurement/product_measurement.dart';
 import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/app_state.dart';
@@ -30,24 +31,67 @@ class MemoryStore implements LocalKeyValueStore {
   }
 }
 
+/// An app whose local project folders are prepared by [prepare] instead of
+/// Git on this computer.
+class _PreparingApp extends AppNotifier {
+  _PreparingApp(
+    this.prepare, {
+    required super.config,
+    required super.authSession,
+    super.configStore,
+    super.connectionForTest,
+    super.localCliDiscovery,
+    super.productMeasurement,
+    super.systemNotifications,
+    super.paneLayoutStore,
+  });
+  final Future<String> Function(ProjectFolderRequest request) prepare;
+  @override
+  Future<String> prepareLocalProjectFolder(
+    ProjectFolderRequest request, {
+    String label = 'harness',
+  }) => prepare(request);
+}
+
+/// [prepareFolder]: prepares local project folders (worktrees, clones)
+/// instead of Git on this computer.
 AppNotifier createApp({
   MemoryStore? store,
   WsConn Function(String)? connectionForTest,
   bool connected = false,
   ProductMeasurement? productMeasurement,
   LocalCliDiscovery? localCliDiscovery,
+  Future<String> Function(ProjectFolderRequest request)? prepareFolder,
   SystemNotifications? systemNotifications,
 }) {
-  final app = AppNotifier(
-    config: AppConfig.dev,
-    authSession: AuthSession(),
-    configStore: null,
-    connectionForTest: connectionForTest,
-    localCliDiscovery: localCliDiscovery,
-    productMeasurement: productMeasurement,
-    systemNotifications: systemNotifications,
-    paneLayoutStore: store == null ? null : PaneLayoutStore(storage: store),
-  )..hasNavigationRail = false;
+  final app =
+      (prepareFolder == null
+            ? AppNotifier(
+                config: AppConfig.dev,
+                authSession: AuthSession(),
+                configStore: null,
+                connectionForTest: connectionForTest,
+                localCliDiscovery: localCliDiscovery,
+                productMeasurement: productMeasurement,
+                systemNotifications: systemNotifications,
+                paneLayoutStore: store == null
+                    ? null
+                    : PaneLayoutStore(storage: store),
+              )
+            : _PreparingApp(
+                prepareFolder,
+                config: AppConfig.dev,
+                authSession: AuthSession(),
+                configStore: null,
+                connectionForTest: connectionForTest,
+                localCliDiscovery: localCliDiscovery,
+                productMeasurement: productMeasurement,
+                systemNotifications: systemNotifications,
+                paneLayoutStore: store == null
+                    ? null
+                    : PaneLayoutStore(storage: store),
+              ))
+        ..hasNavigationRail = false;
   const machine = Machine(
     machineId: 'm',
     authMode: MachineAuthMode.remote,

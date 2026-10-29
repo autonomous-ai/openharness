@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -517,23 +518,159 @@ class _MachinePickerState extends State<_MachinePicker> {
   }
 }
 
-/// Adds a machine of the reader's to the Swarm through the Add machine form,
-/// for Add a Buddy. Resolves to the added machine's id, null when it was not.
-Future<String?> showAddMachine(
-  BuildContext context,
+/// Sets [machineId]'s project up for the Swarm and asks what it offers
+/// (`prepareContribution`), a second apart for up to five minutes. Null when
+/// [alive] says the asker is gone or the reader can no longer write. [setupId]
+/// names the setup, so asking again joins the one under way.
+Future<Map<String, dynamic>?> _prepareContribution(
   SuperTabController c,
-  AppNotifier app, {
-  Future<MachineResources?> Function(String machineId)? readLocal,
-}) => _contributeDialog(
-  context,
-  c,
-  app,
-  sampleOf: (_) => null,
-  canRemove: (_) => false,
-  removeReason: (_) => null,
-  remove: (_) {},
-  readLocal: readLocal,
-);
+  AppNotifier app,
+  String machineId, {
+  required String setupId,
+  required bool Function() alive,
+}) async {
+  final deadline = clock.now().add(const Duration(minutes: 5));
+  while (true) {
+    if (!alive() || !c.canWrite) return null;
+    final prepared = await app.superTabMachineRequest(machineId, {
+      'action': 'prepareContribution',
+      'tabId': c.tabId,
+      'scope': 'swarm',
+      'operationId': setupId,
+    });
+    if (prepared['state'] == 'ready' && prepared['scope'] == 'swarm') {
+      return prepared;
+    }
+    if (prepared['state'] != 'preparing') {
+      throw const SuperTabFailure(
+        'UPDATE_REQUIRED',
+        'Update Harness on this machine, then try again.',
+      );
+    }
+    if (clock.now().isAfter(deadline)) {
+      throw const SuperTabFailure(
+        'SETUP_PENDING',
+        'Project setup is still running. Try again to check its progress.',
+      );
+    }
+    await Future<void>.delayed(const Duration(seconds: 1));
+  }
+}
+
+/// The engines a prepared machine offers the Swarm.
+List<String> _contributedEngines(Map<String, dynamic> prepared) {
+  final engines =
+      (prepared['engines'] as List?)
+          ?.whereType<String>()
+          .where((engine) => _chipEngines.contains(engine))
+          .toSet()
+          .toList() ??
+      <String>[];
+  if (engines.isEmpty) {
+    throw const SuperTabFailure(
+      'NO_SWARM_ENGINE',
+      'Install Claude Code or Codex on this machine, then try again.',
+    );
+  }
+  return engines;
+}
+
+/// Adds the prepared [machineId] to the Swarm, offering [maxAgents] slots.
+/// False when [alive] says the asker is gone or the reader can no longer
+/// write, in which case nothing was added.
+Future<bool> _sendContribution(
+  SuperTabController c,
+  AppNotifier app,
+  String machineId,
+  Map<String, dynamic> prepared,
+  List<String> engines, {
+  required int maxAgents,
+  required bool Function() alive,
+}) async {
+  // An earlier lost reply leaves an uncertain attempt holding its own
+  // receipt, and only one action may be in flight: check that one first, then
+  // send the number the owner is looking at — the stored attempt cannot know
+  // it was changed.
+  if (c.pendingCommand?['type'] == 'machine.contribute') {
+    // If that attempt cannot be confirmed, its own error is the one worth
+    // showing: it says why it is still unclear.
+    if (await c.retry() == null) {
+      if (!alive()) return false;
+      throw SuperTabFailure(
+        c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
+        c.operationError ?? 'The earlier attempt is still not confirmed. Try again to check it.',
+      );
+    }
+    if (!alive() || !c.canWrite) return false;
+  }
+  final result = await c.command({
+    'type': 'machine.contribute',
+    'machineId': machineId,
+    'name': app.stateOf(machineId)!.machine.displayName,
+    'cwd': prepared['cwd'],
+    if (prepared['scope'] != null) 'scope': prepared['scope'],
+    'engines': engines,
+    'maxAgents': maxAgents,
+  });
+  if (result == null) {
+    throw SuperTabFailure(
+      'CONTRIBUTION_FAILED',
+      c.operationError ?? 'Could not add this machine.',
+    );
+  }
+  await app.wakeSuperTabHost(machineId);
+  // This Mac, added while its person is here: macOS asks once for the Harness
+  // Team account (cli/src/team/autoSetup.ts).
+  if (app.stateOf(machineId)?.isLocalMachine == true) {
+    unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
+  }
+  return true;
+}
+
+/// Adds the reader's own computer [machineId] to the Swarm as the Add machine
+/// form does when its Add machine is clicked untouched: the slots its memory
+/// suggests, else what preparation offered. Resolves to [machineId], null when
+/// [alive] ended first. Throws a [SuperTabFailure] saying why it could not.
+/// [setupId] is the caller's to keep between tries: a setup still running
+/// answers the next try with the same one.
+Future<String?> contributeComputer(
+  SuperTabController c,
+  AppNotifier app,
+  String machineId, {
+  required String setupId,
+  required bool Function() alive,
+}) async {
+  final prepared = await _prepareContribution(
+    c,
+    app,
+    machineId,
+    setupId: setupId,
+    alive: alive,
+  );
+  if (prepared == null) return null;
+  final engines = _contributedEngines(prepared);
+  MachineResources? resources;
+  try {
+    resources = await app.readMachineResources(machineId);
+  } catch (_) {
+    // The suggestion only sizes the offer; preparation's own number stands in.
+  }
+  final offered = prepared['maxAgents'];
+  final slots =
+      _suggestedAgentSlots(resources) ??
+      (offered is num ? _clampAgentSlots(offered) : _agentSlotsMin);
+  if (!alive() || !c.canWrite) return null;
+  final added = await _sendContribution(
+    c,
+    app,
+    machineId,
+    prepared,
+    engines,
+    maxAgents: slots,
+    alive: alive,
+  );
+  return added ? machineId : null;
+}
 
 /// Why [m] cannot be added to the Swarm now, in the Add machine form's words;
 /// null when it can.
@@ -817,49 +954,16 @@ Future<String?> _contributeDialog(
               });
               try {
                 setupId ??= superTabOperationId();
-                final deadline = DateTime.now().add(const Duration(minutes: 5));
-                Map<String, dynamic> prepared;
-                while (true) {
-                  if (!context.mounted || !c.canWrite) return;
-                  prepared = await app.superTabMachineRequest(selected, {
-                    'action': 'prepareContribution',
-                    'tabId': c.tabId,
-                    'scope': 'swarm',
-                    'operationId': setupId,
-                  });
-                  if (prepared['state'] == 'ready' &&
-                      prepared['scope'] == 'swarm') {
-                    break;
-                  }
-                  if (prepared['state'] != 'preparing') {
-                    throw const SuperTabFailure(
-                      'UPDATE_REQUIRED',
-                      'Update Harness on this machine, then try again.',
-                    );
-                  }
-                  if (DateTime.now().isAfter(deadline)) {
-                    throw const SuperTabFailure(
-                      'SETUP_PENDING',
-                      'Project setup is still running. Try again to check its progress.',
-                    );
-                  }
-                  await Future<void>.delayed(const Duration(seconds: 1));
-                }
+                final prepared = await _prepareContribution(
+                  c,
+                  app,
+                  selected,
+                  setupId: setupId!,
+                  alive: () => context.mounted,
+                );
+                if (prepared == null) return;
                 if (!context.mounted || !c.canWrite) return;
-                final machine = app.stateOf(selected);
-                final engines =
-                    (prepared['engines'] as List?)
-                        ?.whereType<String>()
-                        .where((engine) => _chipEngines.contains(engine))
-                        .toSet()
-                        .toList() ??
-                    <String>[];
-                if (engines.isEmpty) {
-                  throw const SuperTabFailure(
-                    'NO_SWARM_ENGINE',
-                    'Install Claude Code or Codex on this machine, then try again.',
-                  );
-                }
+                final engines = _contributedEngines(prepared);
                 // A machine with no number of its own whose reading failed,
                 // or had not answered yet, is showing the floor rather than
                 // a suggestion. The owner never chose that, so send what
@@ -876,46 +980,18 @@ Future<String?> _contributeDialog(
                     offered is num) {
                   slots = _clampAgentSlots(offered);
                 }
-                // An earlier lost reply leaves an uncertain attempt holding
-                // its own receipt, and only one action may be in flight:
-                // check that one first, then send the number the owner is
-                // looking at — the stored attempt cannot know it was changed.
-                if (c.pendingCommand?['type'] == 'machine.contribute') {
-                  // If that attempt cannot be confirmed, its own error is
-                  // the one worth showing: it says why it is still unclear.
-                  if (await c.retry() == null) {
-                    if (!context.mounted) return;
-                    throw SuperTabFailure(
-                      c.operationErrorCode ?? 'CONTRIBUTION_FAILED',
-                      c.operationError ??
-                          'The earlier attempt is still not confirmed. '
-                              'Try again to check it.',
-                    );
-                  }
-                  if (!context.mounted || !c.canWrite) return;
-                }
-                final result = await c.command({
-                  'type': 'machine.contribute',
-                  'machineId': selected,
-                  'name': machine!.machine.displayName,
-                  'cwd': prepared['cwd'],
-                  if (prepared['scope'] != null) 'scope': prepared['scope'],
-                  'engines': engines,
-                  'maxAgents': !isConfigure
+                if (!await _sendContribution(
+                  c,
+                  app,
+                  selected,
+                  prepared,
+                  engines,
+                  maxAgents: !isConfigure
                       ? slots
                       : atMost ?? memoryLimit(prepared),
-                });
-                if (result == null) {
-                  throw SuperTabFailure(
-                    'CONTRIBUTION_FAILED',
-                    c.operationError ?? 'Could not add this machine.',
-                  );
-                }
-                await app.wakeSuperTabHost(selected);
-                // This Mac, added while its person is here: macOS asks once
-                // for the Harness Team account (cli/src/team/autoSetup.ts).
-                if (app.stateOf(selected)?.isLocalMachine == true) {
-                  unawaited(app.offerTeamAccount('contribute', tabId: c.tabId));
+                  alive: () => context.mounted,
+                )) {
+                  return;
                 }
                 added = selected;
                 if (context.mounted) Navigator.pop(context);

@@ -19,11 +19,13 @@ import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
+import 'leaderboard/reader.dart';
 import 'unread_line.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'profile_actions.dart';
 import 'pull_requests.dart';
+import 'composer_newline.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
@@ -165,6 +167,10 @@ class _SuperTabViewState extends State<SuperTabView>
   final _completionKeys = List.generate(6, (_) => GlobalKey());
   SuperTabController get c => widget.controller;
 
+  /// The open project's week board, read once for the right pane's members
+  /// and the left sidebar's Models, so both show one week.
+  late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
+
   /// A device with a Lead of this Swarm open scrolls the chat on screen.
   late final _dial = DialListScroll(() => _scroll[c.selectedId]);
   VoidCallback? _unregisterDial;
@@ -236,6 +242,8 @@ class _SuperTabViewState extends State<SuperTabView>
       _registerDial();
     }
     if (oldWidget.controller != c) {
+      _board.dispose();
+      _board = SuperTabProjectBoard(c);
       oldWidget.controller.removeListener(_changed);
       if (oldWidget.controller.buddyChatOpener == _openBuddyChat) {
         oldWidget.controller.buddyChatOpener = null;
@@ -537,6 +545,7 @@ class _SuperTabViewState extends State<SuperTabView>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _board.dispose();
     c.removeListener(_changed);
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
@@ -709,6 +718,22 @@ class _SuperTabViewState extends State<SuperTabView>
       problem ??
           (failed.isEmpty ? null : '${failed.join(', ')} could not be zipped.'),
     );
+  }
+
+  /// The box was edited: keep it as this chat's draft and drop the pick state.
+  void _composerEdited(String text) {
+    c.setDraft(c.selectedId, text);
+    _mentionIndex.value = 0;
+    _dismissedMention.value = null;
+  }
+
+  /// A line break at the cursor. The field only calls [_composerEdited] for
+  /// edits that come from the platform, so this reports its own.
+  void _insertNewline() {
+    final value = withNewline(_composer.value);
+    if (value == null) return;
+    _composer.value = value;
+    _composerEdited(value.text);
   }
 
   void _composerMoved() {
@@ -1247,6 +1272,7 @@ class _SuperTabViewState extends State<SuperTabView>
   Widget _sidebar() => ProjectSidebar(
     controller: c,
     app: widget.app,
+    board: _board,
     onAddAgent: widget.onAddAgent,
     onNewProject: widget.onNewProject,
     devicesSelected: _devicesVisible,
@@ -3168,18 +3194,23 @@ class _SuperTabViewState extends State<SuperTabView>
                     _readAll()) {
                   return KeyEventResult.handled;
                 }
-                if (_focus.hasFocus &&
+                final enterDown =
+                    _focus.hasFocus &&
                     event is KeyDownEvent &&
                     event.logicalKey == LogicalKeyboardKey.enter &&
-                    !keys.isShiftPressed &&
-                    !keys.isControlPressed &&
-                    !keys.isMetaPressed &&
-                    !keys.isAltPressed &&
-                    !(composing.isValid && !composing.isCollapsed)) {
-                  unawaited(_send());
+                    !(composing.isValid && !composing.isCollapsed);
+                if (!enterDown) return KeyEventResult.ignored;
+                if (keys.isControlPressed || keys.isMetaPressed) {
+                  return KeyEventResult.ignored;
+                }
+                // Shift+Enter and Alt+Enter write the line themselves: the platform
+                // gives Option+Return none, and a handled key never reaches it.
+                if (keys.isShiftPressed || keys.isAltPressed) {
+                  _insertNewline();
                   return KeyEventResult.handled;
                 }
-                return KeyEventResult.ignored;
+                unawaited(_send());
+                return KeyEventResult.handled;
               },
               child: DecoratedBox(
                 key: const ValueKey('super-message-composer-surface'),
@@ -3250,7 +3281,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                               600
                                           ? 3
                                           : 8,
-                                      maxLength: 32000,
+                                      maxLength: kComposerMaxLength,
                                       inputFormatters: [_tagBackspace],
                                       keyboardType: TextInputType.multiline,
                                       textAlignVertical:
@@ -3281,11 +3312,7 @@ class _SuperTabViewState extends State<SuperTabView>
                                         filled: false,
                                         counterText: '',
                                       ),
-                                      onChanged: (text) {
-                                        c.setDraft(c.selectedId, text);
-                                        _mentionIndex.value = 0;
-                                        _dismissedMention.value = null;
-                                      },
+                                      onChanged: _composerEdited,
                                     ),
                                   ),
                                 ),
@@ -3394,8 +3421,11 @@ class _SuperTabViewState extends State<SuperTabView>
       }
       _chatCovered = chatCovered;
       final roster = SuperTabRoster(
+        // A new board is a new roster: the old one read another Swarm.
+        key: ObjectKey(_board),
         controller: c,
         app: widget.app,
+        board: _board,
         onInvite: widget.onInvite,
         onOpenAgent: (agent) {
           setState(() {

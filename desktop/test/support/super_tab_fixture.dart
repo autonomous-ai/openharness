@@ -412,6 +412,10 @@ class ConversationServer {
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
   final posts = <Map<String, dynamic>>[];
+
+  /// Refuses the next lead.start with this code and message, as the backend
+  /// refuses a machine that cannot take the Product Manager (leadStart.ts).
+  Map<String, String>? leadRefusal;
   final receipts = <String, Map<String, dynamic>>{};
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
@@ -963,6 +967,31 @@ class ConversationServer {
             },
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'lead.start') {
+        if (leadRefusal case final refusal?) {
+          leadRefusal = null;
+          throw SuperTabFailure(
+            refusal['code']!,
+            refusal['message']!,
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final machineId = command['machineId'] as String?;
+        output.addAll(
+          machineId == null
+              ? {'waiting': true}
+              : {'startId': 'lead-start-$revision', 'machineId': machineId},
+        );
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        project?['lead'] = {
+          'status': machineId == null ? 'waiting' : 'starting',
+          'machineId': ?machineId,
+          'requestedAt': revision,
+        };
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[
