@@ -28,7 +28,7 @@ import { touchDeviceKey } from './deviceKeyLog.js'
 import { getAgentPresence, getAgentPresenceMany, subscribeStatus, getDevicePresence, subscribeDeviceStatus, subscribeDeviceMachineListChanged, subscribeDeviceE2eePair, subscribeMachineShareChanged } from './bus.js'
 import { sharedMachineAccess } from './machineAccess.js'
 import { relayWebDocumentPushes } from './webAccountPushes.js'
-import { DAEMONS } from '../config/env.js'
+import { DAEMONS, env } from '../config/env.js'
 import { attachHubClient, trackSocketLiveness, type HubClient } from './hub.js'
 import { authenticateAccessToken, SsoAuthError, type AuthUser } from './ssoAuth.js'
 import type { Frame } from './tunnel.js'
@@ -121,8 +121,8 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
 
   // PER-USER mode: profile validation is async, so authenticate before completing the upgrade.
   void (async () => {
+    const query = new URL(req.url ?? '/api/web-ws', 'http://backend.local').searchParams
     try {
-      const query = new URL(req.url ?? '/api/web-ws', 'http://backend.local').searchParams
       const requestedEnvironment = parseAutonomousEnvironment(query.get('autonomousEnv'))
       // Who is on the other end, as the client declares it: the mobile app and the web viewer say so;
       // the daemon's relay (and any older client) says nothing and is never counted as a person.
@@ -139,6 +139,11 @@ export function handleWebUpgrade(req: IncomingMessage, socket: Duplex, head: Buf
       // A Mac's team account (lib/teamSession.ts) never selects or attaches to a machine here: refused for good,
       // not an expired sign-in to refresh and retry.
       const team = err instanceof SsoAuthError && err.code === 'TEAM_SESSION_LIMITED'
+      if (invalid && env.WEB_WS_AUTH_HTTP_401 && query.get('auth') === 'http') {
+        try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n') } catch { /* ignore */ }
+        socket.destroy()
+        return
+      }
       const code = invalid ? 4401 : mismatch || team ? 4403 : 1013
       const reason = invalid
         ? 'auth expired'
@@ -168,7 +173,7 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
   // Its connect and disconnect lines (lib/wsAttribution.ts): prod, 2026-10-28, 2,304 of 2,308 opens in 15 minutes
   // declared no client and lived a median 0.4 s, and these lines named only the user.
   const track = trackSocket('web', 'web user', ws, { ...declared, userId: user.sub })
-  const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number }): void => {
+  const refuse = (payload: { machineId: string; error: string; retryAfterMs?: number; reason?: 'deleted' }): void => {
     track.selected(payload.error)
     send({ type: 'machine_select_error', payload })
   }
@@ -373,7 +378,8 @@ function attachUserClient(ws: WebSocket, user: AuthUser, surface: 'mobile' | 'we
       // client's stale list; a failed share check is ours.
       const reason = !binding ? 'unknown' : binding.deletedAt ? 'deleted' : shareCheckFailed ? 'share_check_failed' : 'not_shared'
       logger.warn('machine_select rejected', { userId: user.sub, machineId, reason })
-      refuse({ machineId: machineId, error: 'NOT_YOUR_MACHINE' })
+      // Only the person's own machine says it was deleted (a daemon then stops dialling it); anyone else's says nothing more.
+      refuse({ machineId: machineId, error: 'NOT_YOUR_MACHINE', ...(binding?.deletedAt && binding.userId === user.sub ? { reason: 'deleted' as const } : {}) })
       return
     }
     if (storedAutonomousEnvironment(binding.autonomousEnv) !== user.autonomousEnv) {
