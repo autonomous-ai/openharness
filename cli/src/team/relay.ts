@@ -18,14 +18,14 @@
  * ⚠️ The token is never logged, and lives only in the file and in the launched engine's environment.
  */
 import { execFile } from 'node:child_process'
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { recordAcceptanceIn } from '../engines/kit/folderTrust.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { engineAccount } from '../lib/engineAccount.js'
-import { claudeRelayEnv, codexRelayArgs, codexRelayEnv, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { claudeRelayEnv, codexRelayArgs, codexRelayEnv, codexRelayAuth, codexRelaySignInArgs, isCodexRelayAuth, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
 
 /** The owner's folder for the hand-off, per owner so two people's Macs never share one. */
@@ -219,6 +219,9 @@ export interface TeamRelayLaunchDeps {
   /** Claude Code that never ran in the team account opens on its first-run screens, which nobody is there to answer:
    *  recorded as done, in the team account's own home, before the first launch on the relay. */
   onboarded(engine: 'claude' | 'codex'): void
+  /** Codex's sign-in for the relay (lib/subscriptionRelay.ts codexRelayAuth), in the team account's own Codex home;
+   *  false when it could not be written. */
+  codexSignIn(token: string): boolean
 }
 
 /** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. */
@@ -231,9 +234,25 @@ export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunch
   const grant = deps.read(config)
   if (!grant) return null
   try { deps.onboarded(engine) } catch { /* The engine asks on its screen, as it would have. */ }
-  return engine === 'claude'
-    ? { env: claudeRelayEnv(grant.url, grant.token), args: [] }
-    : { env: codexRelayEnv(grant.token), args: codexRelayArgs(grant.url) }
+  if (engine === 'claude') return { env: claudeRelayEnv(grant.url, grant.token), args: [] }
+  // As a ChatGPT sign-in, so Codex has the owner's models (codexRelaySignInArgs); as an API key, as before, when the
+  // sign-in could not be written.
+  let signIn = false
+  try { signIn = deps.codexSignIn(grant.token) } catch { signIn = false }
+  return { env: codexRelayEnv(grant.token), args: signIn ? codexRelaySignInArgs(grant.url) : codexRelayArgs(grant.url) }
+}
+
+/** Writes the relay's sign-in to [dir]/auth.json, unless a sign-in of the account's own is there. Private to the account. */
+export function writeCodexRelaySignIn(dir: string, token: string, now: number): boolean {
+  const file = join(dir, 'auth.json')
+  let existing: unknown = null
+  try { existing = JSON.parse(readFileSync(file, 'utf8')) } catch { existing = null }
+  if (existing && !isCodexRelayAuth(existing)) return false
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const next = `${file}.harness-relay-${process.pid}`
+  writeFileSync(next, codexRelayAuth(token, now), { mode: 0o600 })
+  renameSync(next, file)
+  return true
 }
 
 /** The team daemon's own: its sign-in, the root-owned config, its engines' sign-ins in its own home. */
@@ -244,6 +263,7 @@ export const realTeamRelayLaunch = (engine: AgentEngine) => teamRelayLaunch(engi
   signedIn: async (e) => (await engineAccount(e, { home: homedir(), env: process.env, lastUsed: false })).signedIn === true,
   read: (config) => readTeamRelay(config),
   onboarded: (e) => { if (e === 'claude') recordAcceptanceIn(join(homedir(), '.claude.json'), 'hasCompletedOnboarding') },
+  codexSignIn: (token) => writeCodexRelaySignIn(process.env.CODEX_HOME || join(homedir(), '.codex'), token, Date.now()),
 })
 
 /** In the team daemon: whether the owner's relay is there for its engines (superTabs/machines.ts readiness). */

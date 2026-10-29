@@ -196,7 +196,7 @@ The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turni
 any still starting, and stops their posts. Their chats stay for their owners to read.
 
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account.
 - A Buddy reads what its owner reads of its project, so it can answer which task owns something, where its pull
   request stands and what blocks it without the product manager's summaries. That is the project chat, its own chat
@@ -212,11 +212,17 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
   information, never as instructions; only its owner's words ask it to act.
 - A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
-  file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
-  full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the
+  file editing is turned off, and the files in its own copy of the project are read-only. No Buddy gets the
   Harness GitHub App's token.
   Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
   broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
+- The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
+  asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
+  `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
+  it has a Codex home of its own. Every Codex Buddy started before the refusal (Harness before 10-29) runs with Codex's
+  full permissions, and its relaunches keep the mode it was started with: remove it and add a Claude Code Buddy. A
+  start the server recorded before the refusal, run by a Harness from 10-29 on, starts in Codex's read-only sandbox
+  with approvals sent to the person, and a Codex too old for that mode stays stopped rather than starting without it.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
@@ -295,6 +301,79 @@ for and shipped, who answered what kind of item, and how long it waited. It
 never records what anyone wrote. The only text it shows is the title of a
 conversation the reader can read. Private conversations, Chat with PM among
 them, never count and never appear in it.
+
+## Cost records
+
+Every task a Lead routes records what it ran on, what it cost and how it ended,
+so a Swarm can show that it gets work done cheaper and route each job to the
+cheapest harness that still gets it right.
+
+Each attempt keeps:
+
+- the kind of job the Lead gave when routing (`ui`, `docs`; `review` for a
+  review), or none;
+- the engine, model and effort it ran at, and the model on the Swarm's grid when
+  it ran one;
+- how it was paid: an engine plan (subscription), per token through an API (an
+  API key, or a grid model shared from one), the Swarm's own GPUs, or unknown;
+- its session's token counts by model (input, output, cache reads and cache
+  writes) when it started and when it ended. Its tokens are the difference. A
+  session counts up to 15 models apart; any more are counted together as
+  `other`, which has no price;
+- its end reading: an agent finishing its own work (Done or Stopped) sends its
+  session's totals read at that moment. Finished by someone else, or by a host
+  from before cost records, its tokens are unknown rather than taken from an
+  older report. A lost, cancelled or host-stopped attempt ends with its
+  machine's last report;
+- how it ended: done, stopped, cancelled, lost, or superseded when its group went
+  while it was still active. A task lost to a usage limit and taken back by the
+  same session is the same attempt, still going. Handing a lost task to another
+  agent is a new attempt; the old one stays lost.
+
+Each machine sends its running Swarm agents' token counts with its usual report.
+Only counts leave the machine: never text, prompts, folders or pull requests.
+Members never see the raw counts; they read the summary.
+
+**Prices.** Costs use API list prices per model, in US dollars, from one reviewed
+table in the backend (`backend/src/superTabs/costs/prices.ts`). Each price names
+its source and the day it was read. A model without a listed price has no cost,
+never a guessed one. Grid models reached through OpenRouter are priced at
+OpenRouter's rates. A model served on the Swarm's own GPUs costs 0, and its
+attempts say so. Two costs are shown: what the tokens would have cost on the API,
+and what was actually spent per token (nothing on a plan or on own GPUs).
+
+**Reading it.** The Lead reads `harness super-tab costs [--days N]` (7 days unless
+set, at most 90), for the Product Manager, and later for the leaderboard and the
+nightly reflection. Per engine, model, effort and kind of job it gives:
+attempts, first-review pass rate, shipped, median minutes to ship, tokens,
+API-equivalent cost, actual spend, and cost per shipped change. A request ships
+once, at its merge or first Done as the leaderboard records it, by the attempt
+that was running then; more attempts done afterwards ship nothing new. Time to
+ship runs from that attempt's start to when the request shipped. Cost per shipped change is shown only when every ended attempt's cost is
+known, so a partial sum never reads cheaper than it was. It covers only attempts
+routed since cost records began, in the groups the reader may read.
+
+Design:
+
+- Growth: the records live on route decisions, which are deleted after 90 days
+  as before. A machine's report keeps counts only for its running agents.
+- Concurrency: recorded in the same write that starts or ends the attempt, so a
+  newer write retries on current data like every other Swarm write.
+- Read cost: one index read of the period's decisions (tabId and creation time),
+  at most 3,000, then only the groups they name. It never reads messages.
+- Scale: a busy Swarm routes about 300 tasks a week, so 90 days is about 4,000;
+  the 3,000 cap says when it cut. The read's time is the first warning.
+- Compatibility: an old host sends no counts and its attempts have no tokens; an
+  old backend refuses the new fields and the CLI sends its report and routes
+  without them. The backend deploys first.
+- Migration and rollback: additive fields, no migration. Rolling back leaves them
+  unread.
+- Audience: the server returns only attempts in groups the reader may read.
+- Identity: counts are recorded per Swarm agent, never as the machine owner.
+- Failure: an attempt with no reading or no price shows no cost and is counted
+  apart, never as zero.
+- Platforms: the counts come from Claude Code and Codex transcripts on macOS,
+  Linux and Windows hosts alike.
 
 ## Avatars, status and celebrations
 
