@@ -51,9 +51,10 @@ import 'until.dart';
   final asked = result == null || result.isEmpty ? null : result;
   // What the PM did once the task got here: earlier actions are not handling it.
   final acted = group.leadAction;
-  final handling = acted != null && (acted['at'] as num) >= (liveness['since'] as num)
+  final handling =
+      acted != null && (acted['at'] as num) >= (liveness['since'] as num)
       ? switch (acted['kind']) {
-          'assign' => 'PM moved it to a new agent',
+          'assign' => 'PM reassigned it',
           'route' || 'start' => 'PM retrying',
           'post' => 'PM posted',
           _ => null,
@@ -87,7 +88,10 @@ import 'until.dart';
       HarnessActivity.failed,
       'Stuck: its agent was removed',
     ),
-    ('orphaned', 'lost') => (HarnessActivity.failed, 'Stuck: its agent stopped'),
+    ('orphaned', 'lost') => (
+      HarnessActivity.failed,
+      'Stuck: its agent stopped',
+    ),
     ('orphaned', 'start-failed') => (
       HarnessActivity.failed,
       'Stuck: its agent could not start',
@@ -101,11 +105,9 @@ import 'until.dart';
   if (mark == null) return null;
   return (
     mark: mark,
-    line: [
-      head,
-      ?handling,
-      if (liveness['state'] != 'quiet') age,
-    ].join(' · '),
+    // The age before what the PM did: a line the sidebar cuts short still
+    // says how long, and its row's tooltip has it whole.
+    line: [head, if (liveness['state'] != 'quiet') age, ?handling].join(' · '),
     since: since,
   );
 }

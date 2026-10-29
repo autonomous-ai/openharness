@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:collection/collection.dart' show mergeSort;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,12 +13,14 @@ import '../state/app_state.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
+import 'identity.dart';
 import 'local_models.dart';
 import 'buddies.dart';
 import 'machines.dart';
 import 'model.dart';
 import 'pm_chat_rows.dart';
 import 'section_heading.dart';
+import 'task_status.dart';
 import 'workgroup_name.dart';
 import 'project_github.dart';
 
@@ -201,6 +204,14 @@ class ProjectSidebar extends StatelessWidget {
   }
 
   /// A workgroup's row from what its project's reading already asked.
+  /// A member as the Humans list names them, for a task's "Waiting on …".
+  String? _personName(String personId) => switch (controller.snapshot?.people
+      .where((p) => p.id == personId)
+      .firstOrNull) {
+    final person? => superTabPersonName(person.email),
+    null => null,
+  };
+
   Widget _workgroupRow(SuperTabConversation group, _ProjectReading reading) =>
       _drawRow(
         group,
@@ -282,7 +293,14 @@ class ProjectSidebar extends StatelessWidget {
                             message:
                                 label ??
                                 project?.name ??
-                                SuperTabWorkgroupName.plain(group),
+                                [
+                                  SuperTabWorkgroupName.plain(group),
+                                  ?superTabTaskStatus(
+                                    group,
+                                    clock.now(),
+                                    personName: _personName,
+                                  )?.line,
+                                ].join('\n'),
                             child: ConstrainedBox(
                               constraints: const BoxConstraints(minHeight: 36),
                               child: Padding(
@@ -293,9 +311,21 @@ class ProjectSidebar extends StatelessWidget {
                                   children: [
                                     Expanded(
                                       child: label == null && project == null
-                                          ? SuperTabWorkgroupName(
-                                              group,
-                                              style: style,
+                                          ? Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                SuperTabWorkgroupName(
+                                                  group,
+                                                  style: style,
+                                                ),
+                                                // Moving, waiting and on what, or stuck (#957).
+                                                SuperTabTaskLine(
+                                                  group,
+                                                  personName: _personName,
+                                                ),
+                                              ],
                                             )
                                           : Column(
                                               crossAxisAlignment:
@@ -365,6 +395,8 @@ class ProjectSidebar extends StatelessWidget {
                                       ),
                                     ),
                                   )
+                                : label == null && project == null
+                                ? SuperTabTaskMark(group)
                                 : null,
                           ),
                         ),

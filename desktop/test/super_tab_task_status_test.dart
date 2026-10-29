@@ -120,13 +120,11 @@ void main() {
         leadAction: {'kind': 'route', 'at': ago(minute * 2)},
       ),
     );
-    expect(line(tester), 'Queued: no free machine · PM retrying · 25m');
+    expect(line(tester), 'Queued: no free machine · 25m · PM retrying');
     expect(mark(tester), HarnessActivity.unknown);
   });
 
-  testWidgets('quiet, with what the PM did once it went quiet', (
-    tester,
-  ) async {
+  testWidgets('quiet, with what the PM did once it went quiet', (tester) async {
     await show(
       tester,
       task(
@@ -134,7 +132,7 @@ void main() {
         leadAction: {'kind': 'assign', 'at': ago(minute)},
       ),
     );
-    expect(line(tester), 'Quiet 34m · PM moved it to a new agent');
+    expect(line(tester), 'Quiet 34m · PM reassigned it');
     expect(mark(tester), HarnessActivity.failed);
     // What the PM did before it went quiet is not handling it.
     await show(
@@ -205,14 +203,27 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1300, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final server = humansSwarm();
-      final group = (server.state['conversations'] as List).cast<Map<String, dynamic>>().firstWhere((g) => g['id'] == 'offline');
-      group['assignment'] = {'id': 'a', 'agentId': 'w', 'status': 'needs_human', 'result': 'mockup OK?'};
-      group['liveness'] = state('waiting', 'person', minute * 12, personId: 'owner');
+      final group = (server.state['conversations'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((g) => g['id'] == 'offline');
+      group['assignment'] = {
+        'id': 'a',
+        'agentId': 'w',
+        'status': 'needs_human',
+        'result': 'mockup OK?',
+      };
+      group['liveness'] = state(
+        'waiting',
+        'person',
+        minute * 12,
+        personId: 'owner',
+      );
       final controller = server.controller(
         account: 'peer',
         initial: {'tabId': 'tab', 'accountId': 'peer', 'selectedId': 'lead'},
       );
       await controller.refresh();
+      controller.expandedProjects.add('lead');
       await withClock(
         Clock.fixed(now),
         () => tester.pumpWidget(
@@ -232,11 +243,22 @@ void main() {
       );
       final row = find.byKey(const ValueKey('super-group-offline'));
       expect(
-        find.descendant(of: row, matching: find.text('Waiting on ken · mockup OK? · 12m')),
+        find.descendant(
+          of: row,
+          matching: find.text('Waiting on ken · mockup OK? · 12m'),
+        ),
         findsOneWidget,
       );
       expect(
-        find.descendant(of: row, matching: find.byKey(const ValueKey('super-task-mark-offline'))),
+        find.descendant(
+          of: row,
+          matching: find.byKey(const ValueKey('super-task-mark-offline')),
+        ),
+        findsOneWidget,
+      );
+      // A line the sidebar cuts short is whole in the row's tooltip.
+      expect(
+        find.byTooltip('Offline editing\nWaiting on ken · mockup OK? · 12m'),
         findsOneWidget,
       );
       await tester.pumpWidget(const SizedBox());
