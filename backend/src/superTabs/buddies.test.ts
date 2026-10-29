@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, CODEX_BUDDY_REFUSAL, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
 import { sweepLiveness } from './liveness.js'
@@ -162,6 +164,12 @@ describe('adding a Buddy', () => {
     const starts = f.state.starts?.length ?? 0, groups = f.state.conversations.length
     expect(() => addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')).toThrow('A Codex Buddy is not available yet')
     expect([f.state.starts?.length ?? 0, f.state.conversations.length]).toEqual([starts, groups])
+  })
+
+  it('words its Codex refusal as Desktop does beside a disabled Codex (security re-check of #2087)', () => {
+    // Desktop holds the same pair to this constant (desktop test/buddy_refusal_parity_test.dart).
+    const desktop = readFileSync(fileURLToPath(new URL('../../../desktop/lib/super_tabs/buddies.dart', import.meta.url)), 'utf8')
+    expect(/kBuddyEngineRefusals = \{\s*'codex':\s*'([^']*)'/.exec(desktop)?.[1]).toBe(CODEX_BUDDY_REFUSAL)
   })
 
   it('is refused while Buddies are off', () => {

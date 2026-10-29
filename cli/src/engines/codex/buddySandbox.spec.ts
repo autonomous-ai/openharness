@@ -70,6 +70,23 @@ describe.skipIf(!hasCodex)('the sandbox a Codex Buddy launches in, with the real
     expect([taken.status, taken.output.trim()]).toEqual([0, 'ran'])
   })
 
+  it('sends approvals to the person even when their config.toml picks Codex\'s own reviewer (security re-check of #2087)', async () => {
+    // What the model is told about escalations, rendered by Codex itself: the person's config.toml says auto_review, and
+    // the Buddy's launch overrides it. The mode's --ask-for-approval and --sandbox are the same settings as config keys.
+    const home = join(root, 'auto-review-home')
+    mkdirSync(home)
+    writeFileSync(join(home, 'config.toml'), 'approvals_reviewer = "auto_review"\n')
+    const launch = ['-c', `approval_policy="${buddyFlags[buddyFlags.indexOf('--ask-for-approval') + 1]}"`, '-c', `sandbox_mode="${sandboxMode}"`]
+    const render = (...overrides: string[]) => run('codex', ['debug', 'prompt-input', ...launch, ...overrides], repo, { ...env, CODEX_HOME: home })
+    const theirs = await render()
+    expect(theirs.status).toBe(0)
+    expect(theirs.output).toContain('`approvals_reviewer` is `auto_review`')
+    const buddy = await render(...buddyFlags.flatMap((flag, i) => buddyFlags[i - 1] === '-c' ? ['-c', flag] : []))
+    expect(buddy.status).toBe(0)
+    expect(buddy.output).not.toContain('auto_review')
+    expect(buddy.output).toContain('Commands are run outside the sandbox if they are approved by the user')
+  })
+
   it('reads the code and its history', async () => {
     const log = await sandboxed('git', 'log', '--oneline')
     expect([log.status, log.output]).toEqual([0, expect.stringContaining('first commit')])

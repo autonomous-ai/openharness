@@ -204,14 +204,15 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 - A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
   file editing is turned off, and the files in its own copy of the project are read-only. No Buddy gets the
   Harness GitHub App's token.
+  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
+  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
 - The server refuses a Codex Buddy for now. Codex runs a command its rules files allow outside its sandbox without
   asking, and those files are shared by all of the person's Codex sessions: Harness's own allows `harness new` and
   `harness send`, and the person's keeps everything they once told Codex to always allow. A Codex Buddy comes back once
-  it has a Codex home of its own. One started before the refusal launches in Codex's read-only sandbox with approvals
-  sent to the person, never with full permissions; a Codex too old for that mode keeps it stopped rather than
-  relaunching it without.
-  Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
-  broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
+  it has a Codex home of its own. Every Codex Buddy started before the refusal (Harness before 10-29) runs with Codex's
+  full permissions, and its relaunches keep the mode it was started with: remove it and add a Claude Code Buddy. A
+  start the server recorded before the refusal, run by a Harness from 10-29 on, starts in Codex's read-only sandbox
+  with approvals sent to the person, and a Codex too old for that mode stays stopped rather than starting without it.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
