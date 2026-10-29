@@ -20,6 +20,20 @@ static bool put_id(char *dst, const char *src, bool required)
     put_text(dst, ID_MAX, src);
     return true;
 }
+// "#rrggbb", either case, as 0xRRGGBB; false for anything else.
+static bool hex_color(const char *s, uint32_t *out)
+{
+    if (!s || s[0] != '#' || strlen(s) != 7) return false;
+    uint32_t v = 0;
+    for (int i = 1; i < 7; i++) {
+        char c = s[i];
+        int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (d < 0) return false;
+        v = v << 4 | (uint32_t)d;
+    }
+    *out = v;
+    return true;
+}
 static bool asking(ht_lead_state_t s)
 {
     return s == HT_LEAD_ASK || s == HT_LEAD_STUCK;
@@ -60,10 +74,24 @@ bool ht_supertab_lead_add(ht_supertab_t *t, const ht_lead_in_t *in)
     // The chat on the face. One this dial cannot name (an unknown kind, an id it cannot hold) is the Lead chat with no
     // id: the Lead stays, and no chat's recap is taken for it.
     const char *c = in->chat ? in->chat : "";
-    l->chat = !strcmp(c, "group") ? HT_CHAT_GROUP : !strcmp(c, "pm") ? HT_CHAT_PM : HT_CHAT_LEAD;
-    bool named = (!strcmp(c, "group") || !strcmp(c, "pm") || !strcmp(c, "lead")) && put_id(l->chat_id, in->chat_id, true);
+    l->chat = !strcmp(c, "group") ? HT_CHAT_GROUP : !strcmp(c, "pm") ? HT_CHAT_PM : !strcmp(c, "buddy") ? HT_CHAT_BUDDY : HT_CHAT_LEAD;
+    bool named = (!strcmp(c, "group") || !strcmp(c, "pm") || !strcmp(c, "lead") || !strcmp(c, "buddy")) &&
+                 put_id(l->chat_id, in->chat_id, true);
     if (named) put_text(l->chat_name, sizeof l->chat_name, in->chat_name);
     else { l->chat = HT_CHAT_LEAD; l->chat_id[0] = 0; l->chat_name[0] = 0; }
+    // The reader's Buddy, only while Buddies are on. One the dial cannot draw is no Buddy; the Lead stays.
+    l->buddies = in->buddies;
+    const ht_buddy_in_t *b = &in->buddy;
+    uint32_t color = 0;
+    if (in->buddies && b->present && b->cells >= 0 && b->cells <= 0x7fff && hex_color(b->color, &color) &&
+        put_id(l->buddy.chat_id, b->chat_id, true)) {
+        l->buddy.has = true;
+        l->buddy.live = b->live;
+        l->buddy.cells = (uint16_t)b->cells;
+        l->buddy.color = color;
+        put_text(l->buddy.name, sizeof l->buddy.name, b->name);
+        put_text(l->buddy.engine, sizeof l->buddy.engine, b->engine);
+    } else memset(&l->buddy, 0, sizeof l->buddy);
     t->lead_n++;
     return true;
 }

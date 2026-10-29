@@ -241,11 +241,68 @@ static void chats(void)
     puts("supertab: chat kind/id/name, old Leads as the Lead chat, recap only for the face's chat PASS");
 }
 
+// The reader's own Buddy in each project (spec 2026-10-29-round-dial-pm-buddy): `buddies` while the Swarm has them on,
+// the Buddy block with its avatar's 15 half bits and colour, and a face that may be its chat.
+static void buddies(void)
+{
+    static ht_supertab_t t;
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 3));
+    ht_lead_in_t b = lead("L0", "done", 0); b.chat = "buddy"; b.chat_id = "b1"; b.chat_name = "diego's Buddy"; b.buddies = true;
+    b.buddy = (ht_buddy_in_t){.present = true, .chat_id = "b1", .name = "diego's Buddy", .engine = "codex", .color = "#d6a79a",
+                                .cells = 25513, .live = true};
+    // Buddies on, no Buddy in this project; and an older daemon, which sends neither.
+    ht_lead_in_t none = lead("L1", "done", 1); none.buddies = true;
+    ht_lead_in_t old = lead("L2", "done", 2);
+    assert(ht_supertab_lead_add(&t, &b) && ht_supertab_lead_add(&t, &none) && ht_supertab_lead_add(&t, &old));
+    const ht_lead_t *l = &t.leads[0];
+    assert(l->buddies && l->buddy.has && l->buddy.live && l->buddy.cells == 25513 && l->buddy.color == 0xd6a79a);
+    assert(!strcmp(l->buddy.chat_id, "b1") && !strcmp(l->buddy.name, "diego's Buddy") && !strcmp(l->buddy.engine, "codex"));
+    assert(l->chat == HT_CHAT_BUDDY && !strcmp(l->chat_id, "b1") && !strcmp(l->chat_name, "diego's Buddy"));
+    assert(t.leads[1].buddies && !t.leads[1].buddy.has);
+    assert(!t.leads[2].buddies && !t.leads[2].buddy.has && t.leads[2].chat == HT_CHAT_LEAD);
+    // A down Buddy is still drawn, not live.
+    assert(ht_supertab_init(&t, "s1", "", "openharness", 1));
+    b.buddy.live = false; assert(ht_supertab_lead_add(&t, &b) && t.leads[0].buddy.has && !t.leads[0].buddy.live);
+    // A block this dial cannot draw is dropped and the Lead kept: a colour that is not #rrggbb, cells past 15 bits or
+    // negative, no chat id or one too long to hold. Buddies stay on.
+    char longer[ID_MAX + 1]; memset(longer, 'b', ID_MAX); longer[ID_MAX] = 0;
+    const char *colors[] = {"d6a79a", "#d6a79", "#d6a79a0", "#d6a7zz", "", NULL};
+    for (int i = 0; i < 6; i++) {
+        ht_lead_in_t bad = b; bad.buddy.color = colors[i];
+        assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &bad));
+        assert(t.leads[0].buddies && !t.leads[0].buddy.has);
+    }
+    const long cells[] = {32768, -1};
+    for (int i = 0; i < 2; i++) {
+        ht_lead_in_t bad = b; bad.buddy.cells = cells[i];
+        assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &bad) && !t.leads[0].buddy.has);
+    }
+    const char *ids[] = {"", NULL, longer};
+    for (int i = 0; i < 3; i++) {
+        ht_lead_in_t bad = b; bad.buddy.chat_id = ids[i];
+        assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &bad) && !t.leads[0].buddy.has);
+    }
+    // The upper case and the edges hold: 0 and 32767 cells, #FFFFFF.
+    ht_lead_in_t edge = b; edge.buddy.color = "#FFFFFF"; edge.buddy.cells = 32767;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &edge));
+    assert(t.leads[0].buddy.has && t.leads[0].buddy.color == 0xffffff && t.leads[0].buddy.cells == 32767);
+    edge.buddy.cells = 0;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &edge) && t.leads[0].buddy.has && !t.leads[0].buddy.cells);
+    // A Buddy block without `buddies` (never from the daemon) is not drawn.
+    ht_lead_in_t off = b; off.buddies = false;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &off) && !t.leads[0].buddy.has);
+    // A Buddy face whose chat id cannot be held is the Lead chat, as any other.
+    ht_lead_in_t wide = b; wide.chat_id = longer;
+    assert(ht_supertab_init(&t, "s1", "", "n", 1) && ht_supertab_lead_add(&t, &wide) && t.leads[0].chat == HT_CHAT_LEAD);
+    puts("supertab: Buddies on, the Buddy block and its avatar, a Buddy face, bad blocks dropped with the Lead kept PASS");
+}
+
 int main(void)
 {
     order_and_limits();
     transitions();
     lookups_and_recap();
     chats();
+    buddies();
     return 0;
 }
