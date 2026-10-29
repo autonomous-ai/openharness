@@ -1,4 +1,5 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
@@ -11,7 +12,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
+import { deliveredCopies, inConversationOrder, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
@@ -463,7 +464,7 @@ export class SuperTabStore {
       if (target && target.machineId !== team) refuse()
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': return refuse()
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -488,6 +489,7 @@ export class SuperTabStore {
    *  Swarm again to confirm (read/host.ts asks for a live account), so applyCommand drops their cleanups. */
   private async deletedMachines(tx: Transaction, state: SuperTabState): Promise<string[]> {
     const ids = [...new Set((state.machineCleanups ?? []).map(c => c.machineId))]
+    if (!ids.length) return []
     const live = new Set((await tx.machine.findMany({ where: { machineId: { in: ids }, autonomousEnv: state.environment, ...machineAlive },
       select: { machineId: true } })).map(m => m.machineId))
     return ids.filter(id => !live.has(id))
@@ -939,9 +941,12 @@ export class SuperTabStore {
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
       const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
+      const suspended = suspendedEngines(stored, now)
       return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
         teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const },
-        ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}) }
+        ...(facts.versions[pool.machineId] ? { clientVersion: facts.versions[pool.machineId] } : {}),
+        // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
+        ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }
     }) } }
   }
 
@@ -1118,10 +1123,11 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
-          thread: reply.thread }
+          thread: reply.thread, ...(agentOnly(reply.source, reply.recipientIds) ? { agentOnly: true } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
-      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+        || command.type === 'machine.engineResume') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -1209,7 +1215,7 @@ export class SuperTabStore {
       if (dispatched) context.routeDecision = await readDecision(tx, tabId, dispatched) ?? undefined
       const effects = applyCommand(original, actor, command, context)
       // An agent-only notice changes nothing people see: no link, no unread mark, no project report.
-      const shown = effects.messages.filter(message => !agentOnly(message.source))
+      const shown = effects.messages.filter(message => !agentOnly(message.source, message.recipients))
       for (const group of effects.state.conversations) {
         appendPullRequestUrls(group, [
           ...shown.filter(message => message.conversationId === group.id).map(message => message.text),
@@ -1630,7 +1636,8 @@ export class SuperTabStore {
   private async reactionTarget(tx: Transaction, tabId: string, actor: Actor, command: ReactCommand): Promise<ReactionTarget | undefined> {
     const message = await tx.superTabMessage.findFirst({ where: { id: command.messageId, tabId, conversationId: command.conversationId },
       select: { id: true, source: true, recipientIds: true } })
-    if (!message || (agentOnly(message.source) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    if (!message || (agentOnly(message.source, message.recipientIds) && !(actor.kind === 'agent' && message.recipientIds.includes(actor.agentId)))) return undefined
+    if ((await deliveredCopies(tx, tabId, [message])).size) return undefined
     return { messageId: message.id, reacted: !!await tx.superTabReaction.findUnique({ where: { id: reactionId(tabId, actor, command) } }) }
   }
 
@@ -1931,7 +1938,9 @@ export class SuperTabStore {
     for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
       const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
         orderBy: [{ sequence: order }, { id: order }], take: 101 })
-      rows.push(...batch.filter(m => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
+      // A task chat's copy of a Lead's notice stored before it was marked is that notice: read by no one (pageReads.ts).
+      const copies = await deliveredCopies(tx, tabId, batch)
+      rows.push(...batch.filter(m => !copies.has(m.id) && (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
         && !(buddy && routingRow(m.source))))
       if (batch.length < 101) break
       edge = batch.at(-1)
@@ -1945,8 +1954,13 @@ export class SuperTabStore {
     const shown = buddy ? page.map(withoutMachineNames) : page
     // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
     const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
-    const threads = roots.length ? threadSummaries(state, group, await pageThreads(tx, tabId, conversationId, roots)) : []
-    return { messages: shown.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
+    const threadRows = roots.length ? await pageThreads(tx, tabId, conversationId, roots) : []
+    // A reply stored in the thread of a notice only its recipients read (the Lead answering a stalled alert before such
+    // replies started no thread, commands.ts) reads as one in the chat: nobody else can open that thread (review of #2177).
+    const hiddenRoots = new Set(threadRows.filter(row => row.id === row.thread && row.agentOnly).map(row => row.id))
+    const threads = threadRows.length ? threadSummaries(state, group, threadRows.filter(row => !hiddenRoots.has(row.thread))) : []
+    const inChat = (m: SuperTabMessage) => m.thread && m.thread !== m.id && hiddenRoots.has(m.thread) ? { ...m, thread: m.id } : m
+    return { messages: shown.map(inChat).map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
       deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
@@ -2169,6 +2183,8 @@ export class SuperTabStore {
         sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
         ...(tokens ? { harnessTokens: tokens } : {}),
         ...(preparing ? { preparingStartIds: preparing } : {}) }
+      // A reading that shows a suspended engine signed in with quota offered again (engineHealth.ts); posts nothing.
+      readingClearsSuspensions(pool, now)
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue
