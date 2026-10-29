@@ -1,13 +1,15 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/widgets/app_dialog.dart'
+    show kSheetVeilOpacity;
 import 'package:harness_mobile/swarm/swarm_profile_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -44,6 +46,7 @@ void main() {
     bool canUpload = true,
     Future<String> Function()? answer,
     Uint8List? picked,
+    Future<Uint8List?> Function()? pick,
   }) async {
     swarm = FakeSwarm();
     mine = {...person(me, role: role), ...extra};
@@ -106,7 +109,7 @@ void main() {
                 onPressed: () => showSwarmProfile(
                   context,
                   swarmId: tab,
-                  pickPhoto: () async => picked,
+                  pickPhoto: pick ?? () async => picked,
                 ),
                 child: const Text('Open'),
               ),
@@ -344,6 +347,146 @@ void main() {
     await tap(tester, key('swarm-status-save'));
     final status = swarm.commands.single['status'] as Map<String, dynamic>;
     expect(DateTime.parse(status['until'] as String), until);
+  });
+
+  /// The text style of the one [text] on screen.
+  TextStyle styleOf(WidgetTester tester, String text) =>
+      tester.widget<Text>(find.text(text)).style!;
+
+  /// The padding nearest around [finder].
+  EdgeInsetsGeometry paddingAround(WidgetTester tester, Finder finder) => tester
+      .widget<Padding>(
+        find.ancestor(of: finder, matching: find.byType(Padding)).first,
+      )
+      .padding;
+
+  group('on the design system', () {
+    testWidgets('the sheet is dimmed as every sheet is, inset 16 across and '
+        '16 below, with a grabber 36 by 4', (tester) async {
+      await open(tester);
+
+      expect(
+        ModalRoute.of(tester.element(find.text('Your profile')))!.barrierColor,
+        Colors.black.withValues(alpha: kSheetVeilOpacity),
+      );
+      expect(
+        tester
+            .widget<Padding>(
+              find.byWidgetPredicate(
+                (w) => w is Padding && w.child is ListenableBuilder,
+              ),
+            )
+            .padding,
+        const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      );
+      final grabber = find.byWidgetPredicate(
+        (w) => w is Container && w.constraints?.maxWidth == 36,
+      );
+      expect(
+        tester.getSize(
+          find.descendant(of: grabber, matching: find.byType(DecoratedBox)),
+        ),
+        const Size(36, 4),
+      );
+      expect(
+        tester.widget<Container>(grabber).margin,
+        const EdgeInsets.only(bottom: 8),
+      );
+    });
+
+    testWidgets('the title and the name are headings of 17; the status under '
+        'the name is a caption of 13', (tester) async {
+      await open(tester);
+
+      for (final text in ['Your profile', 'person-me']) {
+        expect(styleOf(tester, text).fontSize, 17, reason: text);
+        expect(styleOf(tester, text).fontWeight, FontWeight.w600, reason: text);
+      }
+      expect(styleOf(tester, 'No status').fontSize, 13);
+      expect(
+        paddingAround(tester, find.text('Your profile')),
+        const EdgeInsets.fromLTRB(4, 0, 4, 8),
+      );
+      expect(
+        paddingAround(tester, key('swarm-profile-face')),
+        const EdgeInsets.fromLTRB(4, 8, 4, 4),
+      );
+    });
+
+    testWidgets('a picture is a glyph of 24, and a choice is a caption of 13 '
+        'in a capsule padded 14 across', (tester) async {
+      await open(tester);
+
+      expect(
+        tester
+            .widget<Text>(
+              find.descendant(
+                of: key('swarm-avatar-preset-fox'),
+                matching: find.text('🦊'),
+              ),
+            )
+            .style!
+            .fontSize,
+        24,
+      );
+      await tester.ensureVisible(key('swarm-status-clears-never'));
+      expect(styleOf(tester, 'Never').fontSize, 13);
+      expect(
+        paddingAround(tester, find.text('Never')),
+        const EdgeInsets.symmetric(horizontal: 14),
+      );
+    });
+
+    testWidgets('the status field reads at 17 on the field corner of 10, and '
+        'its Clears caption is 13', (tester) async {
+      await open(tester);
+      await tester.ensureVisible(key('swarm-status-text'));
+
+      final field = tester.widget<TextField>(key('swarm-status-text'));
+      expect(field.style!.fontSize, 17);
+      expect(
+        (field.decoration!.border! as OutlineInputBorder).borderRadius,
+        BorderRadius.circular(10),
+      );
+      expect(styleOf(tester, 'Clears').fontSize, 13);
+      expect(
+        paddingAround(tester, find.text('Clears')),
+        const EdgeInsets.fromLTRB(4, 4, 4, 8),
+      );
+    });
+
+    testWidgets('a note under a section is a caption of 13, 12 below it', (
+      tester,
+    ) async {
+      await open(tester, role: 'viewer');
+
+      const note = 'You have read-only access to this Swarm.';
+      expect(styleOf(tester, note).fontSize, 13);
+      expect(
+        paddingAround(tester, find.text(note)),
+        const EdgeInsets.fromLTRB(4, 12, 4, 0),
+      );
+    });
+
+    testWidgets('an error is a caption of 13 in the danger ink', (
+      tester,
+    ) async {
+      await open(
+        tester,
+        pick: () async => throw PlatformException(code: 'denied'),
+      );
+      await tester.ensureVisible(key('swarm-avatar-photo'));
+      await tester.tap(key('swarm-avatar-photo'));
+      await tester.pumpAndSettle();
+
+      final error = tester.widget<Text>(key('swarm-profile-error'));
+      expect(error.data, 'Could not open your photos.');
+      expect(error.style!.fontSize, 13);
+      expect(
+        paddingAround(tester, key('swarm-profile-error')),
+        const EdgeInsets.fromLTRB(4, 12, 4, 0),
+      );
+    });
   });
 
   test('a picked photo is read, and its copy on the phone deleted', () async {
