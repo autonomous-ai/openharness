@@ -117,8 +117,9 @@ int main(void) {
     assert(!strcmp(field(wire[0],"swarmChat"),"v1"));
     // and swarmBuddy v1: each Lead's Buddy block, a Buddy face and the Buddy's quiet notice.
     assert(!strcmp(field(wire[0],"swarmBuddy"),"v1"));
-    // hello says swarmReview v1: words for a Swarm chat are always reviewed here, so the daemon refuses any that are not.
-    assert(!strcmp(field(wire[0],"swarmReview"),"v1"));
+    // and no swarmReview: words for a Swarm chat are sent as any harness's are, reviewed only when held (Diego's dial,
+    // 2026-10-29), and a daemon that heard it would refuse every word not reviewed.
+    assert(!strcmp(field(wire[0],"swarmReview"),"<absent>"));
 
     // supertabs: ids in order, the bad and the repeated skipped, at most 16.
     feed(handle_supertabs,"{\"ids\":[\"s1\",\"\",7,\"s2\",\"s1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}");

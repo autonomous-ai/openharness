@@ -572,7 +572,8 @@ export class SwarmCards {
    *  see (docs/device-voice-swarm-chat.md); the backend checks the post as for typing. */
   async say(harnessId: string, text: string, chat: CardChat = false, chatId?: string, reviewed = false): Promise<SaidOnCard> {
     for (const [tabId, { state }] of this.tabs) {
-      const agent = list(state.agents).find(a => a.machineId === this.machineId && a.harnessId === harnessId)
+      // A Lead on another machine has no harness here, so the dial names it by its Swarm id (Diego's dial, 2026-10-29).
+      const agent = list(state.agents).find(a => (a.machineId === this.machineId && a.harnessId === harnessId) || a.id === harnessId)
       const found = agent && cardId(agent.id) ? this.target(tabId, agent.id, chat) : null
       if (!found) continue
       const to = chatId === undefined || found.id === chatId ? found.id

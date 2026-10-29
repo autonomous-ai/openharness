@@ -458,6 +458,17 @@ describe('SwarmCards.say', () => {
     expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
   })
 
+  // Diego's dial, 2026-10-29: a Lead on another machine has no harness here, so the dial names it by its Swarm id.
+  it('posts words for a Lead on another machine, named by its Swarm id, in its conversation as the person', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2' }), agent('a2')] }) } })
+    await t.cards.tick()
+    expect(await t.cards.say('a1', 'ship it')).toEqual({ said: true })
+    const post = t.call.mock.calls.find(c => c[0] === 'POST')!
+    expect(post[2]).toMatchObject({ command: { type: 'message.send', conversationId: 'lead-web', text: 'ship it' } })
+    expect(post[2]).not.toHaveProperty('asAgentId')
+    expect(await t.cards.say('zz', 'x')).toEqual({ said: false })
+  })
+
   // A refused post was typed into the Lead's terminal instead (spec 2026-10-29 Voice): the dial is told the refusal now.
   it('say reports a 403 as refused with the backend\'s message', async () => {
     let answer = { status: 403, body: { success: false, error: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } } }
