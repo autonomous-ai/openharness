@@ -11,7 +11,8 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { inConversationOrder, pageDeliveries, pageReactions } from './pageReads.js'
+import { inConversationOrder, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
+import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
 import { randomBytes } from 'node:crypto'
@@ -1020,7 +1021,8 @@ export class SuperTabStore {
       }
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
-        if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime() }
+        if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
+          thread: reply.thread }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
@@ -1767,7 +1769,9 @@ export class SuperTabStore {
       if (!kept.has(message.id)) rows.push({ id: message.id, tabId, conversationId: message.conversationId,
         sequence: sequences.get(message.id)!, author: json(message.author), ...(message.source ? { source: json(message.source) } : {}),
         ...(message.attachments ? { attachments: json(message.attachments) } : {}),
-        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [] })
+        text: message.text, replyTo: message.replyTo, recipientIds: message.recipients, mentions: message.mentions ?? [],
+        // A top-level message is its own thread's root; only a row written before threads has none (its replies stay inline).
+        thread: message.thread ?? message.id, ...(message.alsoInChat ? { alsoInChat: true } : {}) })
       for (const recipient of message.recipients) {
         const target = agent(state, recipient)
         const group = conversation(state, message.conversationId)
@@ -1799,7 +1803,7 @@ export class SuperTabStore {
    *  sequence, so a page edge inside such a run must not skip any (design section 4.6). `after` alone reads strictly after
    *  a sequence, which is enough to poll for new messages. */
   async messages(user: AuthUser, tabId: string, conversationId: string,
-    cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string }, asAgentId?: string) {
+    cursor: { after?: number; afterId?: string; before?: number; beforeId?: string; messageId?: string; thread?: string }, asAgentId?: string) {
     const tx = this.db
     const { state } = await this.readLoad(user, tabId, { groupIds: [conversationId] })
     const actor = await this.actor(tx, user, state, asAgentId)
@@ -1809,6 +1813,8 @@ export class SuperTabStore {
       : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
     const where = { tabId, conversationId,
       ...(cursor.messageId ? { id: cursor.messageId } : {}),
+      // One thread: its root (its own thread) and its replies.
+      ...(cursor.thread ? { thread: cursor.thread } : {}),
       ...(forward ? past(cursor.after!, cursor.afterId, 'gt') : cursor.before !== undefined ? past(cursor.before, cursor.beforeId, 'lt') : {}) }
     // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
     // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
@@ -1827,8 +1833,11 @@ export class SuperTabStore {
     if (!forward) page.reverse()
     const reactions = page.length ? reactionCounts(state, await pageReactions(tx, tabId, page.map(m => m.id))) : new Map()
     const deliveries = page.length ? await pageDeliveries(tx, tabId, page.map(m => m.id)) : []
+    // The threads the page's rows are in, so a poll that brings only a reply still moves its root's reply line.
+    const roots = [...new Set(page.flatMap(m => m.thread ? [m.thread] : []))]
+    const threads = roots.length ? threadSummaries(state, group, await pageThreads(tx, tabId, conversationId, roots)) : []
     return { messages: page.map(m => ({ ...m, mentions: m.mentions ?? [], reactions: reactions.get(m.id) ?? [],
-      deliveries: deliveries.filter(d => d.messageId === m.id) })), next,
+      deliveries: deliveries.filter(d => d.messageId === m.id) })), next, threads,
       // A poll for new messages learns here that a reaction changed on a message it already shows (reactions.ts).
       reactionSeq: group.reactionSeq ?? 0 }
   }

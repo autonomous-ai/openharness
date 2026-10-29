@@ -845,6 +845,23 @@ describe('creating an agent', () => {
       } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
     })
 
+    it('gives a Buddy none of the machine MCP servers: it starts no MCP server at all (review 3 of #2092)', async () => {
+      const { writeMachineMcp } = await import('../../lib/machineMcp.js')
+      const { rmSync } = await import('node:fs')
+      const { env } = await import('../../config/env.js')
+      writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: ['claude'], projects: [] } })
+      try {
+        const { create } = setup()
+        const launched = async (role: 'buddy' | 'dev') => {
+          vi.mocked(buildEngineLaunchArgv).mockClear()
+          expect(await create(request({ cwd: folder(), swarmRole: role }))).toMatchObject({ ok: true })
+          return JSON.stringify(vi.mocked(buildEngineLaunchArgv).mock.calls.at(-1)![1])
+        }
+        expect(await launched('dev')).toContain('lamp-mcp')
+        expect(await launched('buddy')).not.toContain('lamp-mcp')
+      } finally { rmSync(join(env.ADAPTER_DATA_DIR, 'mcp-servers.json'), { force: true }) }
+    })
+
     it('started by another agent: its pull request line after every other argument, and who started it on the row', async () => {
       const { create } = setup()
       const cwd = folder()

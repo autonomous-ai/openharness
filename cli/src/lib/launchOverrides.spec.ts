@@ -426,6 +426,14 @@ describe('buildLaunchOverrides — machine MCP servers (#1872)', () => {
     const hermes = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'hermes', { startedBy: null, cwd: null }, 'a')
     expect(JSON.stringify(hermes)).not.toContain('lamp-mcp')
   })
+
+  it('relaunches a Buddy with none of them: it starts no MCP server at all (review 3 of #2092)', async () => {
+    writeMachineMcp({ lamp: { command: 'lamp-mcp', args: [], engines: [], projects: [] } })
+    const buddy = await buildLaunchOverrides(deps({ readAttribution: () => null }).d, 'claude',
+      { startedBy: null, cwd: mkdtempSync(join(tmpdir(), 'overrides-buddy-')), swarmSkill: { role: 'buddy', key: 'harness-claude-buddy' } }, 'a', () => true)
+    expect(buddy.ok).toBe(true)
+    expect(JSON.stringify(buddy)).not.toContain('lamp-mcp')
+  })
 })
 
 describe('buildLaunchOverrides — opencode v2', () => {
