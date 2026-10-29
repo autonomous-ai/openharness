@@ -24,8 +24,8 @@ function fixture() {
   const worker = run({ type: 'agent.add', conversationId: app.conversationId, harnessId: 'worker', machineId: 'machine', name: 'Worker', lead: false,
     configuration }).result.agentId as string
   const group = run({ type: 'conversation.create', projectId: app.projectId, title: 'Copy', brief: '', checks: [] }).result.conversationId as string
-  const pmChat = run({ type: 'conversation.create', projectId: app.projectId, title: 'peer', brief: '', checks: [],
-    audience: { personIds: ['peer'] } }, peer).result.conversationId as string
+  // A conversation only `peer` reads: their chat with their Buddy.
+  const pmChat = run({ type: 'buddy.chat', projectId: app.projectId }, peer).result.conversationId as string
   const send = (conversationId: string, mentions: string[], actor: Actor = owner) => run({ type: 'message.send', conversationId,
     text: 'Please look.', replyTo: null, recipientIds: [], mentions }, actor).messages.at(-1)!
   return { run, send, app, worker, group, pmChat, get state() { return state } }
