@@ -257,15 +257,11 @@ describe('the harness shares list as permissions change', () => {
     await database.db.swarmAgent.create({ data: { ...row, id: `elsewhere-${id}`, tabId: `elsewhere-${tab}`, data: { ...row.data as object, confidential: true } } })
   }
 
-  it('keeps the Swarm\'s current Lead open to its readers, in a private conversation too, and closes it once confidential elsewhere', async () => {
+  it('keeps the Swarm\'s current Lead open to its readers, and closes it once confidential elsewhere', async () => {
     const { tab, run, agents, sees } = await swarmWithShares()
     expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
     await run({ type: 'conversation.agent', conversationId: 'lead', agentId: agents.X!, present: true, lead: true })
     expect([await sees(b), await sees(a)]).toEqual(['XYZ', 'XYZ'])
-    const chat = (await run({ type: 'conversation.create', title: 'Private', brief: 'Owner and A only.', checks: [], audience: { personIds: [owner.sub, a.sub] } }))
-      .result.conversationId as string
-    await run({ type: 'conversation.agent', conversationId: chat, agentId: agents.X!, present: true, lead: false })
-    expect([await sees(a), await sees(b)]).toEqual(['XYZ', 'XYZ'])
     await confidentialElsewhere(tab, agents.X!)
     expect([await sees(b), await sees(a)]).toEqual(['YZ', 'YZ'])
   })

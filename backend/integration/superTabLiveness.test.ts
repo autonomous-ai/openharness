@@ -1157,7 +1157,11 @@ describe('the morning digest', () => {
     const f = await swarm()
     const projectId = (await f.timed.read(owner, f.tab)).state.projects![0]!.id
     await f.execute({ type: 'project.digest', projectId, time: '03:00', timeZone: 'UTC' })
-    const secret = String((await f.execute({ type: 'conversation.create', title: 'Salaries', brief: '', checks: [], audience: { personIds: [owner.sub] } } as Command)).result.conversationId)
+    // owner's Chat with PM from before Buddies replaced it: nobody opens one any more, so its stored row is made one.
+    const secret = String((await f.execute({ type: 'conversation.create', title: 'Salaries', brief: '', checks: [] })).result.conversationId)
+    const generation = (await f.timed.read(owner, f.tab)).state.people.find(p => p.id === owner.sub)!.generation
+    const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: secret } })
+    await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object, audience: { people: [{ id: owner.sub, generation }] } } } })
     const asked = (conversationId: string, count: number, from: number) => Array.from({ length: count }, (_, i) => ({ id: randomUUID(), tabId: f.tab,
       batchId: 'batch', projectId, conversationId, assignmentId: null, personId: owner.sub, askerAgentId: f.lead, question: `Question ${i}?`,
       options: ['Yes', 'No'], recommended: 0, unblocks: 'Work', createdAt: new Date(from + i) }))
