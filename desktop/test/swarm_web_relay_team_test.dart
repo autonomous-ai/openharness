@@ -114,6 +114,45 @@ void main() {
     expect(relayed, ['own-mac']);
   });
 
+  /// The desktop app on a computer: its own machine is the one it asks.
+  void native(Machine local) {
+    relayed = [];
+    app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+      connectionForTest: (id) => _Daemon(id, relayed),
+    );
+    addTearDown(app.dispose);
+    online(local);
+    app.machineStates[local.machineId]!.localOnly = true;
+  }
+
+  test('natively a Swarm post goes through this computer\'s own machine', () async {
+    native(_row('here', sessionKind: 'computer'));
+    expect(app.sharedTabsTarget?.machine.machineId, 'here');
+    await post();
+    expect(relayed, ['here']);
+  });
+
+  test('natively on a computer switched to a Harness Team account nothing is '
+      'sent, and the app says this computer cannot send it', () async {
+    // `harness team on`: this computer's daemon now signs in as the team.
+    native(_row('here', sessionKind: 'team'));
+    online(_row('elsewhere', sessionKind: 'computer'));
+
+    expect(app.sharedTabsTarget, isNull);
+    await expectLater(
+      post(),
+      throwsA(
+        isA<SuperTabFailure>()
+            .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
+            .having((f) => f.message, 'message', contains('This computer runs Swarm agents')),
+      ),
+    );
+    expect(relayed, isEmpty);
+  });
+
   test('on the web with only a Team account machine online nothing is sent, '
       'and the app says no machine of the person\'s is online', () async {
     web();

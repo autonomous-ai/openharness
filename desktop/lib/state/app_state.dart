@@ -1733,12 +1733,16 @@ class AppNotifier extends ChangeNotifier {
   late final tabActivity = TabActivityReader(request: sharedTabs.request);
 
   /// The machine [sharedTabs] asks: this computer natively; on the web one of
-  /// the account's own online machines, never a shared one, and never a Harness
-  /// Team account's: its daemon relays under a team sign-in, which the server
-  /// refuses to let speak as the person ("A team sign-in can only run Swarm
-  /// agents on its own machine", every Buddy-chat post from a phone, 10-29).
+  /// the account's own online machines, never a shared one. Never a Harness
+  /// Team account's, here either (a computer switched with `harness team on`):
+  /// its daemon relays under a team sign-in, which the server refuses to let
+  /// speak as the person ("A team sign-in can only run Swarm agents on its own
+  /// machine", every Buddy-chat post from a phone, 10-29), so nothing is sent.
   MachineState? get sharedTabsTarget {
-    if (viewer == null) return localMachineState;
+    if (viewer == null) {
+      final here = localMachineState;
+      return here == null || here.machine.isTeamAccount ? null : here;
+    }
     bool asks(MachineState machine) =>
         !machine.belongsToOtherAccount &&
         !machine.machine.isTeamAccount &&
@@ -1850,6 +1854,15 @@ class AppNotifier extends ChangeNotifier {
     transport: (method, path, {body}) async {
       final target = sharedTabsTarget;
       if (target == null) {
+        if (viewer == null &&
+            localMachineState?.machine.isTeamAccount == true) {
+          throw const SuperTabFailure(
+            'MACHINE_UNAVAILABLE',
+            'This computer runs Swarm agents for a Harness Team account, so '
+                'it cannot send your own Swarm messages. Open Swarm on another '
+                'of your machines.',
+          );
+        }
         throw const SuperTabFailure(
           'MACHINE_UNAVAILABLE',
           'Connect one of your machines to open Swarm.',
