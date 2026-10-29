@@ -15,6 +15,7 @@ import 'model.dart';
 import 'buddy_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';
+import 'read_marks.dart';
 import 'reading.dart';
 import 'review_verdict.dart';
 
@@ -1068,6 +1069,82 @@ class SuperTabController extends ChangeNotifier {
     await _readMessages(id);
   }
 
+  /// At most this many older pages are read to reach a reader's read mark;
+  /// past them the page just after the mark is read instead.
+  static const _pagesToMark = 3;
+
+  /// Whether [id]'s held messages reach back to [mark], or nothing older is
+  /// left to read.
+  bool heldBackTo(String id, int mark) {
+    final held = _messages[id];
+    return held == null ||
+        held.isEmpty ||
+        held.first.sequence <= mark ||
+        !hasOlder(id);
+  }
+
+  /// Holds [id]'s messages back to the reader's [mark], so its first unread
+  /// is among them: older pages while the mark is at most [_pagesToMark]
+  /// pages back, else the page just after it alone, with the newer ones
+  /// waiting for [showLatest] as under a reader scrolled up. Whether they
+  /// reach it now; a read that failed throws, and nothing counts as read.
+  /// A try again after one failed passes [olderPages] 0: the pages read the
+  /// first time stay, and it goes straight to the page after the mark.
+  Future<bool> loadBackTo(String id, int mark, {int? olderPages}) async {
+    for (var page = 0; page < (olderPages ?? _pagesToMark); page++) {
+      if (_disposed || heldBackTo(id, mark)) return heldBackTo(id, mark);
+      await _readMessages(id, older: true);
+    }
+    if (_disposed || heldBackTo(id, mark)) return heldBackTo(id, mark);
+    return _readAfterMark(id, mark);
+  }
+
+  /// Moves when a read back replaces what a conversation holds: a read of
+  /// newer messages that set out before then would join across the gap.
+  final _heldGeneration = <String, int>{};
+
+  /// Replaces what [id] holds with the page just after [mark]; whether it
+  /// did. A read of newer messages under way finishes first, and one that
+  /// sets out meanwhile is dropped when it lands ([_heldGeneration]).
+  Future<bool> _readAfterMark(String id, int mark) async {
+    for (
+      var under = _reading[(id, false)];
+      under != null;
+      under = _reading[(id, false)]
+    ) {
+      await under;
+    }
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return false;
+    }
+    final answer = await request('GET', '${_messagesPath(id)}?after=$mark');
+    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      return false;
+    }
+    final rows = answer['messages'] as List;
+    final page = [
+      for (final row in rows) SuperTabMessage.fromJson(superTabMap(row)),
+    ]..sort(superTabMessageOrder);
+    // Nothing after the mark: everything held is read.
+    if (page.isEmpty) return true;
+    if (page.any((m) => m.conversationId != id)) {
+      throw const FormatException('A different conversation was returned.');
+    }
+    _heldGeneration[id] = (_heldGeneration[id] ?? 0) + 1;
+    _rows.remove(id);
+    _keepRows(id, rows);
+    _messages[id] = page;
+    _before[id] = SuperTabPage.of(page.first);
+    if (answer['next'] != null) {
+      _readingBack.add(id);
+      _newer.add(id);
+      _pagesBelow[id] = 1;
+    }
+    _viewVersion++;
+    _changed();
+    return true;
+  }
+
   /// Each conversation's reaction counter as its last page said it.
   final _reactionSeq = <String, int>{};
   int _loadedMessageSequence(String id) =>
@@ -1077,8 +1154,25 @@ class SuperTabController extends ChangeNotifier {
           ?.sequence ??
       0;
 
-  /// A reply only in its thread leaves the chat as it was: it lights its
-  /// thread's reply line instead ([threadUnread]).
+  /// How far the reader has read [id]: the higher of the mark kept on the
+  /// server, from any of their devices, and this device's own, which stands
+  /// in while the server is out of reach.
+  int readMark(String id) =>
+      max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
+
+  late final _serverMarks = SuperTabReadMarkSender(
+    (id, sequence) => request(
+      'POST',
+      '$_path/conversations/${Uri.encodeComponent(id)}/read',
+      body: {'sequence': sequence},
+    ),
+  );
+
+  /// Whether [group] has a message in its main stream past the reader's
+  /// mark. A reply only in its thread leaves the chat as it was: it lights its
+  /// thread's reply line instead ([threadUnread]). The server's newest
+  /// main-stream message covers a chat not held here; an older server's
+  /// newest message, and the newest held, stand in for it.
   bool unread(SuperTabConversation group) =>
       max(
         group.lastMainSequence ?? group.lastMessageSequence,
@@ -1090,7 +1184,7 @@ class SuperTabController extends ChangeNotifier {
                 ?.sequence ??
             0,
       ) >
-      (_readAt[group.id] ?? 0);
+      readMark(group.id);
 
   void start() {
     if (_disposed) return;
@@ -1630,14 +1724,16 @@ class SuperTabController extends ChangeNotifier {
   /// ([_readUnreadBuddyChats]).
   int unreadCount(SuperTabConversation group) {
     if (!unread(group)) return 0;
-    final readAt = _readAt[group.id] ?? 0;
+    final readAt = readMark(group.id);
     final count = messages(group.id)
-        .where((m) => m.sequence > readAt && !_ownMessage(m) && m.inMainStream)
+        .where((m) => m.sequence > readAt && m.inMainStream && !isOwn(m))
         .length;
     return _heldSinceRead(group) ? count : max(count, 1);
   }
 
-  bool _ownMessage(SuperTabMessage m) =>
+  /// Whether [m] is the reader's own: written by them, not by an agent or a
+  /// terminal.
+  bool isOwn(SuperTabMessage m) =>
       !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
 
   /// Whether the messages held of [group] run from its read mark (or its
@@ -1646,8 +1742,7 @@ class SuperTabController extends ChangeNotifier {
     final held = _messages[group.id];
     if (held == null || held.isEmpty) return false;
     return held.last.sequence >= group.lastMessageSequence &&
-        (held.first.sequence <= (_readAt[group.id] ?? 0) ||
-            !hasOlder(group.id));
+        (held.first.sequence <= readMark(group.id) || !hasOlder(group.id));
   }
 
   /// The unread messages in the reader's own Buddy chats, the PM's private
@@ -1866,6 +1961,7 @@ class SuperTabController extends ChangeNotifier {
     }
     final loaded = _loadedMessageSequence(id);
     final last = min(through ?? loaded, loaded);
+    _serverMarks.mark(id, last, kept: snapshot?.readMarks[id] ?? 0);
     if ((_readAt[id] ?? 0) >= last) return;
     _readAt[id] = last;
     _saveSoon();
@@ -1933,7 +2029,8 @@ class SuperTabController extends ChangeNotifier {
         final raw = parts.state;
         if (_policy.adapts) {
           stateChanged = true;
-          _viewVersion++;
+          // A read mark moving is the page around the view: no new copy kept.
+          if (!read.marksOnly) _viewVersion++;
         }
         final next = SuperTabSnapshot.fromJson(raw);
         if (next.id != tabId) {
@@ -2054,7 +2151,8 @@ class SuperTabController extends ChangeNotifier {
   /// One read of the Swarm's parts: changes since the cursor once a first load
   /// is held, else a first load. A reload answer, or a change read refused (the
   /// Swarm or the reader's access moved), reads in full at once.
-  Future<({bool full, bool changed, Set<String> removed})> _readParts() async {
+  Future<({bool full, bool changed, bool marksOnly, Set<String> removed})>
+  _readParts() async {
     final held = _parts;
     if (held != null) {
       try {
@@ -2075,6 +2173,7 @@ class SuperTabController extends ChangeNotifier {
           return (
             full: false,
             changed: change.changed || refreshed,
+            marksOnly: change.readMarksOnly && !refreshed,
             removed: change.removedGroups,
           );
         }
@@ -2088,7 +2187,12 @@ class SuperTabController extends ChangeNotifier {
       throw const FormatException('A different Swarm was returned.');
     }
     _parts = parts;
-    return (full: true, changed: true, removed: const <String>{});
+    return (
+      full: true,
+      changed: true,
+      marksOnly: false,
+      removed: const <String>{},
+    );
   }
 
   /// A stub says a held group closed, not how: its data is read again by id.
@@ -2380,6 +2484,9 @@ class SuperTabController extends ChangeNotifier {
     if (older && !hasOlder(id)) return;
     // A light check asks only for new messages, which wait while holding.
     if (light && _holding(id)) return;
+    final generation = _heldGeneration[id];
+    // What [id] held was replaced while newer messages were on their way.
+    bool replaced() => !older && _heldGeneration[id] != generation;
     try {
       final known = _messages[id];
       final tail = known != null && known.isNotEmpty
@@ -2450,7 +2557,10 @@ class SuperTabController extends ChangeNotifier {
           ],
         };
       }
-      if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      if (_disposed ||
+          accessRevoked ||
+          snapshot?.conversation(id) == null ||
+          replaced()) {
         return;
       }
       // A read replacing the saved page moved where earlier continues while
@@ -2505,7 +2615,10 @@ class SuperTabController extends ChangeNotifier {
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?messageId=${Uri.encodeComponent(own.id)}',
         );
-        if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+        if (_disposed ||
+            accessRevoked ||
+            snapshot?.conversation(id) == null ||
+            replaced()) {
           return;
         }
         final rows = (receipt['messages'] as List)
@@ -2933,6 +3046,7 @@ class SuperTabController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _serverMarks.dispose();
     _poll?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();

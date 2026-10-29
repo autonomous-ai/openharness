@@ -79,6 +79,7 @@ class SwarmPartsBackend {
           'decisionsDigest',
           'otherProjectsWork',
           'githubApp',
+          'readMarks',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -141,7 +142,7 @@ class SwarmPartsBackend {
 
   String _cursor(int tick) => 'c${tick}e$epoch';
 
-  Map<String, dynamic> _derived(Map<String, dynamic> state) => {
+  Map<String, dynamic> _derived(Map<String, dynamic> state, String? reader) => {
     'agents': <String, dynamic>{},
     'machines': <String, dynamic>{},
     if (state['mentionsWaiting'] != null)
@@ -155,6 +156,9 @@ class SwarmPartsBackend {
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
+    // The reader's own read marks alone, as backend readMarks.ts sends them.
+    if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
+      'readMarks': Map<String, dynamic>.from(marks),
   };
 
   List<MapEntry<String, _HeldPart>> _ordered() =>
@@ -217,7 +221,7 @@ class SwarmPartsBackend {
         'githubApp': state['githubApp'] ?? false,
         'head': _envelope('head:head', _parts['head:head']!),
         for (final kind in _kinds) kind: <dynamic>[],
-        'derived': _derived(state),
+        'derived': _derived(state, reader),
       };
       for (final entry in _ordered()) {
         final kind = entry.key.substring(0, entry.key.indexOf(':'));
@@ -247,7 +251,7 @@ class SwarmPartsBackend {
         'epoch': epoch,
         'head': null,
         for (final kind in _kinds) kind: <dynamic>[],
-        'derived': _derived(state),
+        'derived': _derived(state, reader),
       };
       for (final entry in _ordered()) {
         if (entry.value.changedAt <= since) continue;
@@ -493,6 +497,57 @@ class ConversationServer {
     )['lastMessageSequence'] = revision;
   }
 
+  /// The read marks this device sent, in order: {conversationId, sequence}.
+  final readMarkPosts = <Map<String, dynamic>>[];
+
+  /// Every read-mark write fails, as offline.
+  bool failReadMarks = false;
+
+  /// A read mark [reader] made on another device, as the backend keeps it.
+  void markReadElsewhere(
+    String conversationId,
+    int sequence, {
+    String reader = 'owner',
+  }) => _keepReadMark(conversationId, sequence, reader);
+
+  int _keepReadMark(String conversationId, int sequence, String reader) {
+    final marks =
+        ((state['readMarks'] ??= <String, dynamic>{}) as Map).putIfAbsent(
+          reader,
+          () => <String, dynamic>{},
+        ) as Map;
+    final kept = max(marks[conversationId] as int? ?? 0, sequence);
+    return marks[conversationId] = kept;
+  }
+
+  /// The backend's read-mark route (readMarks.ts): forward only, never past
+  /// the conversation's newest message.
+  Map<String, dynamic> _markRead(
+    String conversationId,
+    int sequence,
+    String? reader,
+  ) {
+    readMarkPosts.add({'conversationId': conversationId, 'sequence': sequence});
+    if (failReadMarks) {
+      throw const SuperTabFailure('OFFLINE', 'No connection.', statusCode: 503);
+    }
+    final newest =
+        (state['conversations'] as List)
+                .cast<Map<String, dynamic>>()
+                .firstWhere(
+                  (g) => g['id'] == conversationId,
+                )['lastMessageSequence']
+            as int? ??
+        0;
+    return {
+      'sequence': _keepReadMark(
+        conversationId,
+        min(sequence, newest),
+        reader ?? 'owner',
+      ),
+    };
+  }
+
   /// The summaries of the threads [page]'s rows are in, as the backend's
   /// pages carry them (threads.ts).
   List<Map<String, dynamic>> _threads(
@@ -663,6 +718,12 @@ class ConversationServer {
     Map<String, dynamic>? body,
   }) async {
     final reader = Zone.current[_reader] as String?;
+    final read = method == 'POST'
+        ? RegExp(r'/conversations/([^/]+)/read$').firstMatch(path)
+        : null;
+    if (read != null) {
+      return _markRead(read.group(1)!, body!['sequence'] as int, reader);
+    }
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
       if (reject) {

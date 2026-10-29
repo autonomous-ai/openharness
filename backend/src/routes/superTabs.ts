@@ -62,6 +62,9 @@ const hostChangesBody = z.object({ cursor: cursor.optional(), full: z.boolean().
 const startParams = tabParams.extend({ startId: id })
 const nativeParams = tabParams.extend({ contextId: id })
 const messageParams = tabParams.extend({ conversationId: id })
+// A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
+const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
+const noQuery = z.object({}).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
@@ -449,6 +452,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof messageQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/messages',
     { preHandler: [validateParams(messageParams), validateQuery(messageQuery)] },
     (req, reply) => respond(reply, () => store.messages(req.user!, req.params.tabId, req.params.conversationId, req.query, req.query.asAgentId)))
+  app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
+    { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
+    (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
     { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))
