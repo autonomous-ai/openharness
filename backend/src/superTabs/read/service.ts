@@ -29,6 +29,7 @@ import { cursorFor, readCursor } from './cursor.js'
 import { changesFor } from './changes.js'
 import { envelope, groupView, readerView, seenIn, type ReaderView } from './views.js'
 import { decodeDormantPage, encodeDormantPage } from './dormantPage.js'
+import { memberSwarms } from '../swarmRows.js'
 
 type LoadOptions = NonNullable<Parameters<typeof parts.loadActive>[2]> & Pick<NonNullable<Parameters<typeof parts.loadLight>[2]>, 'groups'>
 type Loader = (view: CacheView, tabId: string, opts: LoadOptions) => Promise<SwarmParts>
@@ -167,8 +168,7 @@ export class SwarmReads {
 
   async list(user: AuthUser, after?: string): Promise<SwarmList> {
     if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403)
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, memberIds: { has: user.sub },
-      ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101, select: { id: true, ownerId: true, format: true, workspaceId: true } })
+    const rows = await memberSwarms(this.db, user.autonomousEnv, user.sub, { after, limit: 101 })
     // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
     const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
     const current = new Set((await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },

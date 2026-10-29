@@ -1044,7 +1044,9 @@ model SuperTab {
   @@index([autonomousEnv, workspaceId])
   /// An owner's Swarms in id order: the grid poll names it (superTabs/parts/indexed.ts NAMED_INDEX.SuperTab.owner).
   @@index([autonomousEnv, ownerId, id])
-  @@index([autonomousEnv, memberIds])
+  /// By id within a member: Swarm lists read 100 at a time in id order, and a Workspace removal finds the person's Swarms
+  /// (superTabs/swarmRows.ts).
+  @@index([autonomousEnv, memberIds, id])
   /// By id within an address: the invitation list reads the first 100 in id order (superTabs/invitedSwarms.ts).
   @@index([autonomousEnv, invitedEmails, id])
   @@index([autonomousEnv, machineIds])

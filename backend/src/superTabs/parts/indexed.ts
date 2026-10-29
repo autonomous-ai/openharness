@@ -32,6 +32,8 @@ export const NAMED_INDEX = {
   SuperTab: {
     /** An owner's Swarms in id order: the grid poll. */
     owner: { autonomousEnv: 1, ownerId: 1, _id: 1 },
+    /** A member's Swarms in id order: Swarm lists and Workspace removals. */
+    members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
   },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
@@ -58,15 +60,13 @@ export async function listNamedIndexes(db: PrismaClient): Promise<void> {
   }))
   // A read dropped the listing while this one was on its way: its reply may predate the removal (review of #1994).
   if (drops !== generation) return
-  const next = new Map<NamedCollection, Set<string>>()
-  const missing: Array<Record<string, number>> = []
-  for (const [collection, fields] of listed) {
+  present = new Map(listed.map(([collection, fields]) => {
     const names = Object.keys(NAMED_INDEX[collection])
-    next.set(collection, new Set(names.filter(name => fields.has(Object.keys(indexOf(collection, name)).join(',')))))
-    missing.push(...names.filter(name => !next.get(collection)!.has(name)).map(name => ({ [collection]: 1, ...indexOf(collection, name) })))
-  }
-  present = next
-  if (missing.length) logger.error('[swarm-reads] Swarm collections lack indexes hot reads name; they read without them', { missing })
+    const found = new Set(names.filter(name => fields.has(Object.keys(indexOf(collection, name)).join(','))))
+    const missing = names.filter(name => !found.has(name))
+    if (missing.length) logger.error(`[swarm-reads] ${collection} lacks indexes hot reads name; they read without them`, { missing: missing.map(name => indexOf(collection, name)) })
+    return [collection, found] as const
+  }))
 }
 /** The SwarmGroup listing's older name: it lists every named collection now. */
 export const listGroupIndexes = listNamedIndexes
