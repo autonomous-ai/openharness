@@ -6,11 +6,13 @@ import { openDaemon, whereFor, type Daemon, type Where } from '../agentClient/da
 import { callerOf, outsideCaller, type Frame } from '../agentClient/model.js'
 import { identifier } from './host.js'
 import { resolve } from 'node:path'
-import { uploadAttachments } from './attach.js'
+import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+/** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
+const MAX_PROPOSAL_FILES = 5
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -62,9 +64,17 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
       command: { type: 'message.send', conversationId: first, text: second, replyTo, recipientIds: [], ...(mentions.length ? { mentions } : {}) } })
   } else if (action === 'command' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, command: JSON.parse(second) })
-  } else if (action === 'propose' && identifier(first) && second && positional.length === 3) {
+  } else if (action === 'propose' && identifier(first) && second) {
+    const attach: string[] = []
+    for (let i = 3; i < positional.length; i += 2) {
+      const [flag, value] = [positional[i], positional[i + 1]]
+      if (flag === '--attach' && value) attach.push(resolve(value))
+      else throw new Error(USAGE)
+    }
+    if (attach.length > MAX_PROPOSAL_FILES) throw new Error(`Attach at most ${MAX_PROPOSAL_FILES} files to a proposal.`)
     // A Buddy's proposal for its owner (backend buddies.ts): only ever that command, whatever the JSON says it is.
-    Object.assign(payload, { action: 'command', operationId: first, command: { ...JSON.parse(second), type: 'buddy.propose' } })
+    Object.assign(payload, { action: 'command', operationId: first, ...(attach.length ? { attach } : {}),
+      command: { ...JSON.parse(second), type: 'buddy.propose' } })
   } else if (action === 'start' && identifier(first) && second && positional.length === 3) {
     Object.assign(payload, { operationId: first, request: JSON.parse(second) })
   } else if (action === 'resume' && identifier(first) && positional.length === 2) payload.startId = first
@@ -114,7 +124,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
   let operationId: unknown
   const print = deps.print ?? console.log
   try {
-    const request = parseSuperTabArgs(argv, (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))())
+    const here = (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))()
+    const request = parseSuperTabArgs(argv, here)
     operationId = request.payload.operationId
     daemon = await (deps.open ?? openDaemon)(request.where)
     const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
@@ -173,8 +184,11 @@ export async function superTabCommand(argv: readonly string[], deps: {
       // this process holds no account credential.
       if (Array.isArray(attach)) {
         const command = object(payload.command)
-        command.attachmentIds = await uploadAttachments(attach as string[], String(payload.operationId), { tabId: String(payload.tabId),
-          conversationId: String(command.conversationId), port: request.where.port, dataDir: request.where.dataDir }, scoped, deps.fetch)
+        const target = { tabId: String(payload.tabId), conversationId: String(command.conversationId), port: request.where.port, dataDir: request.where.dataDir }
+        command.attachmentIds = command.type === 'buddy.propose'
+          ? await proposalFiles(attach as string[], String(payload.operationId), command, target, daemon, scoped, { ...deps,
+            local: request.where.machineId === here.machineId && request.where.port === here.port })
+          : await uploadAttachments(attach as string[], String(payload.operationId), target, scoped, deps.fetch)
       }
       result = await daemon.request('super_tabs', payload, 30_000)
     }
@@ -184,6 +198,30 @@ export async function superTabCommand(argv: readonly string[], deps: {
     print(JSON.stringify({ error: error instanceof Error ? error.message : String(error), ...(operationId ? { operationId } : {}) }))
     return 1
   } finally { daemon?.close() }
+}
+
+/** A Buddy's proposal files (backend buddies.ts): those in its own folder, as its harness here records it, uploaded to its
+ *  chat beside the files its owner sent there, which the proposal names by id. A repeat finds the proposal in the project
+ *  chat and names the files it went with. */
+async function proposalFiles(paths: string[], operationId: string, command: Record<string, unknown>, target: UploadTarget, daemon: Daemon,
+  scoped: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>, deps: { pane?: string; fetch?: typeof fetch; local: boolean }): Promise<string[]> {
+  // Its folder is on this machine: through another machine's daemon (--machine, --port) its pane would name someone else's.
+  if (!deps.local) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
+  const named = Array.isArray(command.attachmentIds) ? command.attachmentIds.map(String) : []
+  // Counted before any upload, so a refused proposal leaves no file behind.
+  if (new Set(named).size + paths.length > MAX_PROPOSAL_FILES) throw new Error(`Attach at most ${MAX_PROPOSAL_FILES} files to a proposal.`)
+  const listed = await daemon.request('agents_list')
+  const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
+  const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, String(daemon.machineId))
+  const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
+  if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
+  const files = readInsideFolder(paths, folder)
+  const state = object(object((await scoped({ action: 'status' })).value).state)
+  const projectId = (Array.isArray(state.conversations) ? state.conversations : []).map(object).find(c => c.id === target.conversationId)?.projectId
+  const home = (Array.isArray(state.projects) ? state.projects : []).map(object).find(p => p.id === projectId)?.leadConversationId
+  if (typeof home !== 'string') throw new Error('Name your own chat: a proposal comes from there.')
+  const uploaded = await uploadAttachments(files, operationId, { ...target, sentIn: home }, scoped, deps.fetch)
+  return [...new Set([...named, ...uploaded])]
 }
 
 /** How often a terminal result is read: the backend holds each read about 20 s, and the worker's machine has 10 s to pick a

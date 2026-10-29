@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/super_tabs/view.dart';
+import 'package:harness/super_tabs/section_heading.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
 
@@ -70,7 +71,14 @@ void main() {
     expect(find.text('Leads'), findsNothing);
     expect(find.text('Projects'), findsOneWidget);
     expect(find.text('Humans'), findsOneWidget);
-    expect(find.text('Agents'), findsOneWidget);
+    // The roster's heading; the leaderboard's Agents pill is the other one.
+    expect(
+      find.descendant(
+        of: find.byType(SuperTabSectionHeading),
+        matching: find.text('Agents'),
+      ),
+      findsOneWidget,
+    );
     final create = find.byTooltip('New project');
     final project = find.byKey(const ValueKey('super-group-lead'));
     expect(
