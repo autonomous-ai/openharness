@@ -296,6 +296,7 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
+      teamAccounts = row['teamAccounts'] != false,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -365,6 +366,9 @@ class SuperTabSnapshot {
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
+  /// Whether this Swarm's server uses Harness Team accounts: false only where
+  /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
+  final bool teamAccounts;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the

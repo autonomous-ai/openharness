@@ -722,4 +722,51 @@ void main() {
     expect(find.text('private server text'), findsNothing);
     expect(opened, false);
   });
+
+  // Scholes, 2026-10-29: joining adds this computer, so only a join that made
+  // the person a member says so, with the role; someone already in it, never.
+  testWidgets('tells only a new member\'s join, with its role', (tester) async {
+    Future<List<String>> join(Map<String, dynamic> preview) async {
+      final told = <String>[];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => SwarmJoinDialog(
+                    link: _link,
+                    accountEmail: 'leo@example.com',
+                    isCurrent: () => true,
+                    onJoined: (_, _) {},
+                    onNewMember: (id, role) => told.add('$id:$role'),
+                    request: (_, path, {body}) async =>
+                        path.endsWith('/preview')
+                        ? {'id': _link.tabId, 'name': 'Pilot', ...preview}
+                        : {'id': _link.tabId},
+                  ),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('swarm-join-confirm')));
+      await tester.pumpAndSettle();
+      return told;
+    }
+
+    expect(await join({'role': 'collaborator'}), [
+      '${_link.tabId}:collaborator',
+    ]);
+    expect(await join({'role': 'viewer'}), ['${_link.tabId}:viewer']);
+    expect(
+      await join({'role': 'collaborator', 'alreadyMember': true}),
+      isEmpty,
+    );
+  });
 }

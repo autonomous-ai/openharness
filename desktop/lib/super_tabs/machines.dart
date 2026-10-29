@@ -34,6 +34,7 @@ import 'machine_details.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'team_account_setup.dart';
 import 'section_heading.dart';
 
@@ -44,10 +45,9 @@ const _agentSlotsMin = 1;
 const _agentSlotsMax = 1024;
 
 /// Every machine may offer this many, whatever its RAM, and the suggestion
-/// never starts above [_suggestedSlotsMax]: the CLI's own figures
+/// never starts above 16 (superTabSuggestedAgentSlots): the CLI's own figures
 /// (`prepareContribution`, `cli/src/superTabs/contribution.ts`).
 const _agentSlotsFloor = 4;
-const _suggestedSlotsMax = 16;
 
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
@@ -69,14 +69,8 @@ int? _maxAgentSlots(MachineResources? resources) {
   );
 }
 
-int? _suggestedAgentSlots(MachineResources? resources) {
-  final total = resources?.memoryTotalBytes;
-  if (total == null) return null;
-  return (total / (2 * _agentMemoryBytes)).floor().clamp(
-    _agentSlotsMin,
-    _suggestedSlotsMax,
-  );
-}
+int? _suggestedAgentSlots(MachineResources? resources) =>
+    superTabSuggestedAgentSlots(resources);
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -1192,6 +1186,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Timer? _timer;
   bool _reading = false;
   int _revision = 0;
+
+  /// What this Mac's daemon remembers of its Harness Team account setup
+  /// ([AppNotifier.teamSetupStatus]), for its own row's line; null until read
+  /// or when it cannot say.
+  ({String state, String? detail})? _teamSetup;
+  bool _teamSetupReading = false;
   SuperTabController get c => widget.controller;
   Set<String> get _ids => {
     for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
@@ -1209,6 +1209,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     if (!kUnderTest) {
       _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
     }
+    unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
       widget.app!.foreground.addListener(_foreground);
@@ -1218,6 +1219,32 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   void _changed() {
     if (mounted) setState(() {});
+  }
+
+  /// Reads why this Mac has no Harness Team account, only while its person's
+  /// own row offers Set up: asked of this Mac's daemon, never of another's.
+  Future<void> _readTeamSetup() async {
+    final app = widget.app;
+    if (app == null || _teamSetupReading || !app.canSetUpTeamAccount) return;
+    final own = c.snapshot?.machines.any(
+      (m) =>
+          m['contributorId'] == c.accountId &&
+          app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
+          (m['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED',
+    );
+    if (own != true) {
+      _teamSetup = null;
+      return;
+    }
+    _teamSetupReading = true;
+    try {
+      final read = await app.teamSetupStatus();
+      if (!mounted) return;
+      _teamSetup = read;
+      _changed();
+    } finally {
+      _teamSetupReading = false;
+    }
   }
 
   void _updateUsage() {
@@ -1275,6 +1302,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
       _samples.removeWhere((id, _) => !_ids.contains(id));
       _awaiting.removeWhere((id) => !_samples.containsKey(id));
+      await _readTeamSetup();
     } finally {
       _reading = false;
       if (mounted && widget.app?.foreground.value == true) {
@@ -1598,21 +1626,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         }
       }
     }
-    final problem = _teammatesLine(shared, team, contributor);
+    final line = _teammatesLine(shared, team, contributor);
+    final setUpTeam =
+        line != null &&
+        team == null &&
+        (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
+        contributor == c.accountId &&
+        app != null &&
+        app.canSetUpTeamAccount &&
+        app.stateOf(id)?.isLocalMachine == true;
+    // Its own person reads why: they cancelled, or setup failed and why.
+    final problem = setUpTeam
+        ? superTabTeamSetupLine(_teamSetup) ?? line
+        : line;
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
       id: id,
       name: name,
       problem: problem,
-      setUpTeam:
-          problem != null &&
-          team == null &&
-          (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
-          contributor == c.accountId &&
-          app != null &&
-          app.canSetUpTeamAccount &&
-          app.stateOf(id)?.isLocalMachine == true,
+      setUpTeam: setUpTeam,
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -2043,7 +2076,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           child: _MachineLine(
             view: view,
             onSetUpTeam: view.setUpTeam
-                ? () => showTeamAccountSetup(context, widget.app!)
+                ? () async {
+                    await showTeamAccountSetup(context, widget.app!);
+                    await _readTeamSetup();
+                  }
                 : null,
           ),
         ),
@@ -2589,6 +2625,21 @@ String? superTabTeammatesPaused(Object? code) {
     'PRIVACY_UNCHECKED' => 'privacy not checked yet',
     'PRIVACY_CHECK_FAILED' => 'privacy check failed',
     'PRIVACY_CHECK_STALE' => 'privacy check out of date',
+    _ => null,
+  };
+  return why == null ? null : "Teammates' agents paused: $why";
+}
+
+/// This Mac's own row, for its person, when its daemon remembers why it has no Harness Team account
+/// (cli/src/team/autoSetup.ts `status`); null when it does not, and the Swarm's own line stands.
+String? superTabTeamSetupLine(({String state, String? detail})? setup) {
+  final detail = setup?.detail?.trim().replaceFirst(RegExp(r'[.]+$'), '');
+  final why = switch (setup?.state) {
+    'declined' => 'setup was cancelled',
+    'failed' when detail != null && detail.isNotEmpty =>
+      'setup failed: $detail',
+    'failed' => 'setup failed',
+    'running' => 'setting up',
     _ => null,
   };
   return why == null ? null : "Teammates' agents paused: $why";

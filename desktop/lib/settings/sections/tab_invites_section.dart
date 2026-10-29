@@ -96,6 +96,10 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
       }
       if (!mounted) return;
       app.openSuperTab(tabId, invite['name'] as String);
+      // Accepted by the person at this computer: it joins the Swarm too, then
+      // the system asks once for the Harness Team account.
+      final role = invite['role'];
+      if (role is String) unawaited(app.addMachineOnJoin(tabId, role: role));
       await _refreshSuper();
       if (mounted) await Navigator.of(context).maybePop();
     } catch (failure) {

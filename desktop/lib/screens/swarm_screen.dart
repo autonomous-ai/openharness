@@ -77,6 +77,8 @@ import '../state/harness_launch_integration.dart';
 import '../super_tabs/launch.dart';
 import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
+import '../super_tabs/join_machine.dart';
+import '../super_tabs/join_machine_note.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/quick_switcher.dart';
@@ -297,6 +299,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
   StreamSubscription<void>? _modelsRequests;
   StreamSubscription<String>? _superTabClosures;
   StreamSubscription<String>? _teamSetupAsks;
+  StreamSubscription<SwarmJoinedMachine>? _joinedMachines;
   // The one Swarm notice: whether it exists (queued or shown), whether it
   // is on screen, and the closed tab its Reopen restores.
   int _superTabNoticeSerial = 0;
@@ -849,6 +852,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _teamSetupAsks = app.teamSetupAsks.listen((_) {
       if (mounted) unawaited(showTeamAccountSetup(context, app, asked: true));
     });
+    // This computer, added to a Swarm as its person joined it (super_tabs/join_machine.dart).
+    _joinedMachines = app.joinedMachines.listen((note) {
+      if (mounted) showJoinedMachineNote(context, app.superTabs.open, note);
+    });
     if (!kUnderTest) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -1004,6 +1011,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _modelsRequests?.cancel();
     _superTabClosures?.cancel();
     _teamSetupAsks?.cancel();
+    _joinedMachines?.cancel();
     _keymap.removeListener(_keymapChanged);
     _defaultKeymap.dispose();
     grid.AppTheme.palette.removeListener(_paletteChanged);
