@@ -294,6 +294,18 @@ describe('a review the Swarm opens by itself', () => {
     expect(queued.map(d => d.conversationId)).toContain(review.id)
     const leadLine = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, conversationId: review.id, text: { startsWith: 'Review opened by itself' } } })
     expect(leadLine.text).toBe('Review opened by itself for #2: Reviewer reviews it. Cancel it here if it is not needed.')
+    // The Lead's wake (review of #2225): delivered to the Lead and read by it alone; people and the Reviewer read the brief only.
+    expect(leadLine.recipientIds).toEqual([f.lead])
+    expect((await db.superTabDelivery.findMany({ where: { tabId: f.tab, messageId: leadLine.id } })).map(d => d.agentId)).toEqual([f.lead])
+    const page = async (user: AuthUser, asAgentId?: string, messageId?: string) =>
+      (await f.timed.messages(user, f.tab, review.id, messageId ? { messageId } : {}, asAgentId)).messages.map(m => m.id)
+    expect(await page(host, f.lead)).toContain(leadLine.id)
+    for (const user of [owner, host]) {
+      expect(await page(user)).not.toContain(leadLine.id)
+      expect(await page(user, undefined, leadLine.id)).toEqual([])
+    }
+    expect(await page(host, reviewer)).not.toContain(leadLine.id)
+    expect((await page(owner)).length).toBeGreaterThan(0)
     await f.execute({ type: 'work.cancel', conversationId: review.id, assignmentId: review.assignment!.id, reason: 'Not needed' })
     await f.execute({ type: 'conversation.archive', conversationId: review.id, archived: true })
     expect((await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === review.id)?.archived ?? true).toBe(true)

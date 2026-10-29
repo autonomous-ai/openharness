@@ -1434,6 +1434,9 @@ describe('Reviewer role', () => {
       expect(toReviewer.text).toBe(`${review.brief}\n\nAcceptance checks:\n- Verdict with the reviewed revision`)
       const toLead = effects.messages.filter(m => m.conversationId === review.id && m.recipients.includes(lead))
       expect(toLead.map(m => m.text)).toEqual(['Review opened by itself for #1: Second reviewer reviews it. Cancel it here if it is not needed.'])
+      // The Lead's wake is its alone (review of #2225); the review's brief and its Reviewer's assignment stay the people's record.
+      expect(effects.messages.filter(m => m.conversationId === review.id).map(m => [m.recipients, agentOnly(m.source, m.recipients)]))
+        .toEqual([[[], false], [[fresh], false], [[lead], true]])
       // Every row of it is the Swarm's own, written as the project's Lead as its other notices are, never as the Engineer.
       expect(effects.messages.filter(m => m.conversationId === review.id).map(m => [m.author.kind, m.author.id, m.source?.kind]))
         .toEqual([['agent', lead, 'auto-review'], ['agent', lead, 'auto-review'], ['agent', lead, 'auto-review']])
@@ -1502,8 +1505,8 @@ describe('Reviewer role', () => {
       for (const id of [reviewer, fresh]) f.run({ type: 'agent.release', agentId: id, decision: 'stop' }, leadActor)
       const effects = markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment).toBeNull()
-      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => m.text))
-        .toEqual(['Review opened by itself for #1, but no Reviewer is free. Route it and start one.'])
+      expect(effects.messages.filter(m => m.recipients.includes(lead) && m.conversationId === reviews()[0]!.id).map(m => [m.text, agentOnly(m.source, m.recipients)]))
+        .toEqual([['Review opened by itself for #1, but no Reviewer is free. Route it and start one.', true]])
     })
 
     it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {

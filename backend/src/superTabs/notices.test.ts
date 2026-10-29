@@ -57,7 +57,8 @@ function writtenKinds(): Map<string, string[]> {
     const locals = new Map<string, ts.Expression[]>()
     const at: ts.Node[] = []
     const visit = (node: ts.Node) => {
-      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) add(locals, node.name.text, node.initializer)
+      // A variable, or a parameter's default (autoReview.ts row's source).
+      if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.initializer) add(locals, node.name.text, node.initializer)
       if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === 'source') at.push(node.initializer)
       if (ts.isShorthandPropertyAssignment(node) && node.name.text === 'source') at.push(node.name)
       // message(conversationId, text, recipients, replyTo, source, ...)
