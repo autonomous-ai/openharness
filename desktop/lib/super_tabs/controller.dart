@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
+import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken, DioException, DioExceptionType;
 import 'package:flutter/foundation.dart';
 
@@ -37,6 +39,28 @@ String superTabOperationId() {
   ).join();
 }
 
+/// The id the backend gives the message a person sends with receipt
+/// [operationId]: `stableId(state.id, actorKey(actor), operationId)`, the
+/// first 24 hex of sha256 over the JSON of those parts (backend
+/// superTabs/commands.ts `message.send`, model.ts `stableId`).
+String superTabMessageId({
+  required String tabId,
+  required String accountId,
+  required String operationId,
+}) => const DartSha256()
+    .hashSync(
+      utf8.encode(jsonEncode([tabId, 'person:$accountId', operationId])),
+    )
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join()
+    .substring(0, 24);
+
+/// Saved for a text still queued when the window closed. Older versions read
+/// and show it; this one knows it by [_unsentKey] and shows Not sent alone.
+const _unsentReason = 'Not sent before this window closed.';
+const _unsentKey = 'unsent';
+
 class SuperTabFailure implements Exception {
   const SuperTabFailure(this.code, this.message, {this.statusCode = 0});
   final String code, message;
@@ -50,6 +74,9 @@ class SuperTabFailure implements Exception {
 enum SuperTabOutgoingState {
   /// On its way, or accepted and not read back yet.
   sending,
+
+  /// Accepted by the server, while its transcript refresh is still pending.
+  confirmed,
 
   /// Sent with no answer: it may or may not have arrived. Retry checks and
   /// sends it once.
@@ -67,6 +94,12 @@ typedef _Refused = ({
   String error,
 });
 
+typedef _QueuedSend = ({
+  String operationId,
+  Map<String, dynamic> command,
+  Completer<Map<String, dynamic>?> result,
+});
+
 /// A message the reader sent that the transcript does not hold yet.
 class SuperTabOutgoing {
   const SuperTabOutgoing({
@@ -78,6 +111,7 @@ class SuperTabOutgoing {
     this.thread,
     this.alsoSend = false,
     this.error,
+    this.confirmedAt,
   });
   final String conversationId, text;
 
@@ -95,6 +129,7 @@ class SuperTabOutgoing {
 
   /// Why it was refused, as the backend said it.
   final String? error;
+  final String? confirmedAt;
 }
 
 /// Personal navigation/drafts live on this client. Membership, work and messages
@@ -127,6 +162,8 @@ class SuperTabController extends ChangeNotifier {
     SuperTabReading reading = const SuperTabReading(),
   }) : _policy = reading {
     if (initial['tabId'] == tabId && initial['accountId'] == accountId) {
+      final order = initial['sendOrder'];
+      if (order is List) _sendOrder.addAll(order.whereType<String>());
       _savedSelection = initial['selectedId'] is String;
       expandedProjects.addAll(
         (initial['expandedProjects'] as List? ?? const []).whereType<String>(),
@@ -201,7 +238,7 @@ class SuperTabController extends ChangeNotifier {
                         in superTabMap(row['mentions']).entries)
                       if (token is String) agent: token,
                   },
-                  error: row['error'] as String,
+                  error: row[_unsentKey] == true ? '' : row['error'] as String,
                 ),
           ];
           if (kept.isNotEmpty) _refused[key] = kept;
@@ -525,9 +562,57 @@ class SuperTabController extends ChangeNotifier {
   int stateReads = 0;
   Future<void> _persisting = Future.value();
   Map<String, dynamic>? _pending;
+  final _queuedSends = <_QueuedSend>[];
+  bool _drainingSends = false;
+
+  /// Who holds [saving] now: a send gives it up at its answer, so the next
+  /// one may take it while the first still reads.
+  Object? _lane;
+  final _sendAcknowledgements = <String, Completer<void>>{};
+  final _sendOrder = <String>[];
+
+  /// Text can queue behind another text send; other actions and attachments
+  /// retain their existing single-action flow.
+  bool get canQueueText =>
+      !_disposed &&
+      canWrite &&
+      !uploading &&
+      (_pending == null ||
+          (saving && pendingCommand?['type'] == 'message.send'));
 
   /// Sends the backend took, by message id, until the transcript holds them.
   final _sent = <String, Map<String, dynamic>>{};
+  final _sendIdentities =
+      <String, ({String operationId, String conversationId})>{};
+
+  /// A local row keeps its identity even if the service assigns a different id.
+  String messageIdentity(String id) =>
+      _sendIdentities[id]?.operationId ?? _onTheirWay[id] ?? id;
+
+  /// The messages on their way, by the id the backend gives each, so one a
+  /// read brings before its answer is the same message (and the same row).
+  Map<String, String> get _onTheirWay {
+    final receipts = [
+      if (pendingCommand?['type'] == 'message.send')
+        _pending!['operationId'] as String,
+      for (final queued in _queuedSends) queued.operationId,
+    ];
+    if (!listEquals(receipts, _onTheirWayFor)) {
+      _onTheirWayFor = receipts;
+      _onTheirWayIds = {
+        for (final receipt in receipts) _messageIdOf(receipt): receipt,
+      };
+    }
+    return _onTheirWayIds;
+  }
+
+  List<String> _onTheirWayFor = const [];
+  Map<String, String> _onTheirWayIds = const {};
+  String _messageIdOf(String receipt) => superTabMessageId(
+    tabId: tabId,
+    accountId: accountId,
+    operationId: receipt,
+  );
 
   /// The tags of each message on its way, by operation id, for a refusal to
   /// give back.
@@ -1743,7 +1828,15 @@ class SuperTabController extends ChangeNotifier {
     _quoting.clear();
     _forgetThreads();
     _sent.clear();
+    _sendIdentities.clear();
+    _pending = null;
+    _sendingMentions.clear();
     _refused.clear();
+    _sendOrder.clear();
+    for (final queued in _queuedSends) {
+      queued.result.complete(null);
+    }
+    _queuedSends.clear();
     _poll?.cancel();
     _changed();
   }
@@ -1773,22 +1866,46 @@ class SuperTabController extends ChangeNotifier {
       _threadSeen.entries.skip(max(0, _threadSeen.length - 500)),
     ),
     if (_pending != null) 'pending': _pending,
-    if (_refused.isNotEmpty)
+    if (_sendOrder.isNotEmpty) 'sendOrder': List<String>.of(_sendOrder),
+    if (_refused.isNotEmpty || _queuedSends.isNotEmpty)
       'refused': {
-        for (final MapEntry(:key, :value) in _refused.entries)
+        for (final key in {
+          ..._refused.keys,
+          ..._queuedSends.map((q) => q.command['conversationId'] as String),
+        })
           key: [
-            for (final refused in value)
+            for (final refused in _refused[key] ?? const <_Refused>[])
               {
                 'operationId': refused.operationId,
                 'command': refused.command,
                 'mentions': refused.mentions,
-                'error': refused.error,
+                'error': refused.error.isEmpty ? _unsentReason : refused.error,
+                if (refused.error.isEmpty) _unsentKey: true,
               },
+            // Persist unsent queue entries in the existing recovery format:
+            // older clients also retain their text and require explicit Retry.
+            for (final queued in _queuedSends)
+              if (queued.command['conversationId'] == key)
+                {
+                  'operationId': queued.operationId,
+                  'command': queued.command,
+                  'mentions': _sendingMentions[queued.operationId] ?? const {},
+                  'error': _unsentReason,
+                  _unsentKey: true,
+                },
           ],
       },
   };
 
   Future<void> _persist() {
+    final active = {
+      if (_pending != null) _pending!['operationId'],
+      ..._sent.keys,
+      for (final refused in _refused.values)
+        ...refused.map((r) => r.operationId),
+      ..._queuedSends.map((q) => q.operationId),
+    };
+    _sendOrder.removeWhere((id) => !active.contains(id));
     // Serial writes prevent an older autosave from restoring a resolved receipt.
     final next = _persisting
         .catchError((Object _) {})
@@ -1834,6 +1951,9 @@ class SuperTabController extends ChangeNotifier {
   /// hold yet, oldest first.
   List<SuperTabOutgoing> outgoing(String id) {
     final held = {for (final m in _messages[id] ?? const []) m.id};
+    // The receipts of what is on its way that a read already brought.
+    final onTheirWay = _onTheirWay;
+    final arrived = {for (final messageId in held) ?onTheirWay[messageId]};
     SuperTabOutgoing of(
       Map<String, dynamic> command,
       SuperTabOutgoingState state, {
@@ -1848,27 +1968,33 @@ class SuperTabController extends ChangeNotifier {
       state: state,
       operationId: operationId,
       error: error,
+      confirmedAt: command['confirmedAt'] as String?,
     );
     final pending = _pending,
         command = pending == null
             ? const <String, dynamic>{}
             : superTabMap(pending['command']);
-    return [
+    final rows = <SuperTabOutgoing>[
       for (final refused in _refused[id] ?? const <_Refused>[])
         of(
           refused.command,
           SuperTabOutgoingState.refused,
           operationId: refused.operationId,
-          error: refused.error,
+          // Left unsent at close: Not sent says it all.
+          error: refused.error.isEmpty ? null : refused.error,
         ),
       for (final MapEntry(key: messageId, value: sent) in _sent.entries)
         if (sent['conversationId'] == id && !held.contains(messageId))
-          of(sent, SuperTabOutgoingState.sending),
-      // The backend names a person's message by its send's operation id, so
-      // one read back while its answer was lost is not shown twice.
+          of(
+            sent,
+            SuperTabOutgoingState.confirmed,
+            operationId: messageIdentity(messageId),
+          ),
+      // The backend names a person's message by a hash of its send's
+      // receipt, so one read back before its answer is not shown twice.
       if (command['type'] == 'message.send' &&
           command['conversationId'] == id &&
-          !held.contains(pending!['operationId']))
+          !arrived.contains(pending!['operationId']))
         of(
           command,
           saving
@@ -1876,7 +2002,19 @@ class SuperTabController extends ChangeNotifier {
               : SuperTabOutgoingState.unconfirmed,
           operationId: pending['operationId'] as String?,
         ),
+      for (final queued in _queuedSends)
+        if (queued.command['conversationId'] == id &&
+            !arrived.contains(queued.operationId))
+          of(
+            queued.command,
+            SuperTabOutgoingState.sending,
+            operationId: queued.operationId,
+          ),
     ];
+    int order(SuperTabOutgoing row) =>
+        _sendOrder.indexOf(row.operationId ?? '');
+    rows.sort((a, b) => order(a).compareTo(order(b)));
+    return rows;
   }
 
   /// Sends failed [message] again: one with no answer under its own receipt
@@ -1910,6 +2048,7 @@ class SuperTabController extends ChangeNotifier {
       _sendingMentions.remove(_pending!['operationId']);
       _pending = null;
     }
+    _sendOrder.remove(message.operationId);
     operationError = null;
     operationErrorCode = null;
     unawaited(
@@ -2038,6 +2177,21 @@ class SuperTabController extends ChangeNotifier {
   /// Removes the reader's Buddy in [projectId]; its chat stays.
   Future<bool> removeBuddy(String projectId) async =>
       await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
+
+  /// Names the reader's Buddy in [projectId] from its chat, or clears the
+  /// name for the default when [name] is empty. Everyone in the Swarm sees it.
+  /// False when refused: [operationError] says why.
+  Future<bool> renameBuddy(String projectId, String name) async {
+    final chat = buddyChat(projectId);
+    if (chat == null) return false;
+    final trimmed = name.trim();
+    return await command({
+          'type': 'buddy.rename',
+          'conversationId': chat.id,
+          'name': trimmed.isEmpty ? null : trimmed,
+        }) !=
+        null;
+  }
 
   /// Whether [group] is out of the app: there is no private channel to the
   /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
@@ -3120,6 +3274,7 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     saving = true;
+    final lane = _lane = Object();
     operationError = null;
     operationErrorCode = null;
     operationNotice = null;
@@ -3127,9 +3282,9 @@ class SuperTabController extends ChangeNotifier {
     try {
       // The receipt ID reaches durable local storage before the request can reach the server.
       await _persist();
-      if (_disposed) return null;
+      if (_disposed || accessRevoked) return null;
       final answer = await request('POST', '$_path/commands', body: pending);
-      if (_disposed) return null;
+      if (_disposed || accessRevoked) return null;
       final result = superTabMap(answer['result']);
       final command = superTabMap(pending['command']);
       final notice = result['credentialNotice'];
@@ -3137,11 +3292,18 @@ class SuperTabController extends ChangeNotifier {
       if (command['type'] == 'message.send') {
         final id = command['conversationId'] as String;
         _sendingMentions.remove(pending['operationId']);
-        // Shown as sending until the transcript holds it, so it never leaves
+        // Kept confirmed until the transcript holds it, so it never leaves
         // the chat between the answer and the read that brings it.
-        _sent[result['messageId'] as String? ??
-                pending['operationId'] as String] =
-            command;
+        final messageId =
+            result['messageId'] as String? ?? pending['operationId'] as String;
+        _sendIdentities[messageId] = (
+          operationId: pending['operationId'] as String,
+          conversationId: id,
+        );
+        _sent[messageId] = {
+          ...command,
+          'confirmedAt': clock.now().toUtc().toIso8601String(),
+        };
         if (_drafts[id]?.trim() == command['text']) {
           _drafts.remove(id);
           _mentions.remove(id);
@@ -3167,17 +3329,25 @@ class SuperTabController extends ChangeNotifier {
         _moveView(to: result['conversationId'] as String);
       }
       _pending = null;
+      _changed();
       try {
         await _persist();
       } catch (_) {
         _pending = pending;
         rethrow;
       }
+      if (command['type'] == 'message.send') {
+        // A refresh is read-only work. It must not hold the send lane after
+        // the command and its durable receipt have both been confirmed.
+        _release(lane);
+        _sendAcknowledgements[pending['operationId']]?.complete();
+        _changed();
+      }
       // What the command wrote is in the next change read.
       await refresh();
       return result;
     } catch (failure) {
-      if (!_disposed && _isUpdateRequired(failure)) {
+      if (!_disposed && !accessRevoked && _isUpdateRequired(failure)) {
         _requireUpdate();
         _failOperation(
           updateMessage,
@@ -3192,7 +3362,7 @@ class SuperTabController extends ChangeNotifier {
         } catch (_) {
           _pending = pending;
         }
-      } else if (!_disposed) {
+      } else if (!_disposed && !accessRevoked) {
         _failOperation(
           failure is SuperTabFailure
               ? failure.message
@@ -3225,9 +3395,50 @@ class SuperTabController extends ChangeNotifier {
       }
       return null;
     } finally {
-      saving = false;
+      _release(lane);
       _changed();
+      if (_pending == null) {
+        unawaited(_drainSends());
+      } else if (identical(_pending, pending) &&
+          !_drainingSends &&
+          !_disposed &&
+          !accessRevoked &&
+          _queuedSends.isNotEmpty) {
+        // A send the queue did not start (a file, a Retry) ended unsure: what
+        // waits behind it is kept to send again, as the queue's own does.
+        _refuseQueued();
+        unawaited(
+          _persist().catchError((Object _) {
+            error = 'Could not save these messages on this computer.';
+            _changed();
+          }),
+        );
+      }
     }
+  }
+
+  static String _excerpt(String text) {
+    final line = text.trim().replaceAll(RegExp(r'\s+'), ' ');
+    return line.length <= 80 ? line : '${line.substring(0, 79)}…';
+  }
+
+  /// Gives up [saving] if [lane] still holds it.
+  void _release(Object lane) {
+    if (!identical(_lane, lane)) return;
+    _lane = null;
+    saving = false;
+  }
+
+  /// Keeps every queued text for Retry: an earlier one needs confirmation.
+  void _refuseQueued() {
+    for (final queued in _queuedSends) {
+      _refuse({
+        'operationId': queued.operationId,
+        'command': queued.command,
+      }, 'An earlier message needs confirmation.');
+      if (!queued.result.isCompleted) queued.result.complete(null);
+    }
+    _queuedSends.clear();
   }
 
   /// Keeps a refused [pending] message, with its tags, for Retry.
@@ -3259,6 +3470,15 @@ class SuperTabController extends ChangeNotifier {
   void _dropShownSends(String id) {
     final held = {for (final m in _messages[id] ?? const []) m.id};
     _sent.removeWhere((messageId, _) => held.contains(messageId));
+    _sendOrder.removeWhere(
+      (operationId) => held.any((id) => messageIdentity(id) == operationId),
+    );
+    _sendIdentities.removeWhere(
+      (messageId, identity) =>
+          identity.conversationId == id &&
+          !held.contains(messageId) &&
+          !_sent.containsKey(messageId),
+    );
   }
 
   bool _maySend(Map<String, dynamic> command) =>
@@ -3282,8 +3502,7 @@ class SuperTabController extends ChangeNotifier {
         selected!.archived ||
         !canWrite ||
         uploading ||
-        saving ||
-        _pending != null) {
+        ((saving || _pending != null) && (files.isNotEmpty || !canQueueText))) {
       return null;
     }
     // A tag the text still says: an agent's is a recipient, a person's a tag.
@@ -3304,6 +3523,32 @@ class SuperTabController extends ChangeNotifier {
       return null;
     }
     final conversationId = selectedId;
+    if (files.isEmpty) {
+      final operationId = superTabOperationId();
+      _sendOrder.add(operationId);
+      final result = Completer<Map<String, dynamic>?>();
+      _sendingMentions[operationId] = Map.of(
+        _mentions[conversationId] ?? const {},
+      );
+      _queuedSends.add((
+        operationId: operationId,
+        command: {
+          'type': 'message.send',
+          'conversationId': conversationId,
+          'text': text,
+          'replyTo': replyTo,
+          'recipientIds': addressed,
+          if (tagged.isNotEmpty) 'mentions': tagged,
+        },
+        result: result,
+      ));
+      _drafts.remove(conversationId);
+      _mentions.remove(conversationId);
+      onSending?.call();
+      _changed();
+      unawaited(_drainSends());
+      return result.future;
+    }
     final ids = await _uploadAll(
       conversationId,
       attachments(conversationId),
@@ -3312,7 +3557,10 @@ class SuperTabController extends ChangeNotifier {
     if (ids == null) return null;
     final before = _pending;
     final tags = Map<String, String>.of(_mentions[conversationId] ?? const {});
-    final sending = command({
+    // In the order it was sent, as text is.
+    final operationId = superTabOperationId();
+    _sendOrder.add(operationId);
+    final sending = command(operationId: operationId, {
       'type': 'message.send',
       'conversationId': conversationId,
       'text': text,
@@ -3344,6 +3592,76 @@ class SuperTabController extends ChangeNotifier {
         _pending == null &&
         operationErrorCode?.contains('ATTACHMENT') == true) {
       _uploaded.clear();
+    }
+  }
+
+  Future<void> _drainSends() async {
+    if (_drainingSends || saving || _pending != null || _disposed) return;
+    _drainingSends = true;
+    final gone = <String>[];
+    try {
+      while (_queuedSends.isNotEmpty && !_disposed && !accessRevoked) {
+        final queued = _queuedSends.removeAt(0);
+        final id = queued.command['conversationId'] as String;
+        final group = snapshot?.conversation(id);
+        if (group == null && canWrite) {
+          // Its conversation is gone: no chat can show it, so it is dropped
+          // and the sender told.
+          _sendingMentions.remove(queued.operationId);
+          _sendOrder.remove(queued.operationId);
+          gone.add(queued.command['text'] as String? ?? '');
+          queued.result.complete(null);
+          await _persist();
+        } else if (canWrite && group != null && !group.archived) {
+          _pending = {
+            'operationId': queued.operationId,
+            'command': queued.command,
+          };
+          final advance = Completer<void>();
+          _sendAcknowledgements[queued.operationId] = advance;
+          unawaited(
+            retry().then((result) {
+              if (!queued.result.isCompleted) queued.result.complete(result);
+              if (!advance.isCompleted) advance.complete();
+              _sendAcknowledgements.remove(queued.operationId);
+            }),
+          );
+          await advance.future;
+        } else {
+          _refuse({
+            'operationId': queued.operationId,
+            'command': queued.command,
+          }, 'This conversation is no longer writable.');
+          queued.result.complete(null);
+          await _persist();
+        }
+        if (_pending != null) break;
+      }
+      if (gone.isNotEmpty && !_disposed && !accessRevoked) {
+        operationNotice = gone.length == 1
+            ? 'Not sent: “${_excerpt(gone.single)}”. Its conversation is no longer available.'
+            : 'Not sent: ${gone.length} messages. Their conversation is no longer available.';
+      }
+      // An uncertain send keeps its receipt for Retry. Later messages have
+      // not reached the server and remain explicitly retryable, not lost.
+      if (!_disposed && !accessRevoked && _queuedSends.isNotEmpty) {
+        _refuseQueued();
+        await _persist();
+      }
+    } catch (_) {
+      // The queue remains in the recovery state when a local write fails.
+      error = 'Could not save these messages on this computer.';
+      for (final queued in _queuedSends) {
+        _refuse({
+          'operationId': queued.operationId,
+          'command': queued.command,
+        }, 'Could not save this message on this computer.');
+        if (!queued.result.isCompleted) queued.result.complete(null);
+      }
+      _queuedSends.clear();
+    } finally {
+      _drainingSends = false;
+      _changed();
     }
   }
 
@@ -3465,6 +3783,10 @@ class SuperTabController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    for (final queued in _queuedSends) {
+      queued.result.complete(null);
+    }
+    _queuedSends.clear();
     _serverMarks.dispose();
     _poll?.cancel();
     _toldRead?.cancel();
