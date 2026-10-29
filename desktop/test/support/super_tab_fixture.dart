@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:cryptography/dart.dart' show DartSha256;
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/super_tabs/attachment_upload.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
@@ -383,6 +384,15 @@ const superTabUpdateRequired = SuperTabFailure(
   statusCode: 426,
 );
 
+/// The backend's `stableId(...parts)`: the first 24 hex of
+/// sha256(JSON.stringify(parts)) (backend/src/superTabs/model.ts).
+String _backendId(List<String> parts) => const DartSha256()
+    .hashSync(utf8.encode(jsonEncode(parts)))
+    .bytes
+    .map((b) => b.toRadixString(16).padLeft(2, '0'))
+    .join()
+    .substring(0, 24);
+
 class ConversationServer {
   int revision = 0;
 
@@ -399,6 +409,11 @@ class ConversationServer {
   /// Told of every messages read, by path.
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
+
+  /// Names a person's message as the backend does: a hash of the Swarm, the
+  /// sender and the send's receipt id (backend model.ts `stableId`, used by
+  /// `message.send` in commands.ts), not `message-N`.
+  bool hashedIds = false;
 
   /// Conversations whose single-message reads (`?messageId=`) the backend
   /// refuses, as it does for one the reader may not read.
@@ -827,7 +842,18 @@ class ConversationServer {
           messages.last['thread'] = root;
           if (command['alsoSend'] == true) messages.last['alsoInChat'] = true;
         }
-        output['messageId'] = 'message-$revision';
+        if (hashedIds) {
+          final id = _backendId([
+            state['id'] as String,
+            'person:${reader ?? 'owner'}',
+            operationId,
+          ]);
+          if (messages.last['thread'] == messages.last['id']) {
+            messages.last['thread'] = id;
+          }
+          messages.last['id'] = id;
+        }
+        output['messageId'] = messages.last['id'];
       } else if (command['type'] == 'member.status' ||
           command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||
