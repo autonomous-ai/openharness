@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -32,7 +33,7 @@ function run(command: string, args: readonly string[], cwd: string, env: NodeJS.
 }
 
 describe.skipIf(!hasCodex)('the sandbox a Codex Buddy launches in, with the real Codex', () => {
-  let root: string, repo: string, remote: string, env: NodeJS.ProcessEnv, server: Server, url: string
+  let root: string, repo: string, remote: string, env: NodeJS.ProcessEnv, server: Server, url: string, path: string
   const received: string[] = []
   const sandboxed = (...command: string[]) =>
     run('codex', ['sandbox', '-c', `sandbox_mode=${JSON.stringify(sandboxMode)}`, '--', ...command], repo, env)
@@ -52,7 +53,9 @@ describe.skipIf(!hasCodex)('the sandbox a Codex Buddy launches in, with the real
     git('remote', 'add', 'origin', remote)
     server = createServer((request, response) => { received.push(`${request.method} ${request.url}`); response.end('ok') })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/write`
+    // A path of this run's own: a request from another run, outliving it, once reached a port reused here (review 2 of #2087).
+    path = `/write-${randomUUID()}`
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}${path}`
   })
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
@@ -115,10 +118,11 @@ describe.skipIf(!hasCodex)('the sandbox a Codex Buddy launches in, with the real
   it('cannot POST, even to this computer', async () => {
     // Outside the sandbox the same request lands, so a refusal inside it is the sandbox's.
     const outside = await run('curl', ['-sS', '-X', 'POST', '-d', 'x', url], repo, env)
-    expect([outside.status, received]).toEqual([0, ['POST /write']])
+    const ours = () => received.filter((request) => request.endsWith(path))
+    expect([outside.status, ours()]).toEqual([0, [`POST ${path}`]])
     const inside = await sandboxed('curl', '-sS', '-X', 'POST', '-d', 'x', url)
     expect(inside.status).not.toBe(0)
-    expect(received).toEqual(['POST /write'])
+    expect(ours()).toEqual([`POST ${path}`])
   })
 
   it.skipIf(!hasGh).each([

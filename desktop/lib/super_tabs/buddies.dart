@@ -21,6 +21,16 @@ const kBuddyEngineRefusals = {
   'codex': 'A Codex Buddy is not available yet: Codex would run some commands outside its sandbox without asking. Choose Claude Code.',
 };
 
+/// The engine Start again asks for: the Buddy's own, or Claude Code in place
+/// of one the server refuses, which it would refuse again (review 2 of #2087).
+String buddyRestartEngine(String engine) =>
+    kBuddyEngineRefusals.containsKey(engine) ? 'claude' : engine;
+
+/// Start again's label: "Start with Claude Code" where it changes the engine.
+String buddyRestartLabel(String engine) => buddyRestartEngine(engine) == engine
+    ? 'Start again'
+    : 'Start with Claude Code';
+
 /// An engine as people read it: "Claude", "Codex".
 String buddyEngineName(String engine) =>
     kBuddyEngines[engine] ??
@@ -391,10 +401,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                       c.addBuddy(
                         projectId: chat.projectId,
                         machineId: machineId,
-                        engine: engine,
+                        engine: buddyRestartEngine(engine),
                       ),
                     ),
-              child: const Text('Start again'),
+              child: Text(buddyRestartLabel(engine)),
             ),
         ],
       ),
@@ -444,10 +454,10 @@ class SuperTabBuddyBar extends StatelessWidget {
                           c.addBuddy(
                             projectId: chat.projectId,
                             machineId: agent.machineId,
-                            engine: agent.engine,
+                            engine: buddyRestartEngine(agent.engine),
                           ),
                         ),
-                  child: const Text('Start again'),
+                  child: Text(buddyRestartLabel(agent.engine)),
                 ),
               ],
             ),

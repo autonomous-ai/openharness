@@ -706,7 +706,7 @@ void main() {
       );
 
       testWidgets(
-        'a down Codex Buddy\'s Start again is refused for now, saying why, and it stays as it was',
+        'a down Codex Buddy offers Claude Code in its place, on the same machine (review 2 of #2087)',
         (tester) async {
           final server = buddySwarm();
           giveBuddy(server, engine: 'codex');
@@ -716,14 +716,40 @@ void main() {
           await tester.tap(buddyEntry);
           await tester.pumpAndSettle();
 
-          await tester.tap(find.widgetWithText(TextButton, 'Start again'));
-          await tester.pumpAndSettle();
-          expect(c.operationError, kBuddyEngineRefusals['codex']);
-          expect(c.buddy('lead')!.downSince, isNotNull);
-          expect(
-            find.text('Wren is offline. Your chat stays.'),
-            findsOneWidget,
+          expect(find.widgetWithText(TextButton, 'Start again'), findsNothing);
+          await tester.tap(
+            find.widgetWithText(TextButton, 'Start with Claude Code'),
           );
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
+            'projectId': 'lead',
+            'machineId': 'ken-mac',
+            'engine': 'claude',
+          });
+          expect(c.operationError, isNull);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'a Codex Buddy whose start failed offers Claude Code in its place (review 2 of #2087)',
+        (tester) async {
+          final server = buddySwarm();
+          startBuddy(
+            server,
+            engine: 'codex',
+            error: 'Its machine did not start it within 3 minutes.',
+          );
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          await tester.tap(
+            find.widgetWithText(TextButton, 'Start with Claude Code'),
+          );
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single['engine'], 'claude');
           await close(tester, c);
         },
       );
