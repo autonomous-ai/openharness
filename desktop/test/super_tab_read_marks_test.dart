@@ -42,6 +42,36 @@ void main() {
     expect(c.unread(c.snapshot!.conversation('lead')!), isTrue);
   });
 
+  test('a reply that lives only in its thread leaves the chat read; one also '
+      'sent to the chat counts once', () async {
+    final server = ConversationServer();
+    fromLead(server, 'Root');
+    final c = await open(server);
+    await c.loadMessages('lead');
+    c.markRead('lead', through: 1);
+    fromLead(server, 'Thread-only reply');
+    server.messages.last['thread'] = 'message-1';
+    await c.refresh();
+    await c.loadMessages('lead');
+    expect(c.unread(c.selected!), isFalse);
+    expect(c.unreadCount(c.selected!), 0);
+    fromLead(server, 'Also in the chat');
+    server.messages.last
+      ..['thread'] = 'message-1'
+      ..['alsoInChat'] = true;
+    await c.refresh();
+    await c.loadMessages('lead');
+    expect(c.unread(c.selected!), isTrue);
+    expect(c.unreadCount(c.selected!), 1);
+    // The mark still moves over the thread's replies.
+    c.markRead('lead');
+    await pumpEventQueue();
+    expect(server.readMarkPosts.last, {
+      'conversationId': 'lead',
+      'sequence': 3,
+    });
+  });
+
   test(
     'another person\'s marks never mark the reader\'s conversations read',
     () async {

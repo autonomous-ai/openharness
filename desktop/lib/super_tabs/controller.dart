@@ -803,9 +803,26 @@ class SuperTabController extends ChangeNotifier {
     ),
   );
 
-  bool unread(SuperTabConversation group) =>
-      max(group.lastMessageSequence, _loadedMessageSequence(group.id)) >
-      readMark(group.id);
+  /// Whether [group] has a message past the reader's mark. A reply that lives
+  /// only in its thread is read there, not in the chat; that is known only of
+  /// the messages held since the mark.
+  // TODO(BE): the threads group's backend should send each conversation's
+  // newest main-stream sequence, so a chat not held here is not bold for a
+  // thread-only reply either.
+  bool unread(SuperTabConversation group) {
+    final mark = readMark(group.id);
+    if (max(group.lastMessageSequence, _loadedMessageSequence(group.id)) <=
+        mark) {
+      return false;
+    }
+    if (!_heldSinceRead(group)) return true;
+    return messages(group.id).any(
+      (m) =>
+          m.sequence > mark &&
+          m.inMainStream &&
+          m.source['kind'] != 'update-request',
+    );
+  }
 
   void start() {
     if (_disposed) return;
@@ -1349,12 +1366,14 @@ class SuperTabController extends ChangeNotifier {
     if (!unread(group)) return 0;
     final readAt = readMark(group.id);
     final count = messages(group.id)
-        .where((m) => m.sequence > readAt && !_ownMessage(m))
+        .where((m) => m.sequence > readAt && m.inMainStream && !isOwn(m))
         .length;
     return _heldSinceRead(group) ? count : max(count, 1);
   }
 
-  bool _ownMessage(SuperTabMessage m) =>
+  /// Whether [m] is the reader's own: written by them, not by an agent or a
+  /// terminal.
+  bool isOwn(SuperTabMessage m) =>
       !m.fromAgent && !m.fromTerminal && m.authorId == accountId;
 
   /// Whether the messages held of [group] run from its read mark (or its
@@ -1603,7 +1622,8 @@ class SuperTabController extends ChangeNotifier {
         final raw = parts.state;
         if (_policy.adapts) {
           stateChanged = true;
-          _viewVersion++;
+          // A read mark moving is the page around the view: no new copy kept.
+          if (!read.marksOnly) _viewVersion++;
         }
         final next = SuperTabSnapshot.fromJson(raw);
         if (next.id != tabId) {
@@ -1723,7 +1743,8 @@ class SuperTabController extends ChangeNotifier {
   /// One read of the Swarm's parts: changes since the cursor once a first load
   /// is held, else a first load. A reload answer, or a change read refused (the
   /// Swarm or the reader's access moved), reads in full at once.
-  Future<({bool full, bool changed, Set<String> removed})> _readParts() async {
+  Future<({bool full, bool changed, bool marksOnly, Set<String> removed})>
+  _readParts() async {
     final held = _parts;
     if (held != null) {
       try {
@@ -1744,6 +1765,7 @@ class SuperTabController extends ChangeNotifier {
           return (
             full: false,
             changed: change.changed || refreshed,
+            marksOnly: change.readMarksOnly && !refreshed,
             removed: change.removedGroups,
           );
         }
@@ -1757,7 +1779,12 @@ class SuperTabController extends ChangeNotifier {
       throw const FormatException('A different Swarm was returned.');
     }
     _parts = parts;
-    return (full: true, changed: true, removed: const <String>{});
+    return (
+      full: true,
+      changed: true,
+      marksOnly: false,
+      removed: const <String>{},
+    );
   }
 
   /// A stub says a held group closed, not how: its data is read again by id.

@@ -773,6 +773,8 @@ class SuperTabMessage {
       mentions = List.unmodifiable(
         (row['mentions'] as List?)?.whereType<String>() ?? const <String>[],
       ),
+      thread = row['thread'] as String?,
+      alsoInChat = row['alsoInChat'] == true,
       deliveries = _list(
         row['deliveries'] ?? const [],
         (d) => Map<String, dynamic>.unmodifiable(d),
@@ -788,6 +790,16 @@ class SuperTabMessage {
 
   /// The people a Lead tagged in this message, by person id.
   final List<String> mentions;
+
+  /// The root of the thread this message is in (backend threads.ts): its own id for a top-level message, absent on
+  /// messages from before threads.
+  final String? thread;
+
+  /// A thread reply also sent to the conversation's main stream.
+  final bool alsoInChat;
+
+  /// Whether the main stream shows it: not a reply that lives only in its thread.
+  bool get inMainStream => thread == null || thread == id || alsoInChat;
   final List<Map<String, dynamic>> deliveries;
   // Preserve the recorded identity for history and for removed agents. Views
   // with a current roster resolve the visible name through Snapshot.authorName.

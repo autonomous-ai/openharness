@@ -79,6 +79,7 @@ class SwarmPartsBackend {
           'decisionsDigest',
           'otherProjectsWork',
           'githubApp',
+          'readMarks',
         }.contains(entry.key))
           entry.key: entry.value,
     };

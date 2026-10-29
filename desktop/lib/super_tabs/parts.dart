@@ -23,6 +23,7 @@ class SuperTabPartsChange {
     required this.changed,
     this.removedGroups = const {},
     this.dormantGroups = const {},
+    this.readMarksOnly = false,
   });
 
   /// Some part or a derived value is new: what the screens draw may differ.
@@ -33,6 +34,9 @@ class SuperTabPartsChange {
 
   /// Groups that left the active set: they stay readable on demand.
   final Set<String> dormantGroups;
+
+  /// Only the reader's read marks moved: the page around the view, not what a saved view holds.
+  final bool readMarksOnly;
 }
 
 /// The parts of one Swarm as this reader last saw them (section 5.1): every part by kind and key at the newest
@@ -214,7 +218,7 @@ class SuperTabParts {
       }
     }
     final derived = Map.of(superTabMap(changes['derived'] ?? const {}));
-    if (_takeReadMarks(derived.remove('readMarks'))) changed = true;
+    final marksMoved = _takeReadMarks(derived.remove('readMarks'));
     if (!const DeepCollectionEquality().equals(derived, _derived)) {
       _derived = derived;
       changed = true;
@@ -223,9 +227,10 @@ class SuperTabParts {
     epoch = _int(changes['epoch'] ?? epoch);
     lastChangedAt = _int(changes['lastChangedAt'] ?? lastChangedAt);
     return SuperTabPartsChange(
-      changed: changed,
+      changed: changed || marksMoved,
       removedGroups: removed,
       dormantGroups: dormant,
+      readMarksOnly: marksMoved && !changed,
     );
   }
 
