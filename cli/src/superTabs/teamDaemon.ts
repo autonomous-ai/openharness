@@ -7,18 +7,19 @@ import { existsSync } from 'node:fs'
 import { userInfo } from 'node:os'
 import { join } from 'node:path'
 import { readAuthSession } from '../lib/authSession.js'
-import { readTeamConfig } from '../team/config.js'
-import { TEAM_CONFIG_FILE } from '../team/layout.js'
+import { readTeamConfig, teamConfigFile } from '../team/config.js'
 
 /**
  * Whether this daemon is a Harness Team account's, decided once at startup (security review 1 of #2089): the Team config
- * names this macOS user, or the daemon is signed in as a Team account (a machine used only for agents, `harness team on`).
- * A Team config that is there but cannot be read counts as this user's: the guard is installed, as it fails closed.
+ * names this OS user, or the daemon is signed in as a Team account (a machine used only for agents, `harness team on`).
+ * A Team config that is there but cannot be read counts as this user's: the guard is installed, as it fails closed. The
+ * config is looked for where this platform's setup writes it (team/config.ts `teamConfigFile`), Linux and Windows too.
  */
 export function isTeamDaemon(deps: { configExists?: () => boolean; config?: () => ReturnType<typeof readTeamConfig>; user?: () => string;
   signedInAsTeam?: () => boolean } = {}): boolean {
-  const exists = (deps.configExists ?? (() => existsSync(TEAM_CONFIG_FILE)))()
-  const config = exists ? (deps.config ?? (() => readTeamConfig()))() : null
+  const file = teamConfigFile()
+  const exists = (deps.configExists ?? (() => existsSync(file)))()
+  const config = exists ? (deps.config ?? (() => readTeamConfig(file)))() : null
   if (exists && (!config || config.user === (deps.user ?? (() => userInfo().username))())) return true
   return (deps.signedInAsTeam ?? (() => readAuthSession()?.kind === 'team'))()
 }

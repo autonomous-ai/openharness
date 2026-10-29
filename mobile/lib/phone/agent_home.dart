@@ -20,6 +20,7 @@ import 'daemon_chip.dart';
 import 'desk_groups.dart';
 import 'link_page.dart';
 import 'machines_tab.dart';
+import 'out_of_sight.dart';
 import 'phone_navigation.dart' show phoneRoute;
 import 'settings_page.dart' show PhoneSettingsButton;
 import 'tty_controls.dart';
@@ -839,9 +840,11 @@ class _AgentHomeState extends State<AgentHome>
   }
 
   @override
-  Widget build(BuildContext context) => ListenableBuilder(
+  Widget build(BuildContext context) => ListenWhileInSight(
+    // Out of sight under Swarm Home it builds nothing, however busy the app is, and catches up
+    // when shown ([OutOfSight]).
     listenable: widget.notifier,
-    builder: (context, _) {
+    builder: (context) {
       if (kTypingTrace) typingCount('home.build');
       AppTheme.watch(context);
       // Signed in from a scanned "Add phone" QR: once its computer is here and locked, pair with

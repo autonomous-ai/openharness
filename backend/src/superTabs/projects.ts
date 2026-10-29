@@ -124,7 +124,8 @@ export const PRIVATE_VISIBLE_TO_OWNERS = false
 export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
 
 /** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a Buddy
- *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. */
+ *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. A Buddy reads what its person
+ *  reads of its project, no private conversation but its own chat (buddies.ts). */
 export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
 }
@@ -136,7 +137,13 @@ export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conver
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-  if (buddy) return buddyReads(buddy, group, project.leadConversationId)
+  if (buddy) {
+    // Checked as its person at the membership they added it in: a person who left, rejoined or lost a private project's
+    // membership takes their Buddy's reads with them.
+    const person = state.people.find(p => p.id === buddy.buddyOf!.personId && p.generation === buddy.buddyOf!.generation)
+    const reads = !!person && canReadProject(state, { kind: 'person', userId: person.id, email: person.email }, project)
+    return buddyReads(buddy, group, project.leadConversationId, reads ? person : undefined)
+  }
   if (!group.audience) return true
   // A Buddy chat has no private channel to the PM: only its owner and its Buddy read it (buddies.ts).
   if (actor.kind === 'agent') return !isBuddyChat(group) && ledProject(state, actor.agentId)?.id === project.id

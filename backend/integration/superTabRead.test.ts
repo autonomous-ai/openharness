@@ -297,11 +297,15 @@ describe('dormant groups on demand (design 4.5)', () => {
     })
     await writeGroup(s.tabId, s.buddyId, NOW, g => { g.dormant = true; g.lastActivityAt = new Date(NOW).toISOString() })
     const first = (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, outsider)).body.data
-    expect(first.groups).toHaveLength(49)
+    // A group the reader may not see never shortens a page, and the cursor names the last group it got, never a hidden
+    // one (security review 2 of #2115).
+    expect(first.groups).toHaveLength(50)
     expect(first.groups.every((g: { data: { dormant: boolean } }) => g.data.dormant)).toBe(true)
     expect(keys(first.groups)).not.toContain(s.buddyId)
+    expect(JSON.parse(Buffer.from(first.next, 'base64url').toString()).k).toBe(keys(first.groups).at(-1))
     const second = (await get(`/api/super-tabs/${s.tabId}/groups?dormant=1&before=${first.next}`, outsider)).body.data
     expect(second).toMatchObject({ next: null })
+    expect(second.groups).toHaveLength(3)
     expect(new Set([...keys(first.groups), ...keys(second.groups)]).size).toBe(53)
     expect(keys((await get(`/api/super-tabs/${s.tabId}/groups?dormant=1`, peer)).body.data.groups)[0]).toBe(s.buddyId)
   })
@@ -446,6 +450,52 @@ describe('host form (design 4.10)', () => {
     clock = Date.now()
     return (await host(cursor)).body.data.tabs.find((t: { tabId: string }) => t.tabId === tabId)?.pool as { machine: { paused: boolean } } | undefined
   }
+
+  // WS roadmap Phase 2a: the host reads its changes only when told (lib/swarmHostPushes.ts), so every commit its read would
+  // wake for must tell it, and a commit that concerns other machines, or only this machine's reading, must not.
+  it('tells this machine\'s host after a commit exactly when its host read would wake for it', async () => {
+    const s = await hostScene()
+    const { generation } = await fullRead(s.tabId)
+    const told: Array<{ tabId: string; machineIds: string[]; lastChangedAt: number }> = []
+    const store = new SuperTabStore(db, Date.now, null, { hostsChanged: change => { told.push(change) } })
+    const run = (body: Record<string, unknown>) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: body as never })
+    const toldHere = () => told.filter(t => t.tabId === s.tabId && t.machineIds.includes(machine))
+    await run({ type: 'conversation.rename', conversationId: s.secretGroup, title: 'Not this machine' })
+    expect(toldHere()).toEqual([])
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
+    expect(toldHere()).toEqual([])
+    const before = Date.now()
+    await run({ type: 'conversation.rename', conversationId: s.web, title: 'Its worker\'s group' })
+    expect(toldHere()).toEqual([{ tabId: s.tabId, machineIds: expect.arrayContaining([machine]), lastChangedAt: expect.any(Number) }])
+    expect(toldHere()[0]!.lastChangedAt).toBeGreaterThanOrEqual(before)
+    await run({ type: 'machine.pause', machineId: machine, paused: true })
+    expect(toldHere()).toHaveLength(2)
+  })
+
+  // WS roadmap Phase 2a, client reads: a member's apps read a Swarm when told (lib/swarmClientPushes.ts). The Lead's rule: a
+  // member removed by a commit hears that commit and nothing after it; someone not in the Swarm hears nothing.
+  it('tells the Swarm\'s people after each commit, a removed one once more and never again', async () => {
+    const s = await hostScene()
+    const { generation } = await fullRead(s.tabId)
+    const told: Array<{ tabId: string; userIds: string[]; lastChangedAt: number; parts: string[] }> = []
+    const store = new SuperTabStore(db, Date.now, null, { swarmChanged: change => { told.push(change) } })
+    const run = (body: Record<string, unknown>) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: body as never })
+    await run({ type: 'conversation.rename', conversationId: s.secretGroup, title: 'Renamed' })
+    expect(told).toEqual([{ tabId: s.tabId, userIds: expect.arrayContaining([owner.sub, peer.sub, outsider.sub]), lastChangedAt: expect.any(Number), parts: ['main'] }])
+    expect(told[0]!.userIds).toHaveLength(3)
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
+    expect(told.at(-1)!.parts).toEqual(['machine'])
+    await run({ type: 'member.remove', userId: outsider.sub })
+    expect(told.at(-1)!.userIds).toContain(outsider.sub)
+    await run({ type: 'conversation.rename', conversationId: s.web, title: 'After the removal' })
+    expect(told.at(-1)!.userIds.sort()).toEqual([owner.sub, peer.sub].sort())
+  })
 
   it('wakes the host for a pause even when a reading lands after it, before the host polls', async () => {
     const s = await hostScene()

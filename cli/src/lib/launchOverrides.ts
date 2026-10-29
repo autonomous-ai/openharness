@@ -121,6 +121,7 @@ export interface LaunchOverridesDeps {
   swarm?: {
     prepare(workspace: string, saved: SwarmSkill): { instructions: string }
     github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+    args(engine: string): string[]
   }
 }
 
@@ -308,6 +309,8 @@ export async function prepareLaunchOverrides(
     // a Buddy's (core/agents/create.ts).
     const machineMcp = source.swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
+    // What the Swarm adds for its own sessions (core/api.ts `SwarmLaunch.args`), in the slot `agent_create` gave it.
+    if (source.swarmSkill) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...swarm!.args(engine)] }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.
     let swarmInstructions: string | undefined

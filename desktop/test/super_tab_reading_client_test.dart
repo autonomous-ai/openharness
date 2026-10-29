@@ -82,6 +82,7 @@ SuperTabClient _client(
 }
 
 void main() {
+  _pushGroup();
   test('only the Swarm tab on screen polls; the others wait until shown', () {
     fakeAsync((async) {
       final backend = _Backend();
@@ -304,6 +305,178 @@ void main() {
       expect(backend.paths, isEmpty);
       expect(client.peek('tab'), isNull);
       client.dispose();
+    });
+  });
+}
+
+/// WS roadmap Phase 2a: the server's pushes (backend lib/swarmClientPushes.ts)
+/// as the app hands them on (`AppNotifier`, a `swarm_changed` frame).
+void _heard(SuperTabClient client, [Map<String, dynamic> payload = const {}]) =>
+    client.swarmChanged(payload);
+
+/// Each change newer than the last: a push no read has covered yet.
+var _changedAt = DateTime.utc(2100).millisecondsSinceEpoch;
+Map<String, dynamic> _change(
+  String id, [
+  List<String> parts = const ['main'],
+]) => {'tabId': id, 'lastChangedAt': ++_changedAt, 'parts': parts};
+
+void _pushGroup() {
+  group('Swarms the server pushes', () {
+    test('discovery reads every 2 minutes, and a second after a change, once per burst', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        // The word that it pushes asked for one discovery, at the 15 s gap.
+        async.elapse(const Duration(seconds: 16));
+        backend.paths.clear();
+        async.elapse(const Duration(seconds: 60));
+        expect(backend.discoveries, 0);
+        for (final id in ['tab', 'other', 'tab']) {
+          _heard(client, _change(id));
+        }
+        async.elapse(const Duration(seconds: 1));
+        expect(backend.discoveries, 1);
+        async.elapse(const Duration(seconds: 118));
+        expect(backend.discoveries, 1);
+        // The safety net is checked on the 15 s tick: the first after 2 minutes.
+        async.elapse(const Duration(seconds: 15));
+        expect(backend.discoveries, 2);
+        client.dispose();
+      });
+    });
+
+    test(
+      'a change reads the Swarm open here at once, and nothing of one not open',
+      () {
+        fakeAsync((async) {
+          final backend = _Backend();
+          final client = _client(backend)..bind('owner');
+          client.open('tab');
+          async.elapse(const Duration(seconds: 1));
+          _heard(client);
+          // The word that it pushes read the open Swarm once, at the 3 s gap.
+          async.elapse(const Duration(seconds: 5));
+          backend.paths.clear();
+          _heard(client, _change('tab'));
+          _heard(client, _change('other'));
+          async.flushMicrotasks();
+          expect(backend.states('tab'), 1);
+          expect(backend.states('other'), 0);
+          client.dispose();
+        });
+      },
+    );
+
+    test('a machine\'s reading alone neither discovers nor reads at once', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        backend.paths.clear();
+        _heard(client, _change('tab', ['machine']));
+        async.elapse(const Duration(milliseconds: 1500));
+        expect(backend.discoveries, 0);
+        expect(backend.states('tab'), 0);
+        async.elapse(const Duration(seconds: 3));
+        expect(backend.states('tab'), 1);
+        client.dispose();
+      });
+    });
+
+    test(
+      'a Swarm opened after the server said it pushes reads only when told',
+      () {
+        fakeAsync((async) {
+          final backend = _Backend();
+          final client = _client(backend)..bind('owner');
+          async.elapse(const Duration(seconds: 1));
+          _heard(client);
+          client.open('other');
+          async.elapse(const Duration(seconds: 1));
+          backend.paths.clear();
+          async.elapse(const Duration(seconds: 30));
+          expect(backend.states('other'), 0);
+          client.dispose();
+        });
+      },
+    );
+
+    test('everything polls as before once the server\'s word is over 5 minutes old', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(kSwarmPushLease);
+        backend.paths.clear();
+        async.elapse(const Duration(seconds: 30));
+        expect(backend.discoveries, 2);
+        expect(backend.states('tab'), 10);
+        client.dispose();
+      });
+    });
+
+    // Review of #2121, 5: the list read about once a second in a busy Swarm.
+    test('discovery reads no more often than every 15 s, however busy', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 30));
+        backend.paths.clear();
+        for (var i = 0; i < 60; i++) {
+          _heard(client, _change(i.isEven ? 'tab' : 'other'));
+          async.elapse(const Duration(seconds: 1));
+        }
+        expect(backend.discoveries, inInclusiveRange(4, 5));
+        client.dispose();
+      });
+    });
+
+    // Review of #2121, 6: a daemon that reconnects only says it pushes again;
+    // what changed meanwhile was not pushed.
+    test('the server saying it pushes again reads the open Swarm and the list once', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 50));
+        backend.paths.clear();
+        _heard(client);
+        async.elapse(const Duration(seconds: 2));
+        expect(backend.states('tab'), 1);
+        expect(backend.discoveries, 1);
+        client.dispose();
+      });
+    });
+
+    test('a frame that names a Swarm wrongly changes nothing', () {
+      fakeAsync((async) {
+        final backend = _Backend();
+        final client = _client(backend)..bind('owner');
+        client.open('tab');
+        async.elapse(const Duration(seconds: 1));
+        _heard(client);
+        async.elapse(const Duration(seconds: 16));
+        backend.paths.clear();
+        _heard(client, {
+          'tabId': 7,
+          'parts': ['main'],
+        });
+        _heard(client, {'tabId': 'tab', 'parts': 'main'});
+        async.elapse(const Duration(seconds: 2));
+        expect(backend.paths, isEmpty);
+        client.dispose();
+      });
     });
   });
 }
