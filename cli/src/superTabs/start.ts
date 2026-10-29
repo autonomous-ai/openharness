@@ -454,7 +454,9 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     const startedSession = typeof frame.sessionId === 'string' && frame.sessionId && typeof frame.createdAt === 'string' && Number.isFinite(Date.parse(frame.createdAt))
       ? { sessionId: frame.sessionId, createdAt: frame.createdAt } : undefined
     // New native frames have their creation time before the engine binds. Wait for its original session identity.
-    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId,
+    // The agent it launched goes with it: should the Swarm fail this start meanwhile, its host stops that agent
+    // (superTabs/machines.ts `abandoned`).
+    if (typeof frame.createdAt === 'string' && !startedSession) return { error: 'START_PENDING', startId, creationId, harnessId: nativeId,
       detail: 'Waiting for the launched engine to record its session identity. Resume this same start request.' }
     const join = { type: 'agent.started', startId, harnessId: nativeId, configuration }
     let joined: Json = { result: {} }

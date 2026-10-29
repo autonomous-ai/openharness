@@ -177,6 +177,8 @@ export class ContributedMachines {
    *  last pass found them. Reported so the backend waits past its 3 minutes (backend liveness.ts): Diego's Mac fetched and
    *  checked out a 470 MB project, and the start failed while it did (2026-10-27). */
   private readonly preparing = new Set<string>()
+  /** Starts this host launched whose engine has not yet recorded its session: the agent each created, by start id. */
+  private readonly unconfirmed = new Map<string, Unconfirmed>()
   /** Removals cleaned and acknowledged by this host, and the one in progress per removal. */
   private readonly cleaned = new Set<string>()
   private readonly cleaning = new Map<string, Promise<void>>()
@@ -333,6 +335,7 @@ export class ContributedMachines {
     for (const id of this.waiting.keys()) if (!pendingIds.has(id)) this.waiting.delete(id)
     for (const id of this.refusedSince.keys()) if (!pendingIds.has(id)) this.refusedSince.delete(id)
     for (const id of this.preparing) if (!pendingIds.has(id)) this.preparing.delete(id)
+    for (const [id, launch] of this.unconfirmed) if (!pendingIds.has(id) && !launch.checking) void this.abandoned(id, launch)
     for (const tab of this.published.keys()) if (!pools.some(row => row.tabId === tab)) this.published.delete(tab)
     for (const tab of this.lastSent.keys()) if (!pools.some(row => row.tabId === tab)) this.lastSent.delete(tab)
     for (const tab of this.readingFailures.keys()) if (!pools.some(row => row.tabId === tab)) this.readingFailures.delete(tab)
@@ -553,6 +556,10 @@ export class ContributedMachines {
               // Launched, and its creation still under way on the daemon: anything else is not preparing.
               if (result.error === 'START_PENDING' && result.state === 'pending') this.preparing.add(String(start.id))
               else this.preparing.delete(String(start.id))
+              // Launched, its engine yet to record its session: if the Swarm fails this start meanwhile, [abandoned] stops it.
+              if (result.error === 'START_PENDING' && identifier(result.harnessId) && identifier(result.creationId)) {
+                this.unconfirmed.set(String(start.id), { path, harnessId: result.harnessId, creationId: result.creationId, tries: 0, checking: false })
+              } else this.unconfirmed.delete(String(start.id))
               if (!refused) this.refusedSince.delete(start.id)
               if (result.ok === true && identifier(result.harnessId)) {
                 this.waiting.delete(start.id)
@@ -578,6 +585,36 @@ export class ContributedMachines {
       }
     } finally { local?.close() }
   }
+  /**
+   * A start this host launched, its engine never recording its session, that the backend no longer lists as pending: when
+   * the backend says it failed (its machine did not start it within 3 minutes, say) and joined no agent, the agent this
+   * host created for it is stopped. Nothing else would: the host no longer sees the start, and the agent is no member of
+   * the Swarm. Mac Auto's Harness Team account kept ten such Codex panes idle on 2026-10-29. Only the agent this start's
+   * own creation receipt names is closed (core closeMember), never one that joined; a status the backend cannot give now
+   * is asked again on later passes, a few times.
+   */
+  private async abandoned(startId: string, launch: Unconfirmed): Promise<void> {
+    launch.checking = true
+    try {
+      const status = object(await this.deps.backend(this.core, 'GET', launch.path))
+      if (identifier(status.harnessId) || !status.error) { this.unconfirmed.delete(startId); return }
+      const close = this.core.agents.closeMember
+      if (!close) { this.unconfirmed.delete(startId); return }
+      const closed = await close(launch.harnessId, launch.creationId)
+      if ('closed' in closed && closed.closed) {
+        this.unconfirmed.delete(startId)
+        this.log(`Stopped the agent a failed start launched (start ${startId}, session ${launch.harnessId.slice(0, 8)}): ${String(status.error)}`)
+        return
+      }
+      // Not this start's own agent, as its receipt says: nothing here to stop.
+      if ('error' in closed && closed.error === 'NOT_A_MEMBER') { this.unconfirmed.delete(startId); return }
+      throw new Error(`${'error' in closed ? closed.error : 'unknown'}${'detail' in closed && closed.detail ? `: ${closed.detail}` : ''}`)
+    } catch (error) {
+      if (++launch.tries >= ABANDONED_TRIES) this.unconfirmed.delete(startId)
+      this.log(`Could not stop the agent a failed start launched (start ${startId}): ${error instanceof Error ? error.message : String(error)}`)
+    } finally { launch.checking = false }
+  }
+
   /** Each running session's token counts by model, from the daemon's last usage reading (never a transcript read): the
    *  Swarm prices each attempt by them (backend superTabs/costs). Counts only; the reading's folders and pull requests stay
    *  here. A session with none read yet is left out. */
@@ -874,6 +911,11 @@ const MAX_LOCAL_MODELS = 64
 const GRID_MODELS_MS = 60_000
 /** Every Swarm's grid, as the backend mints its name: their models belong to their own Swarm. */
 const SWARM_GRID = /^swarm-[0-9a-f]{12}$/
+
+/** A start this host launched whose engine has not recorded its session yet (ContributedMachines `abandoned`). */
+interface Unconfirmed { path: string; harnessId: string; creationId: string; tries: number; checking: boolean }
+/** How many passes ask about an abandoned start before it is let go. */
+const ABANDONED_TRIES = 5
 
 type LocalModelReading = { grid: string; model: string; name?: string; contextWindow?: number; kind: 'local' | 'api' | 'shared'; starting?: true }
 
