@@ -1581,7 +1581,7 @@ export class SuperTabStore {
    * to its chat, still unsent, which the proposal then takes like a chat message; or a file its owner sent in that chat,
    * which stays with their message too and goes with one proposal at most. Nothing else is found, so the command refuses
    * it, its own order of refusals first. The server cannot tell where an upload's bytes came from on the Buddy's machine:
-   * that is its CLI's folder check (cli/src/superTabs/attach.ts), and here only what it uploaded to its own chat.
+   * that is its CLI's folder check and its guard (lib/buddyGuard.ts), and here only what it uploaded to its own chat.
    */
   private async proposable(tx: Transaction, state: SuperTabState, actor: Actor, command: ProposeCommand): Promise<{ attachments: Attachment[]; claimed: string[]; proposed: string[] }> {
     const attachments = this.attachments ?? fail('ATTACHMENTS_UNAVAILABLE', 'File attachments are not available on this server.', 503)

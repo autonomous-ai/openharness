@@ -358,13 +358,14 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const role = buddy ? 'buddy' : lead ? 'lead' : reviewer ? 'review' : 'dev', hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
-      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token. It runs with the Swarm
-      // agents' permissions (Scholes, twice, 10-29): its guard and Codex's read-only sandbox stopped it at prompts in a terminal
-      // nobody watches, so its owner's chat showed nothing. It runs only on its owner's own machine (backend buddy.create),
-      // its Super Tab commands are its own (backend buddies.ts), and its skill reads every text but its owner's as data.
+      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token. A Claude Buddy runs
+      // past its folder's guard, which allows reads and its Super Tab commands, and the rest is refused without a prompt
+      // nobody answers (lib/buddyGuard.ts, Ken 10-29). A Codex Buddy reads in its read-only sandbox and asks before anything
+      // outside it: with full permissions it could push and open pull requests with its person's own GitHub login (Lead, 10-29).
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
-      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: true,
-        ...(permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
+      const asks = !buddy ? null : request.engine === 'claude' ? 'buddy' : request.engine === 'codex' ? 'readOnlyAsk' : null
+      const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
+        ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
         prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode)
