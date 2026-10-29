@@ -6,8 +6,10 @@ import { CODEX_RELAY_ACCOUNT, type SubscriptionRelay } from '../lib/subscription
 import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion, CODEX_CLIENT_VERSION_FALLBACK,
-  type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps,
+  publishTeamRelay, publishWindowsTeamRelay, readTeamRelay, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
+  teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
+  CODEX_CLIENT_VERSION_FALLBACK,
+  type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
 const config = { user: 'harnessteam', owner: 'owner', ownerHome: '/Users/owner' } as TeamConfig
@@ -143,6 +145,88 @@ describe('the team daemon, reading its owner\'s relay', () => {
       { text: JSON.stringify({ url: 'http://evil.example:9', token: TOKEN }) }, { text: JSON.stringify({ url: 'http://127.0.0.1:9', token: 'short' }) },
       { text: '{' },
     ]) expect(readTeamRelay(config, reader(over)), JSON.stringify(over)).toBeNull()
+  })
+})
+
+describe('on Linux', () => {
+  const linuxConfig = { user: 'harnessteam', owner: 'owner', ownerHome: '/home/owner' } as TeamConfig
+
+  it('names the owner\'s folder setup made under /var/lib/harness', () => {
+    expect(teamRelayDir('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner')
+    expect(teamRelayFile('owner', 'linux')).toBe('/var/lib/harness/team-relay-owner/relay.json')
+    expect(teamRelayPublished(linuxConfig, (path) => path === '/var/lib/harness/team-relay-owner/relay.json', 'linux')).toBe(true)
+  })
+
+  it('sets the folder\'s and the file\'s whole ACL with setfacl: the owner, and harnessteam reading, nobody else', async () => {
+    const calls: string[][] = []
+    const grant = setfaclGrant(async (file, args) => { calls.push([file, ...args]) })
+    const dir = join(mkdtempSync(join(tmpdir(), 'team-relay-')), 'relay')
+    cleanup.push(dir)
+    await publishTeamRelay(linuxConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, process.getuid!(), grant, dir)
+    expect(calls).toEqual([
+      ['setfacl', '--set', 'u::rwx,g::---,o::---,u:harnessteam:r-x', dir],
+      ['setfacl', '--set', 'u::rw-,g::---,o::---,u:harnessteam:r--', expect.stringMatching(/\.next$/)],
+    ])
+    await expect(setfaclGrant(async () => { throw new Error('exit 1') })(dir, 'harnessteam', 'read,readattr')).rejects.toThrow('could not let harnessteam read')
+  })
+
+  it('the team side reads it only from the configured owner, allowing the group bits an ACL shows', () => {
+    const entry = (uid: number, mode: number, dir: boolean) => ({ uid, mode, isDirectory: () => dir, isFile: () => !dir })
+    const reader = (over: { dir?: ReturnType<typeof entry>; file?: ReturnType<typeof entry> } = {}): TeamRelayReadDeps => ({
+      platform: 'linux', ownerUid: () => 1001,
+      // With an ACL entry, the group bits are the ACL's mask: r-x on the folder, r-- on the file.
+      lstat: (path) => path.endsWith('relay.json') ? over.file ?? entry(1001, 0o100640, false) : over.dir ?? entry(1001, 0o40750, true),
+      read: (path) => { expect(path).toBe('/var/lib/harness/team-relay-owner/relay.json'); return JSON.stringify({ url: 'http://127.0.0.1:9', token: TOKEN }) },
+    })
+    expect(readTeamRelay(linuxConfig, reader())).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    for (const over of [
+      { dir: entry(1002, 0o40750, true) }, { file: entry(1002, 0o100640, false) }, { dir: entry(0, 0o40750, true) },
+      { dir: entry(1001, 0o40770, true) }, { file: entry(1001, 0o100660, false) }, { file: entry(1001, 0o100644, false) },
+    ]) expect(readTeamRelay(linuxConfig, reader(over)), JSON.stringify(over)).toBeNull()
+  })
+})
+
+describe('on Windows', () => {
+  const OWNER_SID = 'S-1-5-21-1-2-3-1001'
+  const DIR = 'C:\\ProgramData\\Harness\\team-relay-DELL'
+  const winConfig = { user: 'harnessteam', owner: 'DELL', ownerSid: OWNER_SID, ownerHome: 'C:\\Users\\DELL' } as TeamConfig
+  const entry = (kind: 'file' | 'dir' | 'link') => ({ isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link' })
+  function windowsFs(over: Partial<WindowsRelayFs> = {}, owners: Record<string, string> = { [DIR]: OWNER_SID, [`${DIR}\\relay.json`]: OWNER_SID }) {
+    const files: Record<string, string> = {}
+    const fs: WindowsRelayFs = {
+      lstat: (path) => path === DIR ? entry('dir') : path in files ? entry('file') : (() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) })(),
+      ownerSid: (path) => owners[path] ?? null,
+      setAcl: vi.fn(async () => {}),
+      write: (path, text) => { files[path] = text },
+      rename: (from, to) => { files[to] = files[from]!; delete files[from] },
+      read: (path) => files[path] ?? '',
+      ...over,
+    }
+    return { fs, files }
+  }
+
+  it('names the owner\'s folder setup made under C:\\ProgramData\\Harness', () => {
+    expect(teamRelayDir('DELL', 'win32')).toBe(DIR)
+  })
+
+  it('the owner\'s daemon sets the folder\'s ACL with icacls and writes the grant, only in a folder that is the owner\'s', async () => {
+    const f = windowsFs()
+    await publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, f.fs, DIR)
+    expect(f.fs.setAcl).toHaveBeenCalledWith(DIR, OWNER_SID, 'harnessteam')
+    expect(JSON.parse(f.files[`${DIR}\\relay.json`]!)).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    await expect(publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, windowsFs({}, { [DIR]: 'S-1-5-21-9-9-9-1002' }).fs, DIR))
+      .rejects.toThrow(/not this account's/)
+    await expect(publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, windowsFs({ lstat: () => entry('link') }).fs, DIR))
+      .rejects.toThrow(/not this account's/)
+  })
+
+  it('the team side reads it only when the folder and the file are the configured owner\'s', async () => {
+    const f = windowsFs()
+    await publishWindowsTeamRelay(winConfig, { url: 'http://127.0.0.1:9', token: TOKEN }, f.fs, DIR)
+    expect(readWindowsTeamRelay(winConfig, f.fs, DIR)).toEqual({ url: 'http://127.0.0.1:9', token: TOKEN })
+    expect(readWindowsTeamRelay(winConfig, { ...f.fs, ownerSid: (path) => path === DIR ? OWNER_SID : 'S-1-5-21-9-9-9-1002' }, DIR)).toBeNull()
+    expect(readWindowsTeamRelay({ ...winConfig, ownerSid: undefined }, f.fs, DIR)).toBeNull()
+    expect(readWindowsTeamRelay(winConfig, { ...f.fs, read: () => '{"url":"http://evil.example","token":"x"}' }, DIR)).toBeNull()
   })
 })
 

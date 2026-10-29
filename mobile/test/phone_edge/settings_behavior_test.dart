@@ -235,7 +235,7 @@ void main() {
   });
 
   testWidgets(
-    'Experimental: Swarm is off until switched, by the row or its switch',
+    'Experimental: Swarm is turned on from its page, and off at once',
     (tester) async {
       final storage = MemoryKeyValueStore();
       final experiments = ExperimentalFeaturesStore(storage: storage);
@@ -251,14 +251,44 @@ void main() {
         find.descendant(of: row, matching: find.text('Swarm')),
         findsOneWidget,
       );
+      expect(
+        find.descendant(
+          of: row,
+          matching: find.text(
+            'Open your Swarms from Home or Find. Still taking shape.',
+          ),
+        ),
+        findsOneWidget,
+        reason: 'both ways in, as the app has them',
+      );
       Switch toggle() => tester.widget<Switch>(
         find.descendant(of: row, matching: find.byType(Switch)),
       );
       expect(toggle().value, isFalse);
 
-      // Anywhere on the row turns it on, and the choice is written for the next launch.
+      // Anywhere on the row opens what Swarm does, with Not now and Turn on Swarm.
       await tester.tap(find.descendant(of: row, matching: find.text('Swarm')));
-      await frames(tester);
+      await frames(tester, count: 8);
+      expect(find.text('Your team of agents, on your phone'), findsOneWidget);
+      expect(find.text('See what needs you'), findsOneWidget);
+      expect(find.text('Answer in one tap'), findsOneWidget);
+      expect(find.text('Brainstorm with your Buddy'), findsOneWidget);
+      expect(find.text('Chat with your PM'), findsNothing);
+      await tester.tap(find.text('Not now'));
+      // A page's slide out takes longer than [frames]' default.
+      await frames(tester, count: 8);
+      expect(find.text('Your team of agents, on your phone'), findsNothing);
+      expect(toggle().value, isFalse);
+      expect(experiments.isOn(PhoneExperiment.swarm), isFalse);
+
+      // The switch opens it too; Turn on Swarm turns it on, back in Settings, and the choice is
+      // written for the next launch.
+      await tester.tap(find.descendant(of: row, matching: find.byType(Switch)));
+      await frames(tester, count: 8);
+      expect(find.text('Your team of agents, on your phone'), findsOneWidget);
+      await tester.tap(find.text('Turn on Swarm'));
+      await frames(tester, count: 8);
+      expect(find.text('Your team of agents, on your phone'), findsNothing);
       expect(toggle().value, isTrue);
       expect(experiments.isOn(PhoneExperiment.swarm), isTrue);
       expect(storage.values['experimental_features'], '["swarm"]');

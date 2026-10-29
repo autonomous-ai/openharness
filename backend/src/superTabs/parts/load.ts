@@ -139,7 +139,7 @@ export async function loadChanged(tx: Transaction, tabIds: string[], since: Date
   return changed
 }
 
-const DORMANT_PAGE = 50
+export const DORMANT_PAGE = 50
 
 /** Dormant groups the caller pages through, newest activity first, 50 at a time. A project's go through its index in that
  *  order. A later page is two reads that index bounds: the rest of its cursor's moment by key, then what is older. The

@@ -189,6 +189,26 @@ it('lets a shared host be woken without exposing its account proxy or agent iden
   expect(t.call).not.toHaveBeenCalled()
   t.port.disconnected(); expect(t.stop).toHaveBeenCalledOnce()
 })
+// WS roadmap Phase 2a, the Lead's rule (2026-10-29): pushes can be missed, so a reconnect's host never trusts the old socket's
+// word that the server pushes; it reads at once and each second until the new socket says so.
+it('gives the host a new feed after a reconnect, one that has not heard the server push', async () => {
+  const feeds: HostFeed[] = []
+  const host = vi.fn((_core: CoreApi, machineId: string, given?: SuperTabHostOptions) => {
+    feeds.push(given!.sources!.feed)
+    return { machineId, start: vi.fn(), stop: vi.fn() } as unknown as SuperTabHost
+  })
+  const service = superTabService(fakeCore({ account: { backend: vi.fn() } }), { host })
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  feeds[0]!.heard({ type: 'swarm_host_changed' })
+  expect(feeds[0]!.pushing).toBe(true)
+  service.port.disconnected()
+  service.port.connected()
+  expect(await service.requests.super_tabs({ action: 'wake' }, owner)).toEqual({ ok: true })
+  expect(feeds).toHaveLength(2)
+  expect(feeds[1]).not.toBe(feeds[0])
+  expect(feeds[1]!.pushing).toBe(false)
+  service.port.stop()
+})
 it('limits the owner proxy to Super Tab endpoints and preserves backend failures', async () => {
   const t = setup()
   for (const path of ['/api/auth/me', '/api/super-tabs/../auth/me', '/api/super-tabs%2F..', 'https://elsewhere.invalid', '/api/super-tabs#other']) {
@@ -1121,6 +1141,59 @@ describe('mentions on a post', () => {
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
     t.call.mockResolvedValue({ status: 200, body: { success: true, data: hostForm([], { tabs: ['tab'] }) } })
     expect(String((await help(t, { tabId: 'tab', agentId: t.agentId })).post)).not.toContain('--mention')
+  })
+})
+
+// A Buddy reads its project's work as its person (Ken, 10-29): its status is a bounded task summary, never the whole Swarm,
+// with pull requests read through its person's own GitHub on their machine; archived tasks and older messages on request.
+describe('a Buddy\'s status', () => {
+  const buddySetup = () => {
+    const t = setup()
+    Object.assign(t.agent, { projectId: 'app', buddyOf: { personId: 'peer', generation: 'g' } })
+    const state = { agents: [t.agent], projects: [{ id: 'app', name: 'App', leadConversationId: 'app-chat' }],
+      conversations: [{ id: 'app-chat', projectId: 'app', title: 'App', leadId: null, agentIds: [], checks: [] },
+        { id: 'offline', projectId: 'app', number: 12, title: 'Offline sync', brief: 'The whole brief', leadId: null, agentIds: [], checks: [],
+          assignment: { status: 'blocked', result: 'Waiting for the sync API' }, pullRequestUrls: ['https://github.com/acme/app/pull/12'] }] }
+    t.call.mockImplementation(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/decisions?') ? { decisions: [], more: false }
+      : path.includes('/groups?dormant=1') ? { groups: [], next: null } : path.includes('/messages?') ? { messages: [], next: null } : swarmData(t.agent, path, state) } }))
+    const pullRequests = vi.fn(async (urls: string[]) => ({ rows: urls.map(url => ({ url, status: 'found' as const, state: 'Open' as const, ci: 'passing' as const })), checkedAt: 'now' }))
+    const service = superTabService(t.core, { host: () => ({ machineId: 'machine-1', start: vi.fn(), stop: vi.fn() }) as unknown as SuperTabHost, pullRequests })
+    return { ...t, pullRequests, ask: service.requests.super_tabs }
+  }
+
+  it('is its project\'s tasks with their pull request state, and no Swarm state', async () => {
+    const t = buddySetup()
+    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
+    expect(value.state).toBeUndefined()
+    expect(object(value.summary).tasks).toEqual([expect.objectContaining({ number: 12, title: 'Offline sync', status: 'blocked', note: 'Waiting for the sync API',
+      pullRequests: [expect.objectContaining({ url: 'https://github.com/acme/app/pull/12', state: 'Open', ci: 'passing' })] })])
+    expect(JSON.stringify(value)).not.toContain('The whole brief')
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/decisions?state=open&asAgentId=${t.agentId}`, undefined)
+  })
+
+  it('reads its archived tasks a page at a time, in its own project only', async () => {
+    const t = buddySetup()
+    expect(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId, archived: true, before: 'page-2' }, owner)).toMatchObject({ ok: true, value: { summary: { tasks: [], next: null } } })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/groups?dormant=1&projectId=app&before=page-2&asAgentId=${t.agentId}`, undefined)
+  })
+
+  it('pages a task\'s older messages', async () => {
+    const t = buddySetup()
+    expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', before: 40, beforeId: 'm-1' }, owner)).toMatchObject({ ok: true })
+    expect(t.call).toHaveBeenCalledWith('GET', `/api/super-tabs/tab/conversations/offline/messages?asAgentId=${t.agentId}&before=40&beforeId=m-1`, undefined)
+    // A cursor that is not one is refused, never read as the newest page.
+    const calls = t.call.mock.calls.length
+    for (const bad of [{ before: 2 ** 53, beforeId: 'm-1' }, { before: 40 }, { before: 40, beforeId: 'a b' }, { before: -1, beforeId: 'm-1' }]) {
+      expect(await t.ask({ action: 'messages', tabId: 'tab', agentId: t.agentId, conversationId: 'offline', ...bad }, owner)).toMatchObject({ error: 'INVALID_REQUEST' })
+    }
+    expect(t.call.mock.calls.slice(calls).filter(([, path]) => String(path).includes('/messages?'))).toEqual([])
+  })
+
+  it('leaves every other agent\'s status as it was', async () => {
+    const t = setup()
+    const value = object(object(await t.ask({ action: 'status', tabId: 'tab', agentId: t.agentId }, owner)).value)
+    expect(value.state).toBeDefined()
+    expect(value.summary).toBeUndefined()
   })
 })
 
