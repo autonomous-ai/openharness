@@ -29,6 +29,18 @@ function withCodexLabels(view: PaneView): PaneView {
   }
 }
 
+/**
+ * The keys that answer Codex's update prompt with plain Skip, or null when the screen is not that prompt or has no such
+ * row. Only for the Swarm's agents (superTabs/terminal.ts), who must not wait for a person: the row is found by its
+ * label, so a reordered prompt can never be answered with Update now (row 1, which runs `npm install -g`) or "Skip until
+ * next version" (which hides the prompt for good).
+ */
+export function updateSkipKeys(capture: string): string[] | null {
+  if (takeover(capture, '') !== 'update') return null
+  const skip = /^\s*[›>]?\s*(\d+)\. Skip\s*$/m.exec(stripAnsi(capture).replace(/\u00a0/g, ' '))
+  return skip ? [skip[1], 'Enter'] : null
+}
+
 function takeover(capture: string, currentUi: string): PaneTakeover | null {
   const lines = stripAnsi(capture).replace(/\u00a0/g, ' ').split('\n')
   const bottom = lines.filter(line => line.trim()).slice(-3)
