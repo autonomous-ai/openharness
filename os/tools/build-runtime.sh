@@ -51,8 +51,8 @@ data['files'] = {path.name: {'sha256': hashlib.sha256(path.read_bytes()).hexdige
                  for path in sorted(folder.iterdir())}
 (folder / 'source.json').write_text(json.dumps(data, indent=2) + '\n')
 PY
-# Playwright's MCP server, from its lock and without install scripts, for `harness test-tools` (cli
-# agentClient/testTools.ts): in the package only, never in a fast runtime update.
+# Playwright's MCP server, from its lock and without install scripts, for `harness computer-use` (cli
+# agentClient/computerUse.ts): in the package only, never in a fast runtime update.
 playwright_stage=$(mktemp -d "${TMPDIR:-/tmp}/harness-playwright-mcp.XXXXXX")
 trap 'rm -rf -- "$runtime_stage" "$playwright_stage"' EXIT
 cp os/packaging/playwright-mcp/package.json os/packaging/playwright-mcp/package-lock.json "$playwright_stage/"

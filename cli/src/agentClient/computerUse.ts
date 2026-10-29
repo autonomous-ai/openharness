@@ -1,17 +1,17 @@
 /**
- * `harness test-tools`: Harness OS's tools for an agent to try what it builds as a person would, off until the person
+ * `harness computer-use`: Harness OS's tools for an agent to try what it builds as a person would, off until the person
  * turns them on. Two machine MCP servers (lib/machineMcp.ts, #1872), both bundled in the OS:
  *
  * - `playwright`: Playwright's MCP server (os/packaging/playwright-mcp) driving the OS's Chromium, for a website: it
  *   opens pages, clicks, types and reads them and their console. A window of its own, on the screen.
  * - `desktop`: the desktop (os/desktop_mcp.py), for a desktop app: screenshots, and the mouse and keys on them.
  *
- *     harness test-tools            on or off
- *     harness test-tools on         attached to every agent started from now on (Claude Code, Codex, OpenCode)
- *     harness test-tools off        taken off again
+ *     harness computer-use            on or off
+ *     harness computer-use on         attached to every agent started from now on (Claude Code, Codex, OpenCode)
+ *     harness computer-use off        taken off again
  *
  * Turning them on or off writes this machine's mcp-servers.json, read at each Claude Code and Codex start, and
- * OpenCode's own config (below): a harness running already gets them when it restarts. The person's phone does the same (services/osDevice.ts `test_tools`). An agent may
+ * OpenCode's own config (below): a harness running already gets them when it restarts. The person's phone does the same (services/osDevice.ts `computer_use`). An agent may
  * not: a server runs inside every later agent.
  */
 import { execFile, execFileSync } from 'node:child_process'
@@ -28,12 +28,12 @@ export const CHROMIUM = '/usr/bin/chromium'
 const NODE = '/usr/bin/node'
 const PYTHON = '/usr/bin/python3'
 /** The machine MCP servers' names: the agents' tools are `mcp__playwright__…` and `mcp__desktop__…`. */
-export const TEST_TOOLS = ['playwright', 'desktop'] as const
+export const COMPUTER_USE = ['playwright', 'desktop'] as const
 
 /** A refusal, as the agent verbs exit (commands.ts `EXIT.refused`): not a failure to retry. */
 const REFUSED = 5
 
-export const TEST_TOOLS_USAGE = `Usage: harness test-tools [on|off]
+export const COMPUTER_USE_USAGE = `Usage: harness computer-use [on|off]
 
 Tools for the agents Harness starts on this Harness OS computer to try what they build as a person would, off until
 you turn them on:
@@ -44,7 +44,7 @@ running already gets them when you restart it. Each agent asks you before it use
 an agent is refused.`
 
 /** The servers' entries; [home] places Playwright's screenshots and snapshots out of the project's folder. */
-export function testToolServers(home: string = homedir()): Record<(typeof TEST_TOOLS)[number], MachineMcpServer> {
+export function computerUseServers(home: string = homedir()): Record<(typeof COMPUTER_USE)[number], MachineMcpServer> {
   return {
     playwright: {
       command: NODE,
@@ -57,11 +57,11 @@ export function testToolServers(home: string = homedir()): Record<(typeof TEST_T
 }
 
 /** Whether this computer carries them: Harness OS from the release that bundles them. */
-export const testToolsAvailable = (exists: (path: string) => boolean = existsSync): boolean =>
+export const computerUseAvailable = (exists: (path: string) => boolean = existsSync): boolean =>
   [PLAYWRIGHT_MCP, DESKTOP_MCP, CHROMIUM].every((path) => exists(path))
 
 /** On: both attached. */
-export const testToolsOn = (servers: MachineMcpServers): boolean => TEST_TOOLS.every((name) => !!servers[name])
+export const computerUseOn = (servers: MachineMcpServers): boolean => COMPUTER_USE.every((name) => !!servers[name])
 
 /**
  * OpenCode, whose launch takes no MCP server: its own global config, as Connections writes it
@@ -101,7 +101,7 @@ const ours = (entry: unknown): boolean => {
   return Array.isArray(command) && command.some((part) => part === PLAYWRIGHT_MCP || part === DESKTOP_MCP)
 }
 
-/** Put the test tools into OpenCode's config, or take them out: what it could not do, in words, or null. */
+/** Put the computer-use tools into OpenCode's config, or take them out: what it could not do, in words, or null. */
 export function applyOpencode(on: boolean, opencode: Opencode, home: string = homedir()): string | null {
   const major = opencode.major()
   if (major === null) return null
@@ -120,7 +120,7 @@ export function applyOpencode(on: boolean, opencode: Opencode, home: string = ho
   const mcp = record(data.mcp)
   const servers = major >= 2 ? record(mcp.servers) : mcp
   const skipped: string[] = []
-  for (const [name, server] of Object.entries(testToolServers(home))) {
+  for (const [name, server] of Object.entries(computerUseServers(home))) {
     if (servers[name] !== undefined && !ours(servers[name])) { if (on) skipped.push(name); continue }
     if (!on) { delete servers[name]; continue }
     const command = [server.command, ...server.args]
@@ -142,26 +142,26 @@ export function applyOpencode(on: boolean, opencode: Opencode, home: string = ho
 
 /** Turn them on or off in this machine's mcp-servers.json (Claude Code, Codex) and OpenCode's config: whether they
  *  are on afterwards and what OpenCode could not take, or why it could not. */
-export function setTestTools(
+export function setComputerUse(
   on: boolean, dataDir: string = env.ADAPTER_DATA_DIR, home: string = homedir(), opencode: Opencode = machineOpencode(process.env, home),
 ): { on: boolean; note?: string } | { error: string } {
   const { servers, why } = readMachineMcp(dataDir)
   if (why) return { error: `Fix or remove it first: ${why}` }
   if (on) {
-    const added = TEST_TOOLS.filter((name) => !servers[name]).length
+    const added = COMPUTER_USE.filter((name) => !servers[name]).length
     if (Object.keys(servers).length + added > MACHINE_MCP_MOST_SERVERS) {
       return { error: `At most ${MACHINE_MCP_MOST_SERVERS} machine MCP servers: remove one with harness mcp-servers remove first.` }
     }
-    Object.assign(servers, testToolServers(home))
+    Object.assign(servers, computerUseServers(home))
   } else {
-    for (const name of TEST_TOOLS) delete servers[name]
+    for (const name of COMPUTER_USE) delete servers[name]
   }
   writeMachineMcp(servers, dataDir)
   const note = applyOpencode(on, opencode, home)
   return note ? { on, note } : { on }
 }
 
-export interface TestToolsDeps {
+export interface ComputerUseDeps {
   dataDir?: string
   home?: string
   exists?: (path: string) => boolean
@@ -174,38 +174,38 @@ export interface TestToolsDeps {
   err?: (line: string) => void
 }
 
-export function testToolsCommand(argv: readonly string[], deps: TestToolsDeps = {}): number {
+export function computerUseCommand(argv: readonly string[], deps: ComputerUseDeps = {}): number {
   const out = deps.out ?? console.log
   const err = deps.err ?? console.error
   const dataDir = deps.dataDir ?? env.ADAPTER_DATA_DIR
-  if (argv.includes('--help') || argv.includes('-h')) { out(TEST_TOOLS_USAGE); return 0 }
+  if (argv.includes('--help') || argv.includes('-h')) { out(COMPUTER_USE_USAGE); return 0 }
   const [verb = 'status', ...rest] = argv
-  if (rest.length || !['status', 'on', 'off'].includes(verb)) { err(TEST_TOOLS_USAGE); return 2 }
-  if (!testToolsAvailable(deps.exists)) {
-    err('The test tools come with Harness OS (Playwright and the desktop MCP): this computer has no such tools.')
+  if (rest.length || !['status', 'on', 'off'].includes(verb)) { err(COMPUTER_USE_USAGE); return 2 }
+  if (!computerUseAvailable(deps.exists)) {
+    err('Computer use comes with Harness OS (Playwright and the desktop MCP): this computer has no such tools.')
     return 1
   }
   if (verb === 'status') {
     const { servers, why } = readMachineMcp(dataDir)
     if (why) { err(`Not read, so no agent gets them: ${why}`); return 1 }
-    out(testToolsOn(servers)
-      ? 'Test tools are on: agents Harness starts get playwright and desktop. harness test-tools off takes them off.'
-      : 'Test tools are off. harness test-tools on gives the agents Harness starts playwright and desktop.')
+    out(computerUseOn(servers)
+      ? 'Computer use is on: agents Harness starts get playwright and desktop. harness computer-use off takes them off.'
+      : 'Computer use is off. harness computer-use on gives the agents Harness starts playwright and desktop.')
     return 0
   }
   const agent = outsideCaller(deps.env ?? process.env, '')
   if (agent || deps.inPane) {
-    err(`${agent ? agent.name : 'An agent in a Harness pane'} may not turn the test tools on or off: they run inside every `
-      + 'later agent here. Ask the person to turn them on from their phone (the computer\'s Test tools), or to run '
-      + `harness test-tools ${verb} in a terminal outside Harness.`)
+    err(`${agent ? agent.name : 'An agent in a Harness pane'} may not turn computer use on or off: its tools run inside every `
+      + 'later agent here. Ask the person to turn them on from their phone (the computer\'s Computer use), or to run '
+      + `harness computer-use ${verb} in a terminal outside Harness.`)
     return REFUSED
   }
   const home = deps.home ?? homedir()
-  const result = setTestTools(verb === 'on', dataDir, home, deps.opencode ?? machineOpencode(process.env, home))
+  const result = setComputerUse(verb === 'on', dataDir, home, deps.opencode ?? machineOpencode(process.env, home))
   if ('error' in result) { err(result.error); return 1 }
   out(result.on
-    ? 'Test tools on: agents started from now on get playwright and desktop. Restart a running harness to give it them.'
-    : 'Test tools off: agents started from now on don\'t get them. Restart a running harness to take them away.')
+    ? 'Computer use on: agents started from now on get playwright and desktop. Restart a running harness to give it them.'
+    : 'Computer use off: agents started from now on don\'t get them. Restart a running harness to take them away.')
   if (result.note) err(result.note)
   return 0
 }

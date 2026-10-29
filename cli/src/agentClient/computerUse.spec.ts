@@ -3,25 +3,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { machineMcpArgs, readMachineMcp } from '../lib/machineMcp.js'
-import { applyOpencode, CHROMIUM, DESKTOP_MCP, PLAYWRIGHT_MCP, setTestTools, testToolsAvailable, testToolsCommand, testToolServers, testToolsOn } from './testTools.js'
+import { applyOpencode, CHROMIUM, DESKTOP_MCP, PLAYWRIGHT_MCP, setComputerUse, computerUseAvailable, computerUseCommand, computerUseServers, computerUseOn } from './computerUse.js'
 
-describe('harness test-tools', () => {
+describe('harness computer-use', () => {
   let dataDir: string
   const lines: { out: string[]; err: string[] } = { out: [], err: [] }
   const onOs = () => true
   const noOpencode = { path: '/nowhere/opencode.json', major: () => null, reload: () => {} }
-  const run = (argv: string[], over: Parameters<typeof testToolsCommand>[1] = {}) => testToolsCommand(argv, {
+  const run = (argv: string[], over: Parameters<typeof computerUseCommand>[1] = {}) => computerUseCommand(argv, {
     dataDir, home: '/home/me', exists: onOs, env: {}, inPane: false, opencode: noOpencode,
     out: (line) => lines.out.push(line), err: (line) => lines.err.push(line), ...over,
   })
 
-  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'test-tools-')); lines.out = []; lines.err = [] })
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'computer-use-')); lines.out = []; lines.err = [] })
   afterEach(() => rmSync(dataDir, { recursive: true, force: true }))
 
   it('is off until the person turns it on', () => {
     expect(run([])).toBe(0)
-    expect(lines.out.join('\n')).toContain('Test tools are off')
-    expect(testToolsOn(readMachineMcp(dataDir).servers)).toBe(false)
+    expect(lines.out.join('\n')).toContain('Computer use is off')
+    expect(computerUseOn(readMachineMcp(dataDir).servers)).toBe(false)
   })
 
   it('attaches Playwright on the OS\'s Chromium and the desktop to every agent, and takes them off again', () => {
@@ -42,9 +42,9 @@ describe('harness test-tools', () => {
 
   it('keeps the person\'s own servers when it turns on and off', () => {
     writeFileSync(join(dataDir, 'mcp-servers.json'), JSON.stringify({ servers: { lamp: { command: 'lamp-mcp' } } }), { mode: 0o600 })
-    setTestTools(true, dataDir, '/home/me', noOpencode)
+    setComputerUse(true, dataDir, '/home/me', noOpencode)
     expect(Object.keys(readMachineMcp(dataDir).servers).sort()).toEqual(['desktop', 'lamp', 'playwright'])
-    setTestTools(false, dataDir, '/home/me', noOpencode)
+    setComputerUse(false, dataDir, '/home/me', noOpencode)
     expect(Object.keys(readMachineMcp(dataDir).servers)).toEqual(['lamp'])
   })
 
@@ -60,7 +60,7 @@ describe('harness test-tools', () => {
   it('says a computer without them has none', () => {
     expect(run(['on'], { exists: () => false })).toBe(1)
     expect(lines.err.join('\n')).toContain('Harness OS')
-    expect(testToolsAvailable((path) => path !== CHROMIUM)).toBe(false)
+    expect(computerUseAvailable((path) => path !== CHROMIUM)).toBe(false)
   })
 
   it('does not write over a file it cannot read', () => {
@@ -80,21 +80,21 @@ describe('harness test-tools', () => {
       const oc = opencode(2)
       mkdirSync(join(dataDir, 'opencode'))
       writeFileSync(oc.path, JSON.stringify({ model: 'opencode/free', mcp: { servers: { mine: { type: 'local', command: ['mine'] } } } }))
-      expect(setTestTools(true, dataDir, '/home/me', oc)).toEqual({ on: true })
+      expect(setComputerUse(true, dataDir, '/home/me', oc)).toEqual({ on: true })
       const servers = read(oc.path).mcp.servers
       expect(servers.desktop).toEqual({ type: 'local', command: ['/usr/bin/python3', DESKTOP_MCP] })
       expect(servers.playwright.command.slice(0, 2)).toEqual(['/usr/bin/node', PLAYWRIGHT_MCP])
       expect(oc.reload).toHaveBeenCalledTimes(1)
-      setTestTools(false, dataDir, '/home/me', oc)
+      setComputerUse(false, dataDir, '/home/me', oc)
       expect(read(oc.path)).toEqual({ model: 'opencode/free', mcp: { servers: { mine: { type: 'local', command: ['mine'] } } } })
       expect(oc.reload).toHaveBeenCalledTimes(2)
     })
 
     it('puts them directly under mcp, enabled, for OpenCode 1, and leaves no empty mcp behind', () => {
       const oc = opencode(1)
-      setTestTools(true, dataDir, '/home/me', oc)
+      setComputerUse(true, dataDir, '/home/me', oc)
       expect(read(oc.path).mcp.desktop).toEqual({ type: 'local', command: ['/usr/bin/python3', DESKTOP_MCP], enabled: true })
-      setTestTools(false, dataDir, '/home/me', oc)
+      setComputerUse(false, dataDir, '/home/me', oc)
       expect(read(oc.path)).toEqual({})
     })
 
@@ -102,9 +102,9 @@ describe('harness test-tools', () => {
       const oc = opencode(2)
       mkdirSync(join(dataDir, 'opencode'))
       writeFileSync(oc.path, JSON.stringify({ mcp: { servers: { playwright: { type: 'local', command: ['npx', '@playwright/mcp'] } } } }))
-      expect(setTestTools(true, dataDir, '/home/me', oc)).toEqual({ on: true, note: expect.stringContaining('its own playwright') })
+      expect(setComputerUse(true, dataDir, '/home/me', oc)).toEqual({ on: true, note: expect.stringContaining('its own playwright') })
       expect(read(oc.path).mcp.servers.playwright.command).toEqual(['npx', '@playwright/mcp'])
-      setTestTools(false, dataDir, '/home/me', oc)
+      setComputerUse(false, dataDir, '/home/me', oc)
       expect(read(oc.path).mcp.servers).toEqual({ playwright: { type: 'local', command: ['npx', '@playwright/mcp'] } })
     })
 
@@ -112,7 +112,7 @@ describe('harness test-tools', () => {
       const oc = opencode(2)
       mkdirSync(join(dataDir, 'opencode'))
       writeFileSync(oc.path, '{ // mine\n}')
-      expect(setTestTools(true, dataDir, '/home/me', oc)).toEqual({ on: true, note: expect.stringContaining('not plain JSON') })
+      expect(setComputerUse(true, dataDir, '/home/me', oc)).toEqual({ on: true, note: expect.stringContaining('not plain JSON') })
       expect(readFileSync(oc.path, 'utf8')).toBe('{ // mine\n}')
       expect(oc.reload).not.toHaveBeenCalled()
       const absent = opencode(null)
@@ -125,6 +125,6 @@ describe('harness test-tools', () => {
     expect(run(['maybe'])).toBe(2)
     expect(run(['on', 'now'])).toBe(2)
     expect(run(['--help'])).toBe(0)
-    expect(Object.keys(testToolServers())).toEqual(['playwright', 'desktop'])
+    expect(Object.keys(computerUseServers())).toEqual(['playwright', 'desktop'])
   })
 })

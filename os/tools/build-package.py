@@ -106,7 +106,7 @@ def stage(source, runtime, destination, commit):
         shutil.copyfile(runtime / local, library / target)
         (library / target).chmod(0o755 if local == 'harness-tui' else 0o644)
     (library / 'hn').symlink_to('harness-tui')
-    # Playwright's MCP server (build-runtime.sh), for `harness test-tools`. Without npm's .bin links: a link out of
+    # Playwright's MCP server (build-runtime.sh), for `harness computer-use`. Without npm's .bin links: a link out of
     # its directory is refused by the updater, and the CLI runs the server's cli.js with node.
     playwright = runtime / 'playwright-mcp'
     if playwright.is_dir():

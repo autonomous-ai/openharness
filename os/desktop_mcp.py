@@ -4,7 +4,7 @@
 A stdio MCP server (JSON-RPC 2.0, a message a line) for an agent to try the desktop app it builds as a person
 would: `screenshot`, then `click`, `drag`, `scroll`, `type` and `key` where it sees things, each answered with
 the screen as it is afterwards. Off until the person turns it on, with Playwright's, from their phone or with
-`harness test-tools on` (cli agentClient/testTools.ts), never by an agent.
+`harness computer-use on` (cli agentClient/computerUse.ts), never by an agent.
 
 Input goes through the compositor's own virtual devices (labwc: wlr-virtual-pointer for the mouse,
 virtual-keyboard for the keys), so it stays inside this session: no /dev/uinput. While the screen is locked

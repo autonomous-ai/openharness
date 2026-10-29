@@ -1,7 +1,7 @@
 {
   "name": "harness-os-playwright-mcp",
   "private": true,
-  "description": "Playwright's MCP server, bundled in Harness OS for the agents' browser tools (harness test-tools).",
+  "description": "Playwright's MCP server, bundled in Harness OS for the agents' browser tools (harness computer-use).",
   "license": "MIT",
   "dependencies": {
     "@playwright/mcp": "0.0.83"
