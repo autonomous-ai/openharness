@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand, type Command, type CommandContext } from './commands.js'
+import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
-import { ANSWERED_NOTICE } from './decisions.js'
+import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId } from './buddies.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
@@ -444,7 +444,9 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
     expect(() => f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, owner, { decision: { ...decision, personId: 'owner' } })).toThrow('unavailable')
     const answered = f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, peer, { decision })
     expect(answered.result.decisionId).toBe('old')
-    expect(answered.messages.map(m => [m.conversationId, m.recipients, m.text])).toEqual([[f.app.conversationId, [f.pm], ANSWERED_NOTICE]])
+    // Told in the project chat, so the notice never says it was asked there.
+    expect(answered.messages.map(m => [m.conversationId, m.recipients, m.text])).toEqual([[f.app.conversationId, [f.pm], CLOSED_CHAT_ANSWERED_NOTICE]])
+    expect(CLOSED_CHAT_ANSWERED_NOTICE).not.toContain('in this conversation')
   })
 })
 
@@ -494,11 +496,25 @@ describe('the PM\'s private line to a person (Ken, 10-29)', () => {
 
   it('is a project Lead\'s alone, to a person in the Swarm, and needs a line', () => {
     const f = fresh()
+    const worker = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'worker-harness', machineId: 'machine', name: 'Worker',
+      configuration, lead: false }).result.agentId as string
     expect(() => f.run(tell(), peer)).toThrow('Only a project\'s Lead')
-    expect(() => f.run(tell(), agentActor('buddy-none'))).toThrow()
+    expect(() => f.run(tell(), agentActor(worker))).toThrow('Only a project\'s Lead')
     expect(() => f.run(tell('stranger'), agentActor(f.pm))).toThrow('person in this Swarm')
     expect(() => f.run(tell('peer', '  '), agentActor(f.pm))).toThrow()
     expect(f.state.conversations.filter(c => c.kind === 'buddy')).toEqual([])
+  })
+
+  it('reaches only a person who reads the Lead\'s project, and only in that project', () => {
+    const f = fresh()
+    const secret = f.run({ type: 'project.create', name: 'Secret', visibility: 'private', brief: '' }).result as { projectId: string; conversationId: string }
+    const secretPm = f.run({ type: 'agent.add', conversationId: secret.conversationId, harnessId: 'secret-pm', machineId: 'machine', name: 'Secret PM',
+      configuration, lead: true }).result.agentId as string
+    expect(() => f.run(tell(), agentActor(secretPm))).toThrow('cannot read this project')
+    const webPm = f.state.agents.find(a => a.harnessId === 'web-pm')!.id
+    const told = f.run(tell(), agentActor(webPm))
+    expect(told.messages.map(m => m.conversationId)).toEqual([buddyChatId(f.web.projectId, { id: 'peer', generation: 'first' })])
+    expect(f.state.conversations.filter(c => c.kind === 'buddy').map(c => c.projectId)).toEqual([f.web.projectId])
   })
 
   it('is refused to a Buddy, as every command but its own chat\'s', () => {
@@ -592,7 +608,8 @@ describe('starting a down Buddy again', () => {
 describe('a Buddy chat\'s readers are fixed (privacy review of #1992)', () => {
   it('refuses adding people or agents to it, the Swarm owner and the PM included', () => {
     const f = setup()
-    expect(() => f.run({ type: 'conversation.audience', conversationId: f.chat, personIds: ['peer', 'owner'] }, peer)).toThrow('A Buddy chat stays its owner\'s')
+    // No command changes who reads a private chat any more (Buddies replaced Chat with PM).
+    expect(commandSchema.safeParse({ type: 'conversation.audience', conversationId: f.chat, personIds: ['peer', 'owner'] }).success).toBe(false)
     expect(() => f.run({ type: 'conversation.agent', conversationId: f.chat, agentId: f.pm, present: true, lead: false }, peer)).toThrow('A Buddy chat stays its owner\'s')
     expect(group(f, f.chat)).toMatchObject({ agentIds: ['buddy'], audience: { people: [{ id: 'peer', generation: 'first' }] } })
   })

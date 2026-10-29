@@ -81,7 +81,7 @@ export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: 
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
 /** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
  *  registrations (projects.ts requireSingleRegistration). A rebind is refused onto any terminal registered elsewhere already. */
-const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'conversation.audience', 'project.create'])
+const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'project.create'])
 /** The session a command registers, when it names one. */
 function registeredBy(state: SuperTabState, command: Command): Array<{ machineId: string; harnessId: string }> {
   if (command.type === 'agent.add') return [{ machineId: command.machineId, harnessId: command.harnessId }]
@@ -1126,16 +1126,10 @@ export class SuperTabStore {
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
       const unreadable = command.type === 'conversation.archive' && command.archived || command.type === 'conversation.agent' && !command.present
-      if (unreadable || command.type === 'conversation.audience') {
+      if (unreadable) {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
           ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
-          data: unreadable ? { status: 'cancelled', holdReason: null, holdSince: null } : { updatedAt: new Date(context.now) } })
-      }
-      if (command.type === 'conversation.audience') {
-        const kept = new Set(conversation(effects.state, command.conversationId).audience?.people.map(p => p.id))
-        const removed = (conversation(original, command.conversationId).audience?.people ?? []).filter(p => !kept.has(p.id)).map(p => p.id)
-        if (removed.length) await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, authorKind: 'person',
-          authorId: { in: removed }, status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
+          data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
       if (removedGroups.length) {

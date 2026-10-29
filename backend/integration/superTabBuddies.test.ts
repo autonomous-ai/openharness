@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
+import { beforeFirstWrite } from './interleave.test-support.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
 // talk to it alone, and it sends their proposal to the PM. A fresh loopback replica set, created here.
@@ -118,6 +119,22 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect((await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)).toEqual(['Your fix is merged.'])
     await expect(f.store.messages(owner, f.tab, chat, {}, f.lead)).rejects.toThrow('unavailable')
     expect(await db.superTabDelivery.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
+  })
+
+  it('never lands for someone who stops reading the project while the line is sent (security review 2 of #2090)', async () => {
+    const f = await swarm()
+    const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    // The line reads the Swarm with peer still a reader; just before it writes, the owner makes the project theirs alone.
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    }), () => Date.now())
+    await expect(racing.execute(owner, f.tab, { operationId: randomUUID(), command: tell('Your fix is merged.') }, f.lead))
+      .rejects.toThrow('cannot read this project')
+    expect(raced).toBe(true)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
   })
 
   it('is opened for the PM\'s first line, and a quiet one takes the next line rather than a second chat', async () => {

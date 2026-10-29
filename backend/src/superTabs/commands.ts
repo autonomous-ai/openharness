@@ -11,7 +11,7 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { ANSWERED_NOTICE, answerDecision, DELEGATED_NOTICE, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
@@ -119,7 +119,6 @@ export const commandSchema = z.discriminatedUnion('type', [
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
-  z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -1149,11 +1148,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'decision.answer': {
-      const { answer, noticeIn, recipients, source, line } = answerDecision(state, actor, context.decision,
+      const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
         { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
-      if (recipients.length) message(noticeIn, answer.delegated ? DELEGATED_NOTICE : ANSWERED_NOTICE, recipients, null, source)
+      if (recipients.length) message(noticeIn, notice, recipients, null, source)
       if (line) effects.messages.push({ id: stableId(operationId, 'delegated'), replyTo: null, recipients: [], ...line })
       result.decisionId = answer.id
       break
@@ -1190,12 +1189,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       recordMerged(group, mergedAt)
       if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
       break
-    }
-    case 'conversation.audience': {
-      // Who may read it already passed (readConversation), so no closed Chat with PM gets here: every reader list is fixed now.
-      const group = open(state, command.conversationId)
-      if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
-      fail('AUDIENCE_FIXED', 'A shared conversation stays shared.', 400)
     }
     case 'conversation.archive': {
       controls(state, actor, command.conversationId)

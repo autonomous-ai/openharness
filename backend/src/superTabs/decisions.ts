@@ -80,6 +80,10 @@ export const ANSWERED_NOTICE = 'A decision asked in this conversation was answer
 /** The same notice for a decision the person left to the PM, with none of the answer either. */
 export const DELEGATED_NOTICE = 'A decision asked in this conversation was left to the Product Manager, who took its recommended option. '
   + 'Read it with: harness super-tab decisions --answered'
+/** The notices for a decision asked in a closed Chat with PM, told in the project chat instead: never "in this conversation". */
+export const CLOSED_CHAT_ANSWERED_NOTICE = 'A decision you asked in a closed Chat with PM was answered. Read the answer with: harness super-tab decisions --answered'
+export const CLOSED_CHAT_DELEGATED_NOTICE = 'A decision you asked in a closed Chat with PM was left to the Product Manager, who took its recommended option. '
+  + 'Read it with: harness super-tab decisions --answered'
 
 /** How an answer reads in the decisions list: a delegated one never as the person's own choice. */
 const answerText = (option: string, delegated: boolean) => delegated ? `PM decided: ${option}` : option
@@ -100,11 +104,13 @@ export function answerDecision(state: SuperTabState, actor: Actor, decision: Dec
   if (choice >= asked.options.length) fail('INVALID_DECISION', 'Choose one of its options.', 400)
   const project = groupProject(state, group)
   const lead = state.conversations.find(c => c.id === project.leadConversationId)?.leadId
-  const noticeIn = isClosedPmChat(group) ? state.conversations.find(c => c.id === project.leadConversationId)! : group
+  const closed = isClosedPmChat(group)
+  const noticeIn = closed ? state.conversations.find(c => c.id === project.leadConversationId)! : group
+  const notice = given.delegate ? closed ? CLOSED_CHAT_DELEGATED_NOTICE : DELEGATED_NOTICE : closed ? CLOSED_CHAT_ANSWERED_NOTICE : ANSWERED_NOTICE
   const recipients = [...new Set([asked.askerAgentId, ...lead ? [lead] : []])].filter(id => noticeIn.agentIds.includes(id))
   const answer: DecisionAnswer = { id: asked.id, choice, note: given.note, ...given.delegate ? { delegated: true as const } : {} }
   const line = given.delegate && lead ? delegatedLine(state, project.id, lead, asked, choice) : null
-  return { answer, noticeIn: noticeIn.id, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
+  return { answer, noticeIn: noticeIn.id, notice, recipients, source: { ...AGENT_ONLY, decisionId: asked.id }, line }
 }
 
 /** The Lead's one line saying what it chose, in the person's own Buddy chat of that project: only they and their Buddy read

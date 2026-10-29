@@ -180,11 +180,14 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   ⇧⌘K opens the current project's. A row with new lines shows its name in bold, with no count; the Swarm tab counts
   them. A chat with no Buddy running offers **Start**: one of the person's own machines and Claude Code, already
   chosen, or Codex.
-- **The product manager's private lines.** Everything the product manager tells one person privately goes to that
+- **The product manager's lines to one person.** What the product manager tells one person directly goes to that
   person's Buddy chat in the project (a line it sends with `person.tell`, and the line saying what it chose for a
   decision left to it). The chat opens for the line if the person has none yet, so no line drops. Such a line reads
   as "River (PM) → you": the product manager writes there but cannot read the chat. It is addressed to the person;
   their Buddy does not answer it for them. They answer in the project chat, or through a proposal.
+  Such a line is not secret from the project: every project member watching the product manager's terminal sees what
+  it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
+  manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
   list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account.
