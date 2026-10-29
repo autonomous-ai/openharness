@@ -222,7 +222,7 @@ class SuperTabConversation {
 
   /// The newest message that makes it unread, as the desktop's
   /// `SuperTabController.unread` counts it: a reply only in its thread does
-  /// not, though the phone, with no thread view yet, shows it in the chat.
+  /// not, as it is not in the chat.
   int get mainSequence => lastMainSequence ?? lastMessageSequence;
 
   /// Moves whenever a reaction here is added or taken back (backend
@@ -810,7 +810,8 @@ class SuperTabDelivery {
 
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for. Read as the desktop's model reads it
-/// (desktop_parity_test); the phone shows none of it yet.
+/// (desktop_parity_test); the phone draws the line, not yet who it is unread
+/// for.
 class SuperTabThread {
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -870,7 +871,6 @@ class SuperTabMessage {
   bool get threadReply => thread != null && thread != id;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
-  /// The phone, with no thread view yet, shows every reply in the chat.
   bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;
   final Map<String, dynamic> author;

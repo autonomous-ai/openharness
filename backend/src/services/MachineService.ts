@@ -1,4 +1,4 @@
-import type { Machine } from '@prisma/client'
+import type { Machine, Prisma } from '@prisma/client'
 import { prisma, machineAlive } from '../lib/prisma.js'
 import { selectManagerId } from '../lib/managers.js'
 import { provisionViaManager } from '../lib/provision.js'
@@ -82,7 +82,18 @@ function assertRequesterEnvironment(binding: Machine, requester: MachineRequeste
   }
 }
 
-function toOwner(b: Machine, status = 'unknown', agentCount = 0, plan?: PlanInfo, engine = 'claude'): OwnerMachine {
+/** The fields an owner view is built from: the list reads only these, never the api key or billing references. */
+const OWNER_VIEW_SELECT = {
+  machineId: true, computerId: true, workspaceId: true, planId: true, autonomousEnv: true, authMode: true,
+  billingStatus: true, createdAt: true, name: true, hostname: true, sessionKind: true, hostMachineId: true,
+} as const satisfies Prisma.MachineSelect
+type OwnerViewRow = Pick<Machine, keyof typeof OWNER_VIEW_SELECT>
+
+/** Machines one list returns at most, newest first. A computer account is capped at 20 (HARNESS_DEVICE_AUTH_MACHINE_LIMIT);
+ *  past this an account is far outside any real one, and the log says the list was cut. */
+export const MACHINE_LIST_MAX = 200
+
+function toOwner(b: OwnerViewRow, status = 'unknown', agentCount = 0, plan?: PlanInfo, engine = 'claude'): OwnerMachine {
   return {
     machineId: b.machineId,
     computerId: b.computerId ?? null,
@@ -160,7 +171,7 @@ function firstUsableComputerMachine(rows: Machine[]): Machine | undefined {
 /** Resolve each agent's plan display name via its binding's planId. authMode comes from the BINDING
  *  (denormalized at create, backfilled at boot) — never from the plan, so a later plan-doc edit can't
  *  flip a live agent's mode. Missing/legacy → self. */
-async function plansByMachine(bindings: Machine[]): Promise<Map<string, PlanInfo>> {
+async function plansByMachine(bindings: Array<Pick<Machine, 'machineId' | 'planId' | 'authMode'>>): Promise<Map<string, PlanInfo>> {
   const out = new Map<string, PlanInfo>()
   const planIds = [...new Set(bindings.map((b) => b.planId).filter((id): id is string => !!id))]
   const plans = planIds.length ? await prisma.subscriptionPlan.findMany({ where: { id: { in: planIds } } }) : []
@@ -215,7 +226,7 @@ function hasManagedCampaignBilling(binding: Machine): boolean {
 /** Best-effort node status + engine per machineId, read directly from the shared Mongo `machine_nodes`
  *  collection (the agent-manager owns writes; the backend just reads). `machine_nodes.engine` is an
  *  optional per-machine override; when absent, fall back to the owning manager's MACHINE_ENGINE mirror. */
-async function nodeInfoByAgent(bindings: Machine[]): Promise<Map<string, { status: string; engine: string }>> {
+async function nodeInfoByAgent(bindings: Array<Pick<Machine, 'machineId'>>): Promise<Map<string, { status: string; engine: string }>> {
   const out = new Map<string, { status: string; engine: string }>()
   const ids = bindings.map((b) => b.machineId)
   if (!ids.length) return out
@@ -251,7 +262,7 @@ async function nodeInfoByAgent(bindings: Machine[]): Promise<Map<string, { statu
  *  A presence read that FAILED is `unknown`, never `offline`: a daemon takes `offline` as evidence and
  *  labels that computer's models "seems offline" (grid-reads-without-waking issue 03). */
 async function applyRemoteStatus(
-  bindings: Machine[],
+  bindings: Array<Pick<Machine, 'machineId'>>,
   plans: Map<string, PlanInfo>,
   info: Map<string, { status: string; engine: string }>,
 ): Promise<void> {
@@ -545,13 +556,16 @@ export const machineService = {
     return resolved
   },
 
-  /** List a user's agents (with best-effort live status). Includes the api key (owner only). */
+  /** List a user's agents (with best-effort live status). Never the api key: it is not even read. */
   async listForUser(userId: string, autonomousEnv?: AutonomousEnvironment): Promise<OwnerMachine[]> {
     const rows = await prisma.machine.findMany({
       where: { userId, ...(autonomousEnv ? { autonomousEnv } : {}), ...machineAlive },
       orderBy: { createdAt: 'desc' },
+      select: OWNER_VIEW_SELECT,
+      take: MACHINE_LIST_MAX,
     })
     if (rows.length === 0) return []
+    if (rows.length === MACHINE_LIST_MAX) logger.warn('machine list cut at its limit', { userId, limit: MACHINE_LIST_MAX })
     const ids = rows.map((b) => b.machineId)
     const [info, counts, plans] = await Promise.all([nodeInfoByAgent(rows), countByMachine(ids), plansByMachine(rows)])
     await applyRemoteStatus(rows, plans, info)

@@ -181,9 +181,9 @@ class SwarmMessageFrame extends StatelessWidget {
 }
 
 /// One message: avatar, who wrote it, their role and when — none of it for a
-/// follow-up — then what it answers, its text, its files and its
-/// [reactions]. A tap opens its actions, a long-press [onLongPress]; lit for
-/// a moment when a quote leads to it.
+/// follow-up — then what it answers, its text, its files, its [reactions] and
+/// its [thread]'s line. A tap opens its actions, a long-press [onLongPress];
+/// lit for a moment when a quote leads to it.
 class SwarmMessageRow extends StatelessWidget {
   const SwarmMessageRow({
     super.key,
@@ -199,8 +199,10 @@ class SwarmMessageRow extends StatelessWidget {
     required this.actions,
     required this.onTap,
     required this.onReply,
+    this.inThread = false,
     this.onAuthor,
     this.reactions,
+    this.thread,
     this.below,
     this.onLongPress,
   });
@@ -221,14 +223,21 @@ class SwarmMessageRow extends StatelessWidget {
   final Widget? quote;
   final VoidCallback onTap;
 
-  /// Null where the person cannot post.
+  /// Null where the person cannot post, or in the thread itself.
   final VoidCallback? onReply;
+
+  /// [onReply] opens the message's thread: "Reply in thread", where a
+  /// message from before threads keeps "Reply" and its inline quote.
+  final bool inThread;
 
   /// Who wrote it, in a sheet; null where nothing opens.
   final VoidCallback? onAuthor;
 
   /// Drawn under its text and files: its reaction counts.
   final Widget? reactions;
+
+  /// Under its reactions: the line of the thread it is the root of.
+  final Widget? thread;
 
   /// Under its reactions: what the person may do with it besides Reply — the
   /// PM's private line answered in the project chat.
@@ -312,6 +321,7 @@ class SwarmMessageRow extends StatelessWidget {
             ),
           ),
         ?reactions,
+        ?thread,
         ?below,
         if (actions)
           Padding(
@@ -323,8 +333,10 @@ class SwarmMessageRow extends StatelessWidget {
                 if (onReply case final reply?)
                   SwarmSmallButton(
                     key: ValueKey('swarm-reply-${message.id}'),
-                    icon: LucideIcons.reply,
-                    label: 'Reply',
+                    icon: inThread
+                        ? LucideIcons.messageSquareReply
+                        : LucideIcons.reply,
+                    label: inThread ? 'Reply in thread' : 'Reply',
                     onTap: reply,
                   ),
                 SwarmSmallButton(
@@ -443,9 +455,14 @@ class SwarmChatAvatar extends StatelessWidget {
     this.pm = false,
     this.picture,
     this.status,
+    this.diameter = size,
   });
 
   static const double size = 32;
+
+  /// How wide it is drawn: [size] beside a message, smaller in a thread's
+  /// line.
+  final double diameter;
 
   /// The member palette's hues in the order the chat has always given them,
   /// so no one's colour moves: the [pm]'s blue first, then the six an agent
@@ -480,21 +497,21 @@ class SwarmChatAvatar extends StatelessWidget {
         : name.trim().characters.first.toUpperCase();
     return SwarmStatusFace(
       name: name,
-      size: size,
+      size: diameter,
       status: status,
       face: SwarmFace(
         picture: picture,
-        size: size,
+        size: diameter,
         tint: fill,
         fallback: Container(
-          width: size,
-          height: size,
+          width: diameter,
+          height: diameter,
           alignment: Alignment.center,
           decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
           child: Text(
             initial,
             style: swarmChatText(
-              13.5,
+              13.5 * diameter / size,
               color: AppInk.onFill,
               weight: FontWeight.w600,
             ),

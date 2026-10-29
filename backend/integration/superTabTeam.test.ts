@@ -460,6 +460,23 @@ describe('a teammate\'s work and the machines that take it', () => {
 // One machine (docs/plans/2026-10-24-swarm-team-account.md): the person's Mac and its Harness Team account are one
 // machine. Its team account joins where the Mac is added, through the Mac's own daemon, and takes the teammates' work
 // started on the Mac.
+// A start records the CLI version its machine ran when it was dispatched, and reads say what the machine runs now, so routing
+// lets a machine updated since its failed starts back in (cli routeCommand.ts `stalled`; Mac Auto, 2026-10-29).
+describe('a machine\'s CLI version, on its starts and in reads', () => {
+  it('stamps a start with the version its machine ran when dispatched, and reads show the version it runs now', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: '0.5.1' } })
+    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: null } }) })
+    const f = await fixture()
+    const read = async () => new SwarmReads(store).firstLoad(owner, f.tab)
+    const first = await read()
+    const dispatched = first.starts.map(p => p.data as { id: string; dispatchedVersion?: string }).find(s => s.id === f.startId)
+    expect(dispatched?.dispatchedVersion).toBe('0.5.1')
+    expect(first.derived.machines['team-mac']).toMatchObject({ clientVersion: '0.5.1' })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: '0.5.6' } })
+    expect((await read()).derived.machines['team-mac']).toMatchObject({ clientVersion: '0.5.6' })
+  })
+})
+
 describe('a project\'s repository, for its GitHub access', () => {
   it('is read by those who may open the project, and by nobody else', async () => {
     const f = await fixture()
@@ -773,6 +790,45 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     // And no other project's work starts there while it runs.
     await expect(run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
       cwd: '/team/lead', worktree: true, requirements } })).rejects.toMatchObject({ code: 'TEAM_ACCOUNT_HELD' })
+  })
+
+  // Review of #2142: the hold outlives its removal through the store's saves and loads, and only its host's confirmed close,
+  // sent once its session data is deleted, releases it (commands.ts agent.sessionClosed).
+  it('stays held for its project after its removal until its host confirms the close, across saves and loads', async () => {
+    const f = await fixture()
+    const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    await run(f.tab, { type: 'agent.remove', agentId: f.builder })
+    const startId = String((await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })).result.startId)
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const harnessId = `team-pm-${randomUUID()}`
+    const pm = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId, configuration: config })).result.agentId)
+    await hostRun(f.tab, { type: 'agent.startSettled', startId, warning: null })
+    // A Product Manager leaves with its project.
+    await run(f.tab, { type: 'project.delete', projectId })
+    const start = () => run(f.tab, { type: 'agent.start', request: { conversationId: f.teamGroup, machineId: 'team-mac', engine: 'codex', name: 'Builder',
+      cwd: '/team/lead', worktree: true, requirements } }).then(() => 'started', (error: { code?: string }) => error.code)
+    // Each command loads the Swarm from its stored parts: the hold is there each time.
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    // No one else confirms it: not the Swarm's owner, nor anyone for another session.
+    await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId: 'another' }, team)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    // Nor the Mac's owner from an ordinary sign-in, which shares the Team session's person but is not its host, with no
+    // purge run (both security reviews of 0a181c00c), even once that sign-in resets the account row's Team mark.
+    const ordinary = () => run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, person).then(() => 'closed', (error: { code?: string }) => error.code)
+    expect({ forged: await ordinary(), after: await start() }).toEqual({ forged: 'TEAM_HOST_ONLY', after: 'TEAM_ACCOUNT_HELD' })
+    const row = (await db.machine.findFirst({ where: { machineId: 'team-mac' } }))!
+    const restore = () => db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: row.sessionKind, hostMachineId: row.hostMachineId } })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'computer', hostMachineId: null } })
+    onTestFinished(async () => { await restore() })
+    expect({ forged: await ordinary(), after: await start() }).toEqual({ forged: 'TEAM_HOST_ONLY', after: 'TEAM_ACCOUNT_HELD' })
+    await restore()
+    await run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, team)
+    expect(await start()).not.toBe('TEAM_ACCOUNT_HELD')
   })
 
   it('is refused on the teammate\'s personal Mac even while the Swarm does not yet require Team accounts', async () => {

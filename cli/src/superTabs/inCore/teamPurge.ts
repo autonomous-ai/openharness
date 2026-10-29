@@ -37,9 +37,14 @@ export function purgeRecord(file: string) {
   const load = (): Map<string, PurgeTarget> => {
     if (!existsSync(file)) return new Map()
     try {
-      const saved = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+      const saved: unknown = JSON.parse(readFileSync(file, 'utf8'))
+      // One of another shape is set aside as well, never read as fewer purges than it names (security review 2 of #2142).
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('not a record')
       const held = new Map<string, PurgeTarget>()
-      for (const [id, entry] of Object.entries(saved)) if (entry && typeof entry === 'object' && (entry as PurgeTarget).agentId === id) held.set(id, entry as PurgeTarget)
+      for (const [id, entry] of Object.entries(saved)) {
+        if (!isTarget(id, entry)) throw new Error('not a purge')
+        held.set(id, entry)
+      }
       return held
     } catch {
       let free = aside
@@ -48,7 +53,17 @@ export function purgeRecord(file: string) {
       return new Map()
     }
   }
+  /** The records kept aside, in the order they were. No folder yet: no record was ever kept here, let alone kept aside. */
+  const keptAsideFiles = (): string[] => existsSync(dirname(file)) ? readdirSync(dirname(file))
+    .filter(name => name === basename(aside) || name.startsWith(`${basename(aside)}.`))
+    .map(name => [Number(name.slice(basename(aside).length + 1)) || 0, join(dirname(file), name)] as const)
+    .sort(([a], [b]) => a - b).map(([, path]) => path) : []
+  const keptAside = (): boolean => existsSync(aside) || keptAsideFiles().length > 0
   const state = { held: load() }
+  // Said once per start, where each is kept, path only: the refusal points here, and its owner clears it by hand (the PR's
+  // risk note; security review 2 of #2142).
+  const kept = keptAsideFiles()
+  if (kept.length) console.warn(`[super-tabs] the record of purges still to finish could not be read; kept aside at ${kept.join(', ')} until its owner clears it`)
   const save = () => {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     writeFileSync(`${file}.next`, JSON.stringify(Object.fromEntries(state.held)), { mode: 0o600 })
@@ -57,12 +72,22 @@ export function purgeRecord(file: string) {
   return {
     pending: (): PurgeTarget[] => [...state.held.values()],
     get: (agentId: string): PurgeTarget | undefined => state.held.get(agentId),
-    unknown: (): boolean => existsSync(aside) || readdirSync(dirname(file)).some(name => name.startsWith(`${basename(aside)}.`)),
+    unknown: keptAside,
     put(target: PurgeTarget): void { state.held.set(target.agentId, target); save() },
     drop(agentId: string): void { if (state.held.delete(agentId)) save() },
   }
 }
 export type PurgeRecord = ReturnType<typeof purgeRecord>
+
+const nameOrNull = (value: unknown) => value === null || typeof value === 'string'
+/** An entry as `put` writes it; `codexHome` absent in records from before Codex PMs had homes of their own. */
+function isTarget(id: string, entry: unknown): entry is PurgeTarget {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+  const target = entry as Record<string, unknown>
+  return target.agentId === id && nameOrNull(target.sessionId) && nameOrNull(target.cwd) && typeof target.engine === 'string'
+    && (target.codexHome === undefined || nameOrNull(target.codexHome))
+    && (target.pastes === undefined || (Array.isArray(target.pastes) && target.pastes.every(paste => typeof paste === 'string')))
+}
 
 /** Claude Code's folder name for a project folder: every character but a letter or digit made a dash. */
 const claudeSlug = (cwd: string) => cwd.replace(/[^A-Za-z0-9]/g, '-')
@@ -199,6 +224,11 @@ export async function sweepForSession(home: string, target: PurgeTarget, pastes:
   return null
 }
 
+/** A purge refused while the record is kept aside; the close that gets it does not say so again (inCore/agents.ts). */
+export const PURGE_RECORD_UNREADABLE = 'PURGE_RECORD_UNREADABLE'
+export const UNREADABLE_DETAIL = "This machine's record of purges still to finish could not be read and was kept aside, as the daemon's log says at "
+  + "each start. The account stays held until its owner clears it as #2142's risk note says, by file names only."
+
 /**
  * The purge of [agentId]'s data, once the Swarm ended it for good, when it was confidential: kept in [record] before the
  * first deletion and dropped once the sweep finds nothing. A retry finishes from the record, the session gone or not.
@@ -212,6 +242,10 @@ export function createConfidentialPurge(deps: {
   record: PurgeRecord
 }): (agentId: string) => Promise<Record<string, unknown>> {
   return async agentId => {
+    // With its record unreadable, which purges are still to finish is not known: none is answered, not even a 'skipped' for a
+    // session already gone, so the close fails and the backend keeps the account held until a person clears the record. Its
+    // path was logged once, when it was kept aside; this answer, logged on every retry, names neither it nor the agent.
+    if (deps.record.unknown()) return { error: PURGE_RECORD_UNREADABLE, detail: UNREADABLE_DETAIL }
     const session = deps.session(agentId)
     let target = deps.record.get(agentId)
     if (!target) {

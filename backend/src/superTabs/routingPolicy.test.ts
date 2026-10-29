@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_ROUTING_POLICY, effectivePolicy, routingOverrideSchema, routingPolicySchema } from './routingPolicy.js'
+import { DEFAULT_ROUTING_POLICY, effectivePolicy, gridQuality, priorFor, routingOverrideSchema, routingPolicySchema } from './routingPolicy.js'
+import type { PriorsTable } from './benchmarkPriors/priors.js'
 
 describe('routing policy', () => {
   it('ships a valid default that needs no setup', () => {
@@ -38,5 +39,83 @@ describe('routing policy', () => {
     expect(bad({ models: [{ ...DEFAULT_ROUTING_POLICY.models[0], cost: 0 }] })).toBe(false)
     expect(bad({ models: [] })).toBe(false)
     expect(routingOverrideSchema.safeParse({ version: 1 }).success).toBe(false)
+  })
+
+  it('rates Kimi K3 and DeepSeek v4.1 at Sonnet\'s tier and every other grid model at the local quality, from the policy', () => {
+    const { policy } = effectivePolicy(null, null)
+    expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality(policy, 'deepseek/deepseek-v4.1-flash-1017', 'deepseek/deepseek-v4.1-flash-1017 · OpenRouter')).toBe(2)
+    expect(gridQuality(policy, 'qwen3:4b', 'Qwen 3 4B')).toBe(1)
+    // A policy saved before per-model rows reads the built-in ones; the owner's own rows replace them, first match first.
+    const saved = { ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true } }
+    expect(gridQuality(effectivePolicy(saved, null).policy, 'moonshotai/kimi-k3')).toBe(2)
+    const owner = effectivePolicy(saved, { localModels: { quality: 2, enabled: true, models: [{ model: 'qwen 3', quality: 3 }, { model: 'qwen', quality: 1 }] } }).policy
+    expect(gridQuality(owner, 'qwen3:4b', 'Qwen 3 4B')).toBe(3)
+    expect(gridQuality(owner, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality({ ...owner, localModels: { quality: 1, enabled: true, models: [] } }, 'moonshotai/kimi-k3')).toBe(1)
+    expect(routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, localModels: { quality: 1, enabled: true, models: [{ model: 'x', quality: 4 }] } }).success).toBe(false)
+  })
+
+  describe('owner override of a benchmark prior', () => {
+    const src = 'https://example.org/board'
+    const entry = (model: string, value: number, engine: 'claude' | 'grid' = 'claude') => ({ engine, model, names: [model], benchmarkNames: [model],
+      scores: [{ benchmark: 'terminal-bench-4.0', score: value, harness: 'Claude Code', source: src, date: '2026-09-22', via: 'leaderboard' as const }] })
+    const table: PriorsTable = { refreshed: '2026-10-29', note: 'Depends on the harness.', benchmarks: [{ id: 'terminal-bench-4.0', name: 'Terminal-Bench 4.0', url: src }],
+      models: [entry('best', 80), entry('moonshotai/kimi-k3', 12, 'grid')] }
+    const withOverrides = (priorOverrides: unknown) => effectivePolicy({ ...DEFAULT_ROUTING_POLICY, priorOverrides }, null).policy
+
+    it('uses the benchmark prior when the owner sets nothing, and says where it came from', () => {
+      const prior = priorFor(DEFAULT_ROUTING_POLICY, { engine: 'grid', model: 'moonshotai/kimi-k3' }, 'cli', table)
+      expect(prior?.quality).toBe(1)
+      expect(prior?.source).toBe('benchmark')
+    })
+
+    it('lets the owner replace one prior: that model and kind only, matched by the words of its name', () => {
+      const policy = withOverrides([{ model: 'kimi k3', kind: 'cli', quality: 3 }])
+      expect(priorFor(policy, { engine: 'grid', model: 'moonshotai/kimi-k3' }, 'cli', table)).toEqual({ quality: 3, source: 'owner' })
+      expect(priorFor(policy, { engine: 'grid', model: 'moonshotai/kimi-k3' }, 'backend', table)?.source).toBe('benchmark')
+      expect(priorFor(policy, { engine: 'claude', model: 'best' }, 'cli', table)?.quality).toBe(3)
+      expect(priorFor(policy, { engine: 'claude', model: 'best' }, 'cli', table)?.source).toBe('benchmark')
+    })
+
+    it('gives a model with no data an owner prior, and keeps first match first', () => {
+      const policy = withOverrides([{ model: 'qwen 3', kind: 'tests', quality: 2 }, { model: 'qwen', kind: 'tests', quality: 1 }])
+      expect(priorFor(policy, { engine: 'grid', model: 'qwen3:4b', label: 'Qwen 3 4B' }, 'tests', table)).toEqual({ quality: 2, source: 'owner' })
+      expect(priorFor(policy, { engine: 'grid', model: 'qwen3:4b', label: 'Qwen 3 4B' }, 'docs', table)).toBeUndefined()
+    })
+
+    it('reads a policy saved before overrides as having none', () => {
+      expect(routingPolicySchema.safeParse(DEFAULT_ROUTING_POLICY).success).toBe(true)
+      expect(priorFor(effectivePolicy(null, null).policy, { engine: 'claude', model: 'best' }, 'cli', table)?.source).toBe('benchmark')
+    })
+
+    it('replaces the account list with the tab override, and one policy never reads another policy\'s rows', () => {
+      const account = { ...DEFAULT_ROUTING_POLICY, priorOverrides: [{ model: 'best', kind: 'cli', quality: 1 }] }
+      const tab = effectivePolicy(account, { priorOverrides: [{ model: 'best', kind: 'cli', quality: 2 }] }).policy
+      const other = effectivePolicy(null, null).policy
+      expect(priorFor(tab, { engine: 'claude', model: 'best' }, 'cli', table)?.quality).toBe(2)
+      expect(priorFor(effectivePolicy(account, null).policy, { engine: 'claude', model: 'best' }, 'cli', table)?.quality).toBe(1)
+      expect(priorFor(other, { engine: 'claude', model: 'best' }, 'cli', table)?.quality).toBe(3)
+    })
+
+    it('rejects a level outside 1-3, an unknown kind, an empty or oversized model name, more than 100 rows and unknown fields', () => {
+      const bad = (rows: unknown) => routingPolicySchema.safeParse({ ...DEFAULT_ROUTING_POLICY, priorOverrides: rows }).success
+      const ok = { model: 'kimi k3', kind: 'cli', quality: 2 }
+      expect(bad([ok])).toBe(true)
+      expect(bad([{ ...ok, quality: 4 }])).toBe(false)
+      expect(bad([{ ...ok, quality: 0 }])).toBe(false)
+      expect(bad([{ ...ok, kind: 'ui' }])).toBe(false)
+      expect(bad([{ ...ok, model: ' ' }])).toBe(false)
+      expect(bad([{ ...ok, model: 'x'.repeat(201) }])).toBe(false)
+      expect(bad(Array.from({ length: 101 }, () => ok))).toBe(false)
+      expect(bad([{ ...ok, note: 'because' }])).toBe(false)
+      expect(routingOverrideSchema.safeParse({ priorOverrides: [ok] }).success).toBe(true)
+    })
+
+    it('falls back to the default with a warning when the saved overrides are corrupt', () => {
+      const corrupt = effectivePolicy({ ...DEFAULT_ROUTING_POLICY, priorOverrides: [{ model: 'x', kind: 'cli', quality: 9 }] }, null)
+      expect(corrupt.policy).toEqual(DEFAULT_ROUTING_POLICY)
+      expect(corrupt.warnings).toEqual(['The account routing policy is unreadable; the built-in default applies.'])
+    })
   })
 })

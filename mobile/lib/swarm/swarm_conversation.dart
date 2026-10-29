@@ -40,6 +40,7 @@ class SwarmConversation extends ChangeNotifier {
       messages = kept.messages;
       _before = kept.before;
       _reactionSeq = kept.reactionSeq;
+      _threads.addAll(kept.threads);
       _read = _kept = true;
       _markRead();
     }
@@ -62,8 +63,42 @@ class SwarmConversation extends ChangeNotifier {
   /// The files of a post are on their way to the backend, before the post.
   bool uploading = false;
 
-  /// Oldest first.
+  /// Oldest first: every message read, a reply only in its thread too.
   List<SuperTabMessage> messages = const [];
+
+  /// The [messages] the chat lists: a reply only in its thread shows there
+  /// alone ([SuperTabMessage.inMainStream], the desktop's main stream).
+  List<SuperTabMessage> get stream {
+    if (!identical(_streamOf, messages)) {
+      _streamOf = messages;
+      _stream = List.unmodifiable(messages.where((m) => m.inMainStream));
+    }
+    return _stream;
+  }
+
+  List<SuperTabMessage>? _streamOf;
+  List<SuperTabMessage> _stream = const [];
+
+  /// Each thread's line, by its root, as the newest page that named it said
+  /// it (the desktop's `_keepThreads`): its replies, who wrote them and when
+  /// the last came.
+  final _threads = <String, SuperTabThread>{};
+
+  /// [root]'s thread, once a page named it with a reply.
+  SuperTabThread? thread(String root) => _threads[root];
+
+  /// Each thread's draft while the chat is open (the desktop's
+  /// `threadDraft`): a thread closed and opened again finds it.
+  final _threadDrafts = <String, String>{};
+
+  String threadDraft(String root) => _threadDrafts[root] ?? '';
+  void setThreadDraft(String root, String text) {
+    if (text.isEmpty) {
+      _threadDrafts.remove(root);
+    } else {
+      _threadDrafts[root] = text;
+    }
+  }
 
   /// On screen, no other screen covers it and Harness is in front: what it
   /// shows is read ([SwarmReader.readMarks]), now and as new messages come.
@@ -177,7 +212,8 @@ class SwarmConversation extends ChangeNotifier {
 
   SuperTabMessage? _replyingTo;
 
-  String get _path =>
+  /// Where its messages are read, a thread's with `?thread=`.
+  String get messagesPath =>
       '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}'
       '/conversations/${Uri.encodeComponent(id)}/messages';
 
@@ -360,6 +396,7 @@ class SwarmConversation extends ChangeNotifier {
   /// Drops the messages read, and the answer of any read under way.
   void _forget() {
     messages = const [];
+    _threads.clear();
     _before = null;
     _read = false;
     _epoch++;
@@ -384,6 +421,7 @@ class SwarmConversation extends ChangeNotifier {
     _refused = true;
     _forget();
     _draft = '';
+    _threadDrafts.clear();
     _mentions.clear();
     _pending = null;
     _sent = null;
@@ -482,7 +520,9 @@ class SwarmConversation extends ChangeNotifier {
           : again
           ? '?before=${tail + 1}'
           : '?after=$tail';
-      final answer = superTabMap(await reader.request('GET', '$_path$query'));
+      final answer = superTabMap(
+        await reader.request('GET', '$messagesPath$query'),
+      );
       if (_disposed || epoch != _epoch) return;
       final incoming = [
         for (final row in answer['messages'] as List)
@@ -506,6 +546,7 @@ class SwarmConversation extends ChangeNotifier {
           ? <String, SuperTabMessage>{}
           : {for (final m in messages) m.id: m};
       var changed = !_read || error != null || _refused || latest;
+      changed |= _keepThreads(answer['threads']);
       for (final m in incoming) {
         if (byId[m.id] case final shown? when _same(shown, m)) continue;
         byId[m.id] = m;
@@ -824,6 +865,40 @@ class SwarmConversation extends ChangeNotifier {
     return refused == null;
   }
 
+  /// Keeps the thread lines a page named ([thread]): one a later page said
+  /// is kept over an older one. True when a line drawn changed.
+  bool _keepThreads(Object? rows) {
+    if (rows is! List) return false;
+    var changed = false;
+    for (final row in rows) {
+      final next = SuperTabThread.fromJson(superTabMap(row));
+      final held = _threads[next.id];
+      if (held != null &&
+          (held.lastSequence > next.lastSequence || _sameThread(held, next))) {
+        continue;
+      }
+      _threads[next.id] = next;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// Thread lines a thread's own read brought ([SwarmThread]): the root's
+  /// line in the chat moves with them.
+  void keepThreads(Object? rows) {
+    if (!_disposed && _keepThreads(rows)) notifyListeners();
+  }
+
+  /// What a thread's line draws, the same in [a] as in [b].
+  static bool _sameThread(SuperTabThread a, SuperTabThread b) =>
+      a.replies == b.replies &&
+      a.lastSequence == b.lastSequence &&
+      a.lastAt == b.lastAt &&
+      listEquals(
+        [for (final who in a.authors) '${who['kind']}:${who['id']}'],
+        [for (final who in b.authors) '${who['kind']}:${who['id']}'],
+      );
+
   /// A post moved between the composer and the messages: both are told.
   void _tell() {
     notifyListeners();
@@ -908,6 +983,7 @@ class SwarmConversation extends ChangeNotifier {
         messages: messages,
         before: _before,
         reactionSeq: _reactionSeq,
+        threads: _threads,
       );
     }
     reader.removeListener(_swarmChanged);
