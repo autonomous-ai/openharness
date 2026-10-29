@@ -200,6 +200,13 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   Harness GitHub App's token.
   Claude Code also merges allow rules from the machine owner's own settings and the project's checked-in settings: a
   broad shell rule there applies to a Buddy too, so keep those narrow on machines that run Claude Buddies.
+- A Buddy is called "<person>'s Buddy" until its owner names it: **Rename Buddy…** in the Buddy chat's ⋮ menu
+  (`buddy.rename` with the Buddy chat's id, and `null` for the default), at any time, even before a Buddy runs.
+  Everyone in the Swarm sees the new name on its roster row and as its messages' sender. Only the chat's owner may
+  rename it, not the Swarm's owner or any agent, and no other agent can be renamed this way. A name is 2 to 32
+  letters, digits, single spaces, dots, dashes, underscores or apostrophes, starting with a letter or digit, and never
+  a role ("Lead", "PM") or another agent's or person's name. It is kept on the Buddy chat, so removing the Buddy and
+  adding it again keeps it; a person who leaves and joins again starts with a new chat and the default name.
 - Nobody else is ever added to a Buddy chat, the Swarm's owner and the product manager included.
 - A proposal is sent only for its owner's own message in their Buddy chat that asked for it: their newest message there,
   or one from the last hour, and only once for each such message. The server writes the "on behalf of" label, so a Buddy cannot leave it out or change it.
