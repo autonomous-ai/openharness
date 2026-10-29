@@ -8,10 +8,10 @@ library;
 /// things wait on the person (`swarm_mark.dart`). False: Find only.
 const swarmHomeMark = true;
 
-/// 2. The first screen. True: what needs the person across every Swarm comes
-/// first, the Swarms under it. False: the Swarms first, needs after them
-/// (`swarm_page.dart`).
-const swarmNeedsFirst = true;
+// 2. The first screen: Swarm Home, direction B (Tony, 2026-10-29) — what
+// needs the person first, then the projects pinned, then the others by
+// latest activity (`swarm_page.dart`). Tony's answer, so no choice is left
+// here.
 
 // 3. A project opens on its project chat: prototype B (Tony, 2026-10-28),
 // with nothing under the header and a ⋮ menu at its end (Tony, 2026-10-29):

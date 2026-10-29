@@ -46,18 +46,27 @@ String _initial(String name) {
 
 /// A screen's top bar: the menu or back button ([leading], a 44-point
 /// [SwarmIconButton]) 4 points in from the edge, the title 4 points beside it
-/// in the terminal's face, and under it maybe one quiet line.
+/// in the terminal's face, and under it maybe one quiet line; at its end
+/// maybe one more button ([trailing]).
 class SwarmTopBar extends StatelessWidget {
   const SwarmTopBar({
     super.key,
     required this.leading,
     required this.title,
     this.subtitle,
+    this.line,
+    this.trailing,
   });
 
   final Widget leading;
   final String title;
   final String? subtitle;
+
+  /// A line of its own under the title in place of [subtitle]: a team line.
+  final Widget? line;
+
+  /// At the bar's end: a [SwarmIconButton].
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -90,7 +99,9 @@ class SwarmTopBar extends StatelessWidget {
                         .style(size: 17, weight: FontWeight.w600)
                         .copyWith(height: 1.25),
                   ),
-                  if (subtitle case final subtitle?)
+                  if (line case final line?)
+                    line
+                  else if (subtitle case final subtitle?)
                     Text(
                       subtitle,
                       maxLines: 1,
@@ -100,6 +111,7 @@ class SwarmTopBar extends StatelessWidget {
                 ],
               ),
             ),
+            ?trailing,
           ],
         ),
       ),
@@ -191,7 +203,7 @@ class SwarmGroup extends StatelessWidget {
 /// left, a bar for its title and a longer one for the line under it, each as
 /// tall as the line it stands for ([SkeletonText]), so nothing moves when the
 /// row arrives. It stands for a card's row (`SwarmRow`) with a line under its
-/// title, or its title alone ([titleOnly]); the drawer draws its own.
+/// title — a need's, a project's on Home — or its title alone ([titleOnly]).
 class SwarmSkeletonRow extends StatelessWidget {
   const SwarmSkeletonRow({
     super.key,
@@ -203,7 +215,7 @@ class SwarmSkeletonRow extends StatelessWidget {
   /// An avatar's round mark rather than a project's tile.
   final bool round;
 
-  /// The row it stands for has no line under its title: a project's.
+  /// The row it stands for has no line under its title.
   final bool titleOnly;
 
   /// The title bar's share of the row's words.
@@ -394,26 +406,43 @@ class SwarmProjectTile extends StatelessWidget {
 
 /// The Lead's tags still waiting on the person in a chat or a project, at
 /// its row's trailing edge: "@2" in the warning ink, said in words (desktop
-/// design system: Mentions).
+/// design system: Mentions); [filled], on an accent pill, as Home's project
+/// rows draw it (Tony's prototype B1, 2026-10-29).
 class SwarmTags extends StatelessWidget {
-  const SwarmTags(this.count, {super.key});
+  const SwarmTags(this.count, {super.key, this.filled = false});
 
   final int count;
+  final bool filled;
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: count == 1 ? '1 mention' : '$count mentions',
-    excludeSemantics: true,
-    child: Text(
+  Widget build(BuildContext context) {
+    final text = Text(
       '@$count',
       maxLines: 1,
       style: AppType.caption(
-        color: AppColors.warning,
+        color: filled ? AppInk.onFill : AppColors.warning,
         fontWeight: AppFont.semibold,
+        height: filled ? 1 : null,
         fontFeatures: const [FontFeature.tabularFigures()],
       ),
-    ),
-  );
+    );
+    return Semantics(
+      label: count == 1 ? '1 mention' : '$count mentions',
+      excludeSemantics: true,
+      child: filled
+          ? Container(
+              constraints: const BoxConstraints(minWidth: 22, minHeight: 20),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+              alignment: Alignment.center,
+              decoration: ShapeDecoration(
+                color: AppPalette.accent,
+                shape: const StadiumBorder(),
+              ),
+              child: text,
+            )
+          : text,
+    );
+  }
 }
 
 /// A count in a filled circle: blue, or yellow for what waits on the person.

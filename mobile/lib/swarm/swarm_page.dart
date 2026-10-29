@@ -12,16 +12,14 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
-import 'swarm_buddy.dart';
-import 'swarm_buddy_chat.dart';
-import 'swarm_choices.dart';
 import 'swarm_connection_notice.dart';
-import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
 import 'swarm_home_keeper.dart';
+import 'swarm_home_list.dart';
+import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
+import 'swarm_needs_page.dart';
 import 'swarm_profile_sheet.dart';
-import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
@@ -29,6 +27,7 @@ import 'swarm_session.dart';
 import 'swarm_start.dart';
 import 'swarm_style.dart';
 import 'swarm_unread.dart';
+import 'team_glance.dart';
 
 /// Swarm Home from anywhere in the shell: every page closed and Swarm Home
 /// the root again ([PhoneShellScope.onShowSwarm]). Without the shell — a
@@ -41,21 +40,28 @@ void openSwarmHome(BuildContext context) {
   unawaited(Navigator.of(context).push(phoneRoute((_) => const SwarmPage())));
 }
 
-/// Swarm Home: what every Swarm of the account asks of the person ("Needs
-/// you"), one thing open at a time; Buddies, the person's Buddy chat in each
-/// project; then the projects, each with its team in a line
-/// ([swarmNeedsFirst] orders needs and the rest). Its drawer ([SwarmDrawer])
-/// is the way to everything else.
+/// Swarm Home, direction B (Tony's prototype B1, 2026-10-29): what needs the
+/// person ("Needs you", two of it and See all), then the projects they
+/// pinned on this phone, then the others by their latest activity, those
+/// quiet for a day folded under "Other projects" ([swarmHomeLists]). Every
+/// Swarm's, or the one the drawer picked ([SwarmHomePrefs.swarmId]). Its
+/// drawer ([SwarmDrawer]) is the way to everything else.
 ///
 /// The phone's Home while Settings ▸ Experimental ▸ Swarm is on; pushed over
 /// another page it has a back button instead of the drawer. Its top bar holds
 /// the menu and its title in one line, as the approved prototype draws it.
 /// Reads the account's [SwarmSession] from the shell; with none, says why.
 class SwarmPage extends StatefulWidget {
-  const SwarmPage({super.key, this.onSettings});
+  const SwarmPage({super.key, this.onSettings, this.now = DateTime.now});
 
   /// Settings over Swarm Home, from the drawer.
   final void Function(BuildContext context)? onSettings;
+
+  /// What a project's last move is measured from.
+  final DateTime Function() now;
+
+  /// How many needs Home shows before See all.
+  static const needsShown = 2;
 
   @override
   State<SwarmPage> createState() => _SwarmPageState();
@@ -69,6 +75,10 @@ class _SwarmPageState extends State<SwarmPage> {
   /// nothing new. Shown again, it reads the Swarms as on any return to Home.
   bool _hidden = false;
 
+  /// Each project's "2m" moves on with the clock: Home is drawn again every
+  /// minute while it is in sight.
+  Timer? _tick;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -78,13 +88,19 @@ class _SwarmPageState extends State<SwarmPage> {
     if (!_hidden) _session?.leave();
     _session = session;
     _hidden = hidden;
+    _tick?.cancel();
+    _tick = null;
     if (hidden || session == null) return;
     session.enter();
     unawaited(session.inbox.refresh());
+    _tick = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void dispose() {
+    _tick?.cancel();
     if (!_hidden) _session?.leave();
     super.dispose();
   }
@@ -99,30 +115,8 @@ class _SwarmPageState extends State<SwarmPage> {
         ),
       );
 
-  /// The need open on Home, by its key; null opens the first.
-  String? _focus;
-
-  /// The Buddy chat being opened, as `swarmId/projectId`, and why the last
-  /// one did not open.
-  String? _buddyOpening;
-  String? _buddyError;
-
-  /// The person's Buddy chat in [projectId], opened on the server first when
-  /// they have none yet. One at a time.
-  Future<void> _openBuddy(String swarmId, String projectId) async {
-    final reader = _session?.inbox.reader(swarmId);
-    if (reader == null || _buddyOpening != null) return;
-    setState(() {
-      _buddyOpening = '$swarmId/$projectId';
-      _buddyError = null;
-    });
-    final error = await openSwarmBuddy(context, reader, swarmId, projectId);
-    if (!mounted) return;
-    setState(() {
-      _buddyOpening = null;
-      _buddyError = error;
-    });
-  }
+  /// The projects quiet for a day are listed under Other projects.
+  bool _quietOpen = false;
 
   @override
   Widget build(BuildContext context) {
@@ -134,6 +128,9 @@ class _SwarmPageState extends State<SwarmPage> {
     // and is not built again once that page goes, so the navigator's canPop
     // would leave the back button for good.
     final pushed = ModalRoute.isFirstOf(context) == false;
+    final listens = session == null
+        ? null
+        : Listenable.merge([session, session.inbox, session.home]);
     return Scaffold(
       backgroundColor: tty.ground,
       // Home's drawer; a Swarm page pushed over another page has its back
@@ -142,15 +139,9 @@ class _SwarmPageState extends State<SwarmPage> {
       drawer: pushed || _hidden
           ? null
           : ListenableBuilder(
-              listenable: Listenable.merge([?session, ?session?.inbox]),
+              listenable: listens ?? const _Nothing(),
               builder: (context, _) => SwarmDrawer(
                 session: session,
-                onProject: (swarmId, projectId) =>
-                    _openProject(context, swarmId, projectId),
-                onBuddy: (swarmId, projectId) =>
-                    unawaited(_openBuddy(swarmId, projectId)),
-                onChat: (swarmId, conversationId) =>
-                    openSwarmConversation(context, swarmId, conversationId),
                 onSettings: widget.onSettings,
                 onProfile: (swarmId) =>
                     unawaited(showSwarmProfile(context, swarmId: swarmId)),
@@ -165,7 +156,7 @@ class _SwarmPageState extends State<SwarmPage> {
               _topBar(context, pushed: pushed)
             else
               ListenWhileInSight(
-                listenable: Listenable.merge([session, session.inbox]),
+                listenable: listens!,
                 builder: (context) => _topBar(
                   context,
                   pushed: pushed,
@@ -176,7 +167,7 @@ class _SwarmPageState extends State<SwarmPage> {
               child: session == null
                   ? const _Unavailable()
                   : ListenWhileInSight(
-                      listenable: Listenable.merge([session, session.inbox]),
+                      listenable: listens!,
                       // Before there is a Swarm to show, a start screen in
                       // place of the body, under the same top bar.
                       builder: (context) =>
@@ -192,7 +183,7 @@ class _SwarmPageState extends State<SwarmPage> {
                                 MediaQuery.paddingOf(context).bottom +
                                     AppSpace.xl,
                               ),
-                              children: _body(context, session, tty),
+                              children: _body(context, session),
                             ),
                           ),
                     ),
@@ -217,7 +208,16 @@ class _SwarmPageState extends State<SwarmPage> {
     subtitle: updating ? 'Updating…' : null,
   );
 
-  List<Widget> _body(BuildContext context, SwarmSession session, Tty tty) {
+  /// The Swarms Home shows: the one the drawer picked while it is listed,
+  /// else all of them.
+  List<SwarmListing> _shown(SwarmSession session) {
+    final swarms = session.inbox.swarms;
+    final picked = session.home.swarmId;
+    final one = swarms.where((swarm) => swarm.id == picked).toList();
+    return one.isEmpty ? swarms : one;
+  }
+
+  List<Widget> _body(BuildContext context, SwarmSession session) {
     final inbox = session.inbox;
     // No computer answering: a card that says so over what Home has, never a
     // screen in its place, and no red line besides.
@@ -239,14 +239,56 @@ class _SwarmPageState extends State<SwarmPage> {
           ..._reading(first: notice == null),
       ];
     }
-    final several = inbox.swarms.length > 1;
-    final empty = _emptyNeeds(inbox);
-    List<Widget> needs({required bool first}) => [
-      SwarmCaption('Needs you', count: inbox.needs.length, first: first),
-      if (inbox.needs.isNotEmpty)
-        SwarmGroup(children: _needs(context, session))
+    final shown = _shown(session);
+    final picked = shown.length == 1 && inbox.swarms.length > 1
+        ? shown.single.id
+        : null;
+    final now = widget.now();
+    final first = notice == null;
+    return [
+      ?notice,
+      if (error != null) _error(error, key: 'swarm-error'),
+      ..._needs(context, session, shown, picked, now, first: first),
+      ..._projects(context, session, shown, now),
+    ];
+  }
+
+  /// Needs you: two of what waits on the person, newest asks first, each a
+  /// row that opens it among the rest; See all for every one.
+  List<Widget> _needs(
+    BuildContext context,
+    SwarmSession session,
+    List<SwarmListing> shown,
+    String? picked,
+    DateTime now, {
+    required bool first,
+  }) {
+    final inbox = session.inbox;
+    final needs = swarmNeedsOf(inbox, picked);
+    return [
+      SwarmCaption('Needs you', count: needs.length, first: first),
+      if (needs.isNotEmpty)
+        SwarmGroup(
+          children: [
+            for (final need in needs.take(SwarmPage.needsShown))
+              SwarmHomeNeedRow(
+                key: ValueKey('swarm-home-need-${need.key}'),
+                session: session,
+                need: need,
+                now: now,
+                onTap: () =>
+                    openSwarmNeeds(context, focus: need.key, swarmId: picked),
+              ),
+            if (needs.length > SwarmPage.needsShown)
+              SwarmSeeAllRow(
+                key: const ValueKey('swarm-needs-all'),
+                count: needs.length,
+                onTap: () => openSwarmNeeds(context, swarmId: picked),
+              ),
+          ],
+        )
       else
-        switch (empty) {
+        switch (_emptyNeeds(inbox, shown)) {
           _EmptyNeeds.reading => SwarmSkeletonRows(
             id: 'swarm-needs-loading',
             rows: 1,
@@ -265,88 +307,21 @@ class _SwarmPageState extends State<SwarmPage> {
           ),
         },
     ];
-    // The person's Buddy chat in each project, there from the start (#2090);
-    // a viewer, who starts no Buddy, sees only the chats they have.
-    final buddies = [
-      for (final swarm in inbox.swarms)
-        if (inbox.reader(swarm.id) case final reader?)
-          for (final project in reader.snapshot?.projects ?? const [])
-            if (swarmBuddyChat(reader, project.id) != null ||
-                swarmCanWrite(reader))
-              SwarmRow(
-                key: ValueKey('swarm-home-buddy-${swarm.id}-${project.id}'),
-                leading: SwarmBuddyAvatar(
-                  reader: reader,
-                  projectId: project.id,
-                ),
-                title: swarmBuddyName(reader, project.id),
-                news: switch (swarmBuddyChat(reader, project.id)) {
-                  final chat? => swarmChatNews(
-                    reader,
-                    inbox.asks(swarm.id),
-                    chat,
-                  ),
-                  null => swarmNoNews,
-                },
-                detail: SwarmRow.line(
-                  [
-                    project.name,
-                    if (several) swarm.name,
-                    swarmBuddyNote(reader, project.id) ??
-                        swarmBuddyEngineName(
-                          swarmBuddy(reader, project.id)!.engine,
-                        ),
-                  ].join(' · '),
-                ),
-                trailing: _buddyOpening == '${swarm.id}/${project.id}'
-                    ? SwarmRow.line('Opening…')
-                    : null,
-                chevron: null,
-                onTap: () => unawaited(_openBuddy(swarm.id, project.id)),
-              ),
-    ];
-    // Swarms listed and still to be read: their rows are on their way.
-    final reading = [
-      for (final swarm in inbox.swarms)
-        if (_unread(inbox.reader(swarm.id))) swarm.id,
-    ];
-    List<Widget> swarms({required bool first}) => [
-      if (buddies.isNotEmpty || reading.isNotEmpty) ...[
-        SwarmCaption('Buddies', first: first),
-        if (buddies.isNotEmpty) SwarmGroup(children: buddies),
-        for (final (i, id) in reading.indexed) ...[
-          if (buddies.isNotEmpty || i > 0) const SizedBox(height: 8),
-          SwarmSkeletonRows(id: 'swarm-buddy-loading-$id', round: true),
-        ],
-      ],
-      if (_buddyError case final error?)
-        _error(error, key: 'swarm-buddy-error', top: 8),
-      for (final (i, swarm) in inbox.swarms.indexed) ...[
-        SwarmCaption(
-          several ? swarm.name : 'Projects',
-          first: first && buddies.isEmpty && reading.isEmpty && i == 0,
-        ),
-        switch (inbox.reader(swarm.id)) {
-          final SwarmReader reader when reader.snapshot != null => SwarmGroup(
-            children: _projects(context, swarm.id, reader),
-          ),
-          SwarmReader(error: final error?) => SwarmGroup(
-            children: [
-              SwarmRow(
-                title: error,
-                detail: SwarmRow.line('Pull down to try again.'),
-                onTap: null,
-              ),
-            ],
-          ),
-          _ => SwarmSkeletonRows(
-            id: 'swarm-projects-loading-${swarm.id}',
-            titleOnly: true,
-          ),
-        },
-      ],
-      if (inbox.swarms.isEmpty) ...[
-        SwarmCaption('Your Swarms', first: first && buddies.isEmpty),
+  }
+
+  /// Pinned, then Projects: every project of the Swarms shown, grouped by
+  /// [swarmHomeLists]; a Swarm still to be read has rows on their way, one
+  /// that could not be read says so.
+  List<Widget> _projects(
+    BuildContext context,
+    SwarmSession session,
+    List<SwarmListing> shown,
+    DateTime now,
+  ) {
+    final inbox = session.inbox;
+    if (inbox.swarms.isEmpty) {
+      return [
+        const SwarmCaption('Projects'),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
           child: SwarmRow.line(
@@ -354,36 +329,119 @@ class _SwarmPageState extends State<SwarmPage> {
             lines: 2,
           ),
         ),
-      ],
-    ];
-    final first = notice == null;
+      ];
+    }
+    final several = shown.length > 1;
+    final projects = <SwarmHomeProject>[];
+    final glances = <String, SwarmTeamGlance>{};
+    final names = <String, String>{};
+    final reading = <String>[];
+    final failed = <(String, String)>[];
+    for (final swarm in shown) {
+      switch (inbox.reader(swarm.id)) {
+        case final SwarmReader reader when reader.snapshot != null:
+          final snapshot = reader.snapshot!;
+          final news = swarmProjectNews(reader, inbox.asks(swarm.id));
+          final activity = swarmProjectActivity(snapshot, reader.buddies);
+          for (final project in snapshot.projects) {
+            final row = SwarmHomeProject(
+              swarmId: swarm.id,
+              project: project,
+              active: activity[project.id],
+              news: news[project.id] ?? swarmNoNews,
+            );
+            projects.add(row);
+            glances[row.key] = swarmTeamGlance(snapshot, projectId: project.id);
+            names[row.key] = swarm.name;
+          }
+        case SwarmReader(error: final error?):
+          failed.add((swarm.id, error));
+        case _:
+          reading.add(swarm.id);
+      }
+    }
+    final lists = swarmHomeLists(projects, pins: session.home.pins, now: now);
+    Widget row(SwarmHomeProject project) => SwarmHomeProjectRow(
+      key: ValueKey('swarm-project-${project.swarmId}-${project.project.id}'),
+      project: project,
+      glance: glances[project.key]!,
+      now: now,
+      swarmName: several ? names[project.key] : null,
+      onTap: () => _openProject(context, project.swarmId, project.project.id),
+      onLongPress: () => unawaited(_pin(context, session, project)),
+    );
+    final quiet = lists.quiet;
+    final empty = projects.isEmpty && reading.isEmpty && failed.isEmpty;
     return [
-      ?notice,
-      if (error != null) _error(error, key: 'swarm-error'),
-      ...swarmNeedsFirst
-          ? [...needs(first: first), ...swarms(first: false)]
-          : [...swarms(first: first), ...needs(first: false)],
+      if (lists.pinned.isNotEmpty) ...[
+        const SwarmCaption('Pinned'),
+        SwarmGroup(children: [for (final p in lists.pinned) row(p)]),
+      ],
+      if (lists.recent.isNotEmpty || quiet.isNotEmpty || empty) ...[
+        const SwarmCaption('Projects'),
+        SwarmGroup(
+          children: [
+            if (empty) const SwarmRow(title: 'No project yet', onTap: null),
+            for (final p in lists.recent) row(p),
+            if (quiet.isNotEmpty) ...[
+              SwarmOtherProjectsRow(
+                key: const ValueKey('swarm-other-projects'),
+                count: quiet.length,
+                open: _quietOpen,
+                onTap: () => setState(() => _quietOpen = !_quietOpen),
+              ),
+              if (_quietOpen)
+                for (final p in quiet) row(p),
+            ],
+          ],
+        ),
+      ] else if (reading.isNotEmpty || failed.isNotEmpty)
+        const SwarmCaption('Projects'),
+      for (final (i, id) in reading.indexed) ...[
+        if (projects.isNotEmpty || i > 0) const SizedBox(height: 8),
+        SwarmSkeletonRows(id: 'swarm-projects-loading-$id'),
+      ],
+      for (final (id, error) in failed) ...[
+        const SizedBox(height: 8),
+        SwarmGroup(
+          key: ValueKey('swarm-projects-error-$id'),
+          children: [
+            SwarmRow(
+              title: error,
+              detail: SwarmRow.line('Pull down to try again.'),
+              onTap: null,
+            ),
+          ],
+        ),
+      ],
     ];
   }
 
-  /// Home before the list answers: Needs you, Buddies and the projects
-  /// as rows on their way, in the order Home shows them; under a card, its
-  /// first caption not [first].
-  List<Widget> _reading({bool first = true}) {
-    List<Widget> needs({required bool first}) => [
-      SwarmCaption('Needs you', first: first),
-      SwarmSkeletonRows(id: 'swarm-needs-loading', rows: 1),
-    ];
-    List<Widget> swarms({required bool first}) => [
-      SwarmCaption('Buddies', first: first),
-      SwarmSkeletonRows(id: 'swarm-buddy-loading', round: true),
-      const SwarmCaption('Projects'),
-      SwarmSkeletonRows(id: 'swarm-projects-loading', titleOnly: true),
-    ];
-    return swarmNeedsFirst
-        ? [...needs(first: first), ...swarms(first: false)]
-        : [...swarms(first: first), ...needs(first: false)];
+  /// A long press on a project: Pin to top, or Unpin.
+  Future<void> _pin(
+    BuildContext context,
+    SwarmSession session,
+    SwarmHomeProject project,
+  ) async {
+    final pinned = session.home.pinned(project.swarmId, project.project.id);
+    final tapped = await showSwarmPinSheet(
+      context,
+      name: project.project.name,
+      pinned: pinned,
+    );
+    if (tapped != true || !mounted || _session != session) return;
+    session.home.pin(project.swarmId, project.project.id, !pinned);
   }
+
+  /// Home before the list answers: Needs you and the projects as rows on
+  /// their way, in the order Home shows them; under a card, its first
+  /// caption not [first].
+  List<Widget> _reading({bool first = true}) => [
+    SwarmCaption('Needs you', first: first),
+    SwarmSkeletonRows(id: 'swarm-needs-loading', rows: 1),
+    const SwarmCaption('Projects'),
+    SwarmSkeletonRows(id: 'swarm-projects-loading'),
+  ];
 
   /// What went wrong, in the danger colour, up to three lines.
   Widget _error(String text, {required String key, double top = 6}) => Padding(
@@ -395,59 +453,17 @@ class _SwarmPageState extends State<SwarmPage> {
       color: AppColors.danger,
     ),
   );
+}
 
-  /// Every need, one open with its options or Done, the others a line each
-  /// that opens it in its place. The one open is the person's pick while it
-  /// waits, else the first: answered or done, the next one opens.
-  List<Widget> _needs(BuildContext context, SwarmSession session) {
-    final needs = session.inbox.needs;
-    final open = needs.firstWhere(
-      (need) => need.key == _focus,
-      orElse: () => needs.first,
-    );
-    return [
-      for (final need in needs)
-        if (need == open)
-          SwarmNeedRow(
-            session: session,
-            need: need,
-            onOpen: (swarmId, conversationId) =>
-                openSwarmConversation(context, swarmId, conversationId),
-          )
-        else
-          SwarmNeedLine(
-            key: ValueKey('swarm-need-row-${need.key}'),
-            session: session,
-            need: need,
-            onTap: () => setState(() => _focus = need.key),
-          ),
-    ];
-  }
+/// Nothing to listen to: a drawer with no session.
+class _Nothing implements Listenable {
+  const _Nothing();
 
-  /// A Swarm's projects, each its tile and its name, no team line (Team at
-  /// a glance is gone, as on the desktop): bold with something new in it,
-  /// and its tags waiting as `@N` ([swarmProjectNews]).
-  List<Widget> _projects(
-    BuildContext context,
-    String swarmId,
-    SwarmReader reader,
-  ) {
-    final snapshot = reader.snapshot!;
-    if (snapshot.projects.isEmpty) {
-      return [const SwarmRow(title: 'No project yet', onTap: null)];
-    }
-    final news = swarmProjectNews(reader, _session?.inbox.asks(swarmId));
-    return [
-      for (final project in snapshot.projects)
-        SwarmRow(
-          key: ValueKey('swarm-project-$swarmId-${project.id}'),
-          leading: SwarmProjectTile(project.name),
-          title: project.name,
-          news: news[project.id] ?? swarmNoNews,
-          onTap: () => _openProject(context, swarmId, project.id),
-        ),
-    ];
-  }
+  @override
+  void addListener(VoidCallback listener) {}
+
+  @override
+  void removeListener(VoidCallback listener) {}
 }
 
 /// Home shows the Home kept, not read again yet: the list not read, or a
@@ -471,16 +487,12 @@ enum _EmptyNeeds {
   none,
 }
 
-/// A Swarm listed and still to be read: no snapshot yet, and no reason it
-/// could not be read.
-bool _unread(SwarmReader? reader) =>
-    reader == null || (reader.snapshot == null && reader.error == null);
-
-/// Why [inbox]'s Needs you is empty: still reading while a Swarm, or what
-/// waits on the person in it since it was last read in full, is not read yet.
-_EmptyNeeds _emptyNeeds(SwarmInbox inbox) {
+/// Why [inbox]'s Needs you is empty: still reading while a Swarm [shown],
+/// or what waits on the person in it since it was last read in full, is not
+/// read yet.
+_EmptyNeeds _emptyNeeds(SwarmInbox inbox, List<SwarmListing> shown) {
   var reading = false, unread = false;
-  for (final swarm in inbox.swarms) {
+  for (final swarm in shown) {
     switch (inbox.reader(swarm.id)) {
       case SwarmReader(snapshot: _?):
         if (inbox.asks(swarm.id) case final asks?) {
