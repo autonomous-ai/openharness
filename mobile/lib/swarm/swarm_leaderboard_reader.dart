@@ -20,10 +20,19 @@ int _int(Object? value) => value is num ? value.round() : 0;
 int? _optional(Object? value) => value is num ? value.round() : null;
 Map<String, dynamic> _map(Object? value) =>
     value is Map ? value.cast<String, dynamic>() : const {};
+List<T> _rows<T>(Object? value, T Function(Map<String, dynamic>) read) =>
+    List.unmodifiable([
+      if (value is List)
+        for (final row in value)
+          if (row is Map) read(_map(row)),
+    ]);
+String? _text(Object? value) =>
+    value is String && value.isNotEmpty ? value : null;
 
 /// One project's week as the leaderboard read answers it
-/// (`backend/src/superTabs/leaderboard/contract.ts`): what it shipped, and
-/// each person who reads the project with their points, most first. The
+/// (`backend/src/superTabs/leaderboard/contract.ts`): what it shipped, each
+/// person who reads the project with their points, most first, and its PM
+/// and Buddies, and the models its workers ran on, ranked the same way. The
 /// desktop's `SuperTabLeaderboard` (`desktop/lib/super_tabs/leaderboard`),
 /// kept to what the phone shows.
 class SwarmLeaderboard {
@@ -31,10 +40,9 @@ class SwarmLeaderboard {
     : week = _int(json['week']),
       shipped = _int(_map(_map(json['goal'])['thisWeek'])['shipped']),
       shippedBefore = _int(_map(_map(json['goal'])['lastWeek'])['shipped']),
-      people = List.unmodifiable([
-        for (final row in json['people'] as List? ?? const [])
-          if (row is Map) SwarmScore.fromJson(_map(row)),
-      ]);
+      people = _rows(json['people'], SwarmScore.fromJson),
+      agents = _rows(json['agents'], SwarmAgentScore.fromJson),
+      byModel = _rows(json['byModel'], SwarmModelScore.fromJson);
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
@@ -47,6 +55,82 @@ class SwarmLeaderboard {
 
   /// Most points first.
   final List<SwarmScore> people;
+
+  /// The project's PM and Buddies, most points first; empty from a server
+  /// before them.
+  final List<SwarmAgentScore> agents;
+
+  /// Every model that worked the week, most points first; empty from a
+  /// server before them.
+  final List<SwarmModelScore> byModel;
+}
+
+/// A permanent agent, the PM or a Buddy, scored by name like a person (the
+/// desktop's `SuperTabAgentScore`).
+class SwarmAgentScore {
+  SwarmAgentScore.fromJson(Map<String, dynamic> json)
+    : agentId = json['agentId'] as String? ?? '',
+      displayName = json['displayName'] as String? ?? '',
+      buddy = json['kind'] == 'buddy',
+      personId = _text(json['personId']),
+      points = _int(json['points']),
+      rank = _int(json['rank']),
+      shipped = _int(json['shipped']);
+
+  /// [displayName] is the backend's: "Former PM" or "Former Buddy" for one
+  /// no longer this project's.
+  final String agentId, displayName;
+
+  /// A Buddy, else the project's PM.
+  final bool buddy;
+
+  /// A Buddy's person; null for the PM, and for one no longer this project's.
+  final String? personId;
+
+  /// The PM's: requests of the groups it led that shipped; a Buddy's: groups
+  /// opened from its proposals that shipped.
+  final int points, rank, shipped;
+}
+
+/// The temporary workers by what they ran on, never by agent (the desktop's
+/// `SuperTabModelScore`).
+class SwarmModelScore {
+  SwarmModelScore.fromJson(Map<String, dynamic> json)
+    : engine = json['engine'] is String ? json['engine'] as String : '',
+      model = _text(json['model']),
+      effort = _text(json['effort']),
+      grid = json['grid'] == true,
+      points = _int(json['points']),
+      rank = _int(json['rank']),
+      shipped = _int(_map(json['shipped'])['count']),
+      medianAttemptMs = _optional(_map(json['shipped'])['medianAttemptMs']),
+      medianRequestMs = _optional(_map(json['shipped'])['medianRequestMs']),
+      reviewed = _int(_map(json['firstReview'])['reviewed']),
+      passed = _int(_map(json['firstReview'])['passed']),
+      reviews = _int(json['reviews']);
+
+  final String engine;
+
+  /// Null when the engine reported none; [effort] null for attempts recorded
+  /// before efforts were.
+  final String? model, effort;
+
+  /// Served on the Swarm's grid.
+  final bool grid;
+  final int points, rank, shipped;
+
+  /// Median time to ship from the shipping attempt's assignment, and from the
+  /// request's first assignment.
+  final int? medianAttemptMs, medianRequestMs;
+
+  /// The week's attempts with a first review on record, and how many passed.
+  final int reviewed, passed;
+
+  /// Review verdicts it gave.
+  final int reviews;
+
+  /// One key per row: engine, model and effort.
+  String get key => 'model-$engine-${model ?? ''}-${effort ?? ''}';
 }
 
 /// One person's week on the board.

@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/swarm_leaderboard_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
+import 'leaderboard_fixture.dart';
 import 'swarm_fixture.dart';
 
 void main() {
@@ -55,6 +56,113 @@ void main() {
       expect(kim.medianAskToShipMs, isNull);
       expect(kim.medianAnswerMs, isNull);
       expect(kim.streakDays, 0);
+    });
+
+    test("the project's PM and Buddies, in the backend's order", () {
+      final read = SwarmLeaderboard.fromJson({
+        ...leaderboardData(),
+        'agents': [
+          agentScoreData('pm-1', displayName: 'River', points: 12, rank: 1),
+          agentScoreData(
+            'buddy-1',
+            displayName: 'Aria',
+            kind: 'buddy',
+            personId: 'ken',
+            points: 3,
+            rank: 2,
+            shipped: 1,
+          ),
+        ],
+      });
+
+      expect([for (final a in read.agents) a.agentId], ['pm-1', 'buddy-1']);
+      final pm = read.agents.first;
+      expect(pm.displayName, 'River');
+      expect(pm.buddy, isFalse);
+      expect(pm.personId, isNull);
+      expect(pm.points, 12);
+      expect(pm.rank, 1);
+      expect(pm.shipped, 4);
+      final buddy = read.agents.last;
+      expect(buddy.buddy, isTrue);
+      expect(buddy.personId, 'ken');
+      expect(buddy.shipped, 1);
+    });
+
+    test('every model that worked, in the backend\'s order', () {
+      final read = SwarmLeaderboard.fromJson({
+        ...leaderboardData(),
+        'byModel': [
+          modelScoreData(
+            'claude',
+            model: 'claude-opus-5-5',
+            effort: 'high',
+            points: 31,
+            rank: 1,
+            shipped: 31,
+            medianAttemptMs: 47 * 60000,
+            medianRequestMs: 2 * 3600000,
+            reviewed: 11,
+            passed: 9,
+            reviews: 5,
+          ),
+          modelScoreData('codex', grid: true, points: 2, rank: 2),
+        ],
+      });
+
+      final opus = read.byModel.first;
+      expect(opus.engine, 'claude');
+      expect(opus.model, 'claude-opus-5-5');
+      expect(opus.effort, 'high');
+      expect(opus.grid, isFalse);
+      expect(opus.points, 31);
+      expect(opus.rank, 1);
+      expect(opus.shipped, 31);
+      expect(opus.medianAttemptMs, 47 * 60000);
+      expect(opus.medianRequestMs, 2 * 3600000);
+      expect(opus.reviewed, 11);
+      expect(opus.passed, 9);
+      expect(opus.reviews, 5);
+      final codex = read.byModel.last;
+      expect(codex.model, isNull);
+      expect(codex.effort, isNull);
+      expect(codex.grid, isTrue);
+      expect(codex.medianAttemptMs, isNull);
+      // One key per row: engine, model and effort.
+      expect(opus.key, isNot(codex.key));
+      expect(
+        SwarmModelScore.fromJson(
+          modelScoreData(
+            'claude',
+            model: 'claude-opus-5-5',
+            points: 1,
+            rank: 3,
+          ),
+        ).key,
+        isNot(opus.key),
+        reason: 'another effort of the same model is another row',
+      );
+    });
+
+    test('a server before the Agents and Models lists reads them empty', () {
+      final read = SwarmLeaderboard.fromJson(leaderboardData());
+      expect(read.agents, isEmpty);
+      expect(read.byModel, isEmpty);
+
+      final odd = SwarmLeaderboard.fromJson({
+        ...leaderboardData(),
+        'agents': 'none',
+        'byModel': [
+          'not a row',
+          {'engine': 7, 'points': 'many', 'shipped': 3, 'firstReview': null},
+        ],
+      });
+      expect(odd.agents, isEmpty);
+      final row = odd.byModel.single;
+      expect(row.engine, '');
+      expect(row.points, 0);
+      expect(row.shipped, 0);
+      expect(row.reviewed, 0);
     });
   });
 
