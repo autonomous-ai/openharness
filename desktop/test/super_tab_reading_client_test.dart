@@ -66,7 +66,7 @@ class _Backend {
 SuperTabClient _client(
   _Backend backend, {
   SuperTabReading? reading,
-  void Function(SuperTabMention)? onMention,
+  void Function(String tabId, SuperTabMention mention)? onMention,
   void Function(SuperTabController)? onSnapshot,
 }) {
   final client = SuperTabClient(
@@ -159,7 +159,7 @@ void main() {
           final client = _client(
             backend,
             reading: reading,
-            onMention: (m) => told.add(m.id),
+            onMention: (_, m) => told.add(m.id),
           )..bind('owner');
           client.show('tab');
           client.open('tab');
@@ -188,7 +188,7 @@ void main() {
       final client = _client(
         backend,
         reading: _web,
-        onMention: (m) => told.add(m.id),
+        onMention: (_, m) => told.add(m.id),
       )..bind('owner');
       final other = backend.servers['other']!..append('First.');
       other.tag(other.messages.last['id'] as String);

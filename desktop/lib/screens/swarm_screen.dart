@@ -731,6 +731,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.systemNotifications.onTap = (machineId, agentId) async {
       await revealWindow();
       if (!mounted) return;
+      // A tag's notice carries its Swarm tab and tag: the click opens it as the menu bar's row
+      // does, once the tag is still the person's to read.
+      if (machineId == SystemNotifications.mentionNoticeMachine) {
+        final slash = agentId.indexOf('/');
+        if (slash <= 0) return;
+        await _openSwarmNotice({
+          'swarmTabId': agentId.substring(0, slash),
+          'kind': 'mention',
+          'id': agentId.substring(slash + 1),
+        });
+        return;
+      }
       // A device notice puts its marker where an agent's machine goes and the device's key where the
       // agent goes: the click opens that device.
       if (machineId == SystemNotifications.deviceNoticeMachine) {

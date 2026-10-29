@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/status_menu.dart';
 import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/notifications.dart';
@@ -346,5 +347,63 @@ void main() {
       expect(updates.last['statusMenuSwarmEntries'], isNull);
       f.dispose();
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+    testWidgets(
+      'a click on a tag\'s system notification brings its Swarm tab forward '
+      'and opens the tagged message',
+      (tester) async {
+        final messenger = tester.binding.defaultBinaryMessenger;
+        const tabs = MethodChannel('harness/swarm_tabs');
+        messenger.setMockMethodCallHandler(tabs, (call) async => true);
+        addTearDown(() => messenger.setMockMethodCallHandler(tabs, null));
+        // The click raises the window first; the window answers as a shown one.
+        const window = MethodChannel('window_manager');
+        messenger.setMockMethodCallHandler(
+          window,
+          (call) async => call.method == 'isMinimized' ? false : null,
+        );
+        addTearDown(() => messenger.setMockMethodCallHandler(window, null));
+        final f = SuperTabLaunchFixture(local: true);
+        await tester.runAsync(() => openWithNotices(f));
+        final swarmTab = f.app.activeSwarmId;
+        final c = f.app.superTabs.peek(tabId)!;
+        f.app.newSwarm(name: 'Desktop');
+        await mount(tester, f.app, nativeTabs: true);
+        await tester.pump();
+        expect(f.app.activeSwarmId, isNot(swarmTab));
+        // What the macOS runner sends back on a click: the slots as posted.
+        Future<void> click(String machineId, String agentId) async {
+          messenger.handlePlatformMessage(
+            'harness/notifications',
+            const StandardMethodCodec().encodeMethodCall(
+              MethodCall('tapped', {
+                'machineId': machineId,
+                'agentId': agentId,
+              }),
+            ),
+            (_) {},
+          );
+          await tester.pump();
+          await tester.pump();
+          await tester.pump();
+        }
+
+        // A tag no longer waiting for the person opens nothing.
+        await click(SystemNotifications.mentionNoticeMachine, '$tabId/gone');
+        expect(f.app.activeSwarmId, isNot(swarmTab));
+        expect(c.noticeRequest, isNull);
+        await click(
+          SystemNotifications.mentionNoticeMachine,
+          '$tabId/mention-1',
+        );
+        expect(f.app.activeSwarmId, swarmTab);
+        // The Swarm view shown takes it and opens the message ('a tag opens
+        // its conversation at the tagged message' above).
+        expect(c.noticeRequest, (kind: 'mention', id: 'mention-1'));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
   });
 }

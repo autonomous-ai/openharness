@@ -48,17 +48,19 @@ bool get superTabNoticesInMenuBar =>
 /// What tells the person about a new tag outside the window: the operating
 /// system, on Desktop only. The web shows only the badge and the list (spec
 /// decision 6). The Settings switch for system notifications still applies.
-void Function(SuperTabMention)? superTabMentionNotice(
+/// A click on it opens the tag in its Swarm [tabId], at its message.
+void Function(String tabId, SuperTabMention mention)? superTabMentionNotice(
   SystemNotifications system, {
   bool web = kIsWeb,
 }) => web
     ? null
-    : (mention) => system.postNotice(
+    : (tabId, mention) => system.postNotice(
         id: 'harness-mention:${mention.id}',
         title: '${mention.leadName} tagged you',
         body:
             '${mention.projectName} · ${mention.conversationTitle}: '
             '${mention.text}',
+        mention: (tabId: tabId, mentionId: mention.id),
       );
 
 /// The reader's tags in one Swarm: Waiting and Earlier, read from the backend

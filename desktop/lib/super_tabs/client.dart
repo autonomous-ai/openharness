@@ -53,7 +53,8 @@ class SuperTabClient {
   final void Function(SuperTabController)? onSelection;
 
   /// A Lead tagged this account in one of its Swarms while the app was open.
-  final void Function(SuperTabMention)? onMention;
+  /// A new tag of the reader in Swarm `tabId`.
+  final void Function(String tabId, SuperTabMention mention)? onMention;
 
   /// The waiting tags of a Swarm that is not open changed ([waitingTags]).
   final void Function()? onTagCounts;
@@ -556,7 +557,9 @@ class SuperTabClient {
     // What discovery already announced is not news when the Swarm opens.
     SuperTabMentions.of(controller)
       ..seen(_tagsSeen.remove(id))
-      ..onArrived = onMention;
+      ..onArrived = onMention == null
+          ? null
+          : (mention) => onMention!(id, mention);
     if (onNotices case final changed?) {
       SuperTabMentions.of(controller).addListener(changed);
       SuperTabDecisions.of(controller).addListener(changed);
@@ -621,7 +624,7 @@ class SuperTabClient {
         if (seen != null) {
           for (final mention in waiting.reversed) {
             if (!seen.contains(mention.id)) {
-              onMention?.call(mention);
+              onMention?.call(id, mention);
               told.add(mention.id);
             }
           }

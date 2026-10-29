@@ -26,6 +26,7 @@ import 'swarm_state_test.dart' show MemoryStore;
 /// What would have reached the operating system.
 class ShownNotices implements SystemNotifier {
   final shown = <({String title, String body})>[];
+  final routes = <(String, String)>[];
   @override
   bool get supported => true;
   @override
@@ -44,6 +45,7 @@ class ShownNotices implements SystemNotifier {
     required String agentId,
   }) async {
     shown.add((title: title, body: body));
+    routes.add((machineId, agentId));
     return NotificationPermission.granted;
   }
 
@@ -858,11 +860,16 @@ void main() {
       expect(superTabMentionNotice(system, web: true), isNull);
       final server = ConversationServer()..tag('message-1', text: 'Ship it?');
       superTabMentionNotice(system, web: false)!(
+        'tab-1',
         SuperTabMention.fromJson(server.mentions.single),
       );
       await pumpEventQueue();
       expect(notices.shown, [
         (title: 'Wren tagged you', body: 'web-project · Lead: Ship it?'),
+      ]);
+      // A click opens that tag in that Swarm (swarm_screen.dart).
+      expect(notices.routes, [
+        (SystemNotifications.mentionNoticeMachine, 'tab-1/mention-1'),
       ]);
     });
 
@@ -874,7 +881,7 @@ void main() {
         transport: (method, path, {body}) =>
             server.request(method, path, body: body),
         discoveryInterval: Duration.zero,
-        onMention: (mention) => arrived.add(mention.text),
+        onMention: (tab, mention) => arrived.add('$tab: ${mention.text}'),
       );
       addTearDown(client.dispose);
       client.bind('owner');
@@ -884,7 +891,7 @@ void main() {
       server.tag('message-2', text: 'New');
       await c.refresh();
       await pumpEventQueue();
-      expect(arrived, ['New']);
+      expect(arrived, ['tab: New']);
     });
 
     test('a Swarm tab not opened yet counts and announces new tags', () async {
@@ -904,7 +911,7 @@ void main() {
             : server.request(method, path, body: body),
         discoveryInterval: Duration.zero,
         onTabs: (_, _) {},
-        onMention: (mention) => arrived.add(mention.text),
+        onMention: (tab, mention) => arrived.add('$tab: ${mention.text}'),
         onTagCounts: () => counted++,
       );
       addTearDown(client.dispose);
@@ -916,7 +923,7 @@ void main() {
       server.tag('message-2', text: 'New');
       await client.refreshTabs();
       expect(client.waitingTags('tab'), 2);
-      expect(arrived, ['New']);
+      expect(arrived, ['tab: New']);
       // Opened, the Swarm's own state counts, and nothing is announced twice.
       final c = await client.open('tab');
       await c.refresh();
@@ -925,7 +932,7 @@ void main() {
       await client.refreshTabs();
       expect(server.mentionReads, reads);
       expect(client.waitingTags('tab'), 2);
-      expect(arrived, ['New']);
+      expect(arrived, ['tab: New']);
     });
 
     test(
