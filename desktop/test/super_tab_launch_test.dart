@@ -1051,11 +1051,28 @@ void main() {
       machineRow('m', 'Studio.local', contributor: 'owner'),
       machineRow('diego-mac', 'Diego-MacBook.local', lead: true),
     ];
+    // This computer's other machine, not in the Swarm's list: its name comes
+    // from this Desktop, not the Swarm (re-check of #2237).
+    const laptop = Machine(
+      machineId: 'laptop',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken-MacBook.local',
+    );
+    f.app.machines = [...f.app.machines, laptop];
+    f.app.machineStates['laptop'] = MachineState(laptop)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [];
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final box = (await tester.runAsync(() => f.box(newProject: true)))!;
+    final unlisted = box.integration!.leadMachines!.singleWhere(
+      (m) => m.id == 'laptop',
+    );
+    expect(unlisted.inSwarm, isFalse);
     expect(
       box.integration!.leadMachines!.map((m) => m.name),
-      containsAll(['Studio', 'Diego-MacBook']),
+      containsAll(['Studio', 'Diego-MacBook', 'Ken-MacBook']),
     );
     await tester.pumpWidget(
       MaterialApp(
@@ -1084,6 +1101,7 @@ void main() {
     for (final (id, name) in [
       ('m', 'Studio'),
       ('diego-mac', 'Diego-MacBook'),
+      ('laptop', 'Ken-MacBook'),
     ]) {
       expect(
         find.descendant(
