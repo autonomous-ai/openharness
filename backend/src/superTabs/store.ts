@@ -31,7 +31,7 @@ import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, 
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
 import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
-import { clock, insertParts, loadActive, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
+import { clock, insertParts, loadActive, loadGroups, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { memberSwarms } from './swarmRows.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
@@ -45,7 +45,7 @@ import { activeMember, addMember, hasWorkspaceAccess, listWorkspaces, memberId, 
 import { WORKSPACE_LABEL, type WorkspaceRole } from './workspaces.js'
 import {
   activeWork, actorKey, agent, agentOnly, agentRole, appendPullRequestUrls, author, conversation, createSuperTab, fail, person, stableId, visibleState, finishWorker,
-  SuperTabError, isLeads, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState,
+  SuperTabError, isLeads, knownKind, parkLaterConversations, syncLeads, type Actor, type Agent, type Assignment, type Author, type Conversation, type MessageDraft, type Person, type SuperTabState,
 } from './model.js'
 import type { HoldReason } from './holdReason.js'
 import { stuck } from './deliverySettle.js'
@@ -55,7 +55,7 @@ import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
 import { costRows, summarizeCosts } from './costs/read.js'
 import { recordEvidence } from './evidence/store.js'
-import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
+import { closeAssignment, closeUnassignedStart, LIST_SIZE, newestDecisions, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { dropHeldTags, listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, resolveWhenWorked, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingFor, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
 import { CATCH_UP_SCAN, catchUpSummary, type CatchUp } from './catchUp.js'
@@ -228,6 +228,8 @@ const pollMemoryFailed = (error: unknown): void => {
 }
 /** Callers kept for the quiet delivery poll before the stale ones are dropped. */
 const POLLED_CAP = 5_000
+/** How many of a Swarm's newest decisions the route list reads to find a reader's hundred, then once more if it falls short. */
+const DECISION_WINDOWS = [LIST_SIZE, 5 * LIST_SIZE]
 
 /** A Lead's start dispatches within seconds of being recorded; one still undispatched after this long was given up. */
 export const ABANDONED_START_MS = 15 * 60_000
@@ -2076,14 +2078,38 @@ export class SuperTabStore {
 
   async routeDecisions(user: AuthUser, tabId: string, asAgentId?: string) {
     return transaction(this.db, async tx => {
-      const { state } = await this.load(tx, user, tabId, { allGroups: true })
+      const { state } = await this.load(tx, user, tabId)
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
       refuseBuddyRouting(state, actor)
-      // Dormant conversations count too: their decisions stay readable (the list loads every group for this).
-      const groups = state.conversations.filter(c => canReadGroup(state, actor, c)).map(c => c.id)
-      return (await recentDecisions(tx, tabId, groups)).map(timedDecisionOf)
+      // An agent stored with no project (a Swarm from before projects) takes its project from its first conversation, quiet ones
+      // too (projects.ts agentProjectId): only a load of every group answers what it reads, so it goes straight to that.
+      const target = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId) : undefined
+      return (await this.readableDecisions(tx, user, tabId, state, actor, target && !target.projectId ? [] : DECISION_WINDOWS)).map(timedDecisionOf)
     })
+  }
+
+  /**
+   * The newest 100 decisions in the conversations `actor` may read, dormant ones too (their decisions stay readable). The newest
+   * decisions of the Swarm are read first, by index, and only the conversations they name are loaded to check the reader's access:
+   * a Lead reads all, so one window of 100 answers. A reader of few finds fewer than 100 in it; the window is widened once, and
+   * if it still holds fewer while older decisions exist, every conversation is loaded to decide, as the list always did.
+   */
+  private async readableDecisions(tx: Transaction, user: AuthUser, tabId: string, state: SuperTabState, actor: Actor, windows: readonly number[]) {
+    const groups = new Map(state.conversations.map(c => [c.id, c]))
+    const reads = new Map<string, boolean>()
+    for (const window of windows) {
+      const newest = await newestDecisions(tx, tabId, window)
+      const unchecked = [...new Set(newest.map(d => d.conversationId))].filter(id => !reads.has(id))
+      const missing = unchecked.filter(id => !groups.has(id))
+      // A conversation that is gone, or of a kind this release does not know, is read by no one (as in a full load).
+      if (missing.length) for (const part of await loadGroups(tx, tabId, 'key', { key: { $in: missing } })) if (part.data && knownKind(part.data)) groups.set(part.key, part.data)
+      for (const id of unchecked) reads.set(id, groups.has(id) && canReadGroup(state, actor, groups.get(id)!))
+      const mine = newest.filter(d => reads.get(d.conversationId)).slice(0, LIST_SIZE)
+      if (mine.length === LIST_SIZE || newest.length < window) return mine
+    }
+    const { state: whole } = await this.load(tx, user, tabId, { allGroups: true })
+    return recentDecisions(tx, tabId, whole.conversations.filter(c => canReadGroup(whole, actor, c)).map(c => c.id))
   }
 
   /** What the attempts routed in the last `days` cost and how they went (costs/read.ts), over the groups the reader may read.

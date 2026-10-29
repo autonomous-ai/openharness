@@ -70,8 +70,6 @@ async function world(quiet = 0) {
     const peerGeneration = state.people.find(p => p.id === peer.sub)!.generation
     state.conversations.find(c => c.id === peerChat)!.audience = { people: [{ id: peer.sub, generation: peerGeneration }] }
     Object.assign(state.conversations.find(c => c.id === buddyChat)!, { kind: 'buddy', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation: peerGeneration }] } })
-    // An agent from before agents carried a project takes it from its conversations (projects.ts agentProjectId).
-    delete (state.agents.find(a => a.id === docsWorker) as { projectId?: string }).projectId
     const done = (group: string, as: string) => { state.conversations.find(c => c.id === group)!.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: as, status: 'done' } }
     done(docsGroup, 'docs-done')
     finished.forEach((group, i) => done(group, `done-${i}`))
@@ -83,6 +81,12 @@ async function world(quiet = 0) {
     author: { kind: 'person' as const, id: owner.sub, name: owner.email, membershipGeneration: tabId }, createdAt: new Date(MIGRATED - 2 * DAY) })) })
   const report = await migrateSwarm(db, tabId, { now: () => MIGRATED })
   if (!report.ok) throw new Error(report.error)
+  // An agent stored with no project takes it from its first conversation (projects.ts agentProjectId); the migration gives every
+  // agent of a Swarm with projects its own, so the part is changed as an older write left it.
+  const stored = await db.swarmAgent.findFirstOrThrow({ where: { tabId, key: docsWorker } })
+  const { projectId: _project, ...legacy } = stored.data as Record<string, unknown>
+  await db.swarmAgent.update({ where: { id: stored.id }, data: { data: legacy as never } })
+  expect((await db.swarmGroup.findFirst({ where: { tabId, key: docsGroup } }))?.dormant, 'the Docs worker\'s only conversation is quiet').toBe(true)
   return { tabId, lead, worker, docsWorker, web, docsGroup, secretGroup, peerChat, buddyChat, finished }
 }
 type World = Awaited<ReturnType<typeof world>>
@@ -148,9 +152,13 @@ describe('what the route-decision list gives each reader', () => {
   })
 
   it('is what it gave before when the newest hundred are mostly the reader\'s unreadable ones: a wider window of decisions', async () => {
-    const w = await world(3)
+    const w = await world(60)
     await decide(w, [[w.web, 120], [w.secretGroup, 150]])
     const got = await sameAnswers(w)
+    // The collaborator's read is the wider window, still without loading the Swarm's quiet groups.
+    const [, profile] = await profiled(() => store.routeDecisions(peer, w.tabId))
+    expect(profile.SuperTabRouteDecision).toMatchObject({ plans: ['IXSCAN { tabId: 1, createdAt: 1 }'], docsExamined: 100 + 270 })
+    expect(profile.SwarmGroup!.docsExamined).toBeLessThan(await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false } }))
     // The collaborator and the outsider read only Web: its newest 100 reach back past 150 secret decisions.
     expect(ids(got['a collaborator'])).toHaveLength(100)
     expect(ids(got['a member outside the private project'])).toHaveLength(100)
@@ -158,9 +166,12 @@ describe('what the route-decision list gives each reader', () => {
   })
 
   it('is what it gave before when even a wider window holds fewer than a hundred of the reader\'s: the whole Swarm is read', async () => {
-    const w = await world(3)
+    const w = await world(60)
     await decide(w, [[w.web, 60], [w.secretGroup, 600]])
     const got = await sameAnswers(w)
+    // Both windows, then every group.
+    const [, profile] = await profiled(() => store.routeDecisions(peer, w.tabId))
+    expect(profile.SwarmGroup!.docsExamined).toBeGreaterThanOrEqual(await db.swarmGroup.count({ where: { tabId: w.tabId, deleted: false } }))
     expect(ids(got['a collaborator'])).toHaveLength(60)
     expect(ids(got['the owner'])).toHaveLength(100)
   })
