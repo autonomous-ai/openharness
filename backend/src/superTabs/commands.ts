@@ -1,4 +1,4 @@
-import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername } from './usernames.js'
 import { z } from 'zod'
@@ -34,7 +34,7 @@ import { carryOver, cheapAttempt, GRID_START_FAILED, REVIEW_FAILED, stepUp, step
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
-import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
+import { BUDDY_OWN_MACHINE_REFUSAL, CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, requestLead, WAITING_TEXT } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
@@ -758,7 +758,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     const project = groupProject(state, conversation(state, conversationId))
     const member = candidate.kind === 'member' ? state.agents.find(a => a.id === candidate.agentId) : undefined
     if (candidate.kind === 'member' && !member) return null
-    if (state.machines?.some(m => m.machineId === (member?.machineId ?? candidate.machineId) && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
+    // A new agent never starts on a Buddy-only machine; an agent its person added there runs as one on a machine outside the Swarm.
+    if (!member && state.machines?.some(m => m.machineId === candidate.machineId && m.buddyOnly)) return { code: 'NOT_SWARM_MACHINE' as const, reason: NOT_SWARM_MACHINE }
     // A new agent on a Mac for a teammate's project runs in the Mac's Harness Team account (machines.ts teamStartRequest).
     const machineId = member?.machineId ?? teamMachineFor(state, candidate.machineId, project, context.teamAccountsIdle, context.teamMachines)
     const contributor = member?.contributorId ?? state.machines?.find(m => m.machineId === machineId)?.contributorId ?? starter
@@ -771,7 +772,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A confidential session in a Team account keeps the account for its project until its host confirms the close, which
       // it does once the session's data there is deleted (security re-check 2 of #2089).
       const held = onTeamAccount(state, target) && isConfidential(state, target) ? { heldFor: agentProjectId(state, target), since: context.now } : {}
-      ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId, ...held })
+      // Its machine part outlives the Buddy-only record while this closes: it stays as private as the record (read/changes.ts).
+      const hidden = state.machines?.some(m => m.machineId === target.machineId && m.buddyOnly) ? { buddyOnly: true as const } : {}
+      ;(state.closingSessions ??= []).push({ agentId: target.id, machineId: target.machineId, harnessId: target.harnessId, machineOwnerId: target.machineOwnerId,
+        ...held, ...hidden })
     }
     state.agents = state.agents.filter(a => a.id !== target.id)
     effects.cancelledAgents.push(target.id)
@@ -794,21 +798,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       maxAgents: 1, contributorId: me.id, membershipGeneration: me.generation, generation: operationId, paused: false, buddyOnly: true }
     ;(state.machines ??= []).push(pool)
     return pool
-  }
-
-  /** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
-   *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). After every command, so each way a
-   *  Buddy goes (removed, failed, its person or project gone) ends it, as expireRemovals does for removals. */
-  const dropIdleBuddyMachines = () => {
-    for (const pool of state.machines?.filter(m => m.buddyOnly) ?? []) {
-      if (state.agents.some(a => a.machineId === pool.machineId)
-        || state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) continue
-      state.machines = state.machines!.filter(m => m !== pool)
-      ;(state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: operationId, machineOwnerId: pool.contributorId,
-        requestedAt: new Date(context.now).toISOString() })
-      state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
-      state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
-    }
   }
 
   /** Takes a machine out of the Swarm with every agent on it (machine.remove, or its owner leaving): each agent is removed
@@ -1117,6 +1106,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // A Mac's Harness Team account joins by itself wherever its owner added the Mac, as that Mac (cli/src/superTabs/host.ts).
       const mac = context.contribution?.hostMachineId
         ? state.machines.find(m => m.machineId === context.contribution!.hostMachineId && m.contributorId === actor.userId && !m.removal) : undefined
+      // A Mac's Team account never joins through a Buddy-only record: that Mac is not in the Swarm (security review 2 of #2234).
+      if (context.contribution?.hostMachineId && state.machines.some(m => m.machineId === context.contribution!.hostMachineId && m.buddyOnly)) {
+        fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
+      }
       if (command.ifMissing) {
         if (actor.userId !== state.ownerId && !mac) fail('OWNER_REQUIRED', 'Only the Swarm owner adds a machine automatically.', 403)
         // A Buddy-only record is not the machine in the Swarm: it becomes an ordinary one below.
@@ -1579,7 +1572,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // machine shared with them, and never a Harness Team account (Ken's ruling, 10-28). The grant is the store's reading of
       // the machine's account row (store.ts contribution), never the request's.
       const listed = machineContribution(state, command.machineId)
-      const notOwn = () => fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403)
+      const notOwn = () => fail('BUDDY_OWN_MACHINE', BUDDY_OWN_MACHINE_REFUSAL, 403)
       if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) notOwn()
       // Off the Swarm's list it is recorded Buddy-only (Dee, 10-29): its host starts and watches the Buddy there, and nothing
       // else of the Swarm reaches it.
@@ -1915,7 +1908,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const pool of state.machines?.filter(m => m.contributorId === member.id && !m.removal && !m.buddyOnly) ?? []) {
         removeMachine(pool.machineId, pool, state.agents.filter(a => a.machineId === pool.machineId), machine => `${machine} left the Swarm with its owner`)
       }
-      // Their Buddies go with them, on whosever machine they run.
+      // Their Buddies go with them, on whosever machine they run, and those still starting fail, as buddy.remove does: otherwise a
+      // Buddy-only record kept for them would never end (security review 2 of #2234).
+      for (const start of state.starts?.filter(s => s.request.buddyOf?.personId === member.id && !s.harnessId && !s.error) ?? []) {
+        start.error = 'Its person left the Swarm before it started.'
+      }
       for (const target of state.agents.filter(a => a.contributorId === member.id || a.buddyOf?.personId === member.id)) removeAgent(target)
       state.people = state.people.filter(p => p.id !== member.id)
       state.invitations = state.invitations.filter(i => i.email !== member.email)
@@ -2298,7 +2295,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       (actor.kind === 'agent' && actor.agentId === target.id || actor.kind === 'person' && [state.ownerId, target.contributorId].includes(actor.userId))
     if (!acknowledged && !state.agents.some(a => a.id === target.id)) fail('STOP_REQUESTED', 'Wait for the execution host to finish stopping its workers before withdrawing them.')
   }
-  dropIdleBuddyMachines()
+  dropIdleBuddyMachines(state, context.now)
   syncLeads(state)
   if (context.registrations) requireSingleRegistration(original, state, context.registrations)
   markConfidential(state)

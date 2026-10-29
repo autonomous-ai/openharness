@@ -50,7 +50,10 @@ export interface ContributedMachine {
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
-export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string }
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string
+  /** Left by a Buddy-only machine (ContributedMachine.buddyOnly): like the record, no reader but its person learns of it, nor of
+   *  the part's removal once its host confirms (read/changes.ts; security review 1 of #2234). */
+  buddyOnly?: true }
 /** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
 export const REMOVAL_FALLBACK_MS = 30 * 60_000
 /** A cleanup that has waited REMOVAL_FALLBACK_MS since its removal, or one too old to say when: it no longer holds its
@@ -403,6 +406,22 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
 /** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
 export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
 export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
+
+/** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
+ *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
+ *  and every liveness sweep (liveness.ts), so each way a Buddy goes (removed, failed or timed out, its person or project
+ *  gone) ends it, as expireRemovals does for removals. Written as a machine part change, guarded by its version. */
+export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
+  for (const pool of state.machines?.filter(m => m.buddyOnly) ?? []) {
+    if (state.agents.some(a => a.machineId === pool.machineId)
+      || state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) continue
+    state.machines = state.machines!.filter(m => m !== pool)
+    ;(state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: stableId('buddy-machine', pool.machineId, pool.generation),
+      machineOwnerId: pool.contributorId, requestedAt: new Date(now).toISOString(), buddyOnly: true })
+    state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
+    state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
+  }
+}
 
 /** The Swarm's own machines: every contribution but a Buddy-only one (ContributedMachine.buddyOnly). */
 export const swarmMachines = (state: Pick<SuperTabState, 'machines'>): ContributedMachine[] => (state.machines ?? []).filter(m => !m.buddyOnly)

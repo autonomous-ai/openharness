@@ -10,6 +10,8 @@ import { LEAD_CAPABILITY } from './leadStart.js'
 import { hostTab } from './read/hostRows.js'
 import { leaderboard } from './leaderboard/stats.js'
 import { reassemble, split } from './parts/index.js'
+import { BUDDY_PICKUP_MS, sweepLiveness } from './liveness.js'
+
 
 const owner: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'owner', email: 'owner@example.com' }
 const peer: Extract<Actor, { kind: 'person' }> = { kind: 'person', userId: 'peer', email: 'peer@example.com' }
@@ -245,5 +247,88 @@ describe('a Buddy-only machine\'s end', () => {
     expect(buddyOnly(f)!.buddyOnly).toBeUndefined()
     expect(f.state.agents.map(a => a.id)).toContain(agentId)
     expect(visibleState(f.state, owner, 1000).machines!.map(m => m.machineId)).toContain('peer-laptop')
+  })
+})
+
+// Security reviews 1 and 2 of #2234.
+describe('a Buddy-only machine after its reviews', () => {
+  const hostUser = (sub: string) => ({ sub, email: `${sub}@example.com`, role: 'user', autonomousEnv: 'test' }) as never
+  const lookups = { people: [], confidential: new Set<string>(), agentGrant: async () => {}, teams: [], githubApp: false }
+
+  it('ends when its Buddy is never picked up while the machine reports (review 1)', () => {
+    const f = setup()
+    const added = addOwn(f, f.app.projectId)
+    const late = 1000 + BUDDY_PICKUP_MS + 1
+    buddyOnly(f)!.observation = reading(late)
+    sweepLiveness(f.state, late)
+    expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toContain('did not start this Buddy')
+    expect(buddyOnly(f)).toBeUndefined()
+    expect(f.state.machineCleanups).toEqual([expect.objectContaining({ machineId: 'peer-laptop', buddyOnly: true })])
+  })
+
+  it('ends when its Buddy\'s dispatched start times out (review 1)', () => {
+    const f = setup()
+    const added = addOwn(f, f.app.projectId)
+    const start = f.state.starts!.find(s => s.id === added.result.startId)!
+    Object.assign(start, { dispatched: true, dispatchedAt: 2000 })
+    const late = 2000 + 3 * 60_000 + 1 // liveness.ts START_RUN_MS
+    buddyOnly(f)!.observation = reading(late)
+    sweepLiveness(f.state, late)
+    expect(start.error).toBeTruthy()
+    expect(buddyOnly(f)).toBeUndefined()
+  })
+
+  it('ends when its person leaves while their Buddy is still starting (review 2)', () => {
+    const f = setup()
+    const added = addOwn(f, f.app.projectId)
+    f.run({ type: 'member.remove', userId: 'peer' })
+    expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toBe('Its person left the Swarm before it started.')
+    expect(buddyOnly(f)).toBeUndefined()
+  })
+
+  it('hides where a Buddy runs from everyone but its person; their other agents show theirs as today', () => {
+    const f = setup()
+    const { agentId } = running(f, f.app.projectId)
+    const pane = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'pane', machineId: 'peer-laptop', name: 'Pane', configuration, lead: false }, peer,
+      { contribution: own('peer') }).result.agentId as string
+    const where = (reader: Actor) => Object.fromEntries(visibleState(f.state, reader, 1000).agents.filter(a => [agentId, pane].includes(a.id)).map(a => [a.id, a.machineId]))
+    expect(where(owner)).toEqual({ [agentId]: '', [pane]: 'peer-laptop' })
+    expect(where(pmActor(f))).toEqual({ [agentId]: '', [pane]: 'peer-laptop' })
+    expect(where(peer)).toEqual({ [agentId]: 'peer-laptop', [pane]: 'peer-laptop' })
+    // A Buddy reads no machine ids at all, its own included (review 1 of #2115).
+    expect(where({ kind: 'agent', agentId, machineOwnerId: 'peer' })[agentId]).toBe('')
+  })
+
+  it('takes an agent its person adds there as today, still refusing new starts, and ends only once no agent is left (review 2, ruling)', () => {
+    const f = setup()
+    running(f, f.app.projectId)
+    const pane = f.run({ type: 'agent.add', conversationId: f.group, harnessId: 'pane', machineId: 'peer-laptop', name: 'Pane', configuration, lead: false }, peer,
+      { contribution: own('peer') }).result.agentId as string
+    expect(buddyOnly(f)?.buddyOnly).toBe(true)
+    const request = { conversationId: f.group, machineId: 'peer-laptop', engine: 'claude' as const, name: 'Builder',
+      cwd: `/home/peer/harness-swarm/${f.app.projectId}`, worktree: true, requirements: { memoryBytes: 1, diskBytes: 1, maxCpuPercent: 85, tools: [], devices: [], quotaRequired: false } }
+    expect(() => f.run({ type: 'agent.start', request }, peer)).toThrow('This machine is not one of the Swarm\'s machines')
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    expect(buddyOnly(f)?.buddyOnly).toBe(true)
+    f.run({ type: 'agent.remove', agentId: pane }, peer)
+    expect(buddyOnly(f)).toBeUndefined()
+  })
+
+  it('lets the Swarm owner\'s Lead there join the machine to the Swarm by itself, as before (review 2, ruling)', async () => {
+    const f = setup()
+    f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'owner-laptop', engine: 'claude', setup: { ...setupOf, name: 'Owner Laptop' } }, owner)
+    const docs = f.run({ type: 'project.create', name: 'Docs', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const lead = f.run({ type: 'agent.add', conversationId: docs.conversationId, harnessId: 'docs-pm', machineId: 'owner-laptop', name: 'Lead', configuration,
+      lead: true }, owner, { contribution: own('owner') }).result.agentId as string
+    const rows = await hostTab('swarm', f.state, 'owner-laptop', hostUser('owner'), null, lookups)
+    expect(rows.roster.find(r => 'agent' in r && r.agent.id === lead)).toMatchObject({ joinSwarm: true })
+  })
+
+  it('never lets a Mac\'s Team account join through it (review 2)', () => {
+    const f = setup()
+    addOwn(f, f.app.projectId)
+    expect(() => f.run({ type: 'machine.contribute', machineId: 'peer-team', name: 'Peer Laptop', cwd: '/team', scope: 'swarm', engines: ['claude'], maxAgents: 2,
+      ifMissing: true } as Command, peer, { contribution: { ...own('peer'), hostMachineId: 'peer-laptop' } })).toThrow('This machine is not one of the Swarm\'s machines')
+    expect(f.state.machines!.map(m => m.machineId)).toEqual(['owner-mac', 'peer-laptop'])
   })
 })

@@ -75,7 +75,9 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     resume,
     agent: target,
-    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
+    // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
+    // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
+    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly)
       && state.conversations.some(c => !c.archived && c.leadId === target.id),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),

@@ -1220,8 +1220,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   ({String state, String? detail})? _teamSetup;
   bool _teamSetupReading = false;
   SuperTabController get c => widget.controller;
+  // Team agents only: a Buddy is listed nowhere, and its machine may be its
+  // person's alone, outside the Swarm (backend buddyOnly).
   Set<String> get _ids => {
-    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
+    for (final a in c.snapshot?.teamAgents ?? const <SuperTabAgent>[])
+      a.machineId,
     for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
       m['machineId'] as String,
   };

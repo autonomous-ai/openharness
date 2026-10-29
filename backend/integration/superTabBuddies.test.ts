@@ -12,7 +12,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
-import { poolRows } from './hostRows.test-support.js'
+import { poolRows, rosterRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { beforeFirstWrite } from './interleave.test-support.js'
 
@@ -503,15 +503,75 @@ describe('a Buddy on its person\'s own machine outside the Swarm, through the st
     expect((await poolRows(f.store, peer, 'peer-laptop')).find(p => p.tabId === f.tab)).toBeUndefined()
   })
 
-  it('is refused on someone else\'s machine and on a Team sign-in, with or without a Mac, adding nothing', async () => {
+  // Security review 1 of #2234: the change feed sent the record's end to every member as a removal of that machine id.
+  it('never reaches another reader, by first load or change feed: while it runs, when its Buddy goes, when its host cleans up', async () => {
     const f = await swarm()
-    // Someone else's machine is refused before the Buddy rule: it was never shared with peer.
-    await expect(add(f, 'owner-laptop')).rejects.toMatchObject({ code: 'HOST_REQUIRED', status: 403 })
-    for (const machineId of ['peer-team', 'peer-dedicated']) {
-      await expect(add(f, machineId)).rejects.toMatchObject({ code: 'BUDDY_OWN_MACHINE', status: 403 })
+    const reads = new SwarmReads(f.store)
+    const others = [{ user: owner, as: undefined }, { user: owner, as: f.lead }] as const
+    const cursors = await Promise.all(others.map(o => reads.firstLoad(o.user, f.tab, o.as).then(r => r.cursor)))
+    const leaks = async (label: string) => {
+      for (const [i, o] of others.entries()) {
+        expect(JSON.stringify(await reads.firstLoad(o.user, f.tab, o.as)), `${label}: first load`).not.toContain('peer-laptop')
+        expect(JSON.stringify(await reads.changes(o.user, f.tab, cursors[i]!, o.as)), `${label}: changes`).not.toContain('peer-laptop')
+      }
     }
+    const added = await add(f, 'peer-laptop')
+    const pool = (await poolRows(f.store, peer, 'peer-laptop')).find(p => p.tabId === f.tab)!
+    await f.store.observeMachine(peer, f.tab, 'peer-laptop', { generation: pool.machine.generation, resources: { cpuPercent: 10, memoryTotalBytes: 16e9,
+      memoryUsedBytes: 4e9, diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const host = (command: Command) => f.execute(command, peer, undefined, 'peer-laptop')
+    const startId = String(added.result.startId)
+    await host({ type: 'agent.startDispatch', startId })
+    await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })
+    await leaks('running')
+    await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
+    await leaks('removed')
+    // Its own person's read never lists it as a machine either.
+    expect((await reads.changes(peer, f.tab, (await reads.firstLoad(peer, f.tab)).cursor)).machines.map(m => m.key)).not.toContain('peer-laptop')
+    const cleanup = (await rosterRows(f.store, peer, 'peer-laptop')).find(r => r.tabId === f.tab && 'cleanup' in r) as { cleanup: { removalId: string } }
+    // Its host confirms as the machine's person, as for any removed machine.
+    await f.execute({ type: 'machine.cleaned', machineId: 'peer-laptop', removalId: cleanup.cleanup.removalId }, peer)
+    expect((await rosterRows(f.store, peer, 'peer-laptop')).filter(r => r.tabId === f.tab && 'cleanup' in r)).toEqual([])
+    await leaks('cleaned')
+  })
+
+  it('never reaches another reader when its Buddy never launched', async () => {
+    const f = await swarm()
+    const reads = new SwarmReads(f.store)
+    const cursor = (await reads.firstLoad(owner, f.tab)).cursor
+    const added = await add(f, 'peer-laptop')
+    await f.execute({ type: 'agent.startFailed', startId: String(added.result.startId), error: 'Claude Code is not installed.' }, peer, undefined, 'peer-laptop')
+    expect(JSON.stringify(await reads.changes(owner, f.tab, cursor))).not.toContain('peer-laptop')
+    expect(JSON.stringify(await reads.firstLoad(owner, f.tab))).not.toContain('peer-laptop')
+  })
+
+  it('is refused in the same words on someone else\'s machine, a Team sign-in with or without a Mac, and no machine at all, adding nothing', async () => {
+    const f = await swarm()
+    // The same words for someone else's machine, a Team sign-in and a machine that does not exist, so they never say which
+    // (security review 2 of #2234).
+    const refusals = []
+    for (const machineId of ['owner-laptop', 'peer-team', 'peer-dedicated', 'ffffffffffffffffffffffffffffffff']) {
+      refusals.push(await add(f, machineId).then(() => null, (e: { code: string; message: string; status: number }) => [e.code, e.message, e.status]))
+    }
+    expect(refusals).toEqual(Array(4).fill(['BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours.', 403]))
     const read = await f.store.read(peer, f.tab)
     expect([read.state.starts ?? [], read.state.agents.filter(a => a.buddyOf)]).toEqual([[], []])
     expect(await poolRows(f.store, owner, 'owner-laptop')).toEqual([])
+  })
+
+  // Security review 1 of #2234: a private record in one Swarm made the same Mac read as "contributed in another Workspace" in a
+  // Swarm it truly serves, refusing teammates' work there and naming that association.
+  it('is no contribution another Swarm sees: the Mac it shares elsewhere still takes teammates\' work there', async () => {
+    const a = await swarm()
+    const files = new MemoryAttachmentStore()
+    const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
+    const b = (await store.create(peer, randomUUID(), 'Peer\'s own', 'public')).id
+    const stateA = (await a.store.read(owner, a.tab)).state, stateB = (await store.read(peer, b)).state
+    expect(stateB.workspaceId).not.toBe(stateA.workspaceId)
+    await store.execute(peer, b, { operationId: randomUUID(), command: { type: 'buddy.create', projectId: 'lead', machineId: 'peer-mac', engine: 'claude',
+      setup: { name: 'Peer Mac', cwd: '/home/peer/b', engines: ['claude'] } } })
+    expect((await poolRows(store, peer, 'peer-mac')).find(p => p.tabId === b)?.machine).toMatchObject({ buddyOnly: true })
+    expect(await a.store.otherWorkspaceMachines(db, stateA)).toEqual([])
   })
 })
