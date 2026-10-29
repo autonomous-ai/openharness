@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 
 import '../../terminal/terminal_typography.dart';
@@ -12,21 +14,34 @@ const terminalFontAssets = [
   'assets/fonts/roboto-mono/RobotoMono-Italic.ttf',
 ];
 
-/// Symbols Nerd Font Mono, the private-use icons. One file, loaded with the
-/// text face so a terminal is not first drawn without them.
+/// Symbols Nerd Font Mono, the private-use icons. Started with the text face.
+/// The workspace does not wait for it: the file is large, and a terminal
+/// redraws when the face lands.
 const terminalIconFontAsset =
     'assets/fonts/symbols-nerd-font-mono/SymbolsNerdFontMono-Regular.ttf';
 
-/// Registers the terminal's text face and its icon face. A screen already
-/// drawn re-lays out its text when they land (xterm re-measures its cells too).
-Future<void> loadTerminalFonts() async {
+/// Registers the terminal's text face and starts its icon face. Completes
+/// when the text face is ready. The icon file keeps loading; a screen already
+/// drawn re-lays out when a face lands (xterm re-measures its cells too).
+Future<void> loadTerminalFonts() {
   final text = FontLoader(webTerminalFontFamily);
   for (final asset in terminalFontAssets) {
     text.addFont(rootBundle.load(asset));
   }
   final icons = FontLoader(terminalIconFontFamily)
     ..addFont(rootBundle.load(terminalIconFontAsset));
-  await Future.wait([text.load(), icons.load()]);
+  return loadTextFaceFirst(text: text.load(), icons: icons.load());
+}
+
+/// Completes with [text]. [icons] is started and does not hold the result, so
+/// the workspace grace waits on Roboto Mono and not the icon file. An icon
+/// download that fails leaves the text face in place.
+Future<void> loadTextFaceFirst({
+  required Future<void> text,
+  required Future<void> icons,
+}) {
+  unawaited(icons.then((_) {}, onError: (Object _, StackTrace _) {}));
+  return text;
 }
 
 /// How long the workspace waits for [terminalFontAssets] once its library is in.
