@@ -1526,6 +1526,9 @@ export type BackendNotice =
   /** A commit changed what this machine's Swarm host reads (backend lib/swarmHostPushes.ts): it reads its changes now. Naming
    *  none, the server says it pushes them, and the host reads only when told (superTabs/hostFeed.ts HOST_PUSH_LEASE_MS). */
   | { type: 'swarm_host_changed'; tabId?: string; lastChangedAt?: number }
+  /** A Swarm the account is in changed (backend lib/swarmClientPushes.ts): this computer's windows read it again. Naming none,
+   *  the server says it pushes them (desktop super_tabs/swarm_pushes.dart). */
+  | { type: 'swarm_changed'; tabId?: string; lastChangedAt?: number; parts?: Array<'main' | 'machine'> }
 
 /** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
 export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
