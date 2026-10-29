@@ -49,11 +49,12 @@ class SuperTabPerson {
       chosenUsername = person.chosenUsername;
   final String id, email, role;
 
-  /// How the Swarm shows and tags them: the name they chose, else their
-  /// default ([superTabUsernames]). Their email is never shown in its place.
+  /// How the Swarm shows and tags them, as the server sends it, worked out in
+  /// its join order. From an older server, their default
+  /// ([superTabUsernames]). Their email is never shown in its place.
   final String username;
 
-  /// The name they chose; null while they use their default.
+  /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
@@ -82,10 +83,11 @@ String superTabDefaultUsername(String email) {
   return prefix.length < 2 ? '${prefix}1' : prefix;
 }
 
-/// [people] in join order, each with their username: the one they chose, else
-/// their email prefix numbered (`ken2`) after everyone who joined before them
-/// and every chosen name. The server works out the same names
-/// (backend/src/superTabs/usernames.ts); only chosen ones are stored.
+/// [people], each with their username: the one the server sent, else (an older
+/// server, which sends none) their email prefix numbered (`ken2`) after the
+/// people before them. The server works out names in its own join order and
+/// sends them (backend/src/superTabs/usernames.ts), since members can arrive
+/// in any order.
 List<SuperTabPerson> superTabUsernames(List<SuperTabPerson> people) {
   final taken = {for (final p in people) ?p.chosenUsername};
   return [

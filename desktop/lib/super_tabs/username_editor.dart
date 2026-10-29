@@ -25,11 +25,18 @@ class _SuperTabUsernameEditorState extends State<SuperTabUsernameEditor> {
   late final _text = TextEditingController(text: widget.username);
   String? _error;
 
+  /// The last name saved, until the server's version of it arrives.
+  String? _sent;
+
   @override
   void didUpdateWidget(SuperTabUsernameEditor old) {
     super.didUpdateWidget(old);
-    // A saved name comes back as the server keeps it (lowercased).
-    if (old.username != widget.username) _text.text = widget.username;
+    // A saved name comes back as the server keeps it (lowercased), but never
+    // over a newer edit typed while it was on its way.
+    final typed = _text.text.trim();
+    if (old.username == widget.username) return;
+    if (typed == old.username || typed == _sent) _text.text = widget.username;
+    _sent = null;
   }
 
   @override
@@ -45,7 +52,8 @@ class _SuperTabUsernameEditorState extends State<SuperTabUsernameEditor> {
 
   Future<void> _save() async {
     if (widget.busy || !_changed) return;
-    final error = await widget.onSave(_text.text.trim());
+    final error = await widget.onSave(_sent = _text.text.trim());
+    if (error != null) _sent = null;
     if (mounted) setState(() => _error = error);
   }
 

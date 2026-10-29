@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -216,6 +218,26 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a save that lands keeps what was typed while it was on its way',
+      (tester) async {
+        final server = _GatedUsernameServer();
+        final c = await openSheet(tester, server);
+        await tester.enterText(field, 'river');
+        await tester.pump();
+        await tester.tap(save);
+        await tester.pump();
+        await tester.enterText(field, 'pilot');
+        await tester.pump();
+        server.gate.complete();
+        await tester.pumpAndSettle();
+        expect(c.snapshot!.people.single.username, 'river');
+        expect(text(tester), 'pilot');
+        // The newer name is still there to save.
+        expect(enabled(tester), isTrue);
+      },
+    );
+
     testWidgets('an empty name cannot be saved', (tester) async {
       final server = ConversationServer();
       await openSheet(tester, server);
@@ -299,4 +321,21 @@ void main() {
       c.dispose();
     }
   });
+}
+
+/// Holds a username save until [gate] completes (review of #2088).
+class _GatedUsernameServer extends ConversationServer {
+  final gate = Completer<void>();
+  @override
+  Future<Map<String, dynamic>> request(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+  }) async {
+    if (method == 'POST' &&
+        (body?['command'] as Map?)?['type'] == 'member.username') {
+      await gate.future;
+    }
+    return super.request(method, path, body: body);
+  }
 }

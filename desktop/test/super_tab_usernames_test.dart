@@ -1,7 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/super_tabs/parts.dart';
 import 'package:harness/super_tabs/leaderboard/model.dart';
 import 'package:harness/super_tabs/leaderboard/person_row.dart';
 import 'package:harness/super_tabs/model.dart';
+
+import 'super_tab_parts_test.dart' show recorded;
 
 Map<String, dynamic> _person(String id, String email, [String? username]) => {
   'id': id,
@@ -27,8 +30,8 @@ Map<String, String> _names(List<Map<String, dynamic>> people) => {
 };
 
 void main() {
-  // The same cases backend/src/superTabs/usernames.test.ts checks: both sides
-  // work out defaults by this one rule.
+  // An older server sends no usernames: Desktop works out defaults by the
+  // rule backend/src/superTabs/usernames.test.ts checks.
   group('default usernames', () {
     test('is the lowercased email prefix, numbered by join order', () {
       expect(
@@ -66,6 +69,35 @@ void main() {
           {'a': 'pham.ngocswarm', 'b': 'x1', 'c': 'user', 'd': 'a' * 30},
         );
       },
+    );
+  });
+
+  test('names come from the server, whatever order members arrive in', () {
+    Map<String, dynamic> member(String id, String email, String username) => {
+      'key': id,
+      'version': 1,
+      'changedAt': 1793000000000,
+      'data': {
+        'id': id,
+        'email': email,
+        'role': 'collaborator',
+        'generation': 'g',
+        'username': username,
+      },
+    };
+    final load = recorded('first_load')
+      ..['members'] = [
+        member('6a86', 'ken15@autonomous.ai', 'ken15'),
+        // Joined after `earlier`, sent before it (review of #2088).
+        member('rejoined', 'ken@other.org', 'ken2'),
+        member('earlier', 'ken@example.com', 'ken'),
+      ];
+    final snapshot = SuperTabSnapshot.fromJson(
+      SuperTabParts.firstLoad(load).state,
+    );
+    expect(
+      {for (final p in snapshot.people) p.id: p.username},
+      {'6a86': 'ken15', 'rejoined': 'ken2', 'earlier': 'ken'},
     );
   });
 

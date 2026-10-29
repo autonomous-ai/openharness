@@ -93,6 +93,28 @@ void main() {
     expect(c.snapshot!.people.single.username, 'owner');
   });
 
+  test('a viewer changes their own username, though nothing else', () async {
+    final server = ConversationServer();
+    server.state['people'] = [
+      {'id': 'owner', 'email': 'owner@example.com', 'role': 'viewer'},
+    ];
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    expect(await c.setUsername('watcher'), isNull);
+    expect(lastCommand(server), {
+      'type': 'member.username',
+      'username': 'watcher',
+    });
+    expect(c.snapshot!.people.single.username, 'watcher');
+    final sent = server.posts.length;
+    expect(
+      await c.setStatus(const SuperTabPersonStatus(text: 'Hi')),
+      isNotNull,
+    );
+    expect(server.posts.length, sent);
+  });
+
   test('a taken username is refused in words', () async {
     final server = ConversationServer()
       ..refuse = {'code': 'USERNAME_TAKEN', 'message': 'dee is taken.'};
