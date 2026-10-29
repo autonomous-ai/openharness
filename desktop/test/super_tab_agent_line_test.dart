@@ -1,19 +1,15 @@
-// Team at a glance (Dee, 2026-10-27): "it's hard to monitor the team". Each agent row says, in one line, its state, the
-// machine it runs on and its model and effort; one click from the Agents heading shows every machine with its agents
-// and slots, the model and effort counts, and what looks wrong: work piled on one machine while others have room, busy
-// agents on an offline machine, and agents running another effort than their start asked for.
+// Each agent row says, in one line, its state, the machine it runs on and its model and effort (Dee, 2026-10-27:
+// "it's hard to monitor the team"). The Team at a glance screen that once opened from the Agents heading is gone
+// (Dee, 2026-10-29: fewer, clearer things).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/super_tabs/agent_details.dart';
-import 'package:harness/super_tabs/detail_dialog.dart';
 import 'package:harness/super_tabs/roster.dart';
-import 'package:harness/super_tabs/team_glance.dart';
+import 'package:harness/super_tabs/agent_line.dart';
 
 import 'support/super_tab_fixture.dart';
-
-const _offline = 10 * 60 * 1000;
 
 Map<String, dynamic> _machine(
   String id,
@@ -124,21 +120,6 @@ Future<ConversationServer> _swarm(
 Finder _row(String id) => find.byKey(ValueKey('super-member-$id'));
 Finder _line(String id, String text) =>
     find.descendant(of: _row(id), matching: find.text(text));
-
-/// The agents a machine lists for [state], as one row's value.
-String? _stateRow(Finder machine, String state) {
-  final row = find.descendant(
-    of: machine,
-    matching: find.ancestor(of: find.text(state), matching: find.byType(SuperTabDetailRow)),
-  );
-  if (row.evaluate().isEmpty) return null;
-  return (row.evaluate().first.widget as SuperTabDetailRow).value;
-}
-
-Future<void> _openGlance(WidgetTester tester) async {
-  await tester.tap(find.byTooltip('Team at a glance'));
-  await tester.pumpAndSettle();
-}
 
 void main() {
   group('an agent row', () {
@@ -318,249 +299,12 @@ void main() {
     });
   });
 
-  group('Team at a glance', () {
-    testWidgets(
-      'opens with one click and lists each machine with its slots, state and agents',
-      (tester) async {
-        await _swarm(
-          tester,
-          machines: [
-            _machine('m1', 'Mac Studio', free: 2),
-            _machine('m2', 'MacBook Pro', max: 2, free: 2, age: _offline),
-          ],
-          agents: [_agent('Atlas', 'm1')],
-        );
-        await _openGlance(tester);
-        final studio = find.byKey(const ValueKey('glance-machine-m1'));
-        expect(
-          find.descendant(of: studio, matching: find.text('Mac Studio')),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(
-            of: studio,
-            matching: find.text('Online · 2 of 4 slots used'),
-          ),
-          findsOneWidget,
-        );
-        // Agents by what they are doing, one row per state, as label and value (Ken, 2026-10-28).
-        expect(_stateRow(studio, 'Idle'), 'Lead, Atlas');
-        final laptop = find.byKey(const ValueKey('glance-machine-m2'));
-        expect(
-          find.descendant(
-            of: laptop,
-            matching: find.text('Offline · 0 of 2 slots used'),
-          ),
-          findsOneWidget,
-        );
-        expect(
-          find.descendant(of: laptop, matching: find.text('No agents')),
-          findsOneWidget,
-        );
-      },
-    );
-
-    testWidgets('counts agents per model and effort, most first', (
-      tester,
-    ) async {
-      await _swarm(
-        tester,
-        agents: [
-          _agent('Atlas', 'm1'),
-          _agent('Sage', 'm2', model: 'sonnet', effort: 'medium'),
-          _agent('Finn', 'm2'),
-        ],
-      );
-      await _openGlance(tester);
-      final counts = find.byKey(const ValueKey('glance-models'));
-      expect(
-        find.descendant(of: counts, matching: find.text('Opus · high · 3')),
-        findsOneWidget,
-      );
-      expect(
-        find.descendant(of: counts, matching: find.text('Sonnet · medium · 1')),
-        findsOneWidget,
-      );
-      expect(
-        tester.getTopLeft(find.text('Opus · high · 3')).dy,
-        lessThan(tester.getTopLeft(find.text('Sonnet · medium · 1')).dy),
-      );
-    });
-
-    testWidgets(
-      'warns when most busy agents sit on one machine while another has free slots',
-      (tester) async {
-        await _swarm(
-          tester,
-          machines: [
-            _machine('m1', 'Mac Studio', free: 0),
-            _machine('m2', 'MacBook Pro', free: 3),
-          ],
-          agents: [
-            _agent('Atlas', 'm1'),
-            _agent('Sage', 'm1'),
-            _agent('Finn', 'm2'),
-          ],
-          tasks: [
-            _task('Atlas', 'working'),
-            _task('Sage', 'working'),
-            _task('Finn', 'working'),
-          ],
-        );
-        await _openGlance(tester);
-        expect(
-          find.text(
-            '2 of 3 busy agents are on Mac Studio, while MacBook Pro has 3 free slots.',
-          ),
-          findsOneWidget,
-        );
-      },
-    );
-
-    testWidgets(
-      'does not warn about piling up when the other machines have no room or are offline',
-      (tester) async {
-        await _swarm(
-          tester,
-          machines: [
-            _machine('m1', 'Mac Studio', free: 0),
-            _machine('m2', 'MacBook Pro', free: 3, age: _offline),
-          ],
-          agents: [_agent('Atlas', 'm1'), _agent('Sage', 'm1')],
-          tasks: [_task('Atlas', 'working'), _task('Sage', 'working')],
-        );
-        await _openGlance(tester);
-        expect(find.textContaining('busy agents are on'), findsNothing);
-        expect(find.text('Nothing looks wrong.'), findsOneWidget);
-      },
-    );
-
-    // Review of #1759: a paused machine takes no new work, so its free slots are no room.
-    testWidgets('does not count a paused machine as room', (tester) async {
-      await _swarm(
-        tester,
-        machines: [
-          _machine('m1', 'Mac Studio', free: 0),
-          _machine('m2', 'MacBook Pro', free: 3, paused: true),
-        ],
-        agents: [_agent('Atlas', 'm1'), _agent('Sage', 'm1')],
-        tasks: [_task('Atlas', 'working'), _task('Sage', 'working')],
-      );
-      await _openGlance(tester);
-      expect(find.textContaining('busy agents are on'), findsNothing);
-      expect(find.text('Nothing looks wrong.'), findsOneWidget);
-    });
-
-    // Review of #1759: a teammate reads a Mac by its Harness Team account, as the Machines view does; a stale reading
-    // of the Mac's own pool beside a live Team account is not an offline machine.
-    testWidgets(
-      'reads a Mac by its Team account for a teammate, as the Machines view does',
-      (tester) async {
-        await _swarm(
-          tester,
-          account: 'peer',
-          machines: [
-            _machine('m1', 'Mac Studio', age: _offline),
-            _machine('m1-team', 'Mac Studio (team)', free: 3, host: 'm1'),
-            _machine('m2', 'MacBook Pro'),
-          ],
-          agents: [_agent('Finn', 'm1-team')],
-          tasks: [_task('Finn', 'working')],
-        );
-        await _openGlance(tester);
-        final studio = find.byKey(const ValueKey('glance-machine-m1'));
-        expect(
-          find.descendant(
-            of: studio,
-            matching: find.text('Online · 1 of 4 slots used'),
-          ),
-          findsOneWidget,
-        );
-        expect(_stateRow(studio, 'Assigned'), 'Finn');
-        expect(find.textContaining('which is offline'), findsNothing);
-        expect(
-          find.byKey(const ValueKey('glance-machine-m1-team')),
-          findsNothing,
-        );
-      },
-    );
-
-    testWidgets('warns about a busy agent on an offline machine', (
-      tester,
-    ) async {
-      await _swarm(
-        tester,
-        machines: [
-          _machine('m1', 'Mac Studio'),
-          _machine('m2', 'MacBook Pro', age: _offline),
-        ],
-        agents: [_agent('Finn', 'm2')],
-        tasks: [_task('Finn', 'working')],
-      );
-      await _openGlance(tester);
-      expect(
-        find.text('Finn is busy on MacBook Pro, which is offline.'),
-        findsOneWidget,
-      );
-    });
-
-    testWidgets(
-      'warns about an agent running another effort than its start asked for, not an unknown one',
-      (tester) async {
-        await _swarm(
-          tester,
-          agents: [
-            _agent('Hugo', 'm1', effort: 'xhigh'),
-            _agent('Nico', 'm1', effort: 'auto'),
-            _agent('Echo', 'm1'),
-          ],
-          starts: [
-            _start('Hugo', 'high'),
-            _start('Nico', 'high'),
-            _start('Echo', 'high'),
-          ],
-        );
-        await _openGlance(tester);
-        expect(
-          find.text('Hugo runs at xhigh effort; it was started at high.'),
-          findsOneWidget,
-        );
-        expect(find.textContaining('Nico runs'), findsNothing);
-        expect(find.textContaining('Echo runs'), findsNothing);
-      },
-    );
-  
-    testWidgets('busy agents on one offline machine are one warning, their names folded', (tester) async {
-      final names = ['Milo', 'Kai', 'Iris', 'Ellis', 'Nova'];
-      await _swarm(
-        tester,
-        machines: [_machine('m1', 'Mac Studio', max: 8), _machine('m2', 'MacBook Pro', max: 8, age: _offline)],
-        agents: [for (final name in names) _agent(name, 'm2')],
-        tasks: [for (final name in names) _task(name, 'working')],
-      );
-      await _openGlance(tester);
-      expect(find.text('5 agents are busy on MacBook Pro, which is offline.'), findsOneWidget);
-      expect(find.textContaining('Milo is busy'), findsNothing);
-      expect(find.text('Milo, Kai, Iris and 2 more'), findsOneWidget);
-      await tester.tap(find.text('Milo, Kai, Iris and 2 more'));
-      await tester.pumpAndSettle();
-      expect(
-        find.text('Milo, Kai, Iris, Ellis, Nova'),
-        findsNWidgets(2),
-        reason: 'the unfolded warning, and the machine\'s Assigned row',
-      );
-    });
-
-    testWidgets('agents on another effort than they started with are one warning, in plain words', (tester) async {
-      await _swarm(
-        tester,
-        agents: [_agent('Robin', 'm1', effort: 'xhigh'), _agent('Sage', 'm1', effort: 'xhigh')],
-        starts: [_start('Robin', 'high'), _start('Sage', 'high')],
-      );
-      await _openGlance(tester);
-      expect(find.text('2 agents run at another effort than they were started with.'), findsOneWidget);
-      expect(find.text('Robin (xhigh, started at high), Sage (xhigh, started at high)'), findsOneWidget);
-      expect(find.textContaining('runs effort'), findsNothing);
-    });
-});
+  testWidgets('the Agents heading has no Team at a glance button', (
+    tester,
+  ) async {
+    await _swarm(tester, agents: [_agent('Atlas', 'm1')]);
+    expect(find.text('Agents'), findsOneWidget);
+    expect(find.byTooltip('Team at a glance'), findsNothing);
+    expect(find.text('Team at a glance'), findsNothing);
+  });
 }
