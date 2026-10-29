@@ -148,8 +148,10 @@ class LeaderboardWeekSummary extends StatelessWidget {
         if (row.trend case final trend?)
           AppIcons.metadataSize + width(trend.figure, _TrendMark.style()),
     ].fold(0.0, (a, b) => a > b ? a : b);
+    // Cheaper's word sits outside the figures' column: it is no number.
     final valueWidth = [
-      for (final row in rows) width(row.value, valueStyle(row.key)),
+      for (final row in rows)
+        if (row.key != 'cheaper') width(row.value, valueStyle(row.key)),
     ].fold(0.0, (a, b) => a > b ? a : b);
     return Column(
       key: const ValueKey('week-summary'),
@@ -184,9 +186,10 @@ class LeaderboardWeekSummary extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: DesktopChrome.control(),
                           ),
+                          // A long caption wraps rather than losing its end.
                           Text(
                             row.caption,
-                            maxLines: 1,
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: DesktopChrome.metadata(),
                           ),
@@ -204,15 +207,18 @@ class LeaderboardWeekSummary extends StatelessWidget {
                         ),
                       ),
                     const SizedBox(width: _gap),
-                    SizedBox(
-                      width: valueWidth,
-                      child: Text(
-                        row.value,
-                        maxLines: 1,
-                        textAlign: TextAlign.right,
-                        style: valueStyle(row.key),
+                    if (row.key == 'cheaper')
+                      Text(row.value, maxLines: 1, style: valueStyle(row.key))
+                    else
+                      SizedBox(
+                        width: valueWidth,
+                        child: Text(
+                          row.value,
+                          maxLines: 1,
+                          textAlign: TextAlign.right,
+                          style: valueStyle(row.key),
+                        ),
                       ),
-                    ),
                   ],
                 ),
               ),
