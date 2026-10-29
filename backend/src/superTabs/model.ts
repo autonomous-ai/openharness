@@ -77,6 +77,9 @@ export interface Agent {
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
   buddyOf?: { personId: string; generation: string }
+  /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
+   *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
+  teamAccount?: true
 }
 export type AgentRole = 'builder' | 'reviewer'
 export const agentRole = (agent: Pick<Agent, 'role'>): AgentRole => agent.role ?? 'builder'
@@ -99,6 +102,9 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
+  /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
+   *  agent becomes the Lead of the project's Lead conversation once it runs. */
+  leadFor?: { projectId: string; personId: string; generation: string }
 }
 export interface AgentStart {
   poolGeneration?: string
@@ -202,6 +208,9 @@ export interface Conversation {
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
+  /** The sequence of its newest message in the main stream: a reply only in its thread leaves it (threads.ts). Absent until
+   *  this conversation's first message after threads; readers fall back to lastMessageSequence. */
+  lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
@@ -301,7 +310,10 @@ export interface SuperTabState {
   /** Native stop receipts survive late replaceable machine observations. */
   releasedHarnesses?: Array<{ machineId: string; harnessId: string }>
   /** Sessions of removed agents their host closes, listed to that host until it says they closed (agent.sessionClosed). */
-  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string }>
+  /** `heldFor`: a confidential session in a Harness Team account, whose project the account keeps serving alone until its
+   *  host confirms the close, which it does once its saved session there is deleted (machines.ts productManagerOn); `since`
+   *  when it was removed, and `noticed` once the Swarm said it lasts (liveness.ts). */
+  closingSessions?: Array<{ agentId: string; machineId: string; harnessId: string; machineOwnerId: string; heldFor?: string; since?: number; noticed?: true }>
   /** Removed machines whose host still has to clean up (machines.ts expireRemovals), listed only to that host. */
   machineCleanups?: import('./machines.js').MachineCleanup[]
   /** Conversations of a kind a later release added, set aside unchanged by a release that does not know it (parkLaterConversations). */
@@ -348,6 +360,10 @@ export interface MessageDraft {
   attachments?: import('./attachments.js').Attachment[]
   /** People a Lead tagged (mentions.ts). */
   mentions?: string[]
+  /** The root of the thread this reply is in; absent on a top-level message, which is its own thread (writeMessages). */
+  thread?: string
+  /** A thread reply also shown in the conversation's main stream. */
+  alsoInChat?: true
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }

@@ -237,6 +237,27 @@ describe('Super Tab collaboration policy', () => {
       { reply: { id: posted.id, conversationId: 'elsewhere', author: posted.author, createdAt: 0 } })).toThrow('Reply to a message in this conversation')
   })
 
+  it('files a reply under its thread root, never a nested thread, and keeps a reply to a pre-thread message inline', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const root = f.run({ type: 'message.send', conversationId: 'lead', text: 'Should we do threads?', replyTo: null, recipientIds: [] }).messages[0]!
+    expect(root.thread).toBeUndefined()
+    const first = f.run({ type: 'message.send', conversationId: 'lead', text: 'Yes.', replyTo: root.id, recipientIds: [] },
+      { kind: 'agent', agentId: lead, machineOwnerId: 'host-owner' }, { reply: { id: root.id, conversationId: 'lead', author: root.author, createdAt: 0, thread: root.id } }).messages[0]!
+    expect(first).toMatchObject({ replyTo: root.id, thread: root.id })
+    expect(first.alsoInChat).toBeUndefined()
+    // A reply to a reply joins the root's thread.
+    const second = f.run({ type: 'message.send', conversationId: 'lead', text: 'Agreed.', replyTo: first.id, recipientIds: [], alsoSend: true },
+      owner, { reply: { id: first.id, conversationId: 'lead', author: first.author, createdAt: 0, thread: root.id } }).messages[0]!
+    expect(second).toMatchObject({ replyTo: first.id, thread: root.id, alsoInChat: true })
+    // A message written before threads has none: a reply to it stays an inline quote.
+    const inline = f.run({ type: 'message.send', conversationId: 'lead', text: 'Old question answered.', replyTo: 'old-message', recipientIds: [], alsoSend: true },
+      owner, { reply: { id: 'old-message', conversationId: 'lead', author: root.author, createdAt: 0, thread: null } }).messages[0]!
+    expect(inline.replyTo).toBe('old-message')
+    expect(inline.thread).toBeUndefined()
+    expect(inline.alsoInChat).toBeUndefined()
+  })
+
   it('delivers an assigned worker\'s own post to its Lead, and nobody else\'s', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
@@ -1081,7 +1102,9 @@ it('allows the contributor to keep a completed worker and refuses another projec
   f.run({ type: 'agent.release', agentId: worker, decision: 'keep' }, peer)
   expect(f.state.agents.find(a => a.id === worker)!.workDecision).toBe('keep')
   const project = f.run({ type: 'project.create', name: 'Other', visibility: 'public', brief: '' }).result
-  const otherLead = f.add('other-lead', 'owner', project.conversationId as string, true)
+  // On another machine: a Team account running this project's Lead takes no other project's work (leadStart.ts, #895).
+  const otherLead = f.run({ type: 'agent.add', conversationId: project.conversationId as string, machineId: 'other-host', harnessId: 'other-lead',
+    name: 'other-lead', configuration: config, lead: true }, owner, { contribution: { machineOwnerId: 'host-owner', contributorId: 'owner' } }).result.agentId as string
   expect(() => f.run({ type: 'agent.release', agentId: worker, decision: 'stop' }, { kind: 'agent', agentId: otherLead, machineOwnerId: 'host-owner' })).toThrow()
 })
 

@@ -1,4 +1,6 @@
 import { encodeRuntimeProfile } from '../engines/kit/runtime.js'
+import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { parseRuntimeProfile } from '../lib/runtimeProfileWire.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
@@ -7,6 +9,8 @@ import { groupSkillMode, identifier, object } from './host.js'
 import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
+import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
+import { NO_PM_RELAY, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -34,6 +38,12 @@ function requireSuccess(reply: Json): Json {
   return object(reply.value)
 }
 /** A Buddy's start note: its owner's chat, where it talks, and nothing to wait for. */
+/** A project's Product Manager the Swarm started here (backend leadStart.ts): the Lead of the project's conversation, with
+ *  the lines Desktop's own-machine launch gives one (desktop super_tabs/launch_prompt.dart). */
+function leadPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
+  return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${mode ? `${swarmSkillUse('lead', mode)} ` : ''}Discuss first; build when authorized. Coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up. Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the request with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. Route only to start an agent or assign work, never your own: harness super-tab --tab ${tabId} route GROUP JSON. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
+}
+
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
@@ -307,6 +317,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
+      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, with no sign-in there: it signs
+      // in on the owner's relay, or not at all. With no relay it is refused before anything launches, and the queue moves it
+      // on (backend leadStart.ts), rather than starting signed out (security re-check 3 of #2089).
+      if (request.engine === 'codex' && request.leadFor && typeof request.leadFor === 'object' && isTeamDaemon() && !teamRelayed()) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: NO_PM_RELAY } }))
+        return { error: 'START_FAILED', startId, detail: NO_PM_RELAY }
+      }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
         error: 'CONTRIBUTION_REQUIRED', startId,
@@ -332,11 +349,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const skilled = ['claude', 'codex'].includes(String(request.engine)), reviewer = request.role === 'reviewer'
       // A Buddy's start names its owner (backend buddies.ts): it brainstorms in their chat and is never assigned work.
       const buddy = !!request.buddyOf && typeof request.buddyOf === 'object'
+      // A project's Product Manager (backend leadStart.ts): the Lead of its project's conversation once it runs.
+      const lead = !buddy && !!request.leadFor && typeof request.leadFor === 'object'
       // A contributed machine's host cannot read the tab as a Lead does: it asked the backend whose work this is when it
       // readied the start, and prepared it with the app's token if it is another person's (superTabs/projectFolder.ts).
       // Its Swarm read was refused with a 400 at every start until 2026-10-28, and its agents ran Harness orchestration
       // whatever their project's skills: the start read names them, and a backend from before that keeps orchestration.
-      const role = buddy ? 'buddy' : reviewer ? 'review' : 'dev', hosted = input.hostDispatch === true ? object(input.github) : null
+      const role = buddy ? 'buddy' : lead ? 'lead' : reviewer ? 'review' : 'dev', hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
       // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token. A Claude Buddy runs
@@ -349,7 +368,8 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
         ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),
         ...(github ? { swarmGitHub: true } : {}),
-        prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode) : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
+        prompt: buddy ? buddyPrompt(String(input.tabId), String(request.conversationId), mode)
+          : lead ? `${leadPrompt(String(input.tabId), String(request.conversationId), mode)}${github ? ` ${githubPromptLine(github.requester)}` : ''}` : `You are joining a shared Super Tab${reviewer ? ' as a Reviewer' : ''}. ${mode ? `${swarmSkillUse(role, mode)} ` : ''}Run harness super-tab --tab ${input.tabId} status until this harness appears in the roster. ${reviewer
           ? `Do not review yet. You review work in conversation ${request.conversationId} when it is ready for review.`
           : `Do not begin project work yet. Your lead will assign work in conversation ${request.conversationId}.`} Reply in that conversation using harness super-tab --tab ${input.tabId} post ${request.conversationId} 'your message' UNIQUE_OPERATION_ID. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.${github ? ` ${githubPromptLine(github.requester)}` : ''}`,
         ...(request.worktree ? { projectSource: 'worktree', gitSource: request.cwd, branchName: `super-tab/${startId}`,
@@ -357,6 +377,14 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
           ...(request.branchRef ? { branchRef: request.branchRef } : { branchBase: 'default' }) } : { cwd: request.cwd }),
       }
       for (const key of ['codexHome', 'gridModel', 'gridName']) if (request[key] !== undefined) payload[key] = request[key]
+      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, deleted whole when the Swarm
+      // ends it, so nothing of its chats stays where the account's next agent reads (teamDaemon.ts, security re-check 2 of #2089).
+      const pmHome = lead ? pmEngineHome(String(request.engine), creationId, isTeamDaemon(), homedir()) : null
+      if (pmHome) {
+        // Codex refuses a CODEX_HOME that is not there; only the Team user reads it.
+        mkdirSync(pmHome, { recursive: true, mode: 0o700 })
+        payload.codexHome = pmHome
+      }
       // The routed model goes on the command line of this session alone. Typing /model into the pane afterwards saves
       // it as the person's default in their own Claude settings (manual run 2, 2026-10-19).
       launched = canLaunch && launchesWithModel(resources.capacity, request.engine)

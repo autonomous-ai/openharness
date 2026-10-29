@@ -6,7 +6,7 @@ import { CODEX_RELAY_ACCOUNT, type SubscriptionRelay } from '../lib/subscription
 import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher, prepareCodexHome, installedCodexVersion, CODEX_CLIENT_VERSION_FALLBACK,
+  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion, CODEX_CLIENT_VERSION_FALLBACK,
   type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps,
 } from './relay.js'
 
@@ -156,7 +156,7 @@ describe('a launch in the team account', () => {
     const deps = launchDeps()
     expect(await teamRelayLaunch('claude', deps)).toEqual({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:9/claude', ANTHROPIC_AUTH_TOKEN: TOKEN }, args: [] })
     expect(deps.onboarded).toHaveBeenCalledWith('claude')
-    const codex = await teamRelayLaunch('codex', deps)
+    const codex = await teamRelayLaunch('codex', deps) as OwnerRelayLaunch | null
     expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
     expect(codex?.args).toContain('model_provider="harness_owner"')
     // Its home is made ready first (the owner's model list), and Codex stays an API-key provider of the relay.
@@ -164,10 +164,47 @@ describe('a launch in the team account', () => {
     expect(codex?.args).toContain('model_providers.harness_owner.env_key="HARNESS_RELAY_TOKEN"')
     expect(codex?.args.join(' ')).not.toContain('requires_openai_auth')
     // A home that could not be made ready still launches, as before.
-    expect((await teamRelayLaunch('codex', launchDeps({ codexHome: async () => { throw new Error('read-only') } })))?.args).toContain('model_provider="harness_owner"')
+    expect((await teamRelayLaunch('codex', launchDeps({ codexHome: async () => { throw new Error('read-only') } })) as OwnerRelayLaunch | null)?.args).toContain('model_provider="harness_owner"')
     // A first-run screen that cannot be recorded is left for the engine to ask.
     expect(await teamRelayLaunch('claude', launchDeps({ onboarded: () => { throw new Error('read-only') } }))).not.toBeNull()
     expect(await teamRelayLaunch('codex', launchDeps({ signedIn: async () => { throw new Error('keychain') } }))).not.toBeNull()
+  })
+
+  // Security re-check of #2089: a Codex Product Manager in a Team account runs in an engine home of its own (superTabs/
+  // teamDaemon.ts pmEngineHome). Whether it is signed in, and the owner's model list, are that home's, not the daemon's: it
+  // started signed out when the Team user had a Codex sign-in of its own, and without the owner's models.
+  it('for a launch in a Codex home of its own, asks that home whether it is signed in and readies that home', async () => {
+    const signedIn = vi.fn(async (_engine: 'claude' | 'codex', home?: string) => home === undefined)
+    const deps = launchDeps({ signedIn })
+    const codex = await teamRelayLaunch('codex', deps, '/Users/team/.harness-pm-homes/super-1/codex') as OwnerRelayLaunch | null
+    expect(signedIn).toHaveBeenCalledWith('codex', '/Users/team/.harness-pm-homes/super-1/codex')
+    expect(deps.codexHome).toHaveBeenCalledWith(grant, '/Users/team/.harness-pm-homes/super-1/codex')
+    expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
+    // The daemon's own Codex home, signed in itself, still launches on its own sign-in.
+    expect(await teamRelayLaunch('codex', deps)).toBeNull()
+  })
+
+  // Security re-check 2 of 9e49723b8: a launch in a Codex home of its own holds no sign-in there, so with no relay it is refused
+  // with why (create.ts and launchOverrides.ts honour it), never started signed out.
+  it('refuses a launch in a Codex home of its own that no relay and no sign-in there can sign in', async () => {
+    const home = '/Users/team/.harness-pm-homes/super-1/codex'
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }), home)).toEqual({ refused: NO_PM_RELAY })
+    expect(await teamRelayLaunch('codex', launchDeps({ config: () => null }), home)).toEqual({ refused: NO_PM_RELAY })
+    expect(NO_PM_RELAY).toBe('The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.')
+    // Signed in in that home, or not a Team daemon, or no home of its own: nothing to refuse.
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, signedIn: async () => true }), home)).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null, team: () => false }), home)).toBeNull()
+    expect(await teamRelayLaunch('codex', launchDeps({ read: () => null }))).toBeNull()
+  })
+
+  it('readies a Product Manager\'s own Codex home with the owner\'s models, and leaves the daemon\'s alone', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'team-pm-')), pm = join(root, '.harness-pm-homes', 'super-1', 'codex'), own = join(root, '.codex')
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }), { status: 200 }))
+    const codex = await teamRelayLaunch('codex', launchDeps({ codexHome: (g, home) => prepareCodexHome(home ?? own, g, { fetch: fetch as never, version: () => '0.165.0', now: () => 0 }) }), pm) as OwnerRelayLaunch | null
+    expect(codex?.args).toContain('model_provider="harness_owner"')
+    expect(JSON.parse(readFileSync(join(pm, 'models_cache.json'), 'utf8')).models).toEqual([{ slug: 'gpt-6.1-sol', visibility: 'list' }])
+    expect(existsSync(own)).toBe(false)
   })
 
   it('adds nothing elsewhere: another engine, the owner\'s own daemon, no team account, its own sign-in, no relay', async () => {

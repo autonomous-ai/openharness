@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
+const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true }))
+vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
+vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
@@ -266,6 +272,63 @@ it('starts no Buddy with full permissions or the GitHub App\'s token: Claude ref
     expect([engine, payload.permissionMode, payload.bypassPermission, payload.swarmGitHub]).toEqual([engine, mode, bypass, undefined])
     expect(payload.prompt).not.toContain('GitHub')
   }
+})
+
+it('starts a project\'s Product Manager with the swarm-lead skill, as the Lead of its project\'s conversation, with the GitHub App\'s token', async () => {
+  const f = fixture()
+  f.start.request = { ...f.start.request, leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+  await startAgent({ action: 'start', tabId: 'tab', operationId: 'lead-prompt', request: f.start.request, hostDispatch: true, github: { requester: 'owner' } } as never,
+    f.scoped, where, f.open)
+  const payload = f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!
+  expect(payload.swarmRole).toBe('lead')
+  expect(payload.swarmGitHub).toBe(true)
+  expect(payload.prompt).toContain('swarm-lead skill')
+  expect(payload.prompt).toContain(`You are the Product Manager of the project whose conversation is ${f.start.request.conversationId}, started by the Swarm`)
+  expect(payload.prompt).toContain(`harness super-tab --tab tab messages ${f.start.request.conversationId}`)
+  expect(payload.prompt).not.toContain('Your lead will assign')
+  expect(payload.prompt).not.toContain('swarm-dev')
+})
+
+// Security re-check 2 of #2089 (the Lead's option A): a Codex Product Manager in a Team account runs in an engine home of
+// its own, deleted whole when the Swarm ends it; a Claude Code one in the shared home, scrubbed then (inCore/teamApps.ts).
+it('starts a Codex Product Manager on a Team daemon in an engine home of its own, and no other agent or daemon so', async () => {
+  const launch = async (engine: string, lead: boolean, team: boolean) => {
+    teamDaemon.value = team
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine, ...(lead ? { leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } : {}) } as typeof f.start.request
+    await startAgent({ action: 'start', tabId: 'tab', operationId: `home-${engine}-${lead}-${team}`, request: f.start.request }, f.scoped, where, f.open)
+    return f.request.mock.calls.find(call => call[0] === 'agent_create')![1]!.codexHome
+  }
+  expect(await launch('codex', true, true)).toBe(join(homedir(), '.harness-pm-homes', 'super-native-receipt', 'codex'))
+  // Made before the launch: Codex refuses a CODEX_HOME that is not there.
+  expect(existsSync(join(homedir(), '.harness-pm-homes', 'super-native-receipt', 'codex'))).toBe(true)
+  expect(await launch('claude', true, true)).toBeUndefined()
+  expect(await launch('codex', false, true)).toBeUndefined()
+  expect(await launch('codex', true, false)).toBeUndefined()
+  teamDaemon.value = false
+})
+
+// Security re-check 3 of #2089: a Codex Product Manager in a Team account starts signed in on the owner's relay, or is
+// refused with why. Its own engine home holds no sign-in, so with no relay it started signed out.
+it('refuses a Codex Product Manager on a Team daemon with no owner relay before anything launches, saying why', async () => {
+  teamDaemon.value = true
+  teamDaemon.relayed = false
+  try {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'no-relay', request: f.start.request }, f.scoped, where, f.open)
+    const reason = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
+    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
+    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
+    expect(f.scoped.mock.calls.map(([input]) => (input as { command?: { type?: string; error?: string } }).command)).toContainEqual({ type: 'agent.startFailed', startId: expect.any(String), error: reason })
+    // A Claude Code one, and a Codex worker, are not this check's.
+    for (const request of [{ engine: 'claude', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex' }]) {
+      const g = fixture()
+      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: `other-${request.engine}`, request: g.start.request }, g.scoped, where, g.open)
+      expect(g.request.mock.calls.map(call => call[0])).toContain('agent_create')
+    }
+  } finally { teamDaemon.value = false; teamDaemon.relayed = true }
 })
 
 describe('the skills of the project the agent joins', () => {
