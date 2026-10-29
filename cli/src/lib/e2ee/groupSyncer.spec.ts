@@ -462,7 +462,9 @@ describe('GroupSyncer', () => {
     for (const n of f.nodes) n.syncer.stop()
   })
 
-  it('a round that missed a member tries again soon, then backs off', async () => {
+  // The first retry waits 30 s, as the relay holds a refused machine (remoteRelay.ts): at 15 s it went through the background
+  // pools and asked an offline machine again before the backend's retry-after was up (socket churn e2e, 2026-10-29).
+  it('a round that missed a member tries again after 30 s, then backs off', async () => {
     vi.useFakeTimers()
     const f = fleet()
     const [a, b] = [f.add('a'), f.add('b')]
@@ -472,7 +474,7 @@ describe('GroupSyncer', () => {
     const handle = vi.spyOn(b.syncer, 'handle')
     await a.syncer.syncAll()
     b.online = true
-    await vi.advanceTimersByTimeAsync(14_000)
+    await vi.advanceTimersByTimeAsync(29_000)
     expect(handle).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(2_000)
     expect(handle).toHaveBeenCalledTimes(1)
