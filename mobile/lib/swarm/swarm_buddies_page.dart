@@ -268,39 +268,51 @@ class SwarmBuddiesRow extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.baseline,
                           textBaseline: TextBaseline.alphabetic,
                           children: [
-                            Flexible(
-                              child: Text(
-                                row.project.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: AppType.label(
-                                  color: unread
-                                      ? AppPalette.textPrimary
-                                      : AppPalette.textSecondary,
-                                  height: 1.3,
-                                  fontWeight: unread ? AppFont.semibold : null,
-                                ),
+                            Expanded(
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.baseline,
+                                textBaseline: TextBaseline.alphabetic,
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      row.project.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppType.label(
+                                        color: unread
+                                            ? AppPalette.textPrimary
+                                            : AppPalette.textSecondary,
+                                        height: 1.3,
+                                        fontWeight: unread
+                                            ? AppFont.semibold
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: AppSpace.s),
+                                  Text(
+                                    state,
+                                    style: AppType.caption(
+                                      color: row.note == null
+                                          ? AppColors.success
+                                          : AppPalette.textFaint,
+                                      height: 1.3,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
-                            const SizedBox(width: AppSpace.s),
-                            Text(
-                              state,
-                              style: AppType.caption(
-                                color: row.note == null
-                                    ? AppColors.success
-                                    : AppPalette.textFaint,
-                                height: 1.3,
-                              ),
-                            ),
-                            const Spacer(),
-                            if (age.isNotEmpty)
+                            if (age.isNotEmpty) ...[
+                              const SizedBox(width: AppSpace.s),
                               Text(
                                 age,
+                                key: ValueKey('swarm-buddies-age-${row.key}'),
                                 style: AppType.caption(
                                   color: AppPalette.textFaint,
                                   height: 1.3,
                                 ),
                               ),
+                            ],
                           ],
                         ),
                         const SizedBox(height: 2),

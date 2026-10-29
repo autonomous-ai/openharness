@@ -90,6 +90,21 @@ void main() {
     );
   });
 
+  testWidgets("each row's time sits at its end, whatever its name's length", (
+    tester,
+  ) async {
+    await pump(tester, buddiesBackend());
+
+    double end(String row) =>
+        tester.getTopRight(key('swarm-buddies-age-$tab/$row')).dx;
+    expect(end(buddiesWeb), end(project));
+    expect(
+      end(project),
+      closeTo(tester.getTopRight(key(mobile)).dx - 16, .5),
+      reason: "at the row's inset",
+    );
+  });
+
   testWidgets('a chat with something unread is bold, with a dot; a read one '
       'is quiet', (tester) async {
     await pump(tester, buddiesBackend());
