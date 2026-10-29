@@ -286,6 +286,70 @@ never records what anyone wrote. The only text it shows is the title of a
 conversation the reader can read. Private conversations, Chat with PM among
 them, never count and never appear in it.
 
+## Cost records
+
+Every task a Lead routes records what it ran on, what it cost and how it ended,
+so a Swarm can show that it gets work done cheaper and route each job to the
+cheapest harness that still gets it right.
+
+Each attempt keeps:
+
+- the kind of job the Lead gave when routing (`ui`, `docs`; `review` for a
+  review), or none;
+- the engine, model and effort it ran at, and the model on the Swarm's grid when
+  it ran one;
+- how it was paid: an engine plan (subscription), per token through an API (an
+  API key, or a grid model shared from one), the Swarm's own GPUs, or unknown;
+- its session's token counts by model (input, output, cache reads and cache
+  writes) when it started and when it ended. Its tokens are the difference;
+- how it ended: done, stopped, cancelled, lost, or superseded when its group went
+  while it was still active. A task lost to a usage limit and taken back by the
+  same session is the same attempt, still going. Handing a lost task to another
+  agent is a new attempt; the old one stays lost.
+
+Each machine sends its running Swarm agents' token counts with its usual report.
+Only counts leave the machine: never text, prompts, folders or pull requests.
+Members never see the raw counts; they read the summary.
+
+**Prices.** Costs use API list prices per model, in US dollars, from one reviewed
+table in the backend (`backend/src/superTabs/costs/prices.ts`). Each price names
+its source and the day it was read. A model without a listed price has no cost,
+never a guessed one. Grid models reached through OpenRouter are priced at
+OpenRouter's rates. A model served on the Swarm's own GPUs costs 0, and its
+attempts say so. Two costs are shown: what the tokens would have cost on the API,
+and what was actually spent per token (nothing on a plan or on own GPUs).
+
+**Reading it.** The Lead reads `harness super-tab costs [--days N]` (7 days unless
+set, at most 90), for the Product Manager, and later for the leaderboard and the
+nightly reflection. Per engine, model, effort and kind of job it gives:
+attempts, first-review pass rate, shipped, median minutes from an attempt's start
+to its Done, tokens, API-equivalent cost, actual spend, and cost per shipped
+change. Cost per shipped change is shown only when every ended attempt's cost is
+known, so a partial sum never reads cheaper than it was. It covers only attempts
+routed since cost records began, in the groups the reader may read.
+
+Design:
+
+- Growth: the records live on route decisions, which are deleted after 90 days
+  as before. A machine's report keeps counts only for its running agents.
+- Concurrency: recorded in the same write that starts or ends the attempt, so a
+  newer write retries on current data like every other Swarm write.
+- Read cost: one index read of the period's decisions (tabId and creation time),
+  at most 3,000, then only the groups they name. It never reads messages.
+- Scale: a busy Swarm routes about 300 tasks a week, so 90 days is about 4,000;
+  the 3,000 cap says when it cut. The read's time is the first warning.
+- Compatibility: an old host sends no counts and its attempts have no tokens; an
+  old backend refuses the new fields and the CLI sends its report and routes
+  without them. The backend deploys first.
+- Migration and rollback: additive fields, no migration. Rolling back leaves them
+  unread.
+- Audience: the server returns only attempts in groups the reader may read.
+- Identity: counts are recorded per Swarm agent, never as the machine owner.
+- Failure: an attempt with no reading or no price shows no cost and is counted
+  apart, never as zero.
+- Platforms: the counts come from Claude Code and Codex transcripts on macOS,
+  Linux and Windows hosts alike.
+
 ## Avatars, status and celebrations
 
 People and agents each show one avatar wherever they appear: messages, the
