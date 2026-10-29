@@ -2751,10 +2751,13 @@ if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
   process.exit(0)
 }
 
+/** The Swarm's commands, loaded only when one runs (src/architecture.spec.ts SWARM_DOORS: one door). */
+const swarmCommands = () => import('./superTabs/command.js')
+
 /** `harness send`, `new`, `tell` and `close` (and the `harness mcp` tools that run them): never from a Buddy's pane
  *  (superTabs/buddyPane.ts, security review of #2087). Loaded only when one of them runs. */
 function unlessBuddy(run: () => Promise<number>): Promise<number> {
-  return import('./superTabs/command.js').then(({ buddyRefusal }) => buddyRefusal())
+  return swarmCommands().then(({ buddyRefusal }) => buddyRefusal())
     .then(refused => { if (!refused) return run(); console.error(refused); return 1 })
 }
 
@@ -2814,7 +2817,7 @@ switch (cmd) {
   // The Swarm's commands are loaded only when run: started from the sources, every daemon process runs this file, and
   // with the Swarm off (`HARNESS_SWARM`) none of them loads its code (src/architecture.spec.ts).
   case 'super-tab':
-    import('./superTabs/command.js').then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
+    swarmCommands().then(({ superTabCommand }) => superTabCommand(rest)).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'git-credential':
     // git's credential helper in a Swarm agent's session (docs/swarm-github-app.md); git runs it, people do not.
