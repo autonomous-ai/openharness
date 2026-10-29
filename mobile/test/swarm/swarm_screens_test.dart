@@ -439,6 +439,21 @@ void main() {
       expect(find.text('Which name should the flag have?'), findsOneWidget);
     });
 
+    testWidgets('a tag opens the conversation from its text too', (
+      tester,
+    ) async {
+      await pump(tester, backend(), const SwarmNeedsPage());
+      await tester.tap(key('swarm-need-row-mention:m1'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.textContaining('Can you check the copy?', findRichText: true),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmConversationPage), findsOneWidget);
+    });
+
     testWidgets('with Swarm off, says where to turn it on', (tester) async {
       await pump(tester, backend(), const SwarmPage(), on: false);
 

@@ -244,7 +244,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    for (final number in ['21', '92%']) {
+    for (final number in ['21', '44%']) {
       expect(find.text(number), findsOneWidget, reason: number);
       final paragraph = tester.renderObject<RenderParagraph>(find.text(number));
       expect(paragraph.didExceedMaxLines, isFalse, reason: number);
