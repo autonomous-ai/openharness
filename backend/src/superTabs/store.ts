@@ -1887,6 +1887,13 @@ export class SuperTabStore {
     const buddy = isBuddyReader(state, actor)
     const readable = (m: Pick<SuperTabMessage, 'source' | 'recipientIds'>) => (!agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId)))
       && !(buddy && routingRow(m.source))
+    // One thread is read only through a root this reader may read, and one that does not exist reads the same: a hidden
+    // root (an agent-only note to someone else; for a Buddy, a route row) is refused, never its replies alone (review 2 of
+    // #2168). By its id, through the primary key.
+    if (cursor.thread) {
+      const root = await tx.superTabMessage.findFirst({ where: { tabId, conversationId, id: cursor.thread }, select: { source: true, recipientIds: true } })
+      if (!root || !readable(root)) fail('NOT_FOUND', 'This thread is unavailable.', 404)
+    }
     const forward = cursor.after !== undefined
     const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
       : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }

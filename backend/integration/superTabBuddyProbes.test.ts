@@ -270,13 +270,14 @@ describe('a Buddy and threads', () => {
     expect(seen.threads.map(t => t.id)).not.toContain(route.id)
     // The reply reads as a message of its own: no pointer to the row the Buddy may not read.
     expect(seen.messages.find(m => m.id === reply)!.thread ?? null).toBeNull()
-    const thread = await f.store.messages(peer, f.tab, group, { thread: route.id }, agentId)
-    expect(thread.messages.map(m => m.id)).toEqual([reply])
-    expect(thread.threads.map(t => t.id)).not.toContain(route.id)
+    // Its thread is refused like any message it may not read, as is a thread that does not exist (review 2 of #2168).
+    await expect(f.store.messages(peer, f.tab, group, { thread: route.id }, agentId)).rejects.toThrow('unavailable')
+    await expect(f.store.messages(peer, f.tab, group, { thread: 'invented-root' }, agentId)).rejects.toThrow('unavailable')
+    expect((await f.store.messages(owner, f.tab, group, { thread: route.id }, f.lead)).messages.map(m => m.id)).toEqual([route.id, reply])
     expect(seen.messages.find(m => m.id === legacy)!.replyTo).toBeNull()
     // Nothing names the route row: not a reply's thread or reply-to, not a reply line (review 1 of #2168).
-    expect(JSON.stringify([seen, thread])).not.toContain(route.id)
-    expect(JSON.stringify([seen, thread])).not.toContain('OWNER-PRIVATE-HOST')
+    expect(JSON.stringify(seen)).not.toContain(route.id)
+    expect(JSON.stringify(seen)).not.toContain('OWNER-PRIVATE-HOST')
   })
 })
 
@@ -292,11 +293,11 @@ it('gives no reader a pointer to, or reply line for, an agent-only note it may n
   const lead = await f.store.messages(owner, f.tab, 'lead', {}, f.lead)
   expect(lead.messages.find(m => m.id === reply)).toMatchObject({ thread: note, replyTo: note })
   expect(lead.threads.map(t => t.id)).toContain(note)
+  expect((await f.store.messages(owner, f.tab, 'lead', { thread: note }, f.lead)).messages.map(m => m.id)).toEqual([note, reply])
   for (const [user, as] of [[owner, undefined], [peer, agentId]] as const) {
-    for (const cursor of [{}, { thread: note }]) {
-      const read = await f.store.messages(user, f.tab, 'lead', cursor, as)
-      if (!('thread' in cursor)) expect(read.messages.find(m => m.id === reply)).toMatchObject({ thread: null, replyTo: null })
-      expect(JSON.stringify(read)).not.toContain(note)
-    }
+    const read = await f.store.messages(user, f.tab, 'lead', {}, as)
+    expect(read.messages.find(m => m.id === reply)).toMatchObject({ thread: null, replyTo: null })
+    expect(JSON.stringify(read)).not.toContain(note)
+    await expect(f.store.messages(user, f.tab, 'lead', { thread: note }, as)).rejects.toThrow('unavailable')
   }
 })
