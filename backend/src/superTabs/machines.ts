@@ -95,7 +95,11 @@ const readiness = z.object({
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
-  quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
+  quotas: z.array(quota).max(32),
+  /** Per engine whose allowance is unknown, why, in plain words naming no account, token or plan (cli superTabs/capacity.ts
+   *  quotaUnknownReason): what the route says of it. Absent from hosts before it. */
+  quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
+  runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
