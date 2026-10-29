@@ -11,7 +11,7 @@ import { win32 } from 'node:path'
 import type { JobState } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { GhBuild } from './gh.js'
-import { TeamSignInError } from './handoff.js'
+import { TeamSignInError } from './signInError.js'
 import { HANDOFF_CODE } from './layout.js'
 import type { PrivacyItem } from './privacy.js'
 import {
