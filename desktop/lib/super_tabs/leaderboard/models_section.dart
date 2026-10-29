@@ -20,8 +20,8 @@ const leaderboardModelMinReviewed = 3;
 /// How many models the sidebar lists until its heading shows them all.
 const leaderboardModelsShown = 3;
 
-/// A model as the sidebar's Models lists it: every effort it ran at as one,
-/// and how many of its attempts reviewers approved on first review.
+/// A model as the sidebar's Models lists it: every engine and effort it ran
+/// at as one, and how many of its attempts reviewers approved on first review.
 class LeaderboardModelShare {
   const LeaderboardModelShare({
     required this.name,
@@ -46,9 +46,10 @@ List<LeaderboardModelShare> leaderboardModelShares(SuperTabLeaderboard board) {
       final String model => modelDisplayName(model),
       null => engineIdentity(score.engine).label,
     };
-    final key = '${score.engine}/$name';
-    final before = merged[key];
-    merged[key] = (
+    // One row per model, whichever engine ran it at whichever effort:
+    // rows are keyed by name.
+    final before = merged[name];
+    merged[name] = (
       name: name,
       reviewed: (before?.reviewed ?? 0) + score.reviewed,
       passed: (before?.passed ?? 0) + score.passed,

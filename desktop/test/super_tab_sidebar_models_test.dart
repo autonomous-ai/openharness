@@ -139,6 +139,28 @@ void main() {
     await close(tester, controller);
   });
 
+  testWidgets(
+    'lists a model run through two engines once, its reviews together',
+    (tester) async {
+      // Review of e4b70e9: one grid model through Claude Code and Codex drew
+      // two rows with one key ("Duplicate keys found").
+      final server = modelsSwarm();
+      server.leaderboard!['byModel'] = [
+        modelScore('claude', 'qwen3', 'high', reviewed: 4, passed: 3),
+        modelScore('codex', 'qwen3', null, reviewed: 4, passed: 4),
+      ];
+      final controller = await show(tester, server);
+      expect(tester.takeException(), isNull);
+      expect(row('qwen3'), findsOneWidget);
+      expect(inRow('qwen3', find.text('88%')), findsOneWidget);
+      expect(
+        find.byTooltip('7 of 8 approved on first review this week'),
+        findsOneWidget,
+      );
+      await close(tester, controller);
+    },
+  );
+
   testWidgets('hides Models when no model has three first reviews', (
     tester,
   ) async {
