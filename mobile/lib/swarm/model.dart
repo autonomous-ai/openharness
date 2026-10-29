@@ -165,6 +165,7 @@ class SuperTabConversation {
           ? SuperTabTask.fromJson(superTabMap(row['task']))
           : null,
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
+      lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
@@ -206,6 +207,16 @@ class SuperTabConversation {
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
   final int lastMessageSequence;
+
+  /// Its newest message in the main stream: a reply only in its thread
+  /// leaves it. Null from a backend before threads, or before this
+  /// conversation's first message since.
+  final int? lastMainSequence;
+
+  /// The newest message that makes it unread, as the desktop's
+  /// `SuperTabController.unread` counts it: a reply only in its thread does
+  /// not, though the phone, with no thread view yet, shows it in the chat.
+  int get mainSequence => lastMainSequence ?? lastMessageSequence;
 
   /// Moves whenever a reaction here is added or taken back (backend
   /// reactions.ts): the messages shown are read again for their counts.
@@ -781,12 +792,41 @@ class SuperTabDelivery {
   };
 }
 
+/// What a page says about one thread (backend threads.ts): the line under its
+/// root, and who it marks unread for. Read as the desktop's model reads it
+/// (desktop_parity_test); the phone shows none of it yet.
+class SuperTabThread {
+  SuperTabThread.fromJson(Map<String, dynamic> row)
+    : id = _text(row, 'id'),
+      replies = (row['replies'] as num).toInt(),
+      lastSequence = (row['lastSequence'] as num).toInt(),
+      lastAt = DateTime.tryParse(row['lastAt'] as String? ?? ''),
+      authors = List.unmodifiable(
+        (row['authors'] as List? ?? const []).map(superTabMap),
+      ),
+      people = List.unmodifiable(
+        (row['people'] as List? ?? const []).whereType<String>(),
+      );
+  final String id;
+  final int replies, lastSequence;
+  final DateTime? lastAt;
+
+  /// The newest distinct reply authors, newest first: the first wrote the
+  /// last reply.
+  final List<Map<String, dynamic>> authors;
+
+  /// People who wrote in the thread or were tagged in it.
+  final List<String> people;
+}
+
 class SuperTabMessage {
   SuperTabMessage.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
       conversationId = _text(row, 'conversationId'),
       text = _text(row, 'text'),
       replyTo = row['replyTo'] as String?,
+      thread = row['thread'] as String?,
+      alsoInChat = row['alsoInChat'] == true,
       sequence = (row['sequence'] as num).toInt(),
       author = Map.unmodifiable(superTabMap(row['author'])),
       source = Map.unmodifiable(superTabMap(row['source'] ?? const {})),
@@ -804,6 +844,18 @@ class SuperTabMessage {
       );
   final String id, conversationId, text;
   final String? replyTo;
+
+  /// The root of this message's thread: its own id for a top-level message,
+  /// null for one written before threads (its replies stay inline quotes).
+  final String? thread;
+
+  /// A thread reply also shown in the conversation's main stream.
+  final bool alsoInChat;
+  bool get threadReply => thread != null && thread != id;
+
+  /// Whether the main stream lists it: a thread reply only when also sent.
+  /// The phone, with no thread view yet, shows every reply in the chat.
+  bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;
   final Map<String, dynamic> author;
   final Map<String, dynamic> source;
