@@ -1006,6 +1006,44 @@ void main() {
     );
   }
 
+  testWidgets('The reasons and the clone note fit at 200% text, narrow', (
+    tester,
+  ) async {
+    const signedOut = LeadMachine(
+      id: 'rig',
+      name: '2x 4090 Rig',
+      online: true,
+      freeAgents: 16,
+      engineRefusals: {
+        'claude': 'Claude Code isn’t offered here',
+        'codex': 'Codex isn’t signed in',
+      },
+    );
+    final (box, boundary) = await mount(
+      tester,
+      width: 520,
+      textScale: 2,
+      leadMachines: [signedOut],
+    );
+    expect(box.leadNone, isTrue);
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await shot(tester, boundary, 'new-project-none-200');
+    await unmount(tester);
+    final (_, teamBoundary) = await mount(
+      tester,
+      width: 520,
+      textScale: 2,
+      leadMachines: [studioFull, diegoTeam],
+      setup: agentIn,
+    );
+    expect(find.text('Clones lamp-os there first'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await shot(tester, teamBoundary, 'new-project-team-200');
+    await unmount(tester);
+  });
+
   testWidgets('A paused Swarm gives the pause as the reason', (tester) async {
     final (_, _) = await mount(
       tester,
