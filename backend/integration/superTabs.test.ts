@@ -3149,6 +3149,16 @@ describe('Lead mentions', () => {
     expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
   })
 
+  it('lists a person’s tag of another person under the author’s username, never their email', async () => {
+    const { tab, group } = await tagged()
+    await run(tab, { type: 'member.username', username: 'boss' })
+    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
+      mentions: [peer.sub] })).result.messageId as string
+    const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: 'Peer, see above.' }))
+    expect(JSON.stringify(mention)).not.toContain(owner.email)
+  })
+
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {
     const { tab, group } = await tagged()
     await run(tab, { type: 'message.send', conversationId: group, text: 'Owner chimes in.', replyTo: null, recipientIds: [] })

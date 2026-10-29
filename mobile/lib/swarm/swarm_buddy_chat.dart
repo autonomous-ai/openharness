@@ -42,36 +42,6 @@ Future<String?> openSwarmBuddy(
   return null;
 }
 
-/// The person's Buddy in [projectId] as a face: its own, or a plain "B" for
-/// Buddy while none runs.
-class SwarmBuddyAvatar extends StatelessWidget {
-  const SwarmBuddyAvatar({
-    super.key,
-    required this.reader,
-    required this.projectId,
-    this.size = 32,
-  });
-
-  final SwarmReader reader;
-  final String projectId;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => switch (swarmBuddy(reader, projectId)) {
-    final agent? => SwarmAvatar(
-      id: agent.id,
-      name: swarmBuddyName(reader, projectId),
-      picture: agent.avatar,
-      size: size,
-    ),
-    null => SwarmAvatar(
-      id: 'buddy:${reader.tabId}/$projectId',
-      name: 'Buddy',
-      size: size,
-    ),
-  };
-}
-
 /// Under the person's Buddy chat's header (#2090; the desktop's
 /// `SuperTabBuddyBar`): who else can see their Buddy's terminal, when someone
 /// can, and, while it is down, Start again. With no Buddy, how its start

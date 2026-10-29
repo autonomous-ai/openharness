@@ -8,7 +8,6 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 
-import 'swarm_conversation.dart';
 import 'swarm_file_picker.dart';
 import 'swarm_message_row.dart'
     show swarmChatCard, swarmChatHair, swarmFileSize;
@@ -178,13 +177,14 @@ Future<bool> showSwarmAccessOff(
 /// thumbnail or a file's mark, its name, its size — or, going up, how much has gone — and ✕ to
 /// take it off. Nothing while there are none.
 class SwarmOutgoingChips extends StatelessWidget {
-  const SwarmOutgoingChips({super.key, required this.conversation});
+  const SwarmOutgoingChips({super.key, required this.box});
 
-  final SwarmConversation conversation;
+  /// The chat's composer, or a thread's reply box.
+  final SwarmFilesBox box;
 
   @override
   Widget build(BuildContext context) {
-    final files = conversation.files.files;
+    final files = box.files.files;
     if (files.isEmpty) return const SizedBox.shrink();
     return SizedBox(
       height: _chipHeight + AppSpace.s,
@@ -196,10 +196,10 @@ class SwarmOutgoingChips extends StatelessWidget {
         separatorBuilder: (_, _) => const SizedBox(width: AppSpace.s),
         itemBuilder: (context, i) => _Chip(
           file: files[i],
-          progress: conversation.isUploading(files[i])
-              ? conversation.uploadProgress(files[i]) ?? 0
+          progress: box.isUploading(files[i])
+              ? box.uploadProgress(files[i]) ?? 0
               : null,
-          onRemove: () => conversation.files.remove(files[i]),
+          onRemove: () => box.files.remove(files[i]),
         ),
       ),
     );

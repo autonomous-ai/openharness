@@ -20,6 +20,14 @@ extension SuperTabProfileActions on SuperTabController {
           },
   });
 
+  /// The reader's own username, trimmed (the server lowercases it), or back
+  /// to their default when null. A taken name comes back in words. A viewer
+  /// may change theirs too, though nothing else.
+  Future<String?> setUsername(String? username) => _profile({
+    'type': 'member.username',
+    'username': username?.trim(),
+  }, viewer: true);
+
   /// [agentId]'s avatar when given (its contributor's or Lead's to change),
   /// else the reader's own: [preset], or back to the default when null.
   /// An upload goes through [uploadAvatar].
@@ -70,14 +78,23 @@ extension SuperTabProfileActions on SuperTabController {
     return failure;
   }
 
-  Future<String?> _profile(Map<String, dynamic> command) async {
-    final failure = await _send(command);
+  Future<String?> _profile(
+    Map<String, dynamic> command, {
+    bool viewer = false,
+  }) async {
+    final failure = await _send(command, viewer: viewer);
     if (failure == null) await refresh();
     return failure;
   }
 
-  Future<String?> _send(Map<String, dynamic> command) async {
-    if (!canWrite) return _readOnly;
+  Future<String?> _send(
+    Map<String, dynamic> command, {
+    bool viewer = false,
+  }) async {
+    final member =
+        !accessRevoked &&
+        snapshot?.people.any((p) => p.id == accountId) == true;
+    if (!(viewer ? member : canWrite)) return _readOnly;
     try {
       await request(
         'POST',

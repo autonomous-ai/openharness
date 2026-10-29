@@ -304,3 +304,48 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     expect([working.status, JSON.parse(working.stdout).hookSpecificOutput.permissionDecision]).toEqual([0, 'allow'])
   })
 })
+
+// Scholes, 10-29, and the Lead's ruling on #2185's security reviews: a Buddy never waits on a person. Whatever shape a call
+// takes, the guard answers it now, allow or deny, with a reason the Buddy reads; never "ask", which would put a prompt in a
+// terminal nobody watches, and never silence, which would hand the call to the permission rules.
+describe('a Buddy never waits on an approval', () => {
+  const tools: Array<[string, Record<string, unknown>]> = [
+    ['Monitor', { command: 'while true; do harness super-tab --tab t messages chat; sleep 30; done', description: 'x', persistent: true }],
+    ['AskUserQuestion', { questions: [{ question: 'Go?', header: 'Go', options: [{ label: 'Yes' }, { label: 'No' }] }] }],
+    ['ExitPlanMode', { plan: 'x' }], ['EnterPlanMode', {}], ['Agent', { prompt: 'x', description: 'x' }], ['Task', { prompt: 'x' }],
+    ['WebFetch', { url: 'https://example.com', prompt: 'x' }], ['WebSearch', { query: 'x' }], ['NotebookEdit', { notebook_path: 'a.ipynb' }],
+    ['Skill', { skill: 'x' }], ['CronCreate', { cron: '* * * * *', prompt: 'x' }], ['mcp__any__tool', {}], ['', {}],
+    ['Read', { file_path: join(outside, 'secret.txt') }], ['Read', {}], ['Glob', { pattern: '../**' }], ['Grep', { pattern: 'x', path: '/' }],
+    ['Bash', { command: 'harness super-tab --tab t messages chat', run_in_background: true }], ['Bash', {}],
+  ]
+  const words = ['harness super-tab --tab t messages chat', 'git log', 'git push', 'curl -X POST x', 'cat a.txt', 'sleep 30', 'rm -rf .',
+    'gh pr create', 'tail -f a.txt', 'harness new codex', 'npm install', 'python3 -c 1']
+  const joins = [(a: string, b: string) => `${a}; ${b}`, (a: string, b: string) => `${a} && ${b}`, (a: string, b: string) => `${a} | ${b}`,
+    (a: string, b: string) => `${a} & ${b}`, (a: string, b: string) => `${a}\n${b}`, (a: string) => `$(${a})`, (a: string) => `\`${a}\``,
+    (a: string) => `while true; do ${a}; done`, (a: string) => `bash -c '${a}'`, (a: string) => `${a} > out.txt`, (a: string) => `(${a})`,
+    (a: string) => `nohup ${a}`, (a: string) => `FOO=1 ${a}`, (a: string) => a]
+  const shapes = joins.flatMap(join => words.map((word, i) => join(word, words[(i + 1) % words.length]!)))
+
+  function answer(tool: string, input: Record<string, unknown>) {
+    const run = hook(JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: input, cwd: root }))
+    return { status: run.status, output: run.stdout ? JSON.parse(run.stdout).hookSpecificOutput : null }
+  }
+
+  it.each(tools)('answers the %s tool now, never asking', (tool, input) => {
+    const { status, output } = answer(tool, input)
+    expect(status).toBe(0)
+    expect(['allow', 'deny']).toContain(output.permissionDecision)
+    expect(output.permissionDecisionReason).toEqual(expect.any(String))
+    if (output.permissionDecision === 'deny') expect(output.permissionDecisionReason).toContain('nobody will be asked')
+  })
+
+  // One test each: a spawn per shape, so one slow machine never times out the whole set.
+  it.each(shapes)('answers the shell shape %j now, never asking, and refuses it unless it only reads', command => {
+    const { status, output } = answer('Bash', { command, description: 'x' })
+    expect(status).toBe(0)
+    expect(['allow', 'deny']).toContain(output.permissionDecision)
+    if (output.permissionDecision === 'deny') expect(output.permissionDecisionReason).toContain('nobody will be asked')
+    // Only a single plain command of the Buddy's own reads; every joined, looped, redirected or wrapped one is refused.
+    if (/[;&|`$()>\n]|^(while|bash|nohup|FOO=)/.test(command)) expect(output.permissionDecision).toBe('deny')
+  })
+})

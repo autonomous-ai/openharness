@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/swarm/swarm_home_rows.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
-import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
 
@@ -72,24 +72,22 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets("the project's menu draws the read's one glance", (tester) async {
+  testWidgets("the project's header draws the read's one glance", (
+    tester,
+  ) async {
     final host = await pump(tester);
     final reader = host.session!.inbox.reader(tab)!;
     final read = reader.snapshot!;
     final glance = swarmTeamGlance(read, projectId: project);
     expect(glance.line, '1 waiting');
 
-    await tester.tap(key('swarm-menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(key('swarm-drawer-project-$tab-$project'));
-    await tester.pumpAndSettle();
-    await tester.tap(key('swarm-project-menu'));
+    await tester.tap(key('swarm-project-$tab-$project'));
     await tester.pumpAndSettle();
     final page = tester
-        .widget<SwarmStatusText>(
+        .widget<SwarmTeamDots>(
           find.descendant(
-            of: key('swarm-project-menu-status'),
-            matching: find.byType(SwarmStatusText),
+            of: key('swarm-project-team-line'),
+            matching: find.byType(SwarmTeamDots),
           ),
         )
         .glance;

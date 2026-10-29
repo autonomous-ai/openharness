@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -293,6 +294,67 @@ void main() {
     expect(find.text(time(1)), findsNothing, reason: 'a follow-up has none');
     expect(find.text(time(2)), findsOneWidget);
     expect(find.text('Then the build'), findsOneWidget);
+  });
+
+  // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the
+  // prompt was answered, and a new one came under every message after it.
+  testWidgets('a prompt warning shows once, while its agent still waits, '
+      'and goes once it is answered', (tester) async {
+    Map<String, dynamic> alert(String id, int sequence, String kind) => {
+      ...message(
+        id,
+        sequence,
+        text: kind == 'prompt'
+            ? 'Nova is waiting at a prompt in its terminal.'
+            : 'Nova hit a usage limit. Routing skips it until 15:00 UTC.',
+        minute: sequence,
+      ),
+      'source': {
+        'kind': 'terminal-alert',
+        'agentId': 'agent-builder',
+        'alert': kind,
+      },
+    };
+    Map<String, dynamic> nova(List<String> alerting) => {
+      ...agent('agent-builder', displayName: 'Nova'),
+      'alerting': alerting,
+    };
+    final fake = backend([
+      alert('a1', 1, 'prompt'),
+      message('m2', 2, text: 'Here is what I found', minute: 2),
+      alert('a3', 3, 'limit'),
+      alert('a4', 4, 'prompt'),
+    ]);
+    final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+      ...(await parts(body))! as Map<String, dynamic>,
+      'agents': [
+        part(
+          'agent-lead',
+          1,
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+        ),
+        part('agent-builder', 1, nova(['prompt'])),
+      ],
+    };
+    final host = await pump(tester, fake);
+
+    // Still waiting: only the newest warning, and the usage limit's own note.
+    expect(key('swarm-message-a1'), findsNothing);
+    expect(key('swarm-message-a4'), findsOneWidget);
+    expect(key('swarm-message-a3'), findsOneWidget);
+
+    // Answered: the backend clears the agent's alert, and its warning goes.
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+      ...changes(cursor: 'c3', lastChangedAt: 200),
+      'agents': [part('agent-builder', 2, nova([]))],
+    };
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+    expect(key('swarm-message-a4'), findsNothing);
+    expect(key('swarm-message-a1'), findsNothing);
+    expect(key('swarm-message-a3'), findsOneWidget);
+    expect(find.text('Here is what I found'), findsOneWidget);
   });
 
   testWidgets('a file in a message opens', (tester) async {
@@ -1686,6 +1748,201 @@ void main() {
       expect(find.text('Server error'), findsNothing);
       expect(key('swarm-thread-retry'), findsNothing);
       expect(inThread(onlyThere), findsOneWidget);
+    });
+
+    group('files', () {
+      final picker = (
+        documents: pickSwarmFiles,
+        copies: swarmPickerCopyFolders,
+      );
+      // No plugin answers in a widget test: the pickers' copies here are in
+      // memory.
+      setUp(() => swarmPickerCopyFolders = () async => const []);
+      tearDown(() {
+        swarmPickerCopyFolders = picker.copies;
+        pickSwarmFiles = picker.documents;
+      });
+
+      /// Uploads the test answers: each held until [answer] completes it.
+      final uploads =
+          <
+            ({
+              String name,
+              String conversationId,
+              CancelToken cancel,
+              void Function(double) progress,
+              Completer<Map<String, dynamic>> answer,
+            })
+          >[];
+      setUp(uploads.clear);
+      Future<Map<String, dynamic>> held({
+        required String tabId,
+        required String conversationId,
+        required String name,
+        required String mime,
+        required Uint8List bytes,
+        required CancelToken cancel,
+        required void Function(double sent) onProgress,
+      }) {
+        final answer = Completer<Map<String, dynamic>>();
+        uploads.add((
+          name: name,
+          conversationId: conversationId,
+          cancel: cancel,
+          progress: onProgress,
+          answer: answer,
+        ));
+        return answer.future;
+      }
+
+      Map<String, dynamic> attachment(String id) => {
+        'attachment': {
+          'id': id,
+          'name': 'x',
+          'mime': 'text/plain',
+          'size': 1,
+          'url': 'https://cdn.harness.autonomous.ai/$id/x',
+        },
+      };
+
+      /// Opens m1's thread and attaches crash.log with the box's +.
+      Future<void> attachInThread(WidgetTester tester) async {
+        pickSwarmFiles = () async => [
+          XFile.fromData(
+            Uint8List(12),
+            path: '/picker-copies/crash.log',
+            length: 12,
+          ),
+        ];
+        await tester.tap(key('swarm-thread-line-m1'));
+        await tester.pumpAndSettle();
+        await tester.tap(key('swarm-thread-attach'));
+        await tester.pumpAndSettle();
+        expect(find.text('Photo library'), findsOneWidget, reason: 'the sheet');
+        await tester.tap(key('swarm-attach-files'));
+        await tester.pumpAndSettle();
+      }
+
+      Finder inBox(Finder finder) =>
+          find.descendant(of: key('swarm-thread-box'), matching: finder);
+
+      testWidgets('the box\'s + attaches as the chat\'s does: the files show '
+          'over the field, go up for the chat, then go with the reply', (
+        tester,
+      ) async {
+        final fake = threaded();
+        await pump(tester, fake, upload: held);
+        await attachInThread(tester);
+
+        expect(inBox(key('swarm-outgoing-crash.log')), findsOneWidget);
+        expect(inBox(find.text('1 KB')), findsOneWidget);
+        await tester.enterText(key('swarm-thread-field'), 'The log');
+        await tester.pump();
+        await tester.tap(key('swarm-thread-send'));
+        await tester.pump();
+
+        expect(uploads.single.name, 'crash.log');
+        expect(uploads.single.conversationId, 'g1');
+        expect(
+          tester.widget<SwarmAttachButton>(key('swarm-thread-attach')).onTap,
+          isNull,
+          reason: 'off while the files go up',
+        );
+        uploads.single.progress(0.6);
+        await tester.pump();
+        expect(inBox(find.text('60%')), findsOneWidget);
+
+        uploads.single.answer.complete(attachment('f1'));
+        await tester.pumpAndSettle();
+
+        expect(fake.commands.single, {
+          'type': 'message.send',
+          'conversationId': 'g1',
+          'text': 'The log',
+          'replyTo': 'm1',
+          'recipientIds': <String>[],
+          'attachmentIds': ['f1'],
+        });
+        expect(key('swarm-outgoing-crash.log'), findsNothing);
+        await back(tester);
+        expect(
+          key('swarm-outgoing-crash.log'),
+          findsNothing,
+          reason: 'never in the chat\'s own box',
+        );
+      });
+
+      testWidgets('a reply of files alone shows them while it is sent', (
+        tester,
+      ) async {
+        final fake = threaded();
+        fake.routes[commands] = (_) => Completer<Object?>().future;
+        await pump(tester, fake, upload: held);
+        await attachInThread(tester);
+
+        await tester.tap(key('swarm-thread-send'));
+        await tester.pump();
+        uploads.single.answer.complete(attachment('f1'));
+        await tester.pump();
+        await tester.pump();
+
+        expect(
+          find.descendant(
+            of: key('swarm-thread-pending'),
+            matching: find.textContaining('crash.log'),
+          ),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('a refused upload says what the chat says, and keeps the '
+          'draft and the files', (tester) async {
+        final fake = threaded();
+        await pump(tester, fake, upload: held);
+        await attachInThread(tester);
+        await tester.enterText(key('swarm-thread-field'), 'The log');
+        await tester.pump();
+
+        await tester.tap(key('swarm-thread-send'));
+        await tester.pump();
+        uploads.single.answer.completeError(StateError('socket closed'));
+        await tester.pumpAndSettle();
+
+        expect(
+          tester.widget<Text>(key('swarm-thread-post-error')).data,
+          'Could not upload the file. Try again.',
+        );
+        expect(inBox(key('swarm-outgoing-crash.log')), findsOneWidget);
+        expect(inBox(find.text('The log')), findsOneWidget);
+        expect(fake.commands, isEmpty);
+      });
+
+      testWidgets('leaving the thread while its files go up sends nothing; '
+          'opened again, the draft and the files are there', (tester) async {
+        final fake = threaded();
+        await pump(tester, fake, upload: held);
+        await attachInThread(tester);
+        await tester.enterText(key('swarm-thread-field'), 'The log');
+        await tester.pump();
+        await tester.tap(key('swarm-thread-send'));
+        await tester.pump();
+
+        await back(tester);
+        expect(uploads.single.cancel.isCancelled, isTrue);
+        uploads.single.answer.complete(attachment('late'));
+        await tester.pumpAndSettle();
+        expect(fake.commands, isEmpty);
+
+        await tester.tap(key('swarm-thread-line-m1'));
+        await tester.pumpAndSettle();
+        expect(inBox(key('swarm-outgoing-crash.log')), findsOneWidget);
+        expect(inBox(find.text('The log')), findsOneWidget);
+        expect(key('swarm-thread-post-error'), findsNothing);
+        expect(
+          tester.widget<SwarmAttachButton>(key('swarm-thread-attach')).onTap,
+          isNotNull,
+        );
+      });
     });
   });
 
