@@ -1165,7 +1165,7 @@ static void surface_tick(uint32_t now)
         change();
     }
     if (home_caption_tick(now)) change();
-    // A recap lost on the way is asked for once more after 5 s; the daemon ignores a repeat within 1 s.
+    // A recap lost on the way is asked for once more after 5 s; the daemon answers a repeat within 1 s from its first read.
     if (swarm_mode() && swarm.recap.state == HT_RECAP_LOADING && !sw.retried &&
         (int32_t)(now - swarm.recap.asked_ms) >= 5000) {
         sw.retried = true;
