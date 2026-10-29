@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_reader.dart';
+import 'swarm_request.dart';
 
 /// What the phone knows of Buddies (spec: Buddies, 10-28; in every Swarm
 /// since #2090, where they replaced Chat with PM): each person's Buddy chat in
@@ -156,4 +157,74 @@ String _machineName(Object? name) {
   return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
       ? name.substring(0, name.length - suffix.length)
       : name;
+}
+
+/// Opens the person's Buddy chat in [projectId], on the server first when
+/// the read holds none: every person has one in each project before any
+/// Buddy (backend buddy.chat), so the PM's private lines never drop. One
+/// request per person, membership and project, as the desktop's
+/// `openBuddyChat` sends it, so a second tap or another device gets the same
+/// chat back. Answers its id — the chat opened on it looks it up as it reads
+/// its messages — or null when the server named none; a refusal throws.
+Future<String?> openSwarmBuddyChat(SwarmReader reader, String projectId) async {
+  if (swarmBuddyChat(reader, projectId) case final chat?) return chat.id;
+  final generation = reader.snapshot?.people
+      .where((p) => p.id == reader.accountId)
+      .firstOrNull
+      ?.generation;
+  var operation =
+      'buddy-chat-$projectId-${reader.accountId}-${generation ?? ''}';
+  // The backend's operation ids are at most 160 characters.
+  if (operation.length > 160) operation = operation.substring(0, 160);
+  final result = await _command(reader, {
+    'type': 'buddy.chat',
+    'projectId': projectId,
+  }, operation: operation);
+  return result['conversationId'] as String?;
+}
+
+/// Starts the person's Buddy in [projectId] on [machineId] with [engine]
+/// (backend buddy.create; a Buddy that is down is replaced), then reads the
+/// Swarm again, so its start shows. Answers its chat's id; a refusal throws.
+Future<String?> startSwarmBuddy(
+  SwarmReader reader, {
+  required String projectId,
+  required String machineId,
+  required String engine,
+}) async {
+  final result = await _command(reader, {
+    'type': 'buddy.create',
+    'projectId': projectId,
+    'machineId': machineId,
+    'engine': engine,
+  });
+  await reader.refresh();
+  return result['conversationId'] as String?;
+}
+
+/// Removes the person's Buddy in [projectId]: its session stops and its chat
+/// stays. Reads the Swarm again; a refusal throws.
+Future<void> removeSwarmBuddy(SwarmReader reader, String projectId) async {
+  await _command(reader, {'type': 'buddy.remove', 'projectId': projectId});
+  await reader.refresh();
+}
+
+/// Sends [command] to [reader]'s Swarm and answers its result.
+Future<Map<String, dynamic>> _command(
+  SwarmReader reader,
+  Map<String, dynamic> command, {
+  String? operation,
+}) async {
+  final answer = superTabMap(
+    await reader.request(
+      'POST',
+      '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}/commands',
+      body: {
+        'operationId': operation ?? superTabOperationId(),
+        'command': command,
+      },
+    ),
+  );
+  final result = answer['result'];
+  return result is Map ? Map<String, dynamic>.from(result) : const {};
 }
