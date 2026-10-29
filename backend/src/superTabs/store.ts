@@ -29,7 +29,7 @@ import { digestDue, digestMessageId, digestRequest, digestSince } from './digest
 import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
-import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
+import { groupsBy, listingDrops, quietSince, readBy, withoutHints } from './parts/indexed.js'
 import { commitParts, indexesOf, numberMessages, type Touch, type Written } from './parts/commit.js'
 import { loadDeliveryParts } from './parts/light.js'
 import { guardedWrite } from './parts/write.js'
@@ -2021,7 +2021,9 @@ export class SuperTabStore {
    *  with the add-on: a full load of each Swarm sent about 1 MB per Swarm per poll (Diego, 2026-10-28). */
   async hostGrids(user: AuthUser) {
     this.personOnly(user)
-    const rows = await this.db.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 }, take: 100, select: { id: true } })
+    // By the owner index (parts/indexed.ts): Prisma's $expr filter is bounded by the environment alone, every Swarm of it.
+    const rows = (await readBy(this.db, 'SuperTab', 'owner', [{ $match: { autonomousEnv: user.autonomousEnv, ownerId: user.sub, format: 2 } },
+      { $sort: { _id: 1 } }, { $limit: 100 }, { $project: { _id: 1 } }])).map(row => ({ id: row._id as string }))
     return transaction(this.db, async tx => {
       const heads = await tx.swarmHead.findMany({ where: { tabId: { in: rows.map(row => row.id) }, key: 'head' }, select: { tabId: true, data: true } })
       const withGrid = new Map(heads.map(head => [head.tabId, head.data as unknown as HeadData] as const).filter(([, head]) => head.localModels))
