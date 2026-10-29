@@ -79,6 +79,7 @@ class SuperTabModelScore {
       grid = json['grid'] == true,
       points = _int(json['points']),
       rank = _int(json['rank']),
+      attempts = _int(json['attempts']),
       shipped = _int(_map(json['shipped'])['count']),
       medianAttemptMs = _optional(_map(json['shipped'])['medianAttemptMs']),
       medianRequestMs = _optional(_map(json['shipped'])['medianRequestMs']),
@@ -95,6 +96,9 @@ class SuperTabModelScore {
   /// Served on the Swarm's grid.
   final bool grid;
   final int points, rank, shipped;
+
+  /// This week's tasks it ran, never reviews; 0 from a server before them.
+  final int attempts;
 
   /// Median time to ship from the shipping attempt's assignment, and from the
   /// request's first assignment.

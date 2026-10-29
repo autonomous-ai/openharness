@@ -186,13 +186,17 @@ ConversationServer membersSwarm() {
   return server;
 }
 
-/// One model's week on the board: its first reviews and how many passed.
+/// One model's week on the board: the tasks it ran, its first reviews and
+/// how many passed. A board from a server before task counts has no
+/// `attempts` ([attempts] null).
 Map<String, dynamic> modelScore(
   String engine,
   String? model,
   String? effort, {
-  required int reviewed,
-  required int passed,
+  required int? attempts,
+  int reviewed = 0,
+  int passed = 0,
+  int reviews = 0,
 }) => {
   'engine': engine,
   'model': model,
@@ -200,29 +204,54 @@ Map<String, dynamic> modelScore(
   'grid': false,
   'points': 0,
   'rank': 1,
+  'attempts': ?attempts,
   'shipped': {'count': 0, 'medianAttemptMs': null, 'medianRequestMs': null},
   'firstReview': {'reviewed': reviewed, 'passed': passed},
-  'reviews': 0,
+  'reviews': reviews,
 };
 
-/// The week's models (Dee, 2026-10-29): Opus at two efforts, 11 of 12 together.
+/// The week's models (Dee, 2026-10-29): 32 tasks, Opus at two efforts 14 of
+/// them together.
 ConversationServer modelsSwarm([ConversationServer? base]) {
   final server = base ?? humansSwarm();
   server.leaderboard!['byModel'] = [
-    // One model at two efforts is one row: 11 of 12.
-    modelScore('claude', 'claude-opus-5-5', 'high', reviewed: 10, passed: 9),
-    modelScore('claude', 'claude-opus-5-5', 'xhigh', reviewed: 2, passed: 2),
-    modelScore('codex', 'gpt-6.1-sol', null, reviewed: 16, passed: 13),
+    // One model at two efforts is one row: 14 tasks, 11 of 12 passed.
+    modelScore(
+      'claude',
+      'claude-opus-5-5',
+      'high',
+      attempts: 12,
+      reviewed: 10,
+      passed: 9,
+    ),
+    modelScore(
+      'claude',
+      'claude-opus-5-5',
+      'xhigh',
+      attempts: 2,
+      reviewed: 2,
+      passed: 2,
+    ),
+    modelScore(
+      'codex',
+      'gpt-6.1-sol',
+      null,
+      attempts: 9,
+      reviewed: 8,
+      passed: 6,
+    ),
     modelScore(
       'claude',
       'claude-sonnet-5-5',
       'medium',
-      reviewed: 10,
-      passed: 7,
+      attempts: 6,
+      reviewed: 5,
+      passed: 4,
     ),
-    modelScore('claude', 'claude-haiku-5-5', 'low', reviewed: 4, passed: 2),
-    // Too few first reviews to say anything, however good.
-    modelScore('codex', 'gpt-6.1-luna', null, reviewed: 2, passed: 2),
+    // Fourth, and no first review yet.
+    modelScore('claude', 'claude-haiku-5-5', 'low', attempts: 3),
+    // Only reviewed others' work: no task of its own.
+    modelScore('codex', 'gpt-6.1-luna', null, attempts: 0, reviews: 5),
   ];
   return server;
 }

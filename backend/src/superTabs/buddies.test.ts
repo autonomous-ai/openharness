@@ -7,6 +7,7 @@ import { createSuperTab, visibleState, type Actor, type Conversation } from './m
 import { canReadGroup, canWatchAgent, isConfidential, readsRecordsIn } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId } from './buddies.js'
+import { isRoleName } from './agentNames.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -819,5 +820,151 @@ describe('where a Buddy runs (Ken\'s ruling, 10-28)', () => {
       if (saved.required === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED; else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = saved.required
       if (saved.owners !== undefined) process.env.SWARM_TEAM_ACCOUNT_OWNERS = saved.owners
     }
+  })
+})
+
+describe('naming a Buddy (Diego, 10-29)', () => {
+  const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
+  /** fresh() with peer's Buddy added in App, and started unless [start] is false. */
+  function named(start = true) {
+    const f = fresh()
+    const added = addBuddy(f, peer, f.app.projectId)
+    const startId = added.result.startId as string, chat = added.result.conversationId as string
+    const agentId = start ? f.run({ type: 'agent.started', startId, harnessId: 'native', configuration }, peer, host).result.agentId as string : ''
+    const rename = (name: string | null, actor: Actor = peer, conversationId = chat) => f.run({ type: 'buddy.rename', conversationId, name }, actor)
+    return { f, chat, startId, agentId, rename }
+  }
+  const shown = (f: ReturnType<typeof setup>, reader: Actor, agentId: string) => visibleState(f.state, reader).agents.find(a => a.id === agentId)?.displayName
+
+  it('is its owner\'s: everyone in the Swarm then sees the new name, and their chat takes it as its title', () => {
+    const { f, chat, agentId, rename } = named()
+    rename('  Sparky ')
+    for (const reader of [peer, owner, agentActor(f.pm)]) expect(shown(f, reader, agentId)).toBe('Sparky')
+    expect(group(f, chat)).toMatchObject({ title: 'Sparky', buddyName: 'Sparky' })
+  })
+
+  it('is refused for anyone else, the Swarm owner and the PM too, and changes nothing', () => {
+    const { f, chat, agentId, rename } = named()
+    expect(() => rename('Mine now', owner)).toThrow('unavailable')
+    expect(() => rename('Mine now', agentActor(f.pm))).toThrow()
+    expect(() => rename('Mine now', agentActor(agentId))).toThrow()
+    expect(shown(f, owner, agentId)).toBe('peer\'s Buddy')
+    expect(group(f, chat).buddyName).toBeUndefined()
+  })
+
+  it('renames only a Buddy: a project chat or a workgroup is refused', () => {
+    const { f, rename } = named()
+    expect(() => rename('Sparky', peer, f.app.conversationId)).toThrow('Buddy chat')
+    expect(() => rename('Sparky', owner, f.group)).toThrow('Buddy chat')
+    expect(group(f, f.group).title).toBe('Offline')
+  })
+
+  it('goes back to the default when cleared, empty or null', () => {
+    const { f, chat, agentId, rename } = named()
+    for (const cleared of [null, '   ']) {
+      rename('Sparky')
+      rename(cleared)
+      expect(shown(f, owner, agentId)).toBe('peer\'s Buddy')
+      expect(group(f, chat).title).toBe('peer\'s Buddy')
+      expect(group(f, chat).buddyName).toBeUndefined()
+    }
+  })
+
+  it('is kept when the Buddy is removed and added again', () => {
+    const { f, chat, rename } = named()
+    rename('Sparky')
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    const again = addBuddy(f, peer, f.app.projectId)
+    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('Sparky')
+    const agentId = f.run({ type: 'agent.started', startId: again.result.startId as string, harnessId: 'native-2', configuration }, peer, host).result.agentId as string
+    const settled = f.run({ type: 'agent.startSettled', startId: again.result.startId as string, warning: null }, peer, host)
+    expect(shown(f, owner, agentId)).toBe('Sparky')
+    expect(settled.messages.map(m => [m.conversationId, m.text])).toEqual([[chat, 'Sparky is ready. Tell it what you have in mind.']])
+  })
+
+  it('may be chosen before any Buddy runs, and while one is starting', () => {
+    const f = fresh()
+    const chat = f.run({ type: 'buddy.chat', projectId: f.app.projectId }, peer).result.conversationId as string
+    f.run({ type: 'buddy.rename', conversationId: chat, name: 'Early' }, peer)
+    const added = addBuddy(f, peer, f.app.projectId)
+    expect(f.state.starts!.find(s => s.id === added.result.startId)!.request.name).toBe('Early')
+    f.run({ type: 'buddy.rename', conversationId: chat, name: 'Later' }, peer)
+    expect(f.state.starts!.find(s => s.id === added.result.startId)!.request.name).toBe('Later')
+  })
+
+  it('takes a name like a username: 2 to 32 letters, digits, spaces and . _ - \', never a role or someone else\'s name', () => {
+    const { f, agentId, rename } = named()
+    for (const name of ['Sparky', 'R2-D2', 'Nguyễn\'s pal', 'peer\'s Buddy', 'x'.repeat(32), 'Bé Na']) {
+      rename(name)
+      expect(shown(f, owner, agentId)).toBe(name)
+    }
+    for (const name of ['a', 'x'.repeat(33), '.dot', 'evil‮name', 'tab\there', 'two  spaces', 'emoji 🎉', 'semi;colon']) {
+      expect(() => rename(name)).toThrow('Use 2 to 32')
+    }
+    const pmName = shown(f, owner, f.pm)!
+    for (const name of ['Lead', 'pm', 'Product Manager', 'Engineer', pmName, pmName.toUpperCase(), 'owner']) {
+      expect(() => rename(name)).toThrow(/taken|role/)
+    }
+    expect(shown(f, owner, agentId)).toBe('Bé Na')
+  })
+
+  it('refuses invisible characters, and compares and counts names after NFKC (review of #2094)', () => {
+    const { f, agentId, rename } = named()
+    const pmName = shown(f, owner, f.pm)!
+    for (const name of [`${pmName}\uFE0F`, 'Lead\uFE0F', '\u3164\u3164', 'Sp\u200Barky', 'Sparky\u00AD']) expect(() => rename(name)).toThrow()
+    // Fullwidth letters are the same name after NFKC: a role, or the PM's name.
+    expect(() => rename('Ｌｅａｄ')).toThrow('role')
+    expect(() => rename([...pmName].map(ch => String.fromCodePoint(ch.codePointAt(0)! + 0xFEE0)).join(''))).toThrow('taken')
+    // The ligature ﬃ is three letters after NFKC: 31 + 3 is too long, while 29 + 3 fits.
+    expect(() => rename(`${'x'.repeat(31)}ﬃ`)).toThrow('Use 2 to 32')
+    rename(`${'x'.repeat(29)}ﬃ`)
+    expect(shown(f, owner, agentId)).toBe(`${'x'.repeat(29)}ffi`)
+    rename('Ｓｐａｒｋｙ')
+    expect(shown(f, owner, agentId)).toBe('Sparky')
+  })
+
+  it('refuses another person\'s default Buddy name and a name chosen in another Buddy chat, quiet ones included', () => {
+    const { f, rename } = named()
+    expect(() => rename('owner\'s Buddy')).toThrow('taken')
+    const theirs = f.run({ type: 'buddy.chat', projectId: f.web.projectId }, owner).result.conversationId as string
+    f.run({ type: 'buddy.rename', conversationId: theirs, name: 'Moss' }, owner)
+    expect(() => rename('moss')).toThrow('taken')
+    // A chat the command did not load (gone quiet) is named by the store.
+    const quiet = { buddyNames: [{ conversationId: 'quiet-chat', name: 'Fern' }] }
+    expect(() => f.run({ type: 'buddy.rename', conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), name: 'FERN' }, peer, quiet)).toThrow('taken')
+    // Its own chosen name, also listed by the store, is no clash with itself.
+    rename('Sparky')
+    f.run({ type: 'buddy.rename', conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), name: 'Sparky' }, peer, { buddyNames: [{ conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), name: 'Sparky' }] })
+  })
+
+  it('reserves Buddy-only names such as Reviewer, without making them roles for other agents', () => {
+    const { rename } = named()
+    for (const name of ['Reviewer', 'reviewer', 'Admin', 'System', 'Reviewer 2', 'reviewer-3', 'System 4']) expect(() => rename(name)).toThrow(/role|reserved/)
+    expect(isRoleName('Reviewer')).toBe(false)
+  })
+
+  it('falls back to the default when its chosen name was taken by the time a Buddy is added again', () => {
+    const { f, chat, rename } = named()
+    rename('Sparky')
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    f.state.agents.push({ id: 'later', projectId: f.web.projectId, machineId: 'machine', harnessId: 'later-harness', machineOwnerId: 'host',
+      contributorId: 'owner', membershipGeneration: 'test', name: 'Sparky', configuration })
+    const again = addBuddy(f, peer, f.app.projectId)
+    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
+    expect(group(f, chat)).toMatchObject({ title: 'peer\'s Buddy' })
+    expect(group(f, chat).buddyName).toBeUndefined()
+    // Nothing fails silently: its owner reads why in their chat, and how to name it again.
+    expect(again.messages.map(m => [m.conversationId, m.text, m.recipients])).toEqual([[chat,
+      'Sparky is taken now; your Buddy starts as peer\'s Buddy. Rename it from the ⋮ menu.', []]])
+  })
+
+  it('also falls back when another Buddy chat, quiet or loaded, chose the name meanwhile', () => {
+    const { f, chat, rename } = named()
+    rename('Sparky')
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    const again = f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'peer-mac', engine: 'claude' }, peer,
+      { contribution: { machineOwnerId: 'peer', contributorId: 'peer' }, buddyNames: [{ conversationId: 'quiet-chat', name: 'sparky' }] })
+    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
+    expect(group(f, chat).buddyName).toBeUndefined()
   })
 })
