@@ -217,6 +217,41 @@ it('a failed pass is logged and the next minute\'s pass carries on', async () =>
   expect(await left()).toEqual(KEPT.filter(id => !id.startsWith('old-2026-10-30')).sort())
 })
 
+it('a database user that may not install the rule gets one warning and an hourly check, then the sweep runs once it may (prod 10-29)', async () => {
+  const lines: string[] = []
+  const log = { info: (message: string) => lines.push(message), warn: (message: string) => lines.push(message) }
+  await db.productUsageReceipt.deleteMany({ where: { id: { startsWith: 'old-2026-10-30' } } })
+  let refused = true, installs = 0, clock = now.getTime()
+  // As Prisma reports Mongo's refusal (code 13) of collMod to production's app user.
+  const refusing = new Proxy(db, { get: (target, key) => key === '$runCommandRaw'
+    ? (command: Record<string, unknown>) => {
+      if (!('collMod' in command)) return target.$runCommandRaw(command as never)
+      installs++
+      return refused ? Promise.reject(new Error('Raw query failed. Code: `13`. Message: `not authorized on harness to execute command { collMod: "product_usage_receipts" }`'))
+        : target.$runCommandRaw(command as never)
+    }
+    : Reflect.get(target, key) })
+  const stop = sweep.startReceiptSweep(refusing, { everyMs: 20, chunk: 50, chunks: 1, pauseMs: 0, now: () => new Date(clock), log })
+  try {
+    await vi.waitFor(() => expect(installs).toBe(1), { timeout: 5000 })
+    // Many minutes' passes later, within the hour: no second try, no second warning.
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(installs).toBe(1)
+    expect(lines).toEqual(['[usage-receipts] waiting: the database user may not install the receipt rule (collMod); nothing is removed, checking hourly'])
+    expect((await left()).length).toBe(109)
+    clock += 3_600_000
+    await vi.waitFor(() => expect(installs).toBe(2), { timeout: 5000 })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(installs).toBe(2)
+    expect(lines).toHaveLength(1)
+    // Ken grants collMod: the next hourly check installs the rule and the sweep carries on, without a restart.
+    refused = false
+    clock += 3_600_000
+    await vi.waitFor(() => expect(lines.at(-1)).toMatch(/done/), { timeout: 5000 })
+  } finally { stop() }
+  expect(await left()).toEqual(KEPT.filter(id => !id.startsWith('old-2026-10-30')).sort())
+})
+
 it('counting stays exact: a report inside the window counts once across the sweep, an older one adds nothing', async () => {
   const context = { surface: 'cli', release: '0.4.92', platform: 'macos', channel: 'production' } as const
   const report = { schemaVersion: 1 as const, revision: 0, id: randomUUID(), day: '2026-11-01', context, counters: { turns_ended: 2 } }
