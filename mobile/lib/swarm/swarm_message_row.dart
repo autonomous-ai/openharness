@@ -682,7 +682,12 @@ class SwarmFileChip extends StatelessWidget {
                     style: swarmChatText(14, color: color),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: AppSpace.xs),
+                Text(
+                  '·',
+                  style: swarmChatText(13, color: AppPalette.textFaint),
+                ),
+                const SizedBox(width: AppSpace.xs),
                 Text(
                   size,
                   style: swarmChatText(13, color: AppPalette.textFaint),
