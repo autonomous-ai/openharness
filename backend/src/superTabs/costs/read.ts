@@ -17,8 +17,10 @@ export const MAX_ROWS = 3000
 export const MAX_DAYS = 90
 export const DEFAULT_DAYS = 7
 
-/** One attempt as the summary reads it. `fresh`: its agent was started for it (costs/attempts.ts attemptTokens). */
-export interface CostRow { conversationId: string; assignmentId: string; outcome: string | null; kind: string | null; fresh: boolean; run: RouteRun }
+/** One attempt as the summary reads it. `fresh`: its agent was started for it (costs/attempts.ts attemptTokens). `stepUp`: the
+ *  step up from a cheaper model it was (stepUp.ts), as its decision keeps it. */
+export interface CostRow { conversationId: string; assignmentId: string; outcome: string | null; kind: string | null; fresh: boolean; run: RouteRun
+  stepUp?: { attempt: number; reason: string } }
 
 /** The attempts routed since `since`: decisions with an assignment and a run, by the tabId+createdAt index. A plain $match,
  *  as recentDecisions does: Prisma's own filters reach Mongo as $expr, which its planner does not serve from the index. Only
@@ -27,14 +29,16 @@ export async function costRows(tx: Tx, tabId: string, since: number): Promise<{ 
   const found = await tx.superTabRouteDecision.aggregateRaw({ pipeline: [
     { $match: { tabId, createdAt: { $gte: { $date: new Date(since).toISOString() } } } },
     { $sort: { createdAt: -1 } }, { $limit: MAX_ROWS + 1 },
-    { $project: { conversationId: 1, assignmentId: 1, outcome: 1, run: 1, 'final.kind': 1, 'record.assessment.kind': 1 } },
+    { $project: { conversationId: 1, assignmentId: 1, outcome: 1, run: 1, 'final.kind': 1, 'record.assessment.kind': 1, 'record.stepUp': 1 } },
   ] }) as unknown as Array<Record<string, unknown>>
   const rows = found.slice(0, MAX_ROWS).flatMap(row => {
     const run = row.run as RouteRun | null | undefined
     if (!run || typeof row.assignmentId !== 'string') return []
-    const kind = ((row.record as { assessment?: { kind?: unknown } } | undefined)?.assessment?.kind)
+    const record = row.record as { assessment?: { kind?: unknown }; stepUp?: CostRow['stepUp'] } | undefined
+    const kind = record?.assessment?.kind
     return [{ conversationId: String(row.conversationId), assignmentId: row.assignmentId, outcome: (row.outcome ?? null) as string | null,
-      kind: typeof kind === 'string' ? kind : null, fresh: (row.final as { kind?: unknown } | null | undefined)?.kind === 'new', run }]
+      kind: typeof kind === 'string' ? kind : null, fresh: (row.final as { kind?: unknown } | null | undefined)?.kind === 'new', run,
+      ...(record?.stepUp ? { stepUp: record.stepUp } : {}) }]
   })
   return { rows, truncated: found.length > MAX_ROWS }
 }
@@ -59,10 +63,15 @@ export interface CostSummaryRow {
   apiCost: number | null; spend: number | null; costKnown: number
   /** apiCost over shipped, only when every ended attempt's cost is known: a partial sum would read cheaper than it was. */
   costPerShipped: number | null
+  /** Attempts that were a step up from a cheaper model (stepUp.ts). */
+  stepUps: number
 }
 
 export interface CostSummary {
   rows: CostSummaryRow[]
+  /** The same per model alone (a grid model by its own name), across efforts and kinds: what a model's first-review pass
+   *  rate and cost per shipped change are, week over week (Ken, 2026-10-29). */
+  models: Array<Omit<CostSummaryRow, 'effort' | 'kind'>>
   totals: Omit<CostSummaryRow, 'engine' | 'model' | 'effort' | 'kind'>
   /** The prices the costs used, with their sources and the day each was read. */
   prices: Array<{ model: string; source: string; checked: string }>
@@ -91,8 +100,9 @@ function shipping(rows: CostRow[], groups: Conversation[]): Map<string, number> 
 function summarize(rows: CostRow[], firstReview: Map<string, boolean>, shippedAt: Map<string, number>, prices: Set<string>): CostSummary['totals'] {
   const tokens: ModelTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   const outcomes: Record<string, number> = {}, billing: Partial<Record<Billing, number>> = {}, toShip: number[] = []
-  let firstReviews = 0, firstReviewPassed = 0, shipped = 0, tokensKnown = 0, costKnown = 0, apiCost = 0, spend = 0, spendKnown = 0, endedUnknown = 0
+  let firstReviews = 0, firstReviewPassed = 0, shipped = 0, tokensKnown = 0, costKnown = 0, apiCost = 0, spend = 0, spendKnown = 0, endedUnknown = 0, stepUps = 0
   for (const row of rows) {
+    if (row.stepUp) stepUps++
     const verdict = firstReview.get(row.assignmentId)
     if (verdict !== undefined) { firstReviews++; if (verdict) firstReviewPassed++ }
     const outcome = row.outcome ?? 'open'
@@ -120,7 +130,7 @@ function summarize(rows: CostRow[], firstReview: Map<string, boolean>, shippedAt
   return { attempts: rows.length, firstReviews, firstReviewPassed, firstReviewPassRate: firstReviews ? firstReviewPassed / firstReviews : null,
     shipped, outcomes, billing, medianMinutesToShip: median(toShip), tokens, tokensKnown,
     apiCost: costKnown ? apiCost : null, spend: spendKnown ? spend : null, costKnown,
-    costPerShipped: costKnown && shipped && !endedUnknown ? apiCost / shipped : null }
+    costPerShipped: costKnown && shipped && !endedUnknown ? apiCost / shipped : null, stepUps }
 }
 
 /** The summary of these attempts; `groups` are the groups they belong to, for their ledgers' first reviews. */
@@ -128,16 +138,16 @@ export function summarizeCosts(rows: CostRow[], groups: Conversation[]): CostSum
   const firstReview = new Map<string, boolean>()
   for (const group of groups) for (const run of group.ledger?.runs ?? []) if (run.firstReview !== undefined) firstReview.set(run.assignmentId, run.firstReview)
   const keyOf = (row: CostRow) => [row.run.engine, row.run.grid ?? row.run.model, row.run.effort, row.kind ?? 'unspecified'] as const
-  const byKey = new Map<string, CostRow[]>()
-  for (const row of rows) {
-    const key = JSON.stringify(keyOf(row))
-    byKey.set(key, [...byKey.get(key) ?? [], row])
+  /** The rows grouped by [key], in key order. */
+  const grouped = <K extends readonly string[]>(key: (row: CostRow) => K) => {
+    const byKey = new Map<string, CostRow[]>()
+    for (const row of rows) byKey.set(JSON.stringify(key(row)), [...byKey.get(JSON.stringify(key(row))) ?? [], row])
+    return [...byKey.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, group]) => [key(group[0]!), group] as const)
   }
   const prices = new Set<string>(), shippedAt = shipping(rows, groups)
-  const summary = [...byKey.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, group]) => {
-    const [engine, model, effort, kind] = keyOf(group[0]!)
-    return { engine, model, effort, kind, ...summarize(group, firstReview, shippedAt, prices) }
-  })
-  return { rows: summary, totals: summarize(rows, firstReview, shippedAt, new Set()),
+  const summary = grouped(keyOf).map(([[engine, model, effort, kind], group]) => ({ engine, model, effort, kind, ...summarize(group, firstReview, shippedAt, prices) }))
+  const models = grouped(row => [row.run.engine, row.run.grid ?? row.run.model] as const)
+    .map(([[engine, model], group]) => ({ engine, model, ...summarize(group, firstReview, shippedAt, new Set()) }))
+  return { rows: summary, models, totals: summarize(rows, firstReview, shippedAt, new Set()),
     prices: [...prices].sort().map(model => { const p = priceOf(model)!; return { model: p.model, source: p.source, checked: p.checked } }) }
 }

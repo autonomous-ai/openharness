@@ -544,11 +544,16 @@ export class SuperTabStore {
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
       refuseBuddyRouting(state, actor)
-      const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
-      // The owner's account policy alone, so a field reset to "use account default" can show its value.
-      return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
-        account: effectivePolicy(account?.policy ?? null, null).policy }
+      return this.policyOf(tx, state)
     })
+  }
+
+  /** The tab's effective policy: its owner's account policy with the tab's override. */
+  private async policyOf(tx: Transaction, state: SuperTabState) {
+    const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
+    // The owner's account policy alone, so a field reset to "use account default" can show its value.
+    return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
+      account: effectivePolicy(account?.policy ?? null, null).policy }
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
@@ -996,6 +1001,14 @@ export class SuperTabStore {
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
       if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command)
+      // A Team account's session is closed by its own team session: the Mac's owner is its machine owner too, and from an
+      // ordinary sign-in confirmed it, ending its hold with its data still there. A held one is on a Team account by
+      // definition, whatever the account row says now (review of #2142).
+      if (command.type === 'agent.sessionClosed' && team === null) {
+        const closing = original.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId && c.machineOwnerId === user.sub)
+        if (closing) await this.notTeamMachine(user, () => tx.machine.findFirst({ where: { machineId: closing.machineId, userId: user.sub,
+          autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!closing.heldFor || teamByRecord(original, closing.machineId))
+      }
       // Accepting a Swarm's invitation from outside its Workspace makes the person a guest of the Workspace first (design, Roles).
       if (command.type === 'invite.accept' && !hostMachineId && original.workspaceId) {
         const email = user.email.trim().toLowerCase()
@@ -1148,6 +1161,10 @@ export class SuperTabStore {
         const member = await activeMember(tx, original.workspaceId, actor.userId)
         if (member) context.workspaceRole = member.role as WorkspaceRole
       }
+      // Who may review, and whether a verdict steps a task up, is judged by the tab's policy (rules.ts,
+      // stepUp.ts).
+      if (TEAM_WORK_COMMANDS.has(command.type) || command.type === 'work.check'
+        || (command.type === 'work.status' && command.status === 'review')) context.routingPolicy = (await this.policyOf(tx, original)).policy
       // A Ready for review may assign a Reviewer by itself (autoReview.ts), as work.assign does.
       if (TEAM_WORK_COMMANDS.has(command.type) || (command.type === 'work.status' && command.status === 'review')) {
         context.teamMachines = await this.teamMachines(tx, original)
