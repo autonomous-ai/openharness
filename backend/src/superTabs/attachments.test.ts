@@ -1,7 +1,8 @@
 import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { Readable } from 'node:stream'
-import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, checkedType, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MemoryAttachmentStore, objectKeyFor, served, serviceAccountFrom } from './attachments.js'
+import { AttachmentTooLarge, attachmentName, attachmentsFromEnv, CdnAvatarStore, checkedType, imageTypeOf, GcsAttachmentStore, GcsAvatarStore, MemoryAttachmentStore,
+  MemoryAvatarStore, objectKeyFor, served, serviceAccountFrom, type AttachmentStore } from './attachments.js'
 
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
 const key = { type: 'service_account', project_id: 'harness-test', client_email: 'uploads@harness-test.iam.gserviceaccount.com',
@@ -151,5 +152,17 @@ describe('attachment files', () => {
     expect(store.objects.get('k1')).toMatchObject({ contentType: 'application/octet-stream', contentDisposition: "attachment; filename*=UTF-8''x.html" })
     await expect(store.put('k2', { name: 'b.bin', mime: 'application/octet-stream' }, Readable.from([Buffer.alloc(6)]), 5)).rejects.toBeInstanceOf(AttachmentTooLarge)
     expect(store.objects.has('k2')).toBe(false)
+  })
+  it('deletes an object, and counts one already gone as deleted, in each store', async () => {
+    const shared = new MemoryAttachmentStore(), pictures = new MemoryAvatarStore('https://avatars.example.test')
+    const stores: Array<[AttachmentStore, MemoryAttachmentStore]> = [[shared, shared], [pictures, pictures],
+      [new CdnAvatarStore(shared, 'https://cdn.example.test'), shared]]
+    for (const [store, bucket] of stores) {
+      await store.put('avatars/k', { name: 'a.txt', mime: 'text/plain' }, Readable.from([Buffer.from('a')]), 5)
+      await store.put('avatars/other', { name: 'b.txt', mime: 'text/plain' }, Readable.from([Buffer.from('b')]), 5)
+      await store.delete('avatars/k')
+      expect([bucket.objects.has('avatars/k'), bucket.objects.has('avatars/other')]).toEqual([false, true])
+      await expect(store.delete('avatars/k')).resolves.toBeUndefined()
+    }
   })
 })
