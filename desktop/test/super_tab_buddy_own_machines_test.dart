@@ -459,6 +459,123 @@ void main() {
     });
   });
 
+  // Dee, 10-29: a teammate's Swarm Mac, where the Buddy runs in its Team
+  // account and reads only its own chat (backend chatOnlyBuddy).
+  group('team machines', () {
+    /// Ken's Mac in the Swarm, with its Team account reporting [teamAt].
+    void kensMac(SuperTabLaunchFixture f, {int? teamAt, bool team = true}) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      (f.connection.server.state['people'] as List).add({
+        'id': 'ken',
+        'email': 'ken@example.com',
+        'role': 'collaborator',
+      });
+      (f.connection.server.state['machines'] as List).addAll([
+        {
+          'machineId': 'ken-studio',
+          'name': 'Mac Studio',
+          'contributorId': 'ken',
+          'scope': 'swarm',
+          'observation': {'receivedAt': now},
+        },
+        if (team)
+          {
+            'machineId': 'ken-team',
+            'name': 'Mac Studio',
+            'contributorId': 'ken',
+            'hostMachineId': 'ken-studio',
+            'scope': 'swarm',
+            'observation': {'receivedAt': teamAt ?? now},
+          },
+      ]);
+    }
+
+    testWidgets('lists a teammate\'s Mac with a Team account under its own '
+        'heading, by name with its owner, after your machines', (tester) async {
+      final (:f, :c, :mac) = await open(tester, prepare: kensMac);
+
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(
+        menuRows(tester, [
+          kBuddyOwnMachines,
+          mac,
+          kBuddyTeamMachines,
+          'Mac Studio',
+        ]),
+        [kBuddyOwnMachines, mac, kBuddyTeamMachines, 'Mac Studio'],
+      );
+      expect(
+        find.descendant(
+          of: option('ken-studio'),
+          matching: find.byType(SuperTabAvatar),
+        ),
+        findsOneWidget,
+      );
+      // Never its Team account as a machine of its own.
+      expect(option('ken-team'), findsNothing);
+      await close(tester, f, c);
+    });
+
+    testWidgets('leaves out a teammate\'s Mac with no Team account, and shows '
+        'one whose Team account is silent as offline', (tester) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        prepare: (f) => kensMac(f, team: false),
+      );
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(option('ken-studio'), findsNothing);
+      expect(find.text(kBuddyTeamMachines), findsNothing);
+      await close(tester, f, c);
+
+      final (f: f2, c: c2, mac: _) = await open(
+        tester,
+        prepare: (f) => kensMac(
+          f,
+          teamAt: DateTime.now()
+              .subtract(const Duration(minutes: 5))
+              .millisecondsSinceEpoch,
+        ),
+      );
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: option('ken-studio'),
+          matching: find.text(kBuddyMachineOffline),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<MenuItemButton>(option('ken-studio')).onPressed,
+        isNull,
+      );
+      await close(tester, f2, c2);
+    });
+
+    testWidgets(
+      'picked, says who can read the chat there, and starts the Buddy '
+      'on the Mac with no setup',
+      (tester) async {
+        final (:f, :c, :mac) = await open(tester, prepare: kensMac);
+
+        expect(find.text(kBuddyTeamReaders), findsNothing);
+        await tester.tap(barMachine);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Mac Studio').last);
+        await tester.pumpAndSettle();
+        expect(find.text(kBuddyTeamReaders), findsOneWidget);
+        await tester.tap(start);
+        await settle(tester);
+
+        expect(sent(f), ['buddy.create ken-studio']);
+        expect(prepares(f), isEmpty);
+        await close(tester, f, c);
+      },
+    );
+  });
+
   group('Add a Buddy', () {
     testWidgets('lists this Mac first and picked, under its heading alone', (
       tester,

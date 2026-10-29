@@ -256,6 +256,17 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   child: BuddyNoMachine(machines: machines),
                 ),
               ],
+              if (_picked?.owner != null) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: _labelWidth),
+                  child: Text(
+                    kBuddyTeamReaders,
+                    key: const ValueKey('super-buddy-team-readers'),
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -617,6 +628,14 @@ class _BuddyStartState extends State<_BuddyStart> {
           if (machines.isNotEmpty && machine == null) ...[
             const SizedBox(height: 4),
             BuddyNoMachine(machines: machines),
+          ],
+          if (machine?.owner != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              kBuddyTeamReaders,
+              key: const ValueKey('super-buddy-start-team-readers'),
+              style: DesktopChrome.control(color: DesktopChrome.muted),
+            ),
           ],
           if (_error case final error?) ...[
             const SizedBox(height: 4),

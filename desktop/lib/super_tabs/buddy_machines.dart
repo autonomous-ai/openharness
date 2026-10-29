@@ -10,16 +10,31 @@ import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'identity.dart';
 import 'machines.dart';
+import 'model.dart';
 
 /// A machine a Buddy may run on, as the pickers list it: one of the reader's
-/// own. One outside the Swarm ([inSwarm] false) stays theirs: the server
-/// records it for their Buddies alone and never adds it to the Swarm (Dee,
-/// 10-29). An [offline] one is listed but cannot be picked.
-typedef BuddyMachine = ({String id, String name, bool inSwarm, bool offline});
+/// own, or with an [owner] a teammate's Swarm Mac. One of their own outside
+/// the Swarm ([inSwarm] false) stays theirs: the server records it for their
+/// Buddies alone and never adds it to the Swarm (Dee, 10-29). On a teammate's
+/// Mac the Buddy runs in its Harness Team account and reads only its own chat
+/// (backend chatOnlyBuddy). An [offline] one is listed but cannot be picked.
+typedef BuddyMachine = ({
+  String id,
+  String name,
+  bool inSwarm,
+  bool offline,
+  SuperTabPerson? owner,
+});
 
-/// The menu's group of the reader's own machines. The picker has only its
-/// headings, machine names and 'offline': no notes (Dee, 10-29).
+/// The menu's groups: the reader's own machines, then teammates'. The picker
+/// has only its headings, machine names, owners' avatars and 'offline': no
+/// notes (Dee, 10-29).
 const kBuddyOwnMachines = 'Your machines';
+const kBuddyTeamMachines = 'Team machines';
+
+/// The one line under the field once a teammate's machine is picked: who can
+/// read the chat there (Lead, 10-29, provisional until Dee rules).
+const kBuddyTeamReaders = 'Teammates there can read this chat.';
 
 /// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
 const kBuddyMachineOffline = 'offline';
@@ -46,6 +61,7 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       // Not in the account's list (yet): only a fresh Swarm reading says it
       // is there, else it is offline until one does (review of #2240).
       offline: app?.stateOf(id)?.isOffline ?? _silent(m),
+      owner: null,
     );
   }
   String? here;
@@ -65,6 +81,7 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       name: name,
       inSwarm: listed != null,
       offline: s.isOffline,
+      owner: null,
     );
   }
   final all = byId.values.toList();
@@ -72,7 +89,44 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
   // A stable sort: within a rank, the Swarm's order, then the account's.
   return [
     for (final r in [0, 1, 2]) ...all.where((m) => rank(m) == r),
+    ...buddyTeamMachines(c),
   ];
+}
+
+/// Teammates' Swarm Macs a Buddy may run on: each with a Harness Team account
+/// in the Swarm, where the Buddy runs (never the owner's own account), by its
+/// name and owner; offline while that account is silent. Online ones first.
+List<BuddyMachine> buddyTeamMachines(SuperTabController c) {
+  final snapshot = c.snapshot;
+  if (snapshot == null) return const [];
+  final pools = snapshot.machines;
+  final teams = [
+    for (final mac in pools)
+      if (mac['hostMachineId'] == null &&
+          mac['removal'] == null &&
+          mac['machineId'] is String &&
+          mac['contributorId'] is String &&
+          mac['contributorId'] != c.accountId)
+        if (pools
+                .where(
+                  (t) =>
+                      t['hostMachineId'] == mac['machineId'] &&
+                      t['contributorId'] == mac['contributorId'] &&
+                      t['removal'] == null,
+                )
+                .firstOrNull
+            case final team?)
+          (
+            id: mac['machineId'] as String,
+            name: superTabMachineName(mac['name'] as String? ?? ''),
+            inSwarm: true,
+            offline: _silent(team),
+            owner: snapshot.people
+                .where((p) => p.id == mac['contributorId'])
+                .firstOrNull,
+          ),
+  ];
+  return [...teams.where((m) => !m.offline), ...teams.where((m) => m.offline)];
 }
 
 /// The machine of [machines] that [chosen] names while it is online, else the
@@ -122,7 +176,7 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
     if (!widget.busy) _menu.open();
   }
 
-  Widget _heading(double width) => SizedBox(
+  Widget _heading(String title, double width) => SizedBox(
     width: width,
     child: Padding(
       padding: EdgeInsets.fromLTRB(
@@ -133,10 +187,7 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
       ),
       child: Semantics(
         header: true,
-        child: Text(
-          kBuddyOwnMachines,
-          style: DesktopChrome.control(medium: true),
-        ),
+        child: Text(title, style: DesktopChrome.control(medium: true)),
       ),
     ),
   );
@@ -164,18 +215,35 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
             ? null
             : () => widget.onChanged(m.id),
         // In words, never by its grey alone (design system, Color and state).
-        trailingIcon: m.offline
-            ? Text(
-                kBuddyMachineOffline,
-                style: DesktopChrome.metadata(color: DesktopChrome.muted),
-              )
-            : m.id == widget.value
-            ? const Icon(AppIcons.check, size: grid.AppControl.iconSize)
-            : null,
+        trailingIcon: _trailing(m),
         child: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
     ),
   );
+
+  /// After the name: a teammate's avatar, then 'offline' or the check.
+  Widget? _trailing(BuddyMachine m) {
+    final state = m.offline
+        ? Text(
+            kBuddyMachineOffline,
+            style: DesktopChrome.metadata(color: DesktopChrome.muted),
+          )
+        : m.id == widget.value
+        ? const Icon(AppIcons.check, size: grid.AppControl.iconSize)
+        : null;
+    final owner = m.owner;
+    if (owner == null) return state;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: owner.username,
+          child: SuperTabAvatar.person(owner, size: 20),
+        ),
+        if (state != null) ...[const SizedBox(width: 8), state],
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -210,8 +278,16 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
           onOpen: () => setState(() {}),
           onClose: () => setState(() {}),
           menuChildren: [
-            _heading(menuWidth),
-            for (final m in widget.machines) _row(m, menuWidth, focusId),
+            if (widget.machines.any((m) => m.owner == null)) ...[
+              _heading(kBuddyOwnMachines, menuWidth),
+              for (final m in widget.machines)
+                if (m.owner == null) _row(m, menuWidth, focusId),
+            ],
+            if (widget.machines.any((m) => m.owner != null)) ...[
+              _heading(kBuddyTeamMachines, menuWidth),
+              for (final m in widget.machines)
+                if (m.owner != null) _row(m, menuWidth, focusId),
+            ],
           ],
           builder: (context, menu, _) => CallbackShortcuts(
             bindings: {
