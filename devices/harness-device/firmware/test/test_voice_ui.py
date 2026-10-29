@@ -122,6 +122,9 @@ bool queue(action_t action) { if (queue_full) return false; queued = action; ret
 # The Swarm's data and lookups, for the Lead a face voice turn goes to.
 harness += source[source.index('enum { SUPERTAB_RECAP_GET'):source.index('static const char *swarm_fixed_text(')]
 harness += function('voice_lead')
+# and whose engine it listens with: the Buddy's on a Swarm's Buddy side.
+for name in ['swarm_side_slot', 'swarm_side_buddy', 'swarm_on_buddy', 'swarm_voice_engine']:
+    harness += function(name)
 harness += function('question_view') + function('copy') + function('input_cancel') + function('view') + function('voice_close') + function('workspace_failed')
 dispatch = source.split('case A_VOICE:\n', 1)[1].split('case A_PET:', 1)[0]
 harness += 'static void dispatch(action_t a) { switch (a.kind) { case A_VOICE:\n' + dispatch + '} }\n'
