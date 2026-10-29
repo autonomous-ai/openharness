@@ -529,6 +529,44 @@ void main() {
     );
   }
 
+  testWidgets(
+    'old private chat stays out even when the reader is in its audience',
+    (tester) async {
+      final (f, c) = await setup(tester);
+      (f.connection.server.state['conversations'] as List).add({
+        ...conversationFixture('legacy-pm', 'Old PM chat'),
+        'number': 91,
+        'audience': {
+          'people': [
+            {'id': c.accountId},
+          ],
+        },
+      });
+      f.connection.server.revision++;
+      await c.refresh();
+      await tester.pump();
+      final legacy = c.snapshot!.conversation('legacy-pm')!;
+      expect(legacy.audience, contains(c.accountId));
+      expect(c.hiddenByBuddies(legacy), isTrue);
+      await open(tester);
+      final query = find.byKey(const ValueKey('swarm-quick-query'));
+      for (final text in ['Old PM chat', '91']) {
+        await tester.enterText(query, text);
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('swarm-quick-conversation:legacy-pm')),
+          findsNothing,
+        );
+        expect(find.text('No matches'), findsOneWidget);
+      }
+      await key(tester, LogicalKeyboardKey.enter);
+      expect(c.selectedId, 'lead');
+      await key(tester, LogicalKeyboardKey.escape);
+      await close(tester, f, c);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+  );
+
   final shots = Platform.environment['SWARM_QUICK_SWITCHER_SHOTS'];
   setUpAll(() => loadCaptureFonts(shots));
   for (final brightness in Brightness.values) {

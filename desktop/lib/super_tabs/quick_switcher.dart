@@ -217,6 +217,7 @@ class _SuperTabQuickSwitcherScopeState
 
 bool _readable(SuperTabController c, SuperTabConversation? g) {
   if (c.accessRevoked || g == null) return false;
+  if (c.hiddenByBuddies(g)) return false;
   if (g.isBuddyChat) return g.buddyOwnerId == c.accountId;
   // Match the sidebar: the server returned this channel for this reader.
   if (g.id == c.snapshot?.leadsConversationId) return true;
