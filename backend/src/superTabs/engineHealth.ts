@@ -12,18 +12,21 @@ export const SUSPEND_AFTER = 2
 export const SUSPENSION_MS = 6 * 3_600_000
 const NAME: Record<string, string> = { claude: 'Claude Code', codex: 'Codex' }
 const named = (engine: string) => NAME[engine] ?? engine
-/** Failures that say nothing of the engine: the machine was removed, the start was dropped, or it lacked memory. */
-const NOT_THE_ENGINE = [MACHINE_REMOVED, ABANDONED, 'Removed by its owner before it started.']
+/** Failures that say nothing of the engine: the machine was removed, the start was dropped, or it lacked memory. Read at
+ *  call time: machines.ts imports this file, and startFailure.ts reaches machines.ts, so its constants may not exist yet
+ *  while this file loads. */
+const notTheEngine = (error: string) => error === MACHINE_REMOVED || error === ABANDONED || error === 'Removed by its owner before it started.'
+  || MEMORY_SHORT.test(error)
 const MEMORY_SHORT = /^Not enough free memory: /
 
 function pool(state: SuperTabState, machineId: string) { return state.machines?.find(m => m.machineId === machineId) }
 /** Only a routed worker's start: a Product Manager's start has its own retries (leadStart.ts), and a Buddy is its owner's own. */
-const counts = (start: AgentStart) => !!start.error && !start.request.gridModel && !start.request.leadFor && !start.request.buddyOf && !NOT_THE_ENGINE.includes(start.error) && !MEMORY_SHORT.test(start.error)
+const counts = (start: AgentStart) => !!start.error && !start.request.gridModel && !start.request.leadFor && !start.request.buddyOf && !notTheEngine(start.error)
 
 /** Signed in, with every usage window below its limit (or metered, with none), in the machine's latest reading. */
 function readsFine(machine: ContributedMachine, engine: string): boolean {
   const reading = machine.observation
-  const quota = reading?.quotas.find(q => q.engine === engine)
+  const quota = reading?.quotas?.find(q => q.engine === engine)
   return reading?.readiness?.engines?.find(e => e.engine === engine)?.signedIn === true
     && quota?.known === true && quota.windows.every(w => w.usedPercent < 100)
 }
@@ -86,7 +89,7 @@ export function suspendedEngines(machine: ContributedMachine, now: number): Reco
 export function engineUnusable(machine: ContributedMachine, engine: string, now: number): string | null {
   const reading = machine.observation
   if (reading?.readiness?.engines?.find(e => e.engine === engine)?.signedIn === false) return `${named(engine)} is not signed in to a subscription on this machine.`
-  const quota = reading?.quotas.find(q => q.engine === engine)
+  const quota = reading?.quotas?.find(q => q.engine === engine)
   if (quota?.known && quota.windows.some(w => w.usedPercent >= 100)) return `${named(engine)} has no subscription quota left on this machine until its usage window resets.`
   const suspension = active(machine, engine, now)
   return suspension ? suspensionReason(engine, suspension.fine) : null

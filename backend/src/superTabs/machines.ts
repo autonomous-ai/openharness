@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
@@ -568,5 +569,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
+  const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
+  if (unusable) fail('ENGINE_UNAVAILABLE', unusable)
   return pool
 }

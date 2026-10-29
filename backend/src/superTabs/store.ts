@@ -1,4 +1,5 @@
 import { contributedEngines, expireRemovals, LASTING_TEAM_REFUSALS, machineContribution, machineObservationSchema, machineSlots, machineTeamWork, observedPrivacy, recordAgentPresence, removalPreview, startPreparing, swarmGridRow, teamAccountRequired, teamWorkRefusal, type MachineObservation } from './machines.js'
+import { readingClearsSuspensions, suspendedEngines } from './engineHealth.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Machine, Prisma, PrismaClient, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
@@ -463,7 +464,7 @@ export class SuperTabStore {
       if (target && target.machineId !== team) refuse()
     }
     switch (command.type) {
-      case 'machine.contribute': case 'machine.pause': case 'machine.remove': return refuse()
+      case 'machine.contribute': case 'machine.pause': case 'machine.remove': case 'machine.engineResume': return refuse()
       case 'machine.cleaned': case 'tab.project': case 'agent.add':
         if (command.machineId !== team) refuse()
         return
@@ -929,8 +930,11 @@ export class SuperTabStore {
       // Whether it takes teammates' projects now, and if not why (machines.ts teamWorkRefusal): what routing leaves it
       // out for, and what Desktop can show on the machine.
       const refusal = machineTeamWork(state, stored, now, teamMachines, otherWorkspace)
+      const suspended = suspendedEngines(stored, now)
       return { ...pool, availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
-        teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const } }
+        teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const },
+        // What the route leaves out (cli superTabs/routeCommand.ts unreadyPool).
+        ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}) }
     }) } }
   }
 
@@ -1102,7 +1106,8 @@ export class SuperTabStore {
           thread: reply.thread }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
-      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+        || command.type === 'machine.engineResume') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -2148,6 +2153,8 @@ export class SuperTabStore {
         sessionKind: team ? 'team' : 'computer', ...(privacy ? { privacy } : {}), ...(progress ? { harnessProgress: progress } : {}),
         ...(tokens ? { harnessTokens: tokens } : {}),
         ...(preparing ? { preparingStartIds: preparing } : {}) }
+      // A reading that shows a suspended engine signed in with quota offered again (engineHealth.ts); posts nothing.
+      readingClearsSuspensions(pool, now)
       // Current-generation physical stop proof also finishes a close whose membership was already withdrawn.
       for (const proof of observation.stoppedReservations ?? []) {
         if (!observation.stoppedHarnessIds.includes(proof.harnessId)) continue

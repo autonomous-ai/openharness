@@ -16,6 +16,7 @@ import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQues
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
 import { loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
+import { noteStartFailed, noteStartSucceeded, resumeEngine } from './engineHealth.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
 import { dirtyGroups, reportGroups, summarize } from './projectUpdates.js'
@@ -88,6 +89,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('machine.contribute'), machineId: id, name: title, cwd: path, scope: z.literal('swarm').optional(), engines: z.array(swarmEngine).min(1).max(2), maxAgents,
     ifMissing: z.literal(true).optional() }).strict(),
   z.object({ type: z.literal('machine.pause'), machineId: id, paused: z.boolean() }).strict(),
+  z.object({ type: z.literal('machine.engineResume'), machineId: id, engine: z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('machine.remove'), machineId: id }).strict(),
   z.object({ type: z.literal('machine.cleaned'), machineId: id, removalId: id }).strict(),
   z.object({ type: z.literal('localModels.set'), enabled: z.boolean() }).strict(),
@@ -454,7 +456,8 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
+    || command.type === 'machine.engineResume') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -1106,6 +1109,20 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       for (const team of teamPoolsOf(state, pool)) if (!team.removal) team.paused = command.paused
       break
     }
+    case 'machine.engineResume': {
+      // A suspended engine (engineHealth.ts) is offered again at its owner's word: theirs, or a Lead's passing on a chat
+      // message they wrote in the last day, as routing rules are. No new button: the only visible change is the struck name.
+      const pool = machineContribution(state, command.machineId) ?? fail('NOT_FOUND', 'This machine has not been contributed.', 404)
+      const asked = actor.kind === 'agent' && command.askedIn && context.askedIn
+      const ownerAsked = !!asked && asked.author.kind === 'person' && asked.author.id === pool.contributorId && !asked.source
+        && context.now - asked.createdAt <= RULE_MESSAGE_MS && !!state.conversations.find(c => c.id === command.askedIn!.conversationId)?.leadId
+        && state.conversations.find(c => c.id === command.askedIn!.conversationId)!.leadId === actor.agentId
+      if (!(actor.kind === 'person' && actor.userId === pool.contributorId) && !ownerAsked) {
+        fail('OWNER_REQUIRED', "Only the machine's owner, or the Lead passing on a chat message the owner wrote in the last day, resumes an engine there.", 403)
+      }
+      resumeEngine(pool, command.engine)
+      break
+    }
     case 'machine.remove': {
       // Its owner takes the machine out with every Swarm agent on it, each removed like one agent (its host closes the
       // session; a Product Manager refuses it, protectLead). A contributed machine then stays listed, paused, while its
@@ -1546,6 +1563,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
         start.error = command.error
+        const suspended = noteStartFailed(state, start, context.now)
         // A Product Manager's start says so in its project's conversation only when it stops trying (leadStart.ts).
         if (start.request.leadFor) {
           const ended = leadStartFailed(state, start, command.error, context.now)
@@ -1556,7 +1574,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // name for nobody, this notice left the round-device group without a worker for an hour (2026-10-27).
         const group = conversation(state, start.request.conversationId)
         const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
-        message(group.id, failureNotice(start.request.name, command.error), lead ? [lead] : [], null, SYSTEM_ROW)
+        // The failure that suspends its engine there says so once, and tags the machine's owner (engineHealth.ts).
+        message(group.id, `${failureNotice(start.request.name, command.error)}${suspended ? `\n\n${suspended}` : ''}`, lead ? [lead] : [], null, SYSTEM_ROW,
+          undefined, suspended && start.machineOwnerId ? [start.machineOwnerId] : undefined)
         if (start.request.gridModel && !activeWork(group)) steppedUp(group, GRID_START_FAILED, start.id)
         break
       }
@@ -1580,6 +1600,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         ...(command.startedSession ? { startedSession: { ...command.startedSession, creationId: start.creationId } } : {}) })
       group.agentIds.push(agentId)
       start.harnessId = command.harnessId
+      noteStartSucceeded(state, start)
       result.agentId = agentId
       if (start.request.leadFor) {
         // Taking over from a Lead that left, as agent.add does.

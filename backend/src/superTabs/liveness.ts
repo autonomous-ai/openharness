@@ -1,5 +1,6 @@
 import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
   type SuperTabState, type TaskLiveness } from './model.js'
+import { noteStartFailed } from './engineHealth.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { failureNotice, LEAD_PICKUP_SUFFIX, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
@@ -363,6 +364,8 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (named && !silent && now - start.dispatchedAt <= START_PREPARE_MS) return []
     const machine = machineName(state, start.request.machineId)
     start.error = `${machine}${!named ? TIMED_OUT_SUFFIX : silent ? STOPPED_REPORTING_SUFFIX : STILL_PREPARING_SUFFIX}`
+    // Counted as a host's failure is (commands.ts agent.startFailed); the one that suspends its engine says so once.
+    const suspended = noteStartFailed(state, start, now)
     if (start.request.leadFor) return leadNotice(state, start, leadStartFailed(state, start, start.error, now))
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
@@ -375,6 +378,7 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
       recipients: group.agentIds.includes(lead.id) ? [lead.id] : [], author: writtenBy(state, lead),
-      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}`, source: { kind: 'start-timeout', startId: start.id } })]
+      text: `${failureNotice(start.request.name, start.error)}${stepped ? `\n\n${stepped.notice}` : ''}${suspended ? `\n\n${suspended}` : ''}`,
+      ...(suspended && start.machineOwnerId ? { mentions: [start.machineOwnerId] } : {}), source: { kind: 'start-timeout', startId: start.id } })]
   })
 }
