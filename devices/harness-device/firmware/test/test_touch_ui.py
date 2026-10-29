@@ -56,7 +56,7 @@ code += source[source.index('typedef enum {'):source.index('static EXT_RAM_BSS_A
 code += typedef('cable_swarm_t') + typedef('cable_notif_t')
 code += r'''
 static struct {
-    bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search;
+    bool ready, connected, loading, voice_open, voice_start_pending, voice_waiting, voice_carry, voice_review, voice_draft_append, voice_review_preview, voice_search, voice_swarm;
     bool coasting, touch_brake, touch_down, touch_cancelled, quiet, nap, focus_face, straight_title, muted;
     ht_rect_t pressed_rect;
     int brightness;
@@ -235,7 +235,7 @@ code += function('ui_project_known') + function('ui_focus_project') + function('
 code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt',
              'utf8_trim', 'swarm_notice', 'swarm_notice_mark', 'swarm_notice_raise', 'swarm_notice_drop', 'swarm_events',
-             'swarm_tabs_changed', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
+             'swarm_tabs_changed', 'swarm_regain', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
              'ui_supertab_wait', 'ui_supertab_wait_close', 'ui_supertabs_clear', 'swarm_said_of', 'ui_supertab_notice', 'ui_supertab_notice_read']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
@@ -1594,6 +1594,21 @@ static void swarm_pane_checks(const char *dir) {
     swarm_sent = 0; surface_tick(fake_ms + 4999); assert(!swarm_sent);
     surface_tick(fake_ms + 5000); assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "recap.get s1 L4"));
     surface_tick(fake_ms + 11000); assert(swarm_sent == 1);
+    // A swipe on a Swarm of one project lands on the project already on the face: nothing happens. It used to empty
+    // the recap for 5 s and pick the project again, which reopened its Lead chat on the desktop (Diego, 2026-10-29).
+    swarm_setup(); enter_at("s2", "P0");
+    ui_supertab_recap("s2", "P0", "", "Sandbox rebuilt.", 1792560000u, false); scene_take();
+    assert(swarm.recap.state == HT_RECAP_LOADED); swarm_sent = 0;
+    habitat_touch(true, 320, 220, fake_ms); habitat_touch(false, 150, 220, fake_ms + 120); scene_take();
+    habitat_touch(true, 150, 220, fake_ms + 1000); habitat_touch(false, 320, 220, fake_ms + 1120); scene_take();
+    assert(!strcmp(sw.lead, "P0") && swarm.recap.state == HT_RECAP_LOADED && !strcmp(swarm.recap.text, "Sandbox rebuilt."));
+    assert(!swarm_sent);
+    // Two projects still move, both ways.
+    enter_at("s3", "K0"); swarm_sent = 0;
+    habitat_touch(true, 320, 220, fake_ms + 2000); habitat_touch(false, 150, 220, fake_ms + 2120);
+    assert(!strcmp(sw.lead, "K1") && swarm_sent == 3 && !strcmp(swarm_wire[0], "select s3 K1"));
+    habitat_touch(true, 320, 220, fake_ms + 3000); habitat_touch(false, 150, 220, fake_ms + 3120);
+    assert(!strcmp(sw.lead, "K0") && swarm_sent == 6 && !strcmp(swarm_wire[3], "select s3 K0"));
     // PANES (tap the name): one page per Lead in order, opened on the one on the face; a long name on two lines with
     // "…"; Done picks with the swipe's messages.
     swarm_setup(); enter_at("s1", "L2"); tap(fake_ms, 233, 30);
@@ -1639,6 +1654,40 @@ static void swarm_pane_checks(const char *dir) {
     // The Swarm gone from the list: back to TABS.
     { const char ids[2][ID_MAX] = {"s3", "s2"}; ui_supertabs_ids(ids, 2); }
     assert(!swarm_mode() && s.view == TABS);
+    // Diego's dial, 2026-10-29: after a reconnect the list came empty, then whole 2 s later. The Swarm on the face comes
+    // back on the Lead it showed, with no pick sent, and the TABS the dial opened by itself switched no desk tab meanwhile.
+    {
+        const char none[1][ID_MAX] = {""}, ids[3][ID_MAX] = {"s1", "s3", "s2"};
+        swarm_setup(); enter_at("s1", "L2"); s.view = HOME; swarm_sent = 0; int switched = tab_switches;
+        ui_supertabs_ids(none, 0); assert(!swarm_mode() && s.view == TABS);
+        int plain = tab_index_of("t2"); assert(plain >= 0 && !tab_swarm(plain));
+        ht_tab_carousel_reset(&tab_carousel, tabs_total(), plain); tabs_sync(); assert(tab_switches == switched);
+        fake_ms += 2000; ui_supertabs_ids(ids, 3); openharness_card(); card_send();
+        assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L2") && s.view == HOME);
+        ui_supertab_focus("s1", "L2"); assert(!strcmp(sw.lead, "L2") && s.view == HOME);
+        assert(!wire_has(0, "select s1 L2") && tab_switches == switched);
+        // The focus alone brings it back too, when it comes before the card.
+        ui_supertabs_ids(none, 0); assert(s.view == TABS);
+        ui_supertabs_ids(ids, 3); openharness_card(); ht_supertabs_put(&swarm, &card, ms(), NULL, 0);
+        ui_supertab_focus("s1", "L2"); assert(swarm_mode() && !strcmp(sw.lead, "L2") && s.view == HOME);
+        // A Swarm that really went, back only after 10 s: TABS stays, and the person's touch browses as before.
+        ui_supertabs_ids(none, 0); fake_ms += 10000; ui_supertabs_ids(ids, 3); card_send();
+        assert(!swarm_mode() && s.view == TABS);
+        habitat_touch(true, 233, 233, fake_ms);
+        ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_of("t2")); tabs_sync(); assert(tab_switches == switched + 1);
+        habitat_touch_cancel();
+        // The person on TABS already, browsing: a Swarm coming back does not pull the dial off it.
+        swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+        ui_supertabs_ids(none, 0); habitat_touch(true, 233, 233, fake_ms); habitat_touch_cancel();
+        ui_supertabs_ids(ids, 3); openharness_card(); card_send(); assert(!swarm_mode() && s.view == TABS);
+        // The person touched TABS, chose a plain tab with Done and went HOME: the Swarm back within 10 s stays off the face.
+        swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+        ui_supertabs_ids(none, 0); habitat_touch(true, 233, 233, fake_ms); habitat_touch_cancel();
+        ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_of("t2")); dispatch((action_t){.kind = A_TAB_DONE});
+        dispatch((action_t){.kind = A_HOME}); assert(s.view == HOME);
+        fake_ms += 2000; ui_supertabs_ids(ids, 3); openharness_card(); card_send();
+        ui_supertab_focus("s1", "L2"); assert(!swarm_mode() && s.view == HOME);
+    }
     // Diego's dial, 2026-10-28: the window on a Swarm tab with no project open (its Chat with PM, a DM) names no Lead.
     // The dial still goes into that Swarm, on the Lead the desktop last showed there, else the first by order; a dial
     // already in it keeps its face.
@@ -3370,6 +3419,9 @@ int main(int argc, char **argv) {
     reset(); tap(1000,233,220); scene_take();
     habitat_touch(true,233,220,2000); surface_tick(4000); habitat_touch(false,233,220,4100);
     assert(!stops && !reviews); // Resting a hand is not review.
+    // On a Swarm face an older daemon takes no review: the hold does not promise one.
+    reset(); tap(1000,233,220); scene_take(); s.voice_swarm=true;
+    habitat_touch(true,233,220,2000); surface_tick(2675); assert(!s.voice_review_preview);
     reset(); s.view=DRAFT;
     ht_draft_page_t draft_page={.active=true,.revision=1,.can_send=true,.id="draft-one",.agent="a",.name="Parser helper",
         .text="Keep the public API.\n\nOnly change the parser.\nPreserve existing tests.\nAdd Unicode coverage.\nDo not rename exports.\nKeep async behavior.\nKeep all exported types.",.position=1,.total=2};

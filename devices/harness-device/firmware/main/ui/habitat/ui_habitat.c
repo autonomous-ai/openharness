@@ -231,7 +231,7 @@ static EXT_RAM_BSS_ATTR struct {
     int brightness;
     uint32_t voice_started;
     bool voice_open, voice_start_pending, voice_waiting, voice_carry;
-    bool voice_review, voice_review_preview, voice_draft_append, voice_search;
+    bool voice_review, voice_review_preview, voice_draft_append, voice_search, voice_swarm;
     uint32_t voice_draft_revision;
     int draft_drag;
     uint32_t voice_generation, voice_question_revision;
@@ -599,6 +599,9 @@ static EXT_RAM_BSS_ATTR struct {
     bool retried;                     // its recap was asked for a second time
     struct { char tab[ID_MAX], lead[ID_MAX]; } focus[HT_SUPERTABS_MAX];   // the Lead the desktop last showed, per Swarm
     char pending[ID_MAX];             // a Swarm the desktop opened before its `swarms` frame said so (ui_supertab_focus)
+    // The Swarm and Lead an emptied list took off the face, not the person, and when: it comes back if the Swarm does.
+    struct { char tab[ID_MAX], lead[ID_MAX]; uint32_t at; } lost;
+    bool auto_tabs;                   // TABS opened by the dial itself, not touched since: it browses no desk tab
     // Super Tab waits from this machine's harnesses, shown only through the Lead whose `local` names the harness.
     struct { char agent[ID_MAX], request[80], swarm[HT_SUPERTAB_NAME], text[240]; bool stuck, shown; } waits[SWARM_WAITS];
     // The chat each Lead's message entry (`swarm` 3) came from, so `supertab.notice.read` removes only that one.
@@ -805,6 +808,7 @@ static int tab_index_here(void)
 }
 static void tabs_open(void)
 {
+    sw.auto_tabs = false;
     view(TABS);
     if (s.view != TABS) return;
     ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_here());
@@ -840,6 +844,8 @@ static void tab_request(const char *id, bool browsing)
 static void tabs_sync(void)
 {
     if (s.view!=TABS || (s.touch_down && s.touch_cancelled)) return;
+    // The list moving under a TABS nobody asked for switched the desktop's tab by itself (Diego, 2026-10-29).
+    if (sw.auto_tabs) return;
     int index=ht_tab_carousel_index(&tab_carousel);
     // A Swarm's page waits for Done: it is entered with no workspace handshake.
     if (index>=0 && index<s.tab_count && !tab_swarm(index)) tab_request(s.tabs[index].id,true);
@@ -1234,7 +1240,7 @@ static void surface_tick(uint32_t now)
         change();
     }
     if (home_caption_tick(now)) change();
-    // A recap lost on the way is asked for once more after 5 s; the daemon ignores a repeat within 1 s.
+    // A recap lost on the way is asked for once more after 5 s; the daemon answers a repeat within 1 s from its first read.
     if (swarm_mode() && swarm.recap.state == HT_RECAP_LOADING && !sw.retried &&
         (int32_t)(now - swarm.recap.asked_ms) >= 5000) {
         sw.retried = true;
@@ -1254,6 +1260,7 @@ static void surface_tick(uint32_t now)
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
         !s.voice_waiting && !s.voice_start_pending && audio_client_recording() &&
         (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION) &&
+        (!s.voice_swarm || cable_client_supports(CABLE_FEATURE_SWARM_REVIEW)) &&
         s.touch_down && !s.touch_cancelled && gesture.live && !gesture.moved && !gesture.guarded &&
         pressed_action.kind == A_PET && held >= 650 && held <= 1800;
     if (review_preview != s.voice_review_preview) { s.voice_review_preview = review_preview; change(); }
@@ -3086,6 +3093,7 @@ static void dispatch(action_t a)
             s.voice_return = s.view;
             int target = find(a.id);
             const ht_lead_t *lead = voice_lead(a.id, a.value);
+            s.voice_swarm = lead != NULL;
             if (lead) target = -1;
             if (a.value == 2) snprintf(s.voice_target, sizeof s.voice_target, "Find %.48s",
                 !strcmp(form.page.title, "Find Harness") ? "Harness" :
@@ -3102,7 +3110,10 @@ static void dispatch(action_t a)
         break;
     case A_VOICE_STOP:
         if (s.voice_open && !s.voice_start_pending && !s.voice_waiting && audio_client_recording()) {
-            if (a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
+            // Words for a Swarm chat are always reviewed, by a daemon that posts the draft there; an older one would type
+            // it into the Lead's terminal, so a Swarm face is never held to review with it.
+            bool swarm_review = cable_client_supports(CABLE_FEATURE_DRAFT | CABLE_FEATURE_SWARM_REVIEW);
+            if (s.voice_swarm ? swarm_review : a.value == 1 && cable_client_supports(CABLE_FEATURE_DRAFT) && !s.voice_search && (s.voice_return == HOME || s.voice_return == AGENT || s.voice_return == SELECTION)) {
                 s.voice_review = true; audio_client_request_review();
             }
             audio_client_stop();
@@ -3467,6 +3478,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
     }
     surface = s.view == HOME || s.view == AGENT;
     if (down && !s.touch_down) {
+        sw.auto_tabs = false; sw.lost.tab[0] = 0;   // the person's TABS from here on, and no Swarm comes back over it
         s.touch_cancelled = false;
         s.touch_brake = s.coasting && (int32_t)(now - s.coast_until) < 0;
         s.coasting = false;
@@ -3721,8 +3733,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 s.offset = (s.offset + (dx < 0 ? 1 : s.notice_count - 1)) % s.notice_count;
             else if (surface && swarm_here() && swarm_here()->lead_n && s.connected) {
                 // A Swarm's next or previous project, by `order`, wrapping as the panes do (never `focus`).
-                int n = swarm_here()->lead_n;
-                swarm_show(swarm_here(), (sw.at + (dx < 0 ? 1 : n - 1)) % n, true);
+                // One project wraps onto itself: nothing to pick, ask or reopen on the desktop (Diego, 2026-10-29).
+                int n = swarm_here()->lead_n, i = (sw.at + (dx < 0 ? 1 : n - 1)) % n;
+                if (i != sw.at) swarm_show(swarm_here(), i, true);
             } else if (surface && swarm_mode()) {
                 // A Swarm with no projects has nowhere to swipe to.
             } else if (surface && s.count && s.connected && !s.loading) {
@@ -5134,6 +5147,20 @@ static void swarm_tabs_changed(void)
     int index = tab_index_of(focused);
     ht_tab_carousel_reset(&tab_carousel, tabs_total(), index >= 0 ? index : tab_index_here());
 }
+// A daemon that had just started said "no Swarms" before it had read them, and the real list came 2 s later (Diego's dial,
+// 2026-10-29): the Swarm the list took off the face comes back on the Lead it showed, with no pick sent, as long as the
+// person has not moved on. Only that Swarm, within 10 s; one that really went stays gone.
+static bool swarm_regain(const ht_supertab_t *t)
+{
+    if (!t || !sw.lost.tab[0] || swarm_mode() || strcmp(t->id, sw.lost.tab)) return false;
+    bool fresh = (int32_t)(ms() - sw.lost.at) < 10000;
+    bool untouched = s.view == TABS ? sw.auto_tabs : swarm_may_follow();
+    if (!fresh || !untouched) { sw.lost.tab[0] = 0; return false; }
+    char lead[ID_MAX]; COPY(lead, sw.lost.lead);
+    sw.lost.tab[0] = 0;
+    swarm_enter(t, lead, false);
+    return true;
+}
 void ui_supertabs_ids(const char ids[][ID_MAX], int n)
 {
     static EXT_RAM_BSS_ATTR ht_lead_event_t ev[HT_SUPERTABS_MAX * HT_SUPERTAB_LEADS_MAX];   // static: off the reader task's stack
@@ -5141,10 +5168,11 @@ void ui_supertabs_ids(const char ids[][ID_MAX], int n)
     int count = ht_supertabs_ids(&swarm, ids, n, ev, (int)(sizeof ev / sizeof ev[0]));
     swarm_events(ev, count);
     if (swarm_mode() && !swarm_here()) {
-        // The Swarm on the face is gone: back to the list.
+        // The Swarm on the face is gone: back to the list. Remembered, for a list that came empty before the real one.
+        COPY(sw.lost.tab, sw.tab); COPY(sw.lost.lead, sw.lead); sw.lost.at = ms();
         sw.tab[0] = sw.lead[0] = sw.desk[0] = 0;
         ht_supertabs_recap_open(&swarm, "", "", ms());
-        if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
+        if (s.view == HOME || s.view == AGENT || s.view == AGENTS) { tabs_open(); sw.auto_tabs = s.view == TABS; }
     }
     swarms_apply();
     swarm_tabs_changed();
@@ -5185,6 +5213,7 @@ bool ui_supertab(const ht_supertab_t *in)
             ht_supertabs_lead_by_local(&swarm, sw.waits[w].agent, &t) : NULL;
         if (l) beep |= swarm_notice_raise(t, l, sw.waits[w].stuck);
     }
+    swarm_regain(ht_supertabs_find(&swarm, in->id));
     const ht_supertab_t *t = swarm_here();
     if (t && !strcmp(t->id, in->id)) {
         // The face keeps its Lead; a Lead that went leaves the face on the one now at its place.
@@ -5221,6 +5250,7 @@ void ui_supertab_focus(const char *tab, const char *lead)
     // As `focus` today: never while talking, nor over a question or a form.
     bool free = !s.voice_open && !question_view(s.view) && s.view != FORM && s.view != DRAFT && s.view != DRAFT_OPTIONS;
     sw.pending[0] = 0;
+    if (swarm_regain(t)) { change(); display_unlock(); return; }
     if (t && (i >= 0 || !lead[0]) && free) {
         if (swarm_mode() && !strcmp(sw.tab, tab)) {
             if (i >= 0 && strcmp(sw.lead, lead)) swarm_show(t, i, false);

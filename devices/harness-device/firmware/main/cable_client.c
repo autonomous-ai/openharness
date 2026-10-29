@@ -327,6 +327,9 @@ static void send_hello(void)
     // A PM and a Buddy side per Swarm (spec 2026-10-29-round-dial-pm-buddy): each Lead's `buddies` and the reader's
     // Buddy, a face that may be the Buddy chat, its quiet notice, and `supertab.side` back. Older daemons ignore it.
     msg_string(&root, "swarmBuddy", "v1");
+    // Words for a Swarm chat are always reviewed here (Send or Discard) before they are posted, as everyone in the Swarm
+    // reads them; the daemon refuses any that come unreviewed (docs/device-voice-swarm-chat.md).
+    msg_string(&root, "swarmReview", "v1");
     // Which of the two dials this is (board.h) — informational, so a log or a bug report can say. A
     // daemon that predates the field ignores it.
     msg_string(&root, "hw", board()->name);
