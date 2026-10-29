@@ -11,6 +11,7 @@ import 'package:harness_mobile/swarm/swarm_home_view.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/swarm/swarm_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_task_status.dart';
 
@@ -18,8 +19,8 @@ import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 /// The task status line on the phone's work rows (#2125, the mockup Tony
-/// approved 10-29): under each task's name in the drawer, and after its
-/// agent's name on the project sheet's work. Over a scripted backend: one
+/// approved 10-29): after its agent's name under each task's name, on the
+/// project's Tasks tab and on its sheet's work. Over a scripted backend: one
 /// Swarm, project Mobile, where Nova waits on Tony in g-ask, waits for review
 /// in g-review, Atlas works in g-work, and g-stranger waits on a person this
 /// Swarm does not hold. With [second], another Swarm reuses the project's
@@ -196,6 +197,7 @@ void main() {
   }
 
   Finder key(String value) => find.byKey(ValueKey(value));
+  double y(WidgetTester tester, String k) => tester.getTopLeft(key(k)).dy;
 
   /// Task [id]'s line as it reads, after its dot, under [within].
   String? line(WidgetTester tester, String id, {Finder? within}) {
@@ -212,14 +214,6 @@ void main() {
         .join();
   }
 
-  /// The drawer, with [swarm]'s project Mobile's chats listed.
-  Future<void> openChats(WidgetTester tester, {String swarm = tab}) async {
-    await tester.tap(key('swarm-menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(key('swarm-drawer-chats-$swarm-$project'));
-    await tester.pumpAndSettle();
-  }
-
   /// [swarm]'s project sheet, over Home.
   Future<void> openSheet(WidgetTester tester, {String swarm = tab}) async {
     showSwarmProjectSheet(
@@ -230,20 +224,33 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  group('the drawer', () {
-    testWidgets('each task under an open project has its line under its '
-        'name, its dot unheard; its project chat and leaderboard have none', (
+  /// [swarm]'s project Mobile, from Home, on its Tasks tab.
+  Future<void> openTasks(WidgetTester tester, {String swarm = tab}) async {
+    await tester.tap(key('swarm-project-$swarm-$project'));
+    await tester.pumpAndSettle();
+    await tester.tap(key('swarm-project-tab-tasks'));
+    await tester.pumpAndSettle();
+  }
+
+  /// The row of the project's tasks that holds [words].
+  Finder rowOf(String words) => find.ancestor(
+    of: find.textContaining(words, findRichText: true),
+    matching: find.byType(SwarmRow),
+  );
+
+  group('the Tasks tab', () {
+    testWidgets('each task has its line under its name, its dot unheard; '
+        'work waiting on the person has its line without a dot of its own', (
       tester,
     ) async {
       await pump(tester, backend(clock.now()));
-      await openChats(tester);
+      await openTasks(tester);
 
       for (final (id, text) in [
-        ('g-ask', 'Waiting on person-tony · Ship it behind a flag? · 12m'),
-        ('g-review', 'Waiting for review · 3m · PM posted 1m ago'),
-        ('g-work', 'Working · 4m ago'),
+        ('g-review', 'Nova · Waiting for review · 3m · PM posted 1m ago'),
+        ('g-work', 'Atlas · Working · 4m ago'),
       ]) {
-        final row = key('swarm-drawer-chat-$id');
+        final row = key('swarm-task-$id');
         expect(line(tester, id, within: row), text, reason: id);
         expect(
           tester.getTopLeft(key('swarm-task-line-$id')).dy,
@@ -261,16 +268,19 @@ void main() {
           reason: '$id: the line is under the name',
         );
       }
-      for (final id in [leadChat]) {
-        expect(key('swarm-task-line-$id'), findsNothing, reason: id);
-      }
+      // Waiting on the person: under Waiting on you, with its line, and the
+      // row's own dot alone.
       expect(
-        find.descendant(
-          of: key('swarm-drawer-leaderboard-$tab-$project'),
-          matching: find.byType(SwarmTaskLine),
-        ),
-        findsNothing,
+        line(tester, 'g-ask', within: rowOf('Fix login')),
+        'Nova · Waiting on person-tony · Ship it behind a flag? · 12m',
       );
+      expect(key('swarm-task-mark-g-ask'), findsNothing);
+      expect(key('swarm-task-g-ask'), findsNothing, reason: 'not in Working');
+      expect(
+        tester.getTopLeft(rowOf('Fix login')).dy,
+        lessThan(y(tester, 'swarm-task-g-review')),
+      );
+      expect(key('swarm-task-line-$leadChat'), findsNothing);
       final handle = tester.ensureSemantics();
       expect(find.bySemanticsLabel(RegExp('●')), findsNothing);
       handle.dispose();
@@ -279,37 +289,36 @@ void main() {
     testWidgets('a person the Swarm does not hold is "a person": no name '
         'from anywhere else', (tester) async {
       await pump(tester, backend(clock.now()));
-      await openChats(tester);
+      await openTasks(tester);
 
-      expect(line(tester, 'g-stranger'), 'Waiting on a person · 2m');
+      expect(
+        line(tester, 'g-stranger', within: rowOf('Docs')),
+        'Nova · Waiting on a person · 2m',
+      );
       expect(find.textContaining('person-elsewhere'), findsNothing);
     });
 
-    testWidgets('its ages keep moving while the drawer is open', (
-      tester,
-    ) async {
+    testWidgets('its ages keep moving while it is open', (tester) async {
       await pump(tester, backend(clock.now()));
-      await openChats(tester);
+      await openTasks(tester);
       expect(
         line(tester, 'g-review'),
-        'Waiting for review · 3m · PM posted '
-        '1m ago',
+        'Nova · Waiting for review · 3m · PM posted 1m ago',
       );
 
       await tester.pump(const Duration(minutes: 1));
       expect(
         line(tester, 'g-review'),
-        'Waiting for review · 4m · PM posted '
-        '2m ago',
+        'Nova · Waiting for review · 4m · PM posted 2m ago',
       );
-      expect(line(tester, 'g-work'), 'Working · 5m ago');
+      expect(line(tester, 'g-work'), 'Atlas · Working · 5m ago');
     });
 
-    testWidgets('access revoked while it is open: every line goes with its '
+    testWidgets('access revoked while it is open: every task goes with its '
         'Swarm, and no timer is left', (tester) async {
       final fake = backend(clock.now());
       final host = await pump(tester, fake);
-      await openChats(tester);
+      await openTasks(tester);
       expect(find.byType(SwarmTaskLine), findsWidgets);
 
       const refused = SuperTabFailure(
@@ -323,6 +332,8 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SwarmTaskLine), findsNothing);
+      expect(key('swarm-project-tasks'), findsNothing);
+      expect(find.textContaining('Fix login'), findsNothing);
       expect(find.textContaining('Ship it behind a flag?'), findsNothing);
       expect(find.textContaining('person-tony'), findsNothing);
       // A minute on, nothing wakes for a row that is gone.
@@ -330,11 +341,11 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('a read that fails keeps the lines it had, with no Loading, '
+    testWidgets('a read that fails keeps the tasks it had, with no Loading, '
         'and the next read moves them on', (tester) async {
       final fake = backend(clock.now());
       final host = await pump(tester, fake);
-      await openChats(tester);
+      await openTasks(tester);
       final reader = host.session!.inbox.reader(tab)!;
 
       fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
@@ -343,9 +354,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         line(tester, 'g-review'),
-        'Waiting for review · 3m · PM posted 1m ago',
+        'Nova · Waiting for review · 3m · PM posted 1m ago',
       );
       expect(find.byType(Skeleton), findsNothing);
+      expect(key('swarm-project-loading'), findsNothing);
 
       // The task went quiet: the next read says so at once.
       final at = clock.now();
@@ -372,28 +384,36 @@ void main() {
       );
       unawaited(reader.refresh());
       await tester.pumpAndSettle();
-      expect(line(tester, 'g-review'), 'Quiet 20m');
+      expect(line(tester, 'g-review'), 'Nova · Quiet 20m');
     });
 
-    testWidgets('with two Swarms, each task names only who its own Swarm '
+    testWidgets('with two Swarms, each project names only who its own Swarm '
         'holds, though they share ids', (tester) async {
       await pump(tester, backend(clock.now(), second: true));
-      // Both Swarms have a g-ask: each row reads its own, one Swarm listed at
-      // a time.
-      await openChats(tester);
-      expect(key('swarm-drawer-chat-g-ask'), findsOneWidget);
+      await openTasks(tester);
       expect(
-        line(tester, 'g-ask'),
-        'Waiting on person-tony · Ship it behind a flag? · 12m',
+        line(tester, 'g-ask', within: rowOf('Fix login')),
+        'Nova · Waiting on person-tony · Ship it behind a flag? · 12m',
       );
+      expect(find.textContaining('Orion'), findsNothing);
 
-      await tester.tap(key('swarm-drawer-chats-$tab-$project'));
+      await tester.tap(key('tty-back'));
       await tester.pumpAndSettle();
-      await tester.tap(key('swarm-drawer-chats-$other-$project'));
-      await tester.pumpAndSettle();
-      expect(key('swarm-drawer-chat-g-ask'), findsOneWidget);
-      expect(line(tester, 'g-ask'), 'Waiting on a person · 30m');
-      expect(find.textContaining('person-tony'), findsNothing);
+      await openTasks(tester, swarm: other);
+      expect(
+        line(tester, 'g-ask', within: rowOf('Other login')),
+        'Orion · Waiting on a person · 30m',
+      );
+      for (final name in ['Nova', 'person-tony', 'Fix login', 'Sync']) {
+        expect(
+          find.descendant(
+            of: key('swarm-project-tasks'),
+            matching: find.textContaining(name, findRichText: true),
+          ),
+          findsNothing,
+          reason: name,
+        );
+      }
     });
   });
 

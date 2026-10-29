@@ -270,7 +270,9 @@ describe('which machines take teammates\' work is read once per 15 s per Swarm',
   it('two polls within 15 s read the team machines once; a machine turning team shows 15 s after the read', async () => {
     const s = await scene()
     const swarmReads = new SwarmReads(store, { now: () => clock })
-    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'sessionKind'])
+    // The one machine-row read (store.ts machineFacts): the Swarm's machines by id, alive, in its environment. Since #2196 it
+    // takes the account kind and CLI version from the rows it returns, not from its filter.
+    const teamReads = (entries: ProfileEntry[]) => reads(entries, 'machines', ['machineId', 'autonomousEnv', 'deletedAt'])
     const teamWork = (read: { derived: { machines: Record<string, { teamWork: unknown }> } }) => read.derived.machines[s.machineId]!.teamWork
     clock = Date.now()
     const readAt = clock

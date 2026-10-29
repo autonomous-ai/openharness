@@ -460,6 +460,23 @@ describe('a teammate\'s work and the machines that take it', () => {
 // One machine (docs/plans/2026-10-24-swarm-team-account.md): the person's Mac and its Harness Team account are one
 // machine. Its team account joins where the Mac is added, through the Mac's own daemon, and takes the teammates' work
 // started on the Mac.
+// A start records the CLI version its machine ran when it was dispatched, and reads say what the machine runs now, so routing
+// lets a machine updated since its failed starts back in (cli routeCommand.ts `stalled`; Mac Auto, 2026-10-29).
+describe('a machine\'s CLI version, on its starts and in reads', () => {
+  it('stamps a start with the version its machine ran when dispatched, and reads show the version it runs now', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: '0.5.1' } })
+    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: null } }) })
+    const f = await fixture()
+    const read = async () => new SwarmReads(store).firstLoad(owner, f.tab)
+    const first = await read()
+    const dispatched = first.starts.map(p => p.data as { id: string; dispatchedVersion?: string }).find(s => s.id === f.startId)
+    expect(dispatched?.dispatchedVersion).toBe('0.5.1')
+    expect(first.derived.machines['team-mac']).toMatchObject({ clientVersion: '0.5.1' })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: '0.5.6' } })
+    expect((await read()).derived.machines['team-mac']).toMatchObject({ clientVersion: '0.5.6' })
+  })
+})
+
 describe('a project\'s repository, for its GitHub access', () => {
   it('is read by those who may open the project, and by nobody else', async () => {
     const f = await fixture()
@@ -692,18 +709,18 @@ describe('one machine: a Mac and its Harness Team account', () => {
   })
 })
 
-// A project's Product Manager on another person's Team machine (leadStart.ts, Dee 10-29): placed by the store when a
-// machine reports, launched from a list older hosts do not read, and the project's Lead once it runs.
+// A project's Product Manager on another person's Team machine (leadStart.ts, Dee 10-29): on the machine its person names
+// (Ken 10-29), launched from a list older hosts do not read, and the project's Lead once it runs.
 describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
   const capable = (generation: string) => ({ ...reading(generation), capabilities: ['leadStart'] }) as Parameters<SuperTabStore['observeMachine']>[3]
 
-  it('waits for a machine that can run it, starts on the Team machine once it reports, and leads the project', async () => {
+  it('needs a machine named, starts on the Team machine named, and leads the project', async () => {
     const f = await fixture()
     const created = (await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: 'Build it.' })).result
     const projectId = String(created.projectId), home = String(created.conversationId)
-    // The team daemon has not said it starts Product Managers yet: nothing is free, so it waits.
-    const asked = await run(f.tab, { type: 'lead.start', projectId, machineId: null, engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
-    expect(asked.result).toMatchObject({ waiting: true })
+    // Only its person knows which machine stays on: none is chosen for them.
+    await expect(run(f.tab, { type: 'lead.start', projectId, machineId: null, engine: 'codex', repositoryUrl: 'https://github.com/example/app' }))
+      .rejects.toMatchObject({ code: 'MACHINE_REQUIRED', status: 400 })
     expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.leadStarts).toBeUndefined()
     // Contributed for every project, as a Mac added to a Swarm with projects is; the fixture's serves only the first. Its
     // Builder of that first project goes, so the account can serve this project alone.
@@ -711,6 +728,7 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     await run(f.tab, { type: 'agent.remove', agentId: f.builder })
     const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
     await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    await run(f.tab, { type: 'lead.start', projectId, machineId: 'team-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
     const row = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!
     expect(row.leadStarts).toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'team-mac', cwd: `/team/${projectId}`,
       leadFor: expect.objectContaining({ projectId, personId: owner.sub }) }) })])
@@ -722,7 +740,7 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     expect(read.state.conversations.find(c => c.id === home)).toMatchObject({ leadId: agentId })
     expect(read.state.projects!.find(p => p.id === projectId)!.lead).toMatchObject({ status: 'started', machineId: 'team-mac' })
     expect((await store.messages(owner, f.tab, home, {})).messages.map(m => m.text))
-      .toEqual(expect.arrayContaining(['Waiting for a machine to start the Product Manager.', 'Product Manager started on MacBook Pro · Team.']))
+      .toEqual(expect.arrayContaining(['Product Manager started on MacBook Pro · Team.']))
   })
 
   // The isolated confidential run (docs/performance/2026-10-27-pm-confidential-isolated-run.test.mts), its Team machine case:
@@ -814,13 +832,15 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     expect(await start()).not.toBe('TEAM_ACCOUNT_HELD')
   })
 
-  it('is refused on the teammate\'s personal Mac even while the Swarm does not yet require Team accounts', async () => {
+  it('on the teammate\'s personal Mac with no Team account, starts there, as its owner (Ken 10-29)', async () => {
     const f = await fixture()
     const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: '' })).result.projectId)
     await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, person)
     const generation = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
     await store.observeMachine(person, f.tab, 'personal-mac', capable(generation))
-    await expect(run(f.tab, { type: 'lead.start', projectId, machineId: 'personal-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' }))
-      .rejects.toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED', status: 403 })
+    const placed = await run(f.tab, { type: 'lead.start', projectId, machineId: 'personal-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
+    expect(placed.result).toMatchObject({ machineId: 'personal-mac' })
+    expect((await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.leadStarts)
+      .toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'personal-mac', cwd: `/work/${projectId}` }) })])
   })
 })

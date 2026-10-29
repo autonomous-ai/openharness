@@ -81,7 +81,18 @@ void main() {
         ).toUtc().toIso8601String(),
       };
       List<Map<String, dynamic>> page() => [
-        message('m1', 1, 20, 'Where are we on the phone build?', author: me),
+        // Agents acknowledge as Slack bots do: River's ✅ on the question it
+        // answered, Jasper's 👀 on the plan it is starting.
+        message(
+          'm1',
+          1,
+          20,
+          'Where are we on the phone build?',
+          author: me,
+          reactions: {
+            'check': [('agent', 'agent-lead')],
+          },
+        ),
         message(
           'm2',
           2,
@@ -107,7 +118,15 @@ void main() {
             'eyes': [('person', 'person-diego')],
           },
         ),
-        message('m4', 4, 33, 'I will ask you before we ship.'),
+        message(
+          'm4',
+          4,
+          33,
+          'Jasper: add ✅ to the phone picker next.',
+          reactions: {
+            'eyes': [('agent', 'agent-jasper')],
+          },
+        ),
       ];
 
       final fake = FakeSwarm();

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
-import { createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
+import { agentOnly, createSuperTab, SuperTabError, visibleState, type Actor, type MessageDraft } from './model.js'
 import { canReadAgent, canWatchAgent, markConfidential, projectOf, projectsOf, readConversation, skillModeOf, skillSetOf, watchersLost } from './projects.js'
 import { mayDrive } from './terminal.js'
 
@@ -494,6 +494,10 @@ describe('custom role sets', () => {
     f.run({ type: 'project.skills', projectId: p.projectId, mode: 'custom' }, peer)
     expect(f.messages).toEqual(expect.arrayContaining([expect.objectContaining({ recipients: [reviewer],
       text: expect.stringContaining('has no Reviewer role') })]))
+    // The agent's alone (Ken, 2026-10-29): people read the project's set on its own line.
+    const gone = f.messages.find(m => m.text.includes('has no Reviewer role'))!
+    expect(agentOnly(gone.source, gone.recipients)).toBe(true)
+    expect(agentOnly(f.messages.find(m => m.text.startsWith('Skills: '))!.source, [])).toBe(false)
     expect(f.messages.filter(m => m.recipients.includes(lead))).toEqual([])
     expect(() => f.run({ type: 'conversation.create', projectId: p.projectId, title: 'Review', brief: 'Check it', reviewOf: build, checks: [] }, peer)).toThrow('no reviewer role')
     expect(() => f.run({ type: 'agent.start', request: request(p.conversationId, { role: 'reviewer' }) } as Command)).toThrow('no reviewer role')

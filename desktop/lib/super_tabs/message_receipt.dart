@@ -6,14 +6,14 @@ import '../core/models.dart';
 import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../state/app_state.dart';
-import '../state/harness_activity.dart';
 import '../widgets/desktop_chrome.dart';
 import 'controller.dart';
 import 'machine_status.dart';
 import 'model.dart';
 
-/// The approved receipt line, scoped by the chat to its newest own message.
-/// No new transport is inferred: missing native activity simply reads Delivered.
+/// The line under the chat's newest own message, shown only while it sends,
+/// when it was not sent, or when its delivery needs a hand; a message that
+/// arrived carries none, as in Slack.
 class SuperTabMessageReceipt extends StatefulWidget {
   const SuperTabMessageReceipt({
     super.key,
@@ -93,16 +93,6 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     super.dispose();
   }
 
-  String _clockText(Duration value) {
-    final seconds = value.inSeconds.clamp(0, 1 << 31);
-    return '${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}';
-  }
-
-  String _replyDuration(Duration value) {
-    final seconds = value.inSeconds.clamp(0, 1 << 31);
-    return seconds < 60 ? '${seconds}s' : '${seconds ~/ 60}m ${seconds % 60}s';
-  }
-
   @override
   Widget build(BuildContext context) {
     final message = widget.message, c = widget.controller;
@@ -135,28 +125,22 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
                             : now.difference(readingAt),
                       ) ==
                       SuperTabMachineStatus.offline);
-    final working =
-        delivery?.delivered == true &&
-        agent != null &&
-        widget.app != null &&
-        harnessActivity(widget.app!, agent.machineId, agent.harnessId) ==
-            HarnessActivity.working;
     final fresh =
         delivery?.pending == true &&
         message.createdAt != null &&
         now.difference(message.createdAt!) < const Duration(seconds: 3);
-    var color = DesktopChrome.muted;
-    var icon = AppIcons.check;
-    String title = 'Sent';
-    String? detail, note, elapsed;
+    final error = Theme.of(context).colorScheme.error;
+    var color = error;
+    var icon = AppIcons.triangleAlert;
+    // Like Slack, a message that went where it was sent carries no line: only
+    // sending, not sending and what needs a hand show (Dee, 10-29).
+    String? title, note;
     bool sending = false;
     final actions = <(String, VoidCallback?)>[];
     final canResolve = c.canWrite && !c.saving && delivery?.id != null;
 
     if (delivery?.status == 'uncertain') {
       title = "Couldn't confirm delivery";
-      icon = AppIcons.triangleAlert;
-      color = Theme.of(context).colorScheme.error;
       note =
           "$name's computer may have typed this into the terminal without confirming. Check the terminal before sending again, or it could run twice.";
       for (final (label, resolution) in [
@@ -171,27 +155,6 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
               : null,
         ));
       }
-    } else if (delivery?.status == 'answered') {
-      title = 'Replied';
-      icon = AppIcons.checkCheck;
-      final answer = delivery?.answeredAt ?? delivery?.updatedAt;
-      final start = delivery?.deliveredAt ?? message.createdAt;
-      if (answer != null && start != null) {
-        title += ' · ${_replyDuration(answer.difference(start))}';
-      }
-    } else if (delivery?.delivered == true) {
-      icon = AppIcons.checkCheck;
-      final at = (delivery!.deliveredAt ?? delivery.updatedAt)?.toLocal();
-      title = at == null
-          ? 'Delivered'
-          : 'Delivered ${at.hour.toString().padLeft(2, '0')}:${at.minute.toString().padLeft(2, '0')}';
-      if (working) {
-        color = DesktopChrome.accent;
-        detail = '$name is working';
-        if (delivery.deliveredAt != null) {
-          elapsed = _clockText(now.difference(delivery.deliveredAt!));
-        }
-      }
     } else if (delivery == null &&
         c.selected?.leadId == null &&
         // Every person reads the Product Managers' conversation; a post there
@@ -200,70 +163,32 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
         // A Buddy chat has no Lead: its Buddy takes the message.
         c.selected?.isBuddyChat != true) {
       title = 'Not sent · this chat has no Lead';
-      icon = AppIcons.triangleAlert;
-      color = Theme.of(context).colorScheme.error;
       actions.add(('Add a Lead', c.canWrite ? widget.onAddLead : null));
     } else if (delivery?.status == 'cancelled') {
       title = 'Not sent';
-      icon = AppIcons.triangleAlert;
-      color = Theme.of(context).colorScheme.error;
     } else if (delivery?.pending == true && offline) {
       color = grid.AppPalette.warn;
-      detail = "$name's computer is offline";
+      icon = AppIcons.cloudOff;
+      title = "$name's computer is offline";
       final host =
           machine?['name'] as String? ?? widget.machineName(agent!.machineId);
       note = readingAt == null
           ? "$host is offline. Your message goes in when it's back online."
           : "$host was last seen ${superTabAgo(now.difference(readingAt))}. Your message goes in when it's back online.";
     } else if (fresh) {
+      color = DesktopChrome.muted;
       title = 'Sending…';
       sending = true;
     }
-    _clock(fresh || working || (delivery?.pending == true && offline));
+    _clock(fresh || (delivery?.pending == true && offline));
+    if (title == null) return const SizedBox.shrink();
     final style = superTabReceiptStyle(color);
-    final motion = !MediaQuery.disableAnimationsOf(context);
     final parts = <Widget>[
-      if (sending && motion)
-        SizedBox(
-          width: 12,
-          height: 12,
-          child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
-        )
+      if (sending)
+        _sendingMark(context, color)
       else
-        Icon(sending ? AppIcons.loaderCircle : icon, size: 14, color: color),
+        Icon(icon, size: 14, color: color),
       Text(title, style: style),
-      if (detail != null) ...[
-        Text('·', style: style),
-        Text(detail, style: style),
-      ],
-      if (working) ...[
-        ExcludeSemantics(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (var i = 0; i < 3; i++)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 1.5),
-                  child: Opacity(
-                    opacity:
-                        !motion || (now.millisecondsSinceEpoch ~/ 500) % 3 == i
-                        ? 1
-                        : .25,
-                    child: Container(
-                      width: 4,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        if (elapsed != null) Text(elapsed, style: style),
-      ],
       for (final (label, action) in actions) ...[
         Text('·', style: style),
         _receiptAction(label, action, style),
@@ -296,6 +221,16 @@ class _SuperTabMessageReceiptState extends State<SuperTabMessageReceipt>
     );
   }
 }
+
+/// Sending's mark: a small spinner, or a still loader when motion is off.
+Widget _sendingMark(BuildContext context, Color color) =>
+    MediaQuery.disableAnimationsOf(context)
+    ? Icon(AppIcons.loaderCircle, size: 14, color: color)
+    : SizedBox(
+        width: 12,
+        height: 12,
+        child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
+      );
 
 /// A receipt line's text: small metadata in [color], with figures that keep
 /// their width as a clock counts.
@@ -381,17 +316,7 @@ class SuperTabOutgoingReceipt extends StatelessWidget {
     if (message.state == SuperTabOutgoingState.sending) {
       final style = superTabReceiptStyle(DesktopChrome.muted);
       return _receiptLine([
-        if (MediaQuery.disableAnimationsOf(context))
-          Icon(AppIcons.loaderCircle, size: 14, color: DesktopChrome.muted)
-        else
-          SizedBox(
-            width: 12,
-            height: 12,
-            child: CircularProgressIndicator(
-              strokeWidth: 1.5,
-              color: DesktopChrome.muted,
-            ),
-          ),
+        _sendingMark(context, DesktopChrome.muted),
         Text('Sending…', style: style),
       ]);
     }

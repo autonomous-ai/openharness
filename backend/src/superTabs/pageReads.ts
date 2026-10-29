@@ -1,7 +1,8 @@
 import type { Prisma, SuperTabDelivery, SuperTabMessage } from '@prisma/client'
+import { routingRow } from './buddies.js'
 import { ms } from './parts/light.js'
 import type { ReactionRow } from './reactions.js'
-import { agentOnly, type Author } from './model.js'
+import { agentOnly, stableId, type Author } from './model.js'
 import { readBy } from './parts/indexed.js'
 import { prismaRow } from './rawRows.js'
 
@@ -93,15 +94,56 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
   return [...same, ...await read(edge ? { [op]: edge.sequence } : undefined, undefined, limit - same.length)]
 }
 
-export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean }
+/**
+ * The messages of one conversation with these ids, by the id index: what a page's rows name as their thread or reply-to but
+ * the page does not hold (store.ts messages), so what this reader may see of them can be checked. Named, not Prisma's `id in`,
+ * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).
+ */
+export async function messagesById(tx: Transaction, tabId: string, conversationId: string, ids: string[]):
+  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds'>>> {
+  if (!ids.length) return []
+  const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId, conversationId } },
+    { $project: { source: 1, recipientIds: 1 } }])
+  return rows.map(row => {
+    const { id, source, recipientIds } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
+    return { id, source, recipientIds }
+  })
+}
+
+/** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
+const LEAD_COPY_KINDS = new Set<unknown>(['work-lost', 'work-resumed'])
+
+/** Of `rows`, the task chat copies stored before #2177 marked them (liveness.ts leadNoticeRows) whose project chat copy
+ *  reached the Lead: that same notice, so read by no one either (re-check of #2177). A copy whose Lead copy reached no one,
+ *  or that has none, stays shown: a person is then the only one who can act. Each Lead copy is read by its id alone, its
+ *  Swarm checked here (inConversationOrder), and only when a row could be such a copy. */
+export async function deliveredCopies(tx: Transaction, tabId: string, rows: ReadonlyArray<{ id: string; source: unknown; recipientIds: readonly string[] }>):
+  Promise<Set<string>> {
+  const copies = rows.filter(row => {
+    const source = row.source as { kind?: unknown; recipientsOnly?: unknown } | null | undefined
+    return !row.recipientIds.length && LEAD_COPY_KINDS.has(source?.kind) && source?.recipientsOnly !== true
+  })
+  if (!copies.length) return new Set()
+  const leads = await tx.superTabMessage.aggregateRaw({ pipeline: [
+    { $match: { _id: { $in: copies.map(row => stableId(row.id, 'lead')) } } }, { $project: { tabId: 1, recipientIds: 1 } }] }) as
+    unknown as Array<{ _id: string; tabId: string; recipientIds?: string[] }>
+  const reached = new Set(leads.filter(lead => lead.tabId === tabId && lead.recipientIds?.length).map(lead => lead._id))
+  return new Set(copies.filter(row => reached.has(stableId(row.id, 'lead'))).map(row => row.id))
+}
+
+/** `routing`: a route, override or rule row (buddies.ts routingRow), which a Buddy never reads, as a reply or a thread's root. */
+export interface ThreadReply { thread: string; id: string; author: Author; mentions: string[]; sequence: number; createdAt: Date; agentOnly: boolean; routing: boolean }
 
 /** Every message of the threads rooted at `roots` in one conversation, roots included, oldest first: what the page's thread
  *  summaries are counted from. Matched as the page reads are, so the tabId+conversationId+thread index bounds it. */
 export async function pageThreads(tx: Transaction, tabId: string, conversationId: string, roots: string[]): Promise<ThreadReply[]> {
   // Sorted here: a $sort in the pipeline makes the planner walk the conversation's sequence index instead.
   const rows = await tx.superTabMessage.aggregateRaw({ pipeline: [{ $match: { tabId, conversationId, thread: { $in: roots } } },
-    { $project: { thread: 1, author: 1, mentions: 1, sequence: 1, createdAt: 1, source: 1 } }] }) as unknown as Array<Record<string, unknown>>
+    { $project: { thread: 1, author: 1, mentions: 1, sequence: 1, createdAt: 1, source: 1, recipientIds: 1 } }] }) as unknown as Array<Record<string, unknown>>
+  const copies = await deliveredCopies(tx, tabId, rows.filter(row => row._id === row.thread)
+    .map(row => ({ id: row._id as string, source: row.source, recipientIds: (row.recipientIds ?? []) as string[] })))
   return rows.map(row => ({ thread: row.thread as string, id: row._id as string, author: row.author as Author,
     mentions: (row.mentions ?? []) as string[], sequence: row.sequence as number, createdAt: new Date(ms(row.createdAt)),
-    agentOnly: agentOnly(row.source) })).sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
+    agentOnly: copies.has(row._id as string) || agentOnly(row.source, (row.recipientIds ?? []) as string[]), routing: routingRow(row.source) }))
+      .sort((a, b) => a.sequence - b.sequence || (a.id < b.id ? -1 : 1))
 }

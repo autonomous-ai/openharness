@@ -94,6 +94,8 @@ export class HostReads {
    * part when its settings or ledger changed, never when only its reading did (every 15 s; group 5's run, 2026-10-26).
    */
   private async woken(tx: Transaction, ids: string[], machineId: string, since: number): Promise<Set<string>> {
+    // A host with no Swarm polls every second: an empty list would reach Prisma as `$or: []`, a scan of the whole collection.
+    if (!ids.length) return new Set()
     const after = new Date(since)
     const [changed, groups, machines] = await Promise.all([
       parts.loadChanged(tx, ids, after, PLAIN_KINDS),
@@ -165,7 +167,7 @@ export class HostReads {
   }
 
   private async lookups(tx: Transaction, state: SuperTabState, teams: Array<{ machineId: string }>, grants: GrantReads): Promise<HostLookups> {
-    const people = await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } })
+    const people = state.people.length ? await tx.user.findMany({ where: { id: { in: state.people.map(p => p.id) }, autonomousEnv: state.environment }, select: { id: true, email: true } }) : []
     const confidential = await confidentialSessions(tx, state.agents.map(a => a.id), state.id)
     return { people, confidential, teams, githubApp: !!this.options.githubApp, agentGrant: target => this.store.agentGrant(tx, state, target, grants) }
   }

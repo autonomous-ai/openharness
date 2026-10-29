@@ -11,6 +11,7 @@
   "src/superTabs/read/host.ts swarmGroup.findMany": 1,
   "src/superTabs/read/host.ts swarmMachine.findMany": 2,
   "src/superTabs/read/service.ts superTab.findMany": 1,
+  "src/superTabs/read/service.ts swarmWorkspaceMember.findMany": 1,
   "src/superTabs/routeDecisions.ts superTabRouteDecision.updateMany": 1,
   "src/superTabs/sessionScope.ts superTabSessionScope.findMany": 1,
   "src/superTabs/sessionScope.ts superTabSessionScope.updateMany": 1,
@@ -22,11 +23,13 @@
   "src/superTabs/store.ts superTabDelivery.updateMany": 11,
   "src/superTabs/store.ts superTabMessage.findMany": 1,
   "src/superTabs/store.ts superTabOperation.findMany": 1,
+  "src/superTabs/store.ts superTabRoleText.deleteMany": 1,
   "src/superTabs/store.ts superTabRun.deleteMany": 1,
   "src/superTabs/store.ts superTabTerminalRequest.count": 1,
   "src/superTabs/store.ts swarmHead.findMany": 2,
   "src/superTabs/store.ts swarmMachine.findMany": 1,
   "src/superTabs/store.ts swarmMember.findMany": 1,
   "src/superTabs/workspaceStore.ts superTab.findMany": 1,
-  "src/superTabs/workspaceStore.ts swarmHead.findMany": 1
+  "src/superTabs/workspaceStore.ts swarmHead.findMany": 1,
+  "src/superTabs/workspaceStore.ts swarmWorkspace.findMany": 2
 }

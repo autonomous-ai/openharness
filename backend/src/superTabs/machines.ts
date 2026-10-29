@@ -1,7 +1,9 @@
 import { z } from 'zod'
+import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
+import { startFinished } from './parts/write.js'
 import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -31,8 +33,16 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). Each project's chat hears how it ended (removalEnded). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
+  /** Added by Desktop as its person joined the Swarm, not lent to teammates by choice: their work runs here only through
+   *  its Harness Team account whose privacy check passed, whether or not the Swarm requires that everywhere
+   *  (teamWorkRefusal). Kept when the contribution is saved again; gone with the machine. */
+  teamAccountOnly?: true
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
+  /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
+  engineFailures?: Record<string, number>
+  /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
+  engineSuspensions?: Record<string, { at: number; fine: boolean }>
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
@@ -95,7 +105,11 @@ const readiness = z.object({
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
-  quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
+  quotas: z.array(quota).max(32),
+  /** Per engine whose allowance is unknown, why, in plain words naming no account, token or plan (cli superTabs/capacity.ts
+   *  quotaUnknownReason): what the route says of it. Absent from hosts before it. */
+  quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
+  runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
@@ -226,7 +240,7 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
   // named it (local Team account run, 2026-10-28).
   if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
-  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
+  if (!teamRow && reading?.sessionKind !== 'team' && !required && !pool.teamAccountOnly) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
@@ -484,7 +498,9 @@ function poolSlots(state: SuperTabState, pool: ContributedMachine) {
   let pending = 0
   for (const start of state.starts ?? []) {
     if (start.request.machineId !== pool.machineId || start.error) continue
-    if (start.harnessId) { if (!stopped.has(start.harnessId)) running.add(start.harnessId) }
+    // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
+    // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
+    if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
     else pending++
   }
   return running.size + pending
@@ -524,22 +540,25 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 
 /** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is
  *  admitted again when its host launches it, so a Team machine whose check failed or went stale since never launches it. */
+/** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
+ *  project exists (leadStart.ts leadChoices). */
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  otherWorkspaceMachines: readonly string[] = []) {
+  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  const project = groupProject(state, conversation(state, request.conversationId))
+  const project = forProject ?? groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
   if (held && held !== project.id) {
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
   }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
-  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
-  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
+  // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
@@ -560,5 +579,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
+  const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
+  if (unusable) fail('ENGINE_UNAVAILABLE', unusable)
   return pool
 }

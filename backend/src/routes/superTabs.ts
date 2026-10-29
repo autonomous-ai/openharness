@@ -48,7 +48,7 @@ const workspaceTransfer = z.object({ userId: id }).strict()
 const workspaceVisibility = z.object({ visibility: z.enum(['invite-only', 'workspace']) }).strict()
 const workspaceJoin = z.object({ operationId: id }).strict()
 const personOnly = (user: AuthUser) => { if (isTeamSession(user)) fail(TEAM_SESSION_LIMITED, TEAM_SESSION_MESSAGE, 403) }
-const listQuery = z.object({ after: id.optional() }).strict()
+const listQuery = z.object({ after: id.optional(), mentions: z.literal('1').optional() }).strict()
 const cursor = z.string().min(1).max(512).regex(/^[A-Za-z0-9_-]+$/)
 const changesQuery = agentQuery.extend({ cursor })
 const costsQuery = z.object({ days: z.coerce.number().int().min(1).max(MAX_DAYS).default(DEFAULT_DAYS), asAgentId: id.optional() }).strict()
@@ -65,6 +65,8 @@ const messageParams = tabParams.extend({ conversationId: id })
 // A person's own read mark (superTabs/readMarks.ts): no asAgentId, since agents keep none.
 const readMarkBody = z.object({ sequence: z.number().int().nonnegative().safe() }).strict()
 const noQuery = z.object({}).strict()
+// The reader's own catch-up (superTabs/catchUp.ts): no asAgentId, since agents read every message as it comes.
+const catchUpQuery = z.object({ after: z.coerce.number().int().nonnegative().safe() }).strict()
 // Pages by (sequence, id) (design 4.6): `afterId`/`beforeId` go with `after`/`before`, from the previous page's `next`.
 const messageQuery = agentQuery.extend({ after: z.coerce.number().int().nonnegative().safe().optional(),
   before: z.coerce.number().int().nonnegative().safe().optional(), messageId: id.optional(), afterId: id.optional(), beforeId: id.optional(),
@@ -295,7 +297,7 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
     (req, reply) => respond(reply, () => store.tabPolicy(req.user!, req.params.tabId, req.query.asAgentId)))
   app.get('/api/super-tabs', updateRequired)
   app.get<{ Querystring: z.infer<typeof listQuery> }>('/api/super-tabs/list', { preHandler: validateQuery(listQuery) },
-    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after)))
+    (req, reply) => respond(reply, () => reads.list(req.user!, req.query.after, req.query.mentions === '1')))
   app.post<{ Body: z.infer<typeof create> }>('/api/super-tabs', { preHandler: validateBody(create) },
     (req, reply) => respond(reply, () => store.create(req.user!, req.body.operationId, req.body.name, req.body.projectVisibility, req.body.workspaceId)))
   // Workspaces (docs/plans/2026-10-27-swarm-workspaces.md): the person's Workspaces and the Swarms they may see in each.
@@ -460,6 +462,9 @@ export async function superTabRoutes(app: FastifyInstance, options: { store?: Su
   app.post<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof noQuery>; Body: z.infer<typeof readMarkBody> }>('/api/super-tabs/:tabId/conversations/:conversationId/read',
     { preHandler: [validateParams(messageParams), validateQuery(noQuery), validateBody(readMarkBody)] },
     (req, reply) => respond(reply, () => reads.markRead(req.user!, req.params.tabId, req.params.conversationId, req.body.sequence)))
+  app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof catchUpQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/catch-up',
+    { preHandler: [validateParams(messageParams), validateQuery(catchUpQuery)] },
+    (req, reply) => respond(reply, () => store.catchUp(req.user!, req.params.tabId, req.params.conversationId, req.query.after)))
   app.get<{ Params: z.infer<typeof messageParams>; Querystring: z.infer<typeof agentQuery> }>('/api/super-tabs/:tabId/conversations/:conversationId/attempts',
     { preHandler: [validateParams(messageParams), validateQuery(agentQuery)] },
     (req, reply) => respond(reply, () => store.attempts(req.user!, req.params.tabId, req.params.conversationId, req.query.asAgentId)))

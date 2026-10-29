@@ -218,17 +218,21 @@ describe('what an experiment in its own process may ask of the core', () => {
     expect(await answerExperimentQuery(core, experiments, 'orchestrator', 'observer_key', { op: 'public' })).toEqual({ error: 'odd' })
   })
 
-  it('tells Share which account is signed in here, which its tabs\' observers are derived for, and no other experiment', async () => {
+  it('tells Share and the Swarm which account is signed in here, and no other experiment', async () => {
     const identity = vi.fn(async (): Promise<{ accountId: string; email: string } | null> => ({ accountId: 'u-bob', email: 'bob@x.io' }))
     const core = fakeCore({ account: { identity } })
     const withShare = new Set(['orchestrator', 'sharing'])
     expect(await answerExperimentQuery(core, withShare, 'sharing', 'account', {})).toEqual({ accountId: 'u-bob', email: 'bob@x.io' })
     identity.mockResolvedValueOnce(null)
     expect(await answerExperimentQuery(core, withShare, 'sharing', 'account', {})).toEqual({ error: 'ACCOUNT_UNAVAILABLE' })
+    // And the Swarm, whose round dial cards show the reader's own Buddy (Diego's dial, 2026-10-29: "No Buddy here yet"
+    // with a Buddy, since the Swarm's process was answered nothing here).
+    const withSwarm = new Set(['superTabs'])
+    expect(await answerExperimentQuery(core, withSwarm, 'superTabs', 'account', {})).toEqual({ accountId: 'u-bob', email: 'bob@x.io' })
     // Any other service's `account` is its own link's to answer: models asks it for the grid name.
     expect(await answerExperimentQuery(core, withShare, 'orchestrator', 'account', {})).toBeNull()
     expect(await answerExperimentQuery(core, withShare, 'models', 'account', {})).toBeNull()
-    expect(identity).toHaveBeenCalledTimes(2)
+    expect(identity).toHaveBeenCalledTimes(3)
   })
 
   it('sends Share\'s sealed frame to one of its observers, and nothing that is not one', async () => {

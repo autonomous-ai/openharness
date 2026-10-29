@@ -255,6 +255,44 @@ describe('a conversation\'s page of messages', () => {
   })
 })
 
+// #2168: what a page's rows name as their thread or reply-to but the page does not hold is read by id, so a reader is never
+// pointed at a row it may not see. As Prisma's `id in` it was $expr, whose index the planner picks per read (here it happened
+// to pick the id index); the read now names the id index, and this pins that it reads only the ids it names.
+describe('the rows a page points at', () => {
+  it('are read by id alone, by the id index, and only in this conversation', async () => {
+    const me = await signedIn('pointer')
+    const tabId = (await store.create(me, randomUUID(), 'Points')).id
+    const conversationId = (await db.swarmGroup.findFirstOrThrow({ where: { tabId, deleted: false } })).key
+    const author = { kind: 'person', id: me.sub, name: me.email, membershipGeneration: tabId }
+    const message = (id: string, sequence: number, fields: Record<string, unknown> = {}) => ({ id: `${tabId}-${id}`, tabId, conversationId, sequence,
+      text: id, author, recipientIds: [] as string[], mentions: [] as string[], ...fields })
+    await db.superTabMessage.createMany({ data: [
+      message('root', 1),
+      // An agent-only note to someone else: the reply in its thread names nothing of it.
+      message('note', 2, { source: { kind: 'note', recipientsOnly: true }, recipientIds: ['some-agent'] }),
+      { ...message('elsewhere', 1), conversationId: 'another-conversation' },
+      // Older messages a read bounded by the conversation alone examines too.
+      ...Array.from({ length: 30 }, (_, i) => message(`old-${i}`, 3 + i)),
+      message('r1', 40, { thread: `${tabId}-root`, replyTo: `${tabId}-root` }),
+      message('r2', 41, { thread: `${tabId}-note` }),
+      message('r3', 42, { replyTo: `${tabId}-elsewhere` }),
+    ] })
+    let page: Awaited<ReturnType<SuperTabStore['messages']>> | undefined
+    const entries = await profiled(db, async () => { page = await store.messages(me, tabId, conversationId, { after: 39 }) })
+    expect(page!.messages.map(m => m.text)).toEqual(['r1', 'r2', 'r3'])
+    expect(page!.messages[0]).toMatchObject({ thread: `${tabId}-root`, replyTo: `${tabId}-root` })
+    expect(page!.messages[1]!.thread).toBeNull()
+    const rows = reads(entries, 'SuperTabMessage', ['_id', 'conversationId'], ['sequence', 'thread'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.nreturned, JSON.stringify(plan(rows))).toBe(2)
+    // Three ids named: at most one document each (the other conversation's examined and left out), and the index seek of
+    // each id plus the key past it.
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(2 * 3)
+    expect(rows[0]!.command?.hint, JSON.stringify(plan(rows))).toEqual(NAMED_INDEX.SuperTabMessage.id)
+  })
+})
+
 describe('who a named read answers', () => {
   it('a Swarm list leaves out a Swarm the person was removed from, and one of another environment', async () => {
     const me = await signedIn('removed')

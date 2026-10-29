@@ -6,7 +6,7 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/attachment_chips.dart": {
-    "edge-insets": 2,
+    "edge-insets": 1,
     "border-radius": 2
   },
   "desktop/lib/super_tabs/attachment_text_viewer.dart": {
@@ -32,14 +32,11 @@
   },
   "desktop/lib/super_tabs/message_receipt.dart": {
     "font-size": 2,
-    "edge-insets": 5,
+    "edge-insets": 4,
     "border-radius": 1
   },
   "desktop/lib/super_tabs/message_row.dart": {
     "edge-insets": 5
-  },
-  "desktop/lib/super_tabs/message_text.dart": {
-    "edge-insets": 1
   },
   "desktop/lib/super_tabs/notifications.dart": {
     "edge-insets": 8
@@ -66,7 +63,7 @@
     "edge-insets": 1
   },
   "desktop/lib/super_tabs/roster.dart": {
-    "edge-insets": 4,
+    "edge-insets": 2,
     "border-radius": 1
   },
   "desktop/lib/super_tabs/route_row.dart": {
@@ -92,7 +89,7 @@
     "edge-insets": 2
   },
   "desktop/lib/super_tabs/view.dart": {
-    "edge-insets": 23,
+    "edge-insets": 22,
     "border-radius": 1
   }
 }

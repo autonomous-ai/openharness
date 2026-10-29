@@ -24,9 +24,15 @@ typedef _View = ({
 });
 
 /// [parts] as [accountId] reads them: whose Buddies are whose depends on who
-/// reads.
+/// reads. Each conversation carries when it last changed, which the state
+/// leaves out ([SuperTabConversation.changedAt]).
 _View _viewOf(SuperTabParts parts, String accountId) {
   final state = parts.state;
+  for (final conversation in state['conversations'] as List) {
+    if (conversation case {'id': final String id} && final Map row) {
+      row['changedAt'] = parts.groupChangedAt(id);
+    }
+  }
   return (
     snapshot: SuperTabSnapshot.fromJson(state),
     partners: swarmPartners(state),

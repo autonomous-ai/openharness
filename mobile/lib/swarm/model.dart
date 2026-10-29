@@ -1,4 +1,5 @@
 import 'identity.dart' show superTabPersonName;
+import 'live_card_model.dart';
 import 'profile_model.dart';
 
 export 'profile_model.dart';
@@ -39,10 +40,16 @@ class SuperTabPerson {
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']);
+      status = SuperTabPersonStatus.fromJson(row['status']),
+      chosenUsername = row['username'] as String?;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
+
+  /// The username the person chose (desktop usernames); null for a default.
+  /// The phone still names people by their email prefix until it takes
+  /// usernames too.
+  final String? chosenUsername;
 
   /// Their status while it lasts.
   SuperTabPersonStatus? statusAt(DateTime now) =>
@@ -73,6 +80,9 @@ class SuperTabAgent {
         _ => null,
       },
       limitedUntil = DateTime.tryParse(row['limitedUntil'] as String? ?? ''),
+      alerting = List.unmodifiable(
+        (row['alerting'] as List?)?.whereType<String>() ?? const <String>[],
+      ),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
       confidential = row['confidential'] == true,
@@ -85,6 +95,10 @@ class SuperTabAgent {
   /// Until when routing skips it: its machine saw a usage limit on its screen
   /// (spec/2026-10-23-lead-sees-agent-terminal.md). Null when none was seen.
   final DateTime? limitedUntil;
+
+  /// What its machine is alerting about now (backend terminal.ts): `prompt`
+  /// while it waits at a prompt in its terminal, gone once that is answered.
+  final List<String> alerting;
 
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
@@ -160,6 +174,8 @@ class SuperTabConversation {
         (row['pullRequestUrls'] as List?)?.whereType<String>() ??
             const <String>[],
       ),
+      cards = SuperTabCards.fromJson(row['cards']),
+      reviewOf = row['reviewOf'] as String?,
       brief = _text(row, 'brief'),
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
@@ -167,6 +183,12 @@ class SuperTabConversation {
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
+      changedAt = row['changedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['changedAt'] as num).toInt(),
+              isUtc: true,
+            )
+          : null,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment'])),
@@ -206,6 +228,13 @@ class SuperTabConversation {
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
+
+  /// Its messages drawn as live cards (swarm_live_card.dart); none from an
+  /// older backend.
+  final SuperTabCards cards;
+
+  /// A review group's reviewed group; null for any other conversation.
+  final String? reviewOf;
   final int lastMessageSequence;
 
   /// Its newest message in the main stream: a reply only in its thread
@@ -215,12 +244,18 @@ class SuperTabConversation {
 
   /// The newest message that makes it unread, as the desktop's
   /// `SuperTabController.unread` counts it: a reply only in its thread does
-  /// not, though the phone, with no thread view yet, shows it in the chat.
+  /// not, as it is not in the chat.
   int get mainSequence => lastMainSequence ?? lastMessageSequence;
 
   /// Moves whenever a reaction here is added or taken back (backend
   /// reactions.ts): the messages shown are read again for their counts.
   final int reactionSeq;
+
+  /// When it last changed, a message included: its part's `changedAt`,
+  /// which the phone's reader adds to what it read
+  /// ([SuperTabParts.groupChangedAt]), as no state names it. Null where it
+  /// is not known: a state read some other way, or a Home kept from before.
+  final DateTime? changedAt;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
@@ -317,6 +352,7 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
+      teamAccounts = row['teamAccounts'] != false,
       readMarks = Map.unmodifiable({
         if (row['readMarks'] case final Map marks)
           for (final MapEntry(:key, :value) in marks.entries)
@@ -393,6 +429,10 @@ class SuperTabSnapshot {
   /// Which decisions wait, as a digest that moves when they change though the
   /// count may not; null from a backend before it (superTabs/decisions.ts).
   final String? decisionsDigest;
+
+  /// False only where the server does not try Harness Team accounts yet
+  /// (backend read/contract.ts `teamAccounts`), as on the desktop.
+  final bool teamAccounts;
 
   /// The reader's own read marks kept on the server (backend readMarks.ts): the newest message sequence read, by
   /// conversation, on any of their devices. Never another person's.
@@ -803,7 +843,8 @@ class SuperTabDelivery {
 
 /// What a page says about one thread (backend threads.ts): the line under its
 /// root, and who it marks unread for. Read as the desktop's model reads it
-/// (desktop_parity_test); the phone shows none of it yet.
+/// (desktop_parity_test); the phone draws the line, not yet who it is unread
+/// for.
 class SuperTabThread {
   SuperTabThread.fromJson(Map<String, dynamic> row)
     : id = _text(row, 'id'),
@@ -863,7 +904,6 @@ class SuperTabMessage {
   bool get threadReply => thread != null && thread != id;
 
   /// Whether the main stream lists it: a thread reply only when also sent.
-  /// The phone, with no thread view yet, shows every reply in the chat.
   bool get inMainStream => !threadReply || alsoInChat;
   final int sequence;
   final Map<String, dynamic> author;
@@ -891,6 +931,12 @@ class SuperTabMessage {
   /// on it; null for every other message, whatever its text says.
   String? get proposalOwnerId =>
       source['kind'] == 'buddy-proposal' ? source['personId'] as String? : null;
+
+  /// The agent a "waiting at a prompt" note is about; null for any other row.
+  String? get promptAlertAgentId =>
+      source['kind'] == 'terminal-alert' && source['alert'] == 'prompt'
+      ? source['agentId'] as String?
+      : null;
 
   /// A note the backend writes about a terminal: a Lead's typing, or an alert.
   bool get terminalEvent =>
