@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -218,6 +220,155 @@ void main() {
     // conversation read to its end is; the line stays for this visit.
     await tester.pump(const Duration(seconds: 5));
     expect(find.byKey(_line), findsOneWidget);
+  });
+
+  // Diego, 10-29: a chat left less than 15 minutes ago keeps its messages,
+  // and the view redrew from that stale copy before the newest page landed.
+  testWidgets('back in a chat left with everything read, the line sits above '
+      'what arrived meanwhile and nothing new is marked read', (tester) async {
+    final server = _server(40)..markReadElsewhere('lead', 40);
+    final c = await show(tester, server);
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    for (var i = 41; i <= 80; i++) {
+      _fromLead(server, 'Update $i');
+    }
+    await c.refresh();
+    await tester.pumpAndSettle();
+    server.readMarkPosts.clear();
+    // The newest page is still on its way when the chat is drawn again.
+    final hold = server.holdReads = Completer<void>();
+    unawaited(c.select('lead'));
+    await tester.pump();
+    await tester.pump();
+    server.holdReads = null;
+    hold.complete();
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+    expect(find.byKey(_line), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      greaterThan(tester.getTopLeft(find.text('Update 40')).dy),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 41')).dy),
+    );
+    expect(
+      server.readMarkPosts.where((p) => (p['sequence'] as int) > 40),
+      isEmpty,
+    );
+    expect(c.readMark('lead'), 40);
+    // Read to the end, the chat is read.
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+    expect(c.readMark('lead'), 80);
+  });
+
+  /// Reads [server]'s Lead chat through 40, leaves it, and lets [arrive]
+  /// more messages arrive while it is away.
+  Future<SuperTabController> leaveRead(
+    WidgetTester tester,
+    ConversationServer server, {
+    int arrive = 40,
+  }) async {
+    final c = await show(tester, server);
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    for (var i = 41; i <= 40 + arrive; i++) {
+      _fromLead(server, 'Update $i');
+    }
+    await c.refresh();
+    await tester.pumpAndSettle();
+    server.readMarkPosts.clear();
+    return c;
+  }
+
+  testWidgets('a read that fails on the way back waits; the next read places '
+      'the line', (tester) async {
+    final server = _server(40)..markReadElsewhere('lead', 40);
+    final c = await leaveRead(tester, server);
+    server.failReads = true;
+    await c.select('lead');
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+    expect(c.awaitsNewest('lead'), isTrue);
+    expect(find.byKey(_line), findsNothing);
+    server.failReads = false;
+    await c.refresh();
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 5));
+    expect(c.awaitsNewest('lead'), isFalse);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 41')).dy),
+    );
+    expect(
+      server.readMarkPosts.where((p) => (p['sequence'] as int) > 40),
+      isEmpty,
+    );
+  });
+
+  testWidgets('scrolled to the end of the held copy while the newest page is '
+      'on its way, nothing is marked read', (tester) async {
+    final server = _server(40)..markReadElsewhere('lead', 30);
+    final c = await show(tester, server);
+    await c.select('offline');
+    await tester.pumpAndSettle();
+    for (var i = 41; i <= 80; i++) {
+      _fromLead(server, 'Update $i');
+    }
+    await c.refresh();
+    await tester.pumpAndSettle();
+    server.readMarkPosts.clear();
+    final hold = server.holdReads = Completer<void>();
+    unawaited(c.select('lead'));
+    await tester.pump();
+    final position = scroll(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pump();
+    await tester.pump();
+    expect(server.readMarkPosts, isEmpty);
+    server.holdReads = null;
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(c.readMark('lead'), 30);
+    expect(
+      tester.getTopLeft(find.byKey(_line)).dy,
+      lessThan(tester.getTopLeft(find.text('Update 31')).dy),
+    );
+  });
+
+  testWidgets('a read that fails over a held copy that is current does not '
+      'wait', (tester) async {
+    final server = _server(40)..markReadElsewhere('lead', 40);
+    final c = await leaveRead(tester, server, arrive: 0);
+    server.failReads = true;
+    await c.select('lead');
+    await tester.pumpAndSettle();
+    expect(c.awaitsNewest('lead'), isFalse);
+    expect(find.byKey(_line), findsNothing);
+    server.failReads = false;
+  });
+
+  testWidgets('access revoked while the newest page is on its way: the held '
+      'copy and the wait go, and the late answer is dropped', (tester) async {
+    final server = _server(40)..markReadElsewhere('lead', 40);
+    final c = await leaveRead(tester, server);
+    final hold = server.holdReads = Completer<void>();
+    unawaited(c.select('lead'));
+    await tester.pump();
+    c.revokeAccess('You no longer have access.');
+    server.holdReads = null;
+    hold.complete();
+    await tester.pumpAndSettle();
+    expect(c.awaitsNewest('lead'), isFalse);
+    expect(c.messages('lead'), isEmpty);
+    expect(find.text('Update 41'), findsNothing);
+    expect(find.byKey(_line), findsNothing);
+    expect(server.readMarkPosts, isEmpty);
   });
 
   testWidgets('no line when everything is read', (tester) async {
