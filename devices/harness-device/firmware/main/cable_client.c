@@ -981,8 +981,9 @@ static void handle_supertab_recap(const cJSON *p)
     const bool none = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "none"));
     ui_supertab_recap(tab, lead, chat_id ? chat_id : "", none || !text ? "" : text, secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, none);
 }
-// `supertab.notice` {tab, lead, chat, chatId, id, text, at}: the Lead's new message in its Lead conversation or Chat with
-// PM, the one thing that alerts with a swarmChat daemon. The daemon sends each once; the UI decides the beep.
+// `supertab.notice` {tab, lead, chat, chatId, id, text, at, thread?}: the Lead's new message in its Lead conversation or Chat with
+// PM, the one thing that alerts with a swarmChat daemon. The daemon sends each once; the UI decides the beep. `thread`: a
+// reply in a thread, which the desktop shows collapsed, so it alerts even with its chat on the face (Diego, 10-29).
 static void handle_supertab_notice(const cJSON *p)
 {
     const char *tab = str_of(p, "tab"), *lead = str_of(p, "lead"), *chat = str_of(p, "chat"), *chat_id = str_of(p, "chatId");
@@ -992,7 +993,7 @@ static void handle_supertab_notice(const cJSON *p)
     const cJSON *at = cJSON_GetObjectItemCaseSensitive(p, "at");
     const double secs = cJSON_IsNumber(at) && at->valuedouble > 0 ? at->valuedouble : 0;
     if (ui_supertab_notice(tab, lead, strcmp(chat, "pm") ? HT_CHAT_LEAD : HT_CHAT_PM, chat_id, text,
-                           secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs))
+                           secs > 4294967295.0 ? 0xFFFFFFFFu : (uint32_t)secs, cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "thread"))))
         audio_notify_done();
 }
 // `supertab.notice.read` {tab, lead, chatId}: the desktop opened that chat, so its alert is read.

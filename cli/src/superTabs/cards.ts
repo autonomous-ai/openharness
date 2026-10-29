@@ -187,8 +187,8 @@ function faceChat(face: Face, leadId: string, agents: Json[], me: string | undef
 
 /** The newest row one of the chat's agents wrote: a person-visible message, not a system row (`source`), the person's or
  *  another agent's. `at` in seconds; `id` the message's, or '' when it has none. */
-export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>): { text: string; at: number; id: string; sequence: number } | null {
-  let best: { text: string; at: number; id: string; sequence: number } | null = null
+export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>): { text: string; at: number; id: string; sequence: number; thread?: true } | null {
+  let best: { text: string; at: number; id: string; sequence: number; thread?: true } | null = null
   for (const item of messages) {
     const m = object(item)
     const author = object(m.author).id
@@ -196,7 +196,9 @@ export function lastAgentMessage(messages: Json[], agentIds: ReadonlySet<string>
     const sequence = typeof m.sequence === 'number' ? m.sequence : -1
     if (best && sequence <= best.sequence) continue
     const stamp = typeof m.createdAt === 'number' ? m.createdAt : Date.parse(String(m.createdAt))
-    best = { text: m.text, at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, id: typeof m.id === 'string' ? m.id : '', sequence }
+    // A reply in a thread: its root is another message (a top-level row is its own thread's root).
+    const thread = typeof m.thread === 'string' && m.thread !== m.id
+    best = { text: m.text, at: Number.isFinite(stamp) ? Math.floor(stamp / 1000) : 0, id: typeof m.id === 'string' ? m.id : '', sequence, ...(thread ? { thread: true as const } : {}) }
   }
   return best
 }
@@ -603,7 +605,7 @@ export class SwarmCards {
 /** The newest message said becomes the held notice at `key`, unless one held is newer. */
 function raise(held: Map<string, LeadNotice>, key: string, chat: LeadNotice['chat'], chatId: string, said: ReturnType<typeof lastAgentMessage>): void {
   if (!said || !cardId(said.id)) return
-  const notice: LeadNotice = { chat, chatId, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at }
+  const notice: LeadNotice = { chat, chatId, id: said.id, text: cut(said.text, RECAP_BYTES), at: said.at, ...(said.thread ? { thread: true as const } : {}) }
   const before = held.get(key)
   if (!before || before.at <= notice.at) held.set(key, notice)
 }

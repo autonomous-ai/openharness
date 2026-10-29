@@ -209,9 +209,9 @@ function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }
   }
   for (let i = frame.leads.length - 1; i >= 0 && !fits(); i--) delete frame.leads[i].buddy
 }
-/** A Lead's new message as the round dial's alert, sized as the recap is. */
+/** A Lead's new message as the round dial's alert, sized as the recap is; `thread` for a reply in a thread, which the dial alerts for even with its chat on the face. */
 function noticeFrame(tab: string, lead: string, n: LeadNotice): Message {
-  return fitText(n.text, (text) => ({ t: 'supertab.notice', tab, lead, chat: n.chat, chatId: n.chatId, id: n.id, text, at: n.at }))
+  return fitText(n.text, (text) => ({ t: 'supertab.notice', tab, lead, chat: n.chat, chatId: n.chatId, id: n.id, text, at: n.at, ...(n.thread ? { thread: true } : {}) }))
 }
 /** `make(text)`, with the text shortened (on a character) until the whole JSON fits what a dial reads: escapes can grow
  *  1,500 bytes of text past it. */
@@ -2826,7 +2826,9 @@ export class CableSession {
   private async pushNotice(key: string, tab: string, lead: string, notice: LeadNotice | undefined, replay: boolean, openChat: string | undefined): Promise<void> {
     const held = this.notices.get(key)
     if (!notice) { this.notices.delete(key); return }
-    const opened = openChat !== undefined && openChat === notice.chatId
+    // A thread reply is collapsed on the desktop, so its chat being open does not read it; the desktop does not tell which
+    // thread is open, so it alerts (Diego's thread replies never alerted while he sat in the PM chat, 10-29).
+    const opened = openChat !== undefined && openChat === notice.chatId && !notice.thread
     if (held?.id !== notice.id) {
       // Replayed or read on the desktop: noted as not open on the dial, so nothing is sent for it now or later.
       const sent = !replay && !opened

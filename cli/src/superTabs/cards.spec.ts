@@ -675,6 +675,17 @@ describe('SwarmCards notices', () => {
     expect(t.reads('g-web')).toBe(0)
   })
 
+  it('marks a notice from a thread reply, so the dial alerts for it while that chat is open', async () => {
+    const t = chatSwarm({ 'lead-web': [said(2, 'a1', { thread: 'x1', replyTo: 'x1' })], 'pm-web': [said(2, 'a1', { thread: 'x1', alsoInChat: true })] })
+    await t.cards.tick()
+    await t.move(2)
+    expect(t.webLead()?.notice).toEqual({ chat: 'lead', chatId: 'lead-web', id: 'x2', text: 'm2', at: saidAt, thread: true })
+    const pm = chatSwarm({ 'pm-web': [said(2, 'a1', { thread: 'x1', alsoInChat: true })] })
+    await pm.cards.tick()
+    await pm.move(1, 2)
+    expect(pm.webLead()?.notice).toMatchObject({ chat: 'pm', id: 'x2', thread: true })
+  })
+
   it('one notice for the newest of two messages', async () => {
     const t = chatSwarm({ 'lead-web': [said(3, 'a1'), said(2, 'a1')] })
     await t.cards.tick()

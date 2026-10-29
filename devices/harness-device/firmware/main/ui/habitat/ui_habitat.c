@@ -5057,7 +5057,7 @@ static int swarm_said_of(const char *lead)
     for (int i = 0; lead && i < SWARM_SAID; i++) if (!strcmp(sw.said[i].lead, lead)) return i;
     return -1;
 }
-bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at)
+bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, const char *chat_id, const char *text, uint32_t at, bool thread)
 {
     (void)at;
     if (!tab || !lead || !chat_id || !text) return false;
@@ -5076,7 +5076,8 @@ bool ui_supertab_notice(const char *tab, const char *lead, ht_chat_kind_t chat, 
     if (slot < 0) slot = 0;
     COPY(sw.said[slot].lead, l->id); COPY(sw.said[slot].chat, chat_id);
     s.notice_sequence++;
-    bool face = on_face(l->id) && !strcmp(l->chat_id, chat_id);
+    // A thread reply is collapsed on the desktop, so having its chat on the face does not mean anyone saw it.
+    bool face = !thread && on_face(l->id) && !strcmp(l->chat_id, chat_id);
     if (face) notice_read_now(l->id);
     else display_wake();
     change();
