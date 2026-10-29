@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { Readable } from 'node:stream'
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
@@ -11,7 +12,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { ABANDONED_START_MS, GrantReads, SuperTabStore } from '../src/superTabs/store.js'
 import { HostReads } from '../src/superTabs/read/host.js'
-import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
+import { MemoryAttachmentStore, MemoryAvatarStore } from '../src/superTabs/attachments.js'
+import { startAttachmentSweep, sweepUnsentAttachments } from '../src/lib/attachmentSweep.js'
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
@@ -2453,6 +2455,134 @@ describe('Super Tab chat attachments', () => {
     const before = files.objects.size
     expect(await file(tab, 'a.png', new Uint8Array(1), 'image/png', 'lead', peer)).toMatchObject({ status: 403, code: 'READ_ONLY' })
     expect(files.objects.size).toBe(before)
+  })
+
+  // Diego, 10-30: uploads nobody sends within a day are removed, row and stored file, so the bucket stops growing.
+  describe('unsent files expire after a day', () => {
+    const HOUR = 3_600_000
+    const pictures = new MemoryAvatarStore('https://avatars.example.test')
+    const bucket = { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test', avatars: pictures, avatarPrefix: 'super-tabs' }
+    // Two a chunk, so a run takes several chunks.
+    const sweep = (database: PrismaClient = db) => sweepUnsentAttachments(database, bucket, new Date(), { chunk: 2, chunks: 5, pauseMs: 0 })
+    const aged = (id: string, hours: number) => db.superTabAttachment.update({ where: { id }, data: { createdAt: new Date(Date.now() - hours * HOUR) } })
+    const row = (id: string) => db.superTabAttachment.findUnique({ where: { id } })
+    const stored = (url: string) => files.objects.has(objectKey(url))
+    const picture = async (tab: string) => {
+      const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(24)])
+      const { avatar } = await new SuperTabStore(db, Date.now, bucket).uploadAvatar(owner, tab, { body: Readable.from([bytes]) })
+      return { id: avatar.id, key: (await row(avatar.id))!.objectKey }
+    }
+    const useAvatar = (tab: string, id: string) => new SuperTabStore(db, Date.now, bucket).execute(owner, tab,
+      { operationId: randomUUID(), command: { type: 'member.avatar', avatar: { kind: 'upload', id } } })
+
+    it('removes a file nobody sent within a day, row and object, and keeps a sent one and a young one', async () => {
+      const { tab } = await fixture()
+      const [old, older, sent, young] = [(await file(tab, 'old.txt')).attachment, (await file(tab, 'older.txt')).attachment,
+        (await file(tab, 'sent.txt')).attachment, (await file(tab, 'young.txt')).attachment]
+      const messageId = String((await send(tab, [sent.id])).result.messageId)
+      const [unusedPicture, usedPicture] = [await picture(tab), await picture(tab)]
+      await useAvatar(tab, usedPicture.id)
+      for (const [id, hours] of [[old.id, 25], [older.id, 48], [sent.id, 25], [young.id, 1], [unusedPicture.id, 25], [usedPicture.id, 25]] as const) await aged(id, hours)
+
+      await sweep()
+      expect([await row(old.id), await row(older.id), stored(old.url), stored(older.url)]).toEqual([null, null, false, false])
+      expect(await row(sent.id)).toMatchObject({ usedBy: messageId })
+      expect(await row(young.id)).toMatchObject({ usedBy: null })
+      expect([stored(sent.url), stored(young.url)]).toEqual([true, true])
+      // The sent message still links its file.
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([sent])
+      // Pictures alike: one never used is removed from the avatar store, the one in use stays.
+      expect([await row(unusedPicture.id), pictures.objects.has(unusedPicture.key)]).toEqual([null, false])
+      expect([(await row(usedPicture.id))?.id, pictures.objects.has(usedPicture.key)]).toEqual([usedPicture.id, true])
+      // A young file is still sent as usual.
+      expect((await send(tab, [young.id])).result.messageId).toBeTruthy()
+    })
+
+    it('keeps a file whose object could not be deleted for the next run, and nothing can use it meanwhile', async () => {
+      const { tab } = await fixture()
+      const [stuck, other] = [(await file(tab, 'stuck.txt')).attachment, (await file(tab, 'other.txt')).attachment]
+      const stuckPicture = await picture(tab)
+      for (const id of [stuck.id, other.id, stuckPicture.id]) await aged(id, 25)
+      const failing = new Set([objectKey(stuck.url), stuckPicture.key])
+      const unavailable = async function (this: MemoryAttachmentStore, key: string) {
+        if (failing.has(key)) throw new Error('bucket unavailable')
+        this.objects.delete(key)
+      }
+      const chat = vi.spyOn(files, 'delete').mockImplementation(unavailable)
+      const avatars = vi.spyOn(pictures, 'delete').mockImplementation(unavailable)
+      try {
+        await sweep()
+      } finally {
+        chat.mockRestore()
+        avatars.mockRestore()
+      }
+      expect([await row(other.id), stored(other.url)]).toEqual([null, false])
+      expect([(await row(stuck.id))?.id, stored(stuck.url), (await row(stuckPicture.id))?.id, pictures.objects.has(stuckPicture.key)])
+        .toEqual([stuck.id, true, stuckPicture.id, true])
+      await expect(send(tab, [stuck.id])).rejects.toMatchObject({ code: 'ATTACHMENT_EXPIRED', status: 410 })
+      await expect(useAvatar(tab, stuckPicture.id)).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
+
+      await sweep()
+      expect([await row(stuck.id), stored(stuck.url), await row(stuckPicture.id), pictures.objects.has(stuckPicture.key)]).toEqual([null, false, null, false])
+    })
+
+    it('runs a pass as the worker starts it, then hourly, and says what it removed', async () => {
+      const { tab } = await fixture()
+      const stale = (await file(tab, 'stale.txt')).attachment
+      await aged(stale.id, 25)
+      const said: unknown[] = []
+      const stop = startAttachmentSweep(db, bucket, { pauseMs: 0, log: { info: (...line: unknown[]) => said.push(line), warn: (...line: unknown[]) => said.push(line) } })
+      try {
+        await vi.waitFor(async () => expect(await row(stale.id)).toBeNull())
+        expect(stored(stale.url)).toBe(false)
+        await vi.waitFor(() => expect(said).toContainEqual(['[attachment-sweep] pass', { removed: 1, failed: 0 }]))
+      } finally {
+        stop()
+      }
+    })
+
+    it('lets a send racing the sweep either take the file or be refused, never post a message linking a removed file', async () => {
+      const { tab } = await fixture()
+      // The sweep runs inside the send's transaction, after it read the file and just before it takes it. The send's
+      // write then conflicts, and its retry finds the file gone.
+      const late = (await file(tab, 'late.txt')).attachment
+      await aged(late.id, 25)
+      let attempts = 0
+      const racing = new SuperTabStore(new Proxy(db, { get(target, key, receiver) {
+        if (key !== '$transaction') return Reflect.get(target, key, receiver)
+        return (body: (tx: PrismaClient) => Promise<unknown>, options: unknown) => target.$transaction(tx => body(new Proxy(tx, { get(client, name, clientReceiver) {
+          const model = Reflect.get(client, name, clientReceiver)
+          if (name !== 'superTabAttachment') return model
+          return new Proxy(model, { get(delegate, method, delegateReceiver) {
+            const original = Reflect.get(delegate, method, delegateReceiver)
+            if (method !== 'updateMany') return original
+            return async (...args: unknown[]) => { if (!attempts++) await sweep(); return original.apply(delegate, args) }
+          } })
+        } }) as PrismaClient), options as never)
+      } }), Date.now, bucket)
+      await expect(racing.execute(owner, tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: 'lead', text: 'late',
+        replyTo: null, recipientIds: [], attachmentIds: [late.id] } })).rejects.toMatchObject({ code: 'ATTACHMENT_UNAVAILABLE' })
+      expect(attempts).toBe(1)
+      expect([await row(late.id), stored(late.url)]).toEqual([null, false])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.filter(m => m.attachments?.some(a => a.id === late.id))).toEqual([])
+
+      // The send commits after the sweep picked the file, before the sweep's claim: the claim checks again and leaves it.
+      const onTime = (await file(tab, 'on-time.txt')).attachment
+      await aged(onTime.id, 25)
+      let messageId = ''
+      const sentBeforeClaim = new Proxy(db, { get(target, key, receiver) {
+        const original = Reflect.get(target, key, receiver)
+        if (key !== '$runCommandRaw') return original
+        return async (command: Record<string, unknown>) => {
+          if ('update' in command && !messageId) messageId = String((await send(tab, [onTime.id])).result.messageId)
+          return original.call(target, command)
+        }
+      } })
+      await sweep(sentBeforeClaim)
+      expect(messageId).not.toBe('')
+      expect([(await row(onTime.id))?.usedBy, stored(onTime.url)]).toEqual([messageId, true])
+      expect((await store.messages(owner, tab, 'lead', {})).messages.find(m => m.id === messageId)?.attachments).toEqual([onTime])
+    })
   })
 })
 

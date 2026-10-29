@@ -29,6 +29,8 @@ import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
 import { productUsagePeopleRollupService } from './services/ProductUsagePeopleRollupService.js'
 import { startReceiptSweep } from './lib/productUsageReceiptSweep.js'
+import { startAttachmentSweep } from './lib/attachmentSweep.js'
+import { attachmentsFromEnv } from './superTabs/attachments.js'
 import { logger } from './utils/logger.js'
 
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
@@ -63,6 +65,7 @@ async function start(): Promise<void> {
   let stopArchive = (): void => {}
   let stopDeliveries = (): void => {}
   let stopReceiptSweep = (): void => {}
+  let stopAttachmentSweep = (): void => {}
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, stopping backend worker...`)
     const hardExit = setTimeout(() => process.exit(0), 5000)
@@ -74,6 +77,7 @@ async function start(): Promise<void> {
     stopArchive()
     stopDeliveries()
     stopReceiptSweep()
+    stopAttachmentSweep()
     // The last partial minute, before the database closes.
     stopQueryStats()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
@@ -85,6 +89,10 @@ async function start(): Promise<void> {
   productUsagePeopleRollupService.start()
   // Usage receipts from when they lived 36 days, a few at a time until none are left (lib/productUsageReceiptSweep.ts).
   stopReceiptSweep = startReceiptSweep(prisma)
+  // Swarm uploads nobody sent within a day, row and stored file, once an hour (lib/attachmentSweep.ts). Without a bucket
+  // there are no uploads.
+  const attachments = attachmentsFromEnv(env)
+  if (attachments) stopAttachmentSweep = startAttachmentSweep(prisma, attachments)
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
