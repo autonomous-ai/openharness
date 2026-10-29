@@ -1425,6 +1425,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     cloudFrames: () => cloud.frames(),
   }).agentsList
   backend.agentGuest = (agentId) => registry.resolve(agentId)?.guest ?? null
+  // On a Harness Team daemon the account is the Mac's owner's, and another person's Product Manager may run here: the
+  // owner's own apps never reach the Swarm's confidential sessions, and only watch the rest while one runs (#895).
+  if (swarm) backend.remoteAppPolicy = swarm.teamAppPolicyFor(env.ADAPTER_DATA_DIR, () => coreApi.daemon.machineId(), () => registry.list())
   const questionWatcher = asking.questionWatcher
 
 

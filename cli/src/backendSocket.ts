@@ -2,7 +2,7 @@ import { messageReceipt, productObservation, productUsageIntent, productUsageLau
 import type { MessageReceipt } from './lib/sessionInput.js'
 import { isLocalOnly, withoutUpdate } from './lib/cardUpdate.js'
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
+import { MESSAGES_REQUESTS, SHARE_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteAppPolicy, type RemoteClient, type RemoteRole, type RemoteTransport, type TabFrame } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
 import { countWindows } from './lib/windowSurfaces.js'
 import type { ViewerStreams } from './core/viewerStreams.js'
@@ -293,6 +293,9 @@ export class BackendSocket {
   /** The guest (email) an agent was started for, or null for the owner's own (registry `guest`): what a
    *  guest session may act on (core/guestPolicy.ts). Null treats every agent as the owner's. */
   agentGuest: ((agentId: string) => string | null) | null = null
+  /** On a Harness Team daemon, what the account's own apps may ask and hear (core/api.ts RemoteAppPolicy): another person's
+   *  Product Manager may run there, and the account is the Mac's owner's (#895). Null everywhere else. */
+  remoteAppPolicy: RemoteAppPolicy | null = null
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
   historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
@@ -579,8 +582,10 @@ export class BackendSocket {
     this.toRemoteApps(frame)
   }
 
-  private toRemoteApps(frame: Frame): void {
+  private toRemoteApps(given: Frame): void {
     if (this.thisComputerOnly) return
+    const frame = this.remoteAppPolicy ? this.remoteAppPolicy.event(given) : given
+    if (!frame) return
     const guest = this.frameGuest(frame)
     this.toGateway('web', (gateway) => gateway.broadcast(frame, guest ?? undefined))
   }
@@ -956,6 +961,8 @@ export class BackendSocket {
     productUsageIntent(type, (frame.payload as { usageIntent?: unknown } | undefined)?.usageIntent,
       (frame.payload as { agentId?: unknown } | undefined)?.agentId, usageSource,
       signal => this.toGateway('usage', gateway => gateway.usageLaunch?.(signal)))
+    // A guest's own space is the guest policy's below; the account's own apps, away from this desk, answer to this one.
+    const appPolicy = !local && connId && this.remoteClient(connId)?.guest === undefined ? this.remoteAppPolicy : null
     const reply = (t: string, rid: unknown, p: Record<string, unknown>): void => {
       if (t === type) {
         const failure = p.failure as { code?: unknown; reason?: unknown } | undefined
@@ -963,7 +970,8 @@ export class BackendSocket {
         // The agent frame itself: a created launch's agent is watched until it starts (gateway/productUsage.ts).
         launchMeasured(p.error ?? (p.failure as { code?: unknown } | undefined)?.code, p.state, p.agent, (p.held as { service?: unknown } | undefined)?.service)
       }
-      this.emitReply(connId, t, rid, p)
+      // The account's own apps see a reply as its policy shows it (`remoteAppPolicy`); a window here sees it whole.
+      this.emitReply(connId, t, rid, appPolicy ? appPolicy.reply(t, p) : p)
     }
     // A guest: a session trusted only because this machine is shared with its account (gateway/gateway.ts).
     const guest = local ? undefined : this.remoteClient(connId)?.guest
@@ -986,6 +994,14 @@ export class BackendSocket {
       if (!verdict.allow) {
         console.warn(`[guest] refused ${logSafeType(type)} from conn:${sid(connId)} — ${verdict.error}`)
         if (requestId !== undefined) reply(type, requestId, { error: verdict.error, message: GUEST_REFUSALS[verdict.error] })
+        return
+      }
+    }
+    if (appPolicy) {
+      const refused = appPolicy.refuse(type, payload)
+      if (refused) {
+        console.warn(`[team] refused ${logSafeType(type)} from conn:${sid(connId)} — ${refused.error}`)
+        if (requestId !== undefined) reply(type, requestId, refused)
         return
       }
     }
