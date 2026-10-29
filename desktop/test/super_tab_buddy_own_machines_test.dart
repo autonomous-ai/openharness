@@ -206,7 +206,6 @@ void main() {
         await tester.tap(barMachine);
         await tester.pumpAndSettle();
         expect(find.text(kBuddyOwnMachines), findsOneWidget);
-        expect(find.text(kBuddyOwnMachinesReaders), findsOneWidget);
         expect(
           menuRows(tester, [
             'This Mac · $mac',
@@ -448,31 +447,32 @@ void main() {
   });
 
   group('Add a Buddy', () {
-    testWidgets(
-      'lists this Mac first and picked, and says who reads the chat',
-      (tester) async {
-        final (:f, :c, :mac) = await open(
-          tester,
-          machines: [rig()],
-          bar: false,
-          prepare: accountMachines,
-        );
+    testWidgets('lists this Mac first and picked, under its heading alone', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [rig()],
+        bar: false,
+        prepare: accountMachines,
+      );
 
-        expect(
-          find.descendant(
-            of: dialogMachine,
-            matching: find.text('This Mac · $mac'),
-          ),
-          findsOneWidget,
-        );
-        expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
-        await tester.tap(dialogMachine);
-        await tester.pumpAndSettle();
-        expect(find.text(kBuddyOwnMachinesReaders), findsOneWidget);
-        expect(find.textContaining('Swarm'), findsNothing);
-        await close(tester, f, c);
-      },
-    );
+      expect(
+        find.descendant(
+          of: dialogMachine,
+          matching: find.text('This Mac · $mac'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
+      await tester.tap(dialogMachine);
+      await tester.pumpAndSettle();
+      expect(find.text(kBuddyOwnMachines), findsOneWidget);
+      // No note: the picker has only its headings, names and state (Dee).
+      expect(find.textContaining("read the chat"), findsNothing);
+      expect(find.textContaining('Swarm'), findsNothing);
+      await close(tester, f, c);
+    });
 
     testWidgets('Add Buddy starts the Buddy on this Mac with its setup', (
       tester,
