@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_conversation.dart';
+import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
@@ -1002,6 +1003,111 @@ void main() {
       await settle();
 
       expect(counts(c, 'm1'), 'thumbs_up:person-ann');
+    });
+  });
+
+  group('read marks', () {
+    const read = '/api/super-tabs/$tab/conversations/g1/read';
+
+    /// [r]'s Swarm with read marks the inbox would give it, and the marks it
+    /// sends.
+    ({SwarmReadMarks marks, List<Object?> sent}) marked(
+      ({FakeSwarm swarm, SwarmReader reader}) r,
+    ) {
+      final marks = SwarmReadMarks(r.reader, store: null);
+      r.reader.readMarks = marks;
+      addTearDown(marks.dispose);
+      final sent = <Object?>[];
+      r.swarm.routes[read] = (body) {
+        sent.add(body!['sequence']);
+        return {'sequence': body['sequence']};
+      };
+      return (marks: marks, sent: sent);
+    }
+
+    /// A change read in which g1 moved on to [sequence].
+    void moveOn(FakeSwarm swarm, int sequence) =>
+        swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+          cursor: 'c3',
+          groups: [
+            part(
+              'g1',
+              9 + sequence,
+              groupData(
+                'g1',
+                title: 'Fix login',
+                agentIds: const ['agent-lead', 'agent-builder'],
+                lastMessageSequence: sequence,
+              ),
+            ),
+          ],
+        );
+
+    test('an open chat is read through its newest message, and again as '
+        'new ones come', () async {
+      final r = rig();
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2), message('m1', 1)],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+      expect(m.sent, [2]);
+
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [message('m3', 3)],
+        'next': null,
+      };
+      moveOn(r.swarm, 3);
+      await r.reader.refresh();
+      await settle();
+
+      expect(m.sent, [2, 3]);
+      expect(m.marks.unread(r.reader.snapshot!.conversation('g1')!), isFalse);
+    });
+
+    test('a covered chat is not read until it shows again', () async {
+      final r = rig();
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2), message('m1', 1)],
+        'next': null,
+      };
+      final c = await open(r.reader);
+      await settle();
+
+      c.shown = false;
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [message('m3', 3)],
+        'next': null,
+      };
+      moveOn(r.swarm, 3);
+      await r.reader.refresh();
+      await settle();
+      expect(c.messages.last.id, 'm3');
+      expect(m.sent, [2]);
+      expect(m.marks.unread(r.reader.snapshot!.conversation('g1')!), isTrue);
+
+      c.shown = true;
+      await settle();
+
+      expect(m.sent, [2, 3]);
+      expect(m.marks.unread(r.reader.snapshot!.conversation('g1')!), isFalse);
+    });
+
+    test('a Swarm without read marks marks nothing', () async {
+      final r = rig();
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m1', 1)],
+        'next': null,
+      };
+
+      await open(r.reader);
+      await settle();
+
+      expect(r.swarm.paths.where((p) => p.endsWith('/read')), isEmpty);
     });
   });
 }

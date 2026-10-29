@@ -171,6 +171,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     super.didChangeDependencies();
     // Off while a screen pushed over this one covers it.
     _visible = TickerMode.valuesOf(context).enabled;
+    _conversation?.shown = _visible;
     if (_voice == null) {
       if (SwarmScope.voiceOf(context) case final create?) {
         _voice = SwarmVoice(
@@ -208,7 +209,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       return;
     }
     session.inbox.removeListener(_attach);
-    final c = _conversation = SwarmConversation(reader, widget.conversationId);
+    final c = _conversation = SwarmConversation(reader, widget.conversationId)
+      ..shown = _visible;
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
     reader.addListener(_see);

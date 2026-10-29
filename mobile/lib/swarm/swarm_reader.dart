@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'model.dart';
 import 'parts.dart';
 import 'swarm_buddy.dart';
+import 'swarm_read_marks.dart';
 import 'swarm_request.dart';
 import 'waiting_work.dart';
 
@@ -92,6 +93,10 @@ class SwarmReader extends ChangeNotifier {
   /// The Buddy chats and Buddies held, the reader's own by project
   /// ([swarmBuddyChat], [swarmBuddy]).
   SwarmBuddies buddies = SwarmBuddies.none;
+
+  /// How far the person has read each chat, which its inbox keeps with it;
+  /// null where nobody keeps them, and nothing reads as unread.
+  SwarmReadMarks? readMarks;
 
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;

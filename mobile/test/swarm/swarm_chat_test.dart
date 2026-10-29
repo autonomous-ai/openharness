@@ -613,9 +613,11 @@ void main() {
     await tester.tap(key('swarm-resend-post'));
     await tester.pumpAndSettle();
 
+    // The posts sent, not the chat's read marks.
     final receipts = {
       for (final call in fake.calls)
-        if (call.method == 'POST') call.body!['operationId'],
+        if (call.method == 'POST' && call.path == commands)
+          call.body!['operationId'],
     };
     expect(receipts, hasLength(1));
     expect(find.text('Not confirmed'), findsNothing);

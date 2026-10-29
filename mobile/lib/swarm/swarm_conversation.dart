@@ -36,6 +36,7 @@ class SwarmConversation extends ChangeNotifier {
       _before = kept.before;
       _reactionSeq = kept.reactionSeq;
       _read = _kept = true;
+      _markRead();
     }
     reader.addListener(_swarmChanged);
     reader.reads.addListener(_swarmChanged);
@@ -58,6 +59,23 @@ class SwarmConversation extends ChangeNotifier {
 
   /// Oldest first.
   List<SuperTabMessage> messages = const [];
+
+  /// On screen, and no other screen covers it: what it shows is read
+  /// ([SwarmReader.readMarks]), now and as new messages come.
+  bool get shown => _shown;
+  bool _shown = true;
+  set shown(bool value) {
+    if (_shown == value) return;
+    _shown = value;
+    _markRead();
+  }
+
+  /// Read through the newest message shown, while it is [shown].
+  void _markRead() {
+    if (_shown && messages.isNotEmpty) {
+      reader.readMarks?.markRead(id, messages.last.sequence);
+    }
+  }
 
   /// What the last read or post could not do, as a sentence.
   String? error;
@@ -161,8 +179,7 @@ class SwarmConversation extends ChangeNotifier {
   /// The post on its way or not confirmed, out of the draft: drawn at the
   /// foot of the chat, "Sending…" and then [unconfirmed], until it is read
   /// back.
-  ({String text, String? replyTo, List<SwarmOutgoingFile> files})?
-  get pending {
+  ({String text, String? replyTo, List<SwarmOutgoingFile> files})? get pending {
     final command = _pending?['command'] as Map?;
     if (command == null) return null;
     return (
@@ -482,6 +499,7 @@ class SwarmConversation extends ChangeNotifier {
       _read = true;
       _refused = false;
       error = null;
+      if (!older) _markRead();
       if (!changed) {
         if (reacted) await _reread();
         return;
@@ -686,9 +704,7 @@ class SwarmConversation extends ChangeNotifier {
   /// Taking a file off while the files go up gives the upload up.
   void _filesChanged() {
     final going = _uploading;
-    if (uploading &&
-        going != null &&
-        !files.files.toSet().containsAll(going)) {
+    if (uploading && going != null && !files.files.toSet().containsAll(going)) {
       cancelUpload();
     }
     _composer.changed();

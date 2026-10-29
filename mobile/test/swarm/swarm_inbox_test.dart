@@ -7,6 +7,8 @@ import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_inbox.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 
+import '../voice_fakes.dart' show MemoryKeyValueStore;
+
 import 'swarm_fixture.dart';
 
 /// The account's Swarms on the phone, and everything they ask of the person in
@@ -840,5 +842,40 @@ void main() {
       expect(lists(), 3);
       i.dispose();
     });
+  });
+
+  test("each Swarm's reader has its read marks, kept on the phone; a move of "
+      'them is told, and a Swarm off the list takes them', () async {
+    final fake = backend({
+      'a': [groupData('g1', lastMessageSequence: 3)],
+    });
+    final store = MemoryKeyValueStore();
+    final i = SwarmInbox(
+      accountId: me,
+      request: fake.request,
+      readMarks: store,
+    );
+    addTearDown(i.dispose);
+    await i.refresh();
+    await settle();
+    final marks = i.reader('a')!.readMarks!;
+    // The first read's marks are written a moment after it.
+    await until(() => store.values['swarm_read_marks.$me.a'] != null);
+    var told = 0;
+    i.addListener(() => told++);
+
+    marks.markRead('g1', 5);
+    await settle();
+    expect(told, greaterThan(0));
+
+    fake.routes['/api/super-tabs/list'] = (_) => {
+      'tabs': <Object>[],
+      'next': null,
+    };
+    await i.refresh();
+    await settle();
+
+    expect(i.reader('a'), isNull);
+    expect(store.values['swarm_read_marks.$me.a'], isNull);
   });
 }
