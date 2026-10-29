@@ -135,6 +135,44 @@ Map<String, dynamic>? swarmBuddyStart(SwarmReader reader, String projectId) {
   return null;
 }
 
+/// The engines a Buddy runs on (spec: Buddies, 10-28), as people read them.
+const swarmBuddyEngines = {'claude': 'Claude', 'codex': 'Codex'};
+
+/// An engine as people read it: "Claude", "Codex".
+String swarmBuddyEngineName(String engine) =>
+    swarmBuddyEngines[engine] ??
+    (engine.isEmpty ? 'Agent' : engine[0].toUpperCase() + engine.substring(1));
+
+/// The person's Buddy in [projectId] by its name, or plain "Buddy" while none
+/// runs (docs/naming-system.md: Buddies).
+String swarmBuddyName(SwarmReader reader, String projectId) =>
+    switch (swarmBuddy(reader, projectId)) {
+      final agent? => reader.snapshot!.agentName(agent.id, fallback: 'Buddy'),
+      null => 'Buddy',
+    };
+
+/// How the person's Buddy in [projectId] stands, in a quiet word after its
+/// name: "starting" while a start is under way, "not started" with none
+/// running, "offline" while it is down; null while it runs (the desktop's
+/// Buddies rows).
+String? swarmBuddyNote(SwarmReader reader, String projectId) {
+  final agent = swarmBuddy(reader, projectId);
+  if (agent != null) return agent.downSince == null ? null : 'offline';
+  final start = swarmBuddyStart(reader, projectId);
+  return start != null && start['harnessId'] == null && start['error'] == null
+      ? 'starting'
+      : 'not started';
+}
+
+/// Whether the person may write in [reader]'s Swarm: start or remove a
+/// Buddy. A viewer may not.
+bool swarmCanWrite(SwarmReader reader) =>
+    reader.snapshot?.people
+        .where((p) => p.id == reader.accountId)
+        .firstOrNull
+        ?.canWrite ??
+    false;
+
 /// A machine a Buddy may start on, as Start your Buddy lists it.
 typedef SwarmBuddyMachine = ({String id, String name});
 

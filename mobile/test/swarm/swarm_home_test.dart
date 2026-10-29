@@ -85,13 +85,16 @@ Future<void> frames(WidgetTester tester) async {
 
 /// Swarm Home and its drawer, over a scripted backend: one Swarm with two
 /// projects. Mobile has River as its Product Manager, Nova waiting on the
-/// person in g1, Atlas down, and the person's Chat with PM; Web has Cleo as
-/// its Product Manager and no Chat with PM yet.
+/// person in g1, Atlas down, and the person's old Chat with PM, which a
+/// server before #2090 still sends; Web has Cleo as its Product Manager.
+/// With [buddy], Mobile has the person's Buddy chat and their Buddy Wren
+/// running in it; Web has no Buddy chat yet, and opening one opens
+/// `buddy-web`.
 void main() {
   const web = 'project-2';
   const webLead = 'group-lead-web';
 
-  FakeSwarm backend() {
+  FakeSwarm backend({bool buddy = false}) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -136,6 +139,7 @@ void main() {
           'downSince': '2026-10-27T01:00:00.000Z',
         },
         inWeb(agent('agent-cleo', name: 'Lead', displayName: 'Cleo')),
+        if (buddy) buddyData('agent-wren', displayName: 'Wren'),
       ],
       groups: [
         groupData(
@@ -162,6 +166,7 @@ void main() {
           audience: ['person-other', 'person-third'],
         ),
         groupData('g-pm', title: 'me', audience: [me]),
+        if (buddy) buddyChatData('buddy-me', agentIds: ['agent-wren']),
         inWeb(
           groupData(
             webLead,
@@ -200,8 +205,13 @@ void main() {
         },
       ],
     };
-    fake.routes['/api/super-tabs/$tab/commands'] = (_) => {
-      'result': <String, dynamic>{},
+    fake.routes['/api/super-tabs/$tab/commands'] = (body) => {
+      'result': switch (body?['command']) {
+        {'type': 'buddy.chat', 'projectId': web} => {
+          'conversationId': 'buddy-web',
+        },
+        _ => <String, dynamic>{},
+      },
     };
     fake.routes['/api/super-tabs/$tab/conversations/'] = (_) => {
       'messages': <Object>[],
@@ -310,7 +320,7 @@ void main() {
       expect(
         find.descendant(of: drawer, matching: find.text('Chat with PM')),
         findsNothing,
-        reason: "Chat with PM is in each project's chats, not a section",
+        reason: 'Buddies replaced Chat with PM (#2090)',
       );
       for (final matching in [
         find.text('Mobile'),
@@ -369,12 +379,15 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        y(tester, 'swarm-drawer-pm-$tab-$project'),
+        y(tester, 'swarm-drawer-buddy-chat-$tab-$project'),
         lessThan(y(tester, 'swarm-drawer-chat-$leadChat')),
-        reason: 'Chat with PM first',
+        reason: 'Buddy chat first, where Chat with PM was',
       );
       expect(
-        inside('swarm-drawer-pm-$tab-$project', find.text('Chat with PM')),
+        inside(
+          'swarm-drawer-buddy-chat-$tab-$project',
+          find.text('Buddy chat'),
+        ),
         findsOneWidget,
       );
       expect(
@@ -399,9 +412,14 @@ void main() {
       expect(
         key('swarm-drawer-chat-g-pm'),
         findsNothing,
-        reason: 'Chat with PM has its own row',
+        reason: 'an old Chat with PM is hidden (#2090)',
       );
-      expect(key('swarm-drawer-pm-$tab-$web'), findsNothing, reason: 'closed');
+      expect(find.text('Chat with PM'), findsNothing);
+      expect(
+        key('swarm-drawer-buddy-chat-$tab-$web'),
+        findsNothing,
+        reason: 'closed',
+      );
       expect(key('swarm-drawer-chat-$webLead'), findsNothing);
 
       await tester.tap(key('swarm-drawer-chat-g1'));
@@ -429,7 +447,7 @@ void main() {
       expect(
         y(tester, 'swarm-drawer-chat-$leadChat'),
         lessThan(y(tester, 'swarm-drawer-leaderboard-$tab-$project')),
-        reason: 'after Chat with PM and the project chat',
+        reason: 'after Buddy chat and the project chat',
       );
       expect(
         y(tester, 'swarm-drawer-leaderboard-$tab-$project'),
@@ -447,51 +465,140 @@ void main() {
       expect(key('swarm-drawer-home'), findsNothing, reason: 'it closed');
     });
 
-    testWidgets("Chat with PM opens the person's own chat with that "
-        'Product Manager', (tester) async {
-      await pump(tester, backend());
+    testWidgets("a project's Buddy chat opens the person's own Buddy chat "
+        'there, asking the server nothing', (tester) async {
+      final fake = backend(buddy: true);
+      await pump(tester, fake);
       await openDrawer(tester);
       await tester.tap(key('swarm-drawer-chats-$tab-$project'));
       await tester.pumpAndSettle();
 
-      await tester.tap(key('swarm-drawer-pm-$tab-$project'));
+      await tester.tap(key('swarm-drawer-buddy-chat-$tab-$project'));
       await tester.pumpAndSettle();
 
       final page = tester.widget<SwarmConversationPage>(
         find.byType(SwarmConversationPage),
       );
-      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+      expect((page.swarmId, page.conversationId), (tab, 'buddy-me'));
+      expect(fake.commands.where((c) => c['type'] == 'buddy.chat'), isEmpty);
+    });
+
+    testWidgets("Buddies, above the projects: the person's Buddy chat in each "
+        "project, by its Buddy's name or Buddy while none runs, the project "
+        'in brackets, and how it stands', (tester) async {
+      await pump(tester, backend(buddy: true));
+      await openDrawer(tester);
+
+      final drawer = find.byType(SwarmDrawer);
+      expect(
+        find.descendant(of: drawer, matching: find.text('Buddies')),
+        findsOneWidget,
+      );
+      expect(
+        y(tester, 'swarm-drawer-home'),
+        lessThan(y(tester, 'swarm-drawer-buddy-$tab-$project')),
+      );
+      expect(
+        y(tester, 'swarm-drawer-buddy-$tab-$project'),
+        lessThan(y(tester, 'swarm-drawer-buddy-$tab-$web')),
+      );
+      expect(
+        y(tester, 'swarm-drawer-buddy-$tab-$web'),
+        lessThan(y(tester, 'swarm-drawer-project-$tab-$project')),
+        reason: 'above the projects',
+      );
+      for (final words in ['Wren', '(Mobile)']) {
+        expect(
+          inside('swarm-drawer-buddy-$tab-$project', find.text(words)),
+          findsOneWidget,
+        );
+      }
+      expect(
+        inside('swarm-drawer-buddy-$tab-$project', find.byType(SwarmAvatar)),
+        findsOneWidget,
+        reason: "its Buddy's face",
+      );
+      expect(
+        inside('swarm-drawer-buddy-$tab-$project', find.text('not started')),
+        findsNothing,
+        reason: 'Wren runs',
+      );
+      for (final words in ['Buddy', '(Web)', 'not started']) {
+        expect(
+          inside('swarm-drawer-buddy-$tab-$web', find.text(words)),
+          findsOneWidget,
+        );
+      }
+    });
+
+    testWidgets('a Buddy row opens the Buddy chat; one not opened yet is '
+        'opened on the server first', (tester) async {
+      final fake = backend(buddy: true);
+      await pump(tester, fake);
+      await openDrawer(tester);
+
+      await tester.tap(key('swarm-drawer-buddy-$tab-$project'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<SwarmConversationPage>(find.byType(SwarmConversationPage))
+            .conversationId,
+        'buddy-me',
+      );
+      expect(fake.commands.where((c) => c['type'] == 'buddy.chat'), isEmpty);
+
+      await tester.tap(key('tty-back'));
+      await tester.pumpAndSettle();
+      await openDrawer(tester);
+      await tester.tap(key('swarm-drawer-buddy-$tab-$web'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.where((c) => c['type'] == 'buddy.chat'), [
+        {'type': 'buddy.chat', 'projectId': web},
+      ]);
+      expect(
+        tester
+            .widget<SwarmConversationPage>(find.byType(SwarmConversationPage))
+            .conversationId,
+        'buddy-web',
+      );
     });
   });
 
   group('Swarm Home', () {
-    testWidgets('Needs you first, then Chat with PM, then the projects', (
+    testWidgets('Needs you first, then Buddies, then the projects', (
       tester,
     ) async {
-      await pump(tester, backend());
+      await pump(tester, backend(buddy: true));
 
       expect(key('swarm-menu'), findsOneWidget);
       expect(key('tty-back'), findsNothing);
       expect(
         y(tester, 'swarm-need-decision:d1'),
-        lessThan(y(tester, 'swarm-home-pm-$tab-$project')),
+        lessThan(y(tester, 'swarm-home-buddy-$tab-$project')),
       );
       expect(
-        y(tester, 'swarm-home-pm-$tab-$project'),
-        lessThan(y(tester, 'swarm-home-pm-$tab-$web')),
+        y(tester, 'swarm-home-buddy-$tab-$project'),
+        lessThan(y(tester, 'swarm-home-buddy-$tab-$web')),
       );
       expect(
-        y(tester, 'swarm-home-pm-$tab-$web'),
+        y(tester, 'swarm-home-buddy-$tab-$web'),
         lessThan(y(tester, 'swarm-project-$tab-$project')),
       );
-      expect(
-        find.descendant(
-          of: key('swarm-home-pm-$tab-$project'),
-          matching: find.text('River'),
-        ),
-        findsOneWidget,
-        reason: 'the Product Manager it is with',
-      );
+      for (final words in ['Wren', 'Mobile · Claude']) {
+        expect(
+          inside('swarm-home-buddy-$tab-$project', find.text(words)),
+          findsOneWidget,
+          reason: 'its Buddy, then its project and what it runs on',
+        );
+      }
+      for (final words in ['Buddy', 'Web · not started']) {
+        expect(
+          inside('swarm-home-buddy-$tab-$web', find.text(words)),
+          findsOneWidget,
+        );
+      }
+      expect(find.text('Chat with PM'), findsNothing);
       expect(
         find.descendant(
           of: key('swarm-project-$tab-$project'),
@@ -527,7 +634,7 @@ void main() {
         reason: 'the title 4 points beside it',
       );
       expect(find.text('Swarm'), findsOneWidget);
-      for (final caption in ['Needs you', 'Chat with PM', 'Projects']) {
+      for (final caption in ['Needs you', 'Buddies', 'Projects']) {
         expect(find.text(caption), findsOneWidget, reason: 'sentence case');
       }
       expect(
@@ -540,13 +647,14 @@ void main() {
         AppColors.warning,
       );
       expect(
-        inside('swarm-home-pm-$tab-$project', find.byType(SwarmAvatar)),
+        inside('swarm-home-buddy-$tab-$project', find.byType(SwarmAvatar)),
         findsOneWidget,
-        reason: 'the Product Manager, in a round mark',
+        reason: 'its Buddy, in a round mark',
       );
       expect(
-        inside('swarm-home-pm-$tab-$project', find.text('R')),
+        inside('swarm-home-buddy-$tab-$project', find.text('B')),
         findsOneWidget,
+        reason: 'Buddy while none runs',
       );
       expect(
         inside('swarm-project-$tab-$project', find.byType(SwarmProjectTile)),
@@ -725,37 +833,44 @@ void main() {
       await pump(tester, fake);
 
       expect(find.text('Nothing needs you.'), findsOneWidget);
-      expect(key('swarm-home-pm-$tab-$project'), findsOneWidget);
+      expect(key('swarm-home-buddy-$tab-$project'), findsOneWidget);
       expect(key('swarm-project-$tab-$project'), findsOneWidget);
     });
 
-    testWidgets('Chat with PM opens it; one not ready says so', (tester) async {
-      final fake = backend();
+    testWidgets('a Buddy row opens the Buddy chat; one the server will not '
+        'open says why', (tester) async {
+      final fake = backend(buddy: true);
+      fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'You cannot read this project.',
+            statusCode: 403,
+          );
       await pump(tester, fake);
 
-      await tester.tap(key('swarm-home-pm-$tab-$web'));
+      await tester.tap(key('swarm-home-buddy-$tab-$web'));
       await tester.pumpAndSettle();
-      expect(fake.commands.single['type'], 'conversation.create');
+      expect(fake.commands.single, {'type': 'buddy.chat', 'projectId': web});
       expect(find.byType(SwarmConversationPage), findsNothing);
-      expect(key('swarm-pm-error'), findsOneWidget);
       expect(
-        find.text('Chat with PM is not ready yet. Try again.'),
-        findsOneWidget,
+        tester.widget<Text>(key('swarm-buddy-error')).data,
+        'You cannot read this project.',
       );
 
-      await tester.tap(key('swarm-home-pm-$tab-$project'));
+      await tester.tap(key('swarm-home-buddy-$tab-$project'));
       await tester.pumpAndSettle();
       final page = tester.widget<SwarmConversationPage>(
         find.byType(SwarmConversationPage),
       );
-      expect((page.swarmId, page.conversationId), (tab, 'g-pm'));
+      expect((page.swarmId, page.conversationId), (tab, 'buddy-me'));
+      expect(fake.commands, hasLength(1), reason: 'that one was held');
     });
 
-    testWidgets('back from Chat with PM, Home still has its menu, and it '
+    testWidgets('back from a Buddy chat, Home still has its menu, and it '
         'opens the drawer', (tester) async {
-      await pump(tester, backend());
+      await pump(tester, backend(buddy: true));
 
-      await tester.tap(key('swarm-home-pm-$tab-$project'));
+      await tester.tap(key('swarm-home-buddy-$tab-$project'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmConversationPage), findsOneWidget);
 
@@ -781,13 +896,14 @@ void main() {
       expect(key('page-under'), findsOneWidget);
     });
 
-    testWidgets("back from the drawer's Chat with PM, Home still has its "
-        'menu', (tester) async {
-      await pump(tester, backend());
+    testWidgets("back from the drawer's Buddy chat, Home still has its menu", (
+      tester,
+    ) async {
+      await pump(tester, backend(buddy: true));
       await openDrawer(tester);
       await tester.tap(key('swarm-drawer-chats-$tab-$project'));
       await tester.pumpAndSettle();
-      await tester.tap(key('swarm-drawer-pm-$tab-$project'));
+      await tester.tap(key('swarm-drawer-buddy-chat-$tab-$project'));
       await tester.pumpAndSettle();
       expect(find.byType(SwarmConversationPage), findsOneWidget);
 
@@ -1480,7 +1596,7 @@ void main() {
       return fake;
     }
 
-    testWidgets('before the list answers, Needs you, Chat with PM and the '
+    testWidgets('before the list answers, Needs you, Buddies and the '
         'projects are skeleton rows, and nothing says it is reading', (
       tester,
     ) async {
@@ -1490,20 +1606,20 @@ void main() {
 
       for (final k in [
         'swarm-needs-loading',
-        'swarm-pm-loading',
+        'swarm-buddy-loading',
         'swarm-projects-loading',
       ]) {
         expect(key(k), findsOneWidget, reason: k);
       }
       expect(
         y(tester, 'swarm-needs-loading'),
-        lessThan(y(tester, 'swarm-pm-loading')),
+        lessThan(y(tester, 'swarm-buddy-loading')),
       );
       expect(
-        y(tester, 'swarm-pm-loading'),
+        y(tester, 'swarm-buddy-loading'),
         lessThan(y(tester, 'swarm-projects-loading')),
       );
-      expect(find.text('Chat with PM'), findsOneWidget);
+      expect(find.text('Buddies'), findsOneWidget);
       expect(find.text('Projects'), findsOneWidget);
       expect(find.text('Nothing needs you.'), findsNothing);
       expect(find.textContaining('Reading'), findsNothing);
@@ -1524,13 +1640,16 @@ void main() {
         final fake = backend();
         final listed = hold(fake, '/api/super-tabs/list');
         await pump(tester, fake, settle: false);
-        final pm = height(tester, 'swarm-pm-loading-0');
+        final buddy = height(tester, 'swarm-buddy-loading-0');
         final row = height(tester, 'swarm-projects-loading-0');
 
         listed.complete();
         await tester.pumpAndSettle();
 
-        expect(height(tester, 'swarm-home-pm-$tab-$project'), closeTo(pm, .01));
+        expect(
+          height(tester, 'swarm-home-buddy-$tab-$project'),
+          closeTo(buddy, .01),
+        );
         expect(
           height(tester, 'swarm-project-$tab-$web'),
           closeTo(row, .01),
@@ -1558,8 +1677,8 @@ void main() {
       await pump(tester, fake, settle: false);
 
       expect(key('swarm-project-$second-$project'), findsOneWidget);
-      expect(key('swarm-home-pm-$second-$project'), findsOneWidget);
-      expect(key('swarm-pm-loading-$tab'), findsOneWidget);
+      expect(key('swarm-home-buddy-$second-$project'), findsOneWidget);
+      expect(key('swarm-buddy-loading-$tab'), findsOneWidget);
       expect(key('swarm-projects-loading-$tab'), findsOneWidget);
       expect(
         y(tester, 'swarm-projects-loading-$tab'),

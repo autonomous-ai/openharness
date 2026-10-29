@@ -287,6 +287,82 @@ void main() {
     );
   });
 
+  group('a Buddy as its rows show it', () {
+    Future<SwarmReader> read({
+      List<Map<String, dynamic>> agents = const [],
+      List<Map<String, dynamic>> starts = const [],
+    }) async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        groups: [buddyChatData('buddy-me')],
+        agents: agents,
+        starts: starts,
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+      return r;
+    }
+
+    test('is named after its Buddy, and reads Buddy while none runs', () async {
+      expect(
+        swarmBuddyName(
+          await read(agents: [buddyData('agent-wren', displayName: 'Wren')]),
+          project,
+        ),
+        'Wren',
+      );
+      expect(swarmBuddyName(await read(), project), 'Buddy');
+    });
+
+    test(
+      'says not started, starting, or offline; nothing while it runs',
+      () async {
+        expect(swarmBuddyNote(await read(), project), 'not started');
+        expect(
+          swarmBuddyNote(
+            await read(starts: [buddyStartData('s1', chatId: 'buddy-me')]),
+            project,
+          ),
+          'starting',
+        );
+        expect(
+          swarmBuddyNote(
+            await read(
+              starts: [
+                buddyStartData('s1', chatId: 'buddy-me', error: 'No machine'),
+              ],
+            ),
+            project,
+          ),
+          'not started',
+          reason: 'a start that failed is no start',
+        );
+        expect(
+          swarmBuddyNote(
+            await read(
+              agents: [
+                {
+                  ...buddyData('agent-wren'),
+                  'downSince': '2026-10-29T01:00:00.000Z',
+                },
+              ],
+            ),
+            project,
+          ),
+          'offline',
+        );
+        expect(
+          swarmBuddyNote(
+            await read(agents: [buddyData('agent-wren')]),
+            project,
+          ),
+          isNull,
+        );
+      },
+    );
+  });
+
   group("a project's work", () {
     test('lists no Buddy chat and no private chat: Chat with PM is closed '
         '(#2090), so its old history is hidden too', () async {

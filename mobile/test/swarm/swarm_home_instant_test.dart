@@ -120,7 +120,11 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Mobile'), findsWidgets);
-      expect(find.text('River'), findsOneWidget, reason: 'its Chat with PM');
+      expect(
+        find.byKey(const ValueKey('swarm-home-buddy-$tab-$project')),
+        findsOneWidget,
+        reason: 'its Buddies',
+      );
       expect(find.textContaining('Fix login'), findsOneWidget);
       expect(host.session!.inbox.loaded, isFalse, reason: 'nothing read yet');
       expect(fake.paths, ['/api/super-tabs/list']);

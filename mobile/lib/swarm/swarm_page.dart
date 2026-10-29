@@ -11,13 +11,14 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
+import 'swarm_buddy.dart';
+import 'swarm_buddy_chat.dart';
 import 'swarm_choices.dart';
 import 'swarm_connection_notice.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_drawer.dart';
 import 'swarm_home_keeper.dart';
 import 'swarm_inbox.dart';
-import 'swarm_pm_chat.dart';
 import 'swarm_profile_sheet.dart';
 import 'swarm_need_rows.dart';
 import 'swarm_project_page.dart';
@@ -41,9 +42,10 @@ void openSwarmHome(BuildContext context) {
 }
 
 /// Swarm Home: what every Swarm of the account asks of the person ("Needs
-/// you"), one thing open at a time; Chat with PM, one per project; then the
-/// projects, each with its team in a line ([swarmNeedsFirst] orders needs and
-/// the rest). Its drawer ([SwarmDrawer]) is the way to everything else.
+/// you"), one thing open at a time; Buddies, the person's Buddy chat in each
+/// project; then the projects, each with its team in a line
+/// ([swarmNeedsFirst] orders needs and the rest). Its drawer ([SwarmDrawer])
+/// is the way to everything else.
 ///
 /// The phone's Home while Settings ▸ Experimental ▸ Swarm is on; pushed over
 /// another page it has a back button instead of the drawer. Its top bar holds
@@ -100,24 +102,25 @@ class _SwarmPageState extends State<SwarmPage> {
   /// The need open on Home, by its key; null opens the first.
   String? _focus;
 
-  /// The Chat with PM being opened, as `swarmId/projectId`, and why the last
+  /// The Buddy chat being opened, as `swarmId/projectId`, and why the last
   /// one did not open.
-  String? _pmOpening;
-  String? _pmError;
+  String? _buddyOpening;
+  String? _buddyError;
 
-  /// The person's Chat with PM of [projectId], created on first use.
-  Future<void> _openPm(String swarmId, String projectId) async {
+  /// The person's Buddy chat in [projectId], opened on the server first when
+  /// they have none yet. One at a time.
+  Future<void> _openBuddy(String swarmId, String projectId) async {
     final reader = _session?.inbox.reader(swarmId);
-    if (reader == null || _pmOpening != null) return;
+    if (reader == null || _buddyOpening != null) return;
     setState(() {
-      _pmOpening = '$swarmId/$projectId';
-      _pmError = null;
+      _buddyOpening = '$swarmId/$projectId';
+      _buddyError = null;
     });
-    final error = await openSwarmPm(context, reader, swarmId, projectId);
+    final error = await openSwarmBuddy(context, reader, swarmId, projectId);
     if (!mounted) return;
     setState(() {
-      _pmOpening = null;
-      _pmError = error;
+      _buddyOpening = null;
+      _buddyError = error;
     });
   }
 
@@ -127,7 +130,7 @@ class _SwarmPageState extends State<SwarmPage> {
     final tty = Tty.of(context);
     final session = _session;
     // Pushed over another page: a page under Home's own route, never one over
-    // it. Home builds while a page slides in over it (Chat with PM opening),
+    // it. Home builds while a page slides in over it (a Buddy chat opening),
     // and is not built again once that page goes, so the navigator's canPop
     // would leave the back button for good.
     final pushed = ModalRoute.isFirstOf(context) == false;
@@ -144,8 +147,8 @@ class _SwarmPageState extends State<SwarmPage> {
                 session: session,
                 onProject: (swarmId, projectId) =>
                     _openProject(context, swarmId, projectId),
-                onPm: (swarmId, projectId) =>
-                    unawaited(_openPm(swarmId, projectId)),
+                onBuddy: (swarmId, projectId) =>
+                    unawaited(_openBuddy(swarmId, projectId)),
                 onChat: (swarmId, conversationId) =>
                     openSwarmConversation(context, swarmId, conversationId),
                 onSettings: widget.onSettings,
@@ -261,34 +264,37 @@ class _SwarmPageState extends State<SwarmPage> {
           ),
         },
     ];
-    final pm = [
+    // The person's Buddy chat in each project, there from the start (#2090);
+    // a viewer, who starts no Buddy, sees only the chats they have.
+    final buddies = [
       for (final swarm in inbox.swarms)
-        if (inbox.reader(swarm.id)?.snapshot case final snapshot?)
-          for (final project in snapshot.projects)
-            SwarmRow(
-              key: ValueKey('swarm-home-pm-${swarm.id}-${project.id}'),
-              leading: switch (swarmPmId(snapshot, project)) {
-                final id? => SwarmAvatar(
-                  id: id,
-                  name: snapshot.agentName(id),
-                  picture: snapshot.agent(id)?.avatar,
+        if (inbox.reader(swarm.id) case final reader?)
+          for (final project in reader.snapshot?.projects ?? const [])
+            if (swarmBuddyChat(reader, project.id) != null ||
+                swarmCanWrite(reader))
+              SwarmRow(
+                key: ValueKey('swarm-home-buddy-${swarm.id}-${project.id}'),
+                leading: SwarmBuddyAvatar(
+                  reader: reader,
+                  projectId: project.id,
                 ),
-                null => SwarmProjectTile(project.name),
-              },
-              title: project.name,
-              detail: switch ([
-                ?swarmPmName(snapshot, project),
-                if (several) swarm.name,
-              ]) {
-                [] => null,
-                final words => SwarmRow.line(words.join(' · ')),
-              },
-              trailing: _pmOpening == '${swarm.id}/${project.id}'
-                  ? SwarmRow.line('Opening…')
-                  : null,
-              chevron: null,
-              onTap: () => unawaited(_openPm(swarm.id, project.id)),
-            ),
+                title: swarmBuddyName(reader, project.id),
+                detail: SwarmRow.line(
+                  [
+                    project.name,
+                    if (several) swarm.name,
+                    swarmBuddyNote(reader, project.id) ??
+                        swarmBuddyEngineName(
+                          swarmBuddy(reader, project.id)!.engine,
+                        ),
+                  ].join(' · '),
+                ),
+                trailing: _buddyOpening == '${swarm.id}/${project.id}'
+                    ? SwarmRow.line('Opening…')
+                    : null,
+                chevron: null,
+                onTap: () => unawaited(_openBuddy(swarm.id, project.id)),
+              ),
     ];
     // Swarms listed and still to be read: their rows are on their way.
     final reading = [
@@ -296,20 +302,20 @@ class _SwarmPageState extends State<SwarmPage> {
         if (_unread(inbox.reader(swarm.id))) swarm.id,
     ];
     List<Widget> swarms({required bool first}) => [
-      if (pm.isNotEmpty || reading.isNotEmpty) ...[
-        SwarmCaption('Chat with PM', first: first),
-        if (pm.isNotEmpty) SwarmGroup(children: pm),
+      if (buddies.isNotEmpty || reading.isNotEmpty) ...[
+        SwarmCaption('Buddies', first: first),
+        if (buddies.isNotEmpty) SwarmGroup(children: buddies),
         for (final (i, id) in reading.indexed) ...[
-          if (pm.isNotEmpty || i > 0) const SizedBox(height: 8),
-          SwarmSkeletonRows(id: 'swarm-pm-loading-$id', round: true),
+          if (buddies.isNotEmpty || i > 0) const SizedBox(height: 8),
+          SwarmSkeletonRows(id: 'swarm-buddy-loading-$id', round: true),
         ],
       ],
-      if (_pmError case final error?)
-        _error(error, key: 'swarm-pm-error', top: 8),
+      if (_buddyError case final error?)
+        _error(error, key: 'swarm-buddy-error', top: 8),
       for (final (i, swarm) in inbox.swarms.indexed) ...[
         SwarmCaption(
           several ? swarm.name : 'Projects',
-          first: first && pm.isEmpty && reading.isEmpty && i == 0,
+          first: first && buddies.isEmpty && reading.isEmpty && i == 0,
         ),
         switch (inbox.reader(swarm.id)) {
           SwarmReader(snapshot: final snapshot?) => SwarmGroup(
@@ -328,7 +334,7 @@ class _SwarmPageState extends State<SwarmPage> {
         },
       ],
       if (inbox.swarms.isEmpty) ...[
-        SwarmCaption('Your Swarms', first: first && pm.isEmpty),
+        SwarmCaption('Your Swarms', first: first && buddies.isEmpty),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: SwarmRow.line(
@@ -348,7 +354,7 @@ class _SwarmPageState extends State<SwarmPage> {
     ];
   }
 
-  /// Home before the list answers: Needs you, Chat with PM and the projects
+  /// Home before the list answers: Needs you, Buddies and the projects
   /// as rows on their way, in the order Home shows them; under a card, its
   /// first caption not [first].
   List<Widget> _reading({bool first = true}) {
@@ -357,8 +363,8 @@ class _SwarmPageState extends State<SwarmPage> {
       SwarmSkeletonRows(id: 'swarm-needs-loading', rows: 1),
     ];
     List<Widget> swarms({required bool first}) => [
-      SwarmCaption('Chat with PM', first: first),
-      SwarmSkeletonRows(id: 'swarm-pm-loading', round: true),
+      SwarmCaption('Buddies', first: first),
+      SwarmSkeletonRows(id: 'swarm-buddy-loading', round: true),
       const SwarmCaption('Projects'),
       SwarmSkeletonRows(id: 'swarm-projects-loading'),
     ];

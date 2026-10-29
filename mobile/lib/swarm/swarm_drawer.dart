@@ -12,6 +12,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
+import 'swarm_buddy_chat.dart';
 import 'swarm_devices_page.dart';
 import 'swarm_face.dart';
 import 'swarm_home_keeper.dart';
@@ -28,18 +29,19 @@ import 'team_glance.dart';
 
 /// Swarm Home's drawer, from the left edge like the desktop's sidebar, as the
 /// approved prototype draws it: its title and a close button; Swarm Home
-/// with what waits on the person; the projects, each with its initial and
-/// its team in a line — its name opens the project, its arrow lists its
-/// chats: Chat with PM, the project chat, its leaderboard, then its work,
-/// what waits on the person first; then Your models and Your devices, read
-/// only; then Settings at its foot. A row closes the drawer before it opens
-/// anything.
+/// with what waits on the person; Buddies, the person's Buddy chat in each
+/// project (Tony, 2026-10-29, as on the desktop since #2090); the projects,
+/// each with its initial and its team in a line — its name opens the
+/// project, its arrow lists its chats: Buddy chat, the project chat, its
+/// leaderboard, then its work, what waits on the person first; then Your
+/// models and Your devices, read only; then Settings at its foot. A row
+/// closes the drawer before it opens anything.
 class SwarmDrawer extends StatefulWidget {
   const SwarmDrawer({
     super.key,
     required this.session,
     required this.onProject,
-    required this.onPm,
+    required this.onBuddy,
     required this.onChat,
     this.onSettings,
     this.onProfile,
@@ -51,8 +53,9 @@ class SwarmDrawer extends StatefulWidget {
   /// A project's page.
   final void Function(String swarmId, String projectId) onProject;
 
-  /// The person's Chat with PM of a project.
-  final void Function(String swarmId, String projectId) onPm;
+  /// The person's Buddy chat in a project, opened on the server first when
+  /// it has none yet.
+  final void Function(String swarmId, String projectId) onBuddy;
 
   /// One chat.
   final void Function(String swarmId, String conversationId) onChat;
@@ -137,6 +140,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                     badge: waiting > 0 ? SwarmBadge(waiting, warn: true) : null,
                     onTap: close,
                   ),
+                  ..._buddies(swarms, inbox, then),
                   // Before the list (and no Home kept), and for a Swarm
                   // still to be read, its projects are rows on their way; one
                   // that could not be read lists none.
@@ -238,6 +242,44 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     );
   }
 
+  /// Buddies: the person's Buddy chat in each project of each Swarm read,
+  /// there from the start (#2090); a viewer, who starts no Buddy, sees only
+  /// the chats they have. The project is in brackets once there are several,
+  /// with its Swarm where there are several Swarms.
+  List<Widget> _buddies(
+    List<SwarmListing> swarms,
+    SwarmInbox? inbox,
+    void Function(VoidCallback action) then,
+  ) {
+    final rows = [
+      for (final swarm in swarms)
+        if (inbox?.reader(swarm.id) case final reader?)
+          for (final project in reader.snapshot?.projects ?? const [])
+            if (swarmBuddyChat(reader, project.id) != null ||
+                swarmCanWrite(reader))
+              (swarm: swarm, reader: reader, project: project),
+    ];
+    if (rows.isEmpty) return const [];
+    final several = swarms.length > 1;
+    return [
+      const _Caption('Buddies'),
+      for (final (:swarm, :reader, :project) in rows)
+        SwarmDrawerRow(
+          key: ValueKey('swarm-drawer-buddy-${swarm.id}-${project.id}'),
+          leading: SwarmBuddyAvatar(reader: reader, projectId: project.id),
+          title: swarmBuddyName(reader, project.id),
+          asides: [
+            if (rows.length > 1)
+              several
+                  ? '(${project.name} · ${swarm.name})'
+                  : '(${project.name})',
+            ?swarmBuddyNote(reader, project.id),
+          ],
+          onTap: () => then(() => widget.onBuddy(swarm.id, project.id)),
+        ),
+    ];
+  }
+
   /// A project's row, and while its arrow is open, its chats ([_chats]).
   List<Widget> _project(
     SwarmSession session,
@@ -277,7 +319,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     ];
   }
 
-  /// An open project's chats: Chat with PM, the project chat, its
+  /// An open project's chats: Buddy chat, the project chat, its
   /// leaderboard, then its work — what waits on the person first, the rest
   /// by latest activity. Worked out only while it is open: a closed project
   /// costs its row alone.
@@ -303,12 +345,15 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
       onTap: () => then(() => widget.onChat(swarmId, g.id)),
     );
     return [
-      SwarmDrawerRow(
-        key: ValueKey('swarm-drawer-pm-$swarmId-${project.id}'),
-        title: 'Chat with PM',
-        sub: true,
-        onTap: () => then(() => widget.onPm(swarmId, project.id)),
-      ),
+      if (reader != null &&
+          (swarmBuddyChat(reader, project.id) != null ||
+              swarmCanWrite(reader)))
+        SwarmDrawerRow(
+          key: ValueKey('swarm-drawer-buddy-chat-$swarmId-${project.id}'),
+          title: 'Buddy chat',
+          sub: true,
+          onTap: () => then(() => widget.onBuddy(swarmId, project.id)),
+        ),
       if (lead != null) chat(lead, 'Project chat'),
       SwarmDrawerRow(
         key: ValueKey('swarm-drawer-leaderboard-$swarmId-${project.id}'),
@@ -450,10 +495,10 @@ class _Disclosure extends StatelessWidget {
   );
 }
 
-/// One row of the drawer: a glyph or a project's tile, a title and maybe a
-/// line under it, a count; selected, it sits on a rounded fill. A chat under
-/// its project ([sub]) is shorter, quieter, and lined up with the project's
-/// name.
+/// One row of the drawer: a glyph or a project's tile, a title, quiet words
+/// after it ([asides]) and maybe a line under it, a count; selected, it sits
+/// on a rounded fill. A chat under its project ([sub]) is shorter, quieter,
+/// and lined up with the project's name.
 class SwarmDrawerRow extends StatelessWidget {
   const SwarmDrawerRow({
     super.key,
@@ -464,11 +509,16 @@ class SwarmDrawerRow extends StatelessWidget {
     this.selected = false,
     this.sub = false,
     this.trailing = false,
+    this.asides = const [],
     required this.onTap,
   });
 
   final Widget? leading;
   final String title;
+
+  /// Quiet words after the title, such as a Buddy's project in brackets and
+  /// "offline"; they give way first when the row is narrow.
+  final List<String> asides;
   final Widget? detail;
   final Widget? badge;
   final bool selected;
@@ -512,20 +562,40 @@ class SwarmDrawerRow extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: sub
-                            ? TextStyle(
-                                color: AppPalette.textSecondary,
-                                fontSize: 15,
-                              )
-                            : TextStyle(
-                                color: AppPalette.textPrimary,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w500,
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: sub
+                                  ? TextStyle(
+                                      color: AppPalette.textSecondary,
+                                      fontSize: 15,
+                                    )
+                                  : TextStyle(
+                                      color: AppPalette.textPrimary,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                            ),
+                          ),
+                          for (final aside in asides) ...[
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                aside,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: AppPalette.textFaint,
+                                  fontSize: 13,
+                                ),
                               ),
+                            ),
+                          ],
+                        ],
                       ),
                       if (detail case final detail?) ...[
                         const SizedBox(height: 2),

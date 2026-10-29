@@ -9,19 +9,23 @@ import 'package:harness_mobile/swarm/swarm_face.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
 
 const leadPhoto = 'https://storage.googleapis.com/avatars/river.png?sig=1';
+const buddyPhoto = 'https://storage.googleapis.com/avatars/wren.png?sig=1';
 
 /// The faces people and agents chose, on the screens that showed only
-/// initials: Home's Chat with PM, the project page's work and team, and the
+/// initials: Home's Buddies, the project page's work and team, and the
 /// chat's messages — with a person's status emoji beside their own.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
 
-  FakeSwarm backend() {
+  /// With [buddy], the person's Buddy Wren wears an uploaded photo in its
+  /// chat.
+  FakeSwarm backend({bool buddy = false}) {
     final fake = FakeSwarm();
     fake.routes['/api/super-tabs/list'] = (_) => {
       'tabs': [
@@ -30,7 +34,10 @@ void main() {
       'next': null,
     };
     final derived = {
-      'avatars': {'agent:agent-lead': leadPhoto},
+      'avatars': {
+        'agent:agent-lead': leadPhoto,
+        if (buddy) 'agent:agent-wren': buddyPhoto,
+      },
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
@@ -45,8 +52,14 @@ void main() {
             'avatar': {'kind': 'preset', 'key': 'owl'},
           },
           agent('agent-plain', displayName: 'Pike'),
+          if (buddy)
+            {
+              ...buddyData('agent-wren', displayName: 'Wren'),
+              'avatar': {'kind': 'upload'},
+            },
         ],
         groups: [
+          if (buddy) buddyChatData('buddy-me', agentIds: ['agent-wren']),
           groupData(
             'g1',
             title: 'Fix login',
@@ -105,13 +118,17 @@ void main() {
   /// Links an uploaded picture was asked from.
   final asked = <Uri>[];
 
-  Future<void> pump(WidgetTester tester, Widget home) async {
+  Future<void> pump(
+    WidgetTester tester,
+    Widget home, {
+    bool buddy = false,
+  }) async {
     asked.clear();
     final account = ValueNotifier<String?>(me);
     final host = SwarmHost(
       accountId: () => account.value,
       account: account,
-      request: backend().request,
+      request: backend(buddy: buddy).request,
       notices: SilentSystemNotices(),
       features: ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm},
@@ -142,17 +159,17 @@ void main() {
   Finder within(String key, Finder finder) =>
       find.descendant(of: find.byKey(ValueKey(key)), matching: finder);
 
-  testWidgets("Home's Chat with PM shows the Lead's uploaded picture", (
+  testWidgets("Home's Buddies show the Buddy's uploaded picture", (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1170, 2532);
     addTearDown(tester.view.reset);
-    await pump(tester, const SwarmPage());
+    await pump(tester, const SwarmPage(), buddy: true);
     expect(
-      find.byKey(const ValueKey('swarm-home-pm-$tab-$project')),
+      within('swarm-home-buddy-$tab-$project', find.byType(SwarmAvatar)),
       findsOneWidget,
     );
-    expect(asked, [Uri.parse(leadPhoto)]);
+    expect(asked, [Uri.parse(buddyPhoto)]);
   });
 
   testWidgets("the project's work shows each worker's chosen face", (
