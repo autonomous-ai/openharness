@@ -578,6 +578,19 @@ it('refuses --agent from an agent\'s shell on Windows when this computer\'s Swar
   expect(request.mock.calls.filter(([type, payload]) => type === 'super_tabs' && (payload as Record<string, unknown>)?.action !== 'buddyCheck')).toEqual([])
 })
 
+// A Buddy's read verbs (Ken, 10-29): archived tasks a page at a time, and a task's older messages, with no new verb.
+it('parses archived status pages and older message pages', () => {
+  const at = ['--tab', 'tab']
+  expect(parseSuperTabArgs([...at, 'status', '--archived'], where).payload).toMatchObject({ action: 'status', archived: true })
+  expect(parseSuperTabArgs([...at, 'status', '--archived', 'eyJsYSI6MX0'], where).payload).toMatchObject({ action: 'status', archived: true, before: 'eyJsYSI6MX0' })
+  // By sequence and message id together: messages may share a sequence, and a sequence alone skipped them (security review 2).
+  expect(parseSuperTabArgs([...at, 'messages', 'lead', '--before', '40', 'm-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'lead', before: 40, beforeId: 'm-1' })
+  for (const argv of [['status', '--archived', 'a b'], ['status', '--old'], ['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
+    ['messages', 'lead', '--before', '40'], ['messages', 'lead', '--before', '9007199254740992', 'm-1'], ['messages', 'lead', '--before', '40', 'a b'], ['messages', 'lead', '--after', '4', 'm-1']]) {
+    expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
+  }
+})
+
 // Cost records (Dee, 2026-10-29): what routed attempts cost and how they went, over the last days.
 it('reads the cost summary of the last 7 days, or of --days N up to 90', () => {
   expect(parseSuperTabArgs([...prefix, 'costs'], where).payload).toMatchObject({ action: 'costs', days: 7 })

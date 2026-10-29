@@ -20,6 +20,8 @@ import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
+import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
+import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
@@ -76,8 +78,10 @@ async function start(): Promise<void> {
   stopReceiptSweep = startReceiptSweep(prisma)
   // The worker's sweeps and archive write Swarms: they bump the stamps the API processes read by. It reads too little to keep a cache.
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
-  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once.
-  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries })
+  // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
+  // groups they changed.
+  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
+    swarmChanged: announceSwarmChanges })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).

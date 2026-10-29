@@ -9,7 +9,7 @@ import type { AuthUser } from '../../lib/ssoAuth.js'
 import { machineAlive } from '../../lib/prisma.js'
 import { isTeamSession } from '../../lib/teamSession.js'
 import { machineBillingAllowsDataPlane } from '../../lib/billingState.js'
-import { fail, type AgentStart, type SuperTabState } from '../model.js'
+import { fail, type SuperTabState } from '../model.js'
 import { GrantReads, TEAM_HOST_ONLY, TEAM_HOST_ONLY_MESSAGE, teamByRecord, type SuperTabStore } from '../store.js'
 import type { CacheView } from '../cache.js'
 import { readLastChangedAts, readMachines } from '../cachedReads.js'
@@ -17,6 +17,7 @@ import { retryTransient } from '../retry.js'
 import * as parts from '../parts/index.js'
 import type { MachineData, Part } from '../parts/index.js'
 import { groupsBy, retryStaleIndex } from '../parts/indexed.js'
+import { plainHost } from '../parts/commit.js'
 import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contract.js'
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
@@ -28,14 +29,10 @@ const ROW_HASH = 22
 /** A full read covers this many of the machine's Swarms, most recently changed first (was 100 full Swarms each second). */
 const FULL_TABS = 500
 
-/** A change any host of the Swarm cares about from the part alone: names, pause, observers, its agents and starts. */
+/** A change this machine's host cares about from the part alone (parts/commit.ts plainHost, the rule the push shares). */
 function plainlyRelevant(part: Part, machineId: string): boolean {
-  switch (part.kind) {
-    case 'head': case 'member': return true
-    case 'agent': return (part.data as { machineId?: string } | null)?.machineId === machineId
-    case 'start': return (part.data as AgentStart | null)?.request.machineId === machineId
-    default: return false
-  }
+  const host = plainHost(part.kind, part.data)
+  return host === 'all' || host === machineId
 }
 const PLAIN_KINDS = ['head', 'member', 'agent', 'start'] as const
 

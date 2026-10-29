@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 // Never this Mac's own Team config or sign-in: a throwaway path, and a sign-in the test sets.
 const fixtures = vi.hoisted(() => ({ configFile: '', signedIn: null as null | { kind: string } }))
-vi.mock('../../team/layout.js', async (original) => ({ ...await original<object>(), get TEAM_CONFIG_FILE() { return fixtures.configFile } }))
+// Where isTeamDaemon looks on every platform (team/config.ts `teamConfigFile`): on a Linux runner that is not the Mac's path.
+vi.mock('../../team/config.js', async (original) => ({ ...await original<object>(), teamConfigFile: () => fixtures.configFile }))
 vi.mock('../../lib/authSession.js', async (original) => ({ ...await original<object>(), readAuthSession: () => fixtures.signedIn }))
 import { CONFIDENTIAL_RECORD_MAX, confidentialRecord, confidentialRecordFile, createTeamAppPolicy, isTeamDaemon,
   pmEngineHome, purgeRecord, readConfidentialMarks, teamAppPolicyFor, type HeldSession, type TeamAppDeps } from './teamApps.js'
