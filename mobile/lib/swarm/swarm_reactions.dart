@@ -20,7 +20,8 @@ typedef SwarmReactorName = String Function(String kind, String id);
 /// The counts under a message, as Desktop draws them (`reactions.dart`): each
 /// emoji and how many gave it, the reader's own marked. A tap takes theirs
 /// back or adds it; holding one names who gave it. Without [onReact] (a
-/// reader who cannot post) the counts only show.
+/// reader who cannot post) the counts only show. With [onAdd], an
+/// add-reaction chip after the counts opens the picker (Swarm Home C).
 class SwarmReactionBar extends StatelessWidget {
   const SwarmReactionBar({
     super.key,
@@ -29,6 +30,7 @@ class SwarmReactionBar extends StatelessWidget {
     required this.readerId,
     required this.nameOf,
     this.onReact,
+    this.onAdd,
   });
 
   final String messageId;
@@ -36,6 +38,7 @@ class SwarmReactionBar extends StatelessWidget {
   final String readerId;
   final SwarmReactorName nameOf;
   final ValueChanged<SuperTabReactionEmoji>? onReact;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -55,6 +58,11 @@ class SwarmReactionBar extends StatelessWidget {
                 final react? => () => react(reaction.emoji),
                 null => null,
               },
+            ),
+          if (onAdd case final add?)
+            _AddChip(
+              key: ValueKey('swarm-add-reaction-$messageId'),
+              onTap: add,
             ),
         ],
       ),
@@ -130,6 +138,50 @@ class _Count extends StatelessWidget {
                     ),
                   ],
                 ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// After a message's counts: a finger's size to tap, drawn as a count is,
+/// with a face and a plus; a tap opens the picker.
+class _AddChip extends StatelessWidget {
+  const _AddChip({super.key, required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Add reaction',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+          child: Center(
+            widthFactor: 1,
+            child: Container(
+              height: 30,
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
+              decoration: ShapeDecoration(
+                color: swarmChatCard(tty),
+                shape: StadiumBorder(
+                  side: BorderSide(color: swarmChatHair(tty)),
+                ),
+              ),
+              child: Icon(
+                LucideIcons.smilePlus,
+                size: 16,
+                color: AppPalette.textSecondary,
               ),
             ),
           ),

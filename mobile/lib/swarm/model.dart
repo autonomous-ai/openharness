@@ -135,6 +135,11 @@ class SuperTabAgent {
       ),
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       downSince = DateTime.tryParse(row['downSince'] as String? ?? ''),
+      workDecision = switch (row['workDecision']) {
+        final String decision when _workDecisions.contains(decision) =>
+          decision,
+        _ => null,
+      },
       confidential = row['confidential'] == true,
       configuration = Map.unmodifiable(superTabMap(row['configuration']));
   final String id, projectId, name, machineId, harnessId, contributorId;
@@ -153,6 +158,13 @@ class SuperTabAgent {
   /// Since when its machine has reported its session gone, or its host confirmed a stop (backend machines.ts). Null
   /// while it runs.
   final DateTime? downSince;
+
+  /// What its project's Lead decided once its work was over (backend
+  /// model.ts `workDecision`): `awaiting` a decision, kept (`keep`) for more
+  /// work, or `stop`ped. Null while it has not finished any.
+  final String? workDecision;
+
+  static const _workDecisions = {'awaiting', 'keep', 'stop'};
 
   /// The account whose computer runs it; a contributor may run agents on a computer another account shared with them.
   final String machineOwnerId;

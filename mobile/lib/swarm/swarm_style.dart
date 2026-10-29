@@ -160,7 +160,8 @@ class SwarmTabHeader extends StatelessWidget {
   }
 }
 
-/// A caption over a card, in sentence case, with maybe a count at its right.
+/// A caption over a card, in sentence case, with maybe a count, or a
+/// [note], at its right.
 class SwarmCaption extends StatelessWidget {
   const SwarmCaption(
     this.text, {
@@ -168,10 +169,15 @@ class SwarmCaption extends StatelessWidget {
     this.count,
     this.countColor,
     this.countKey = const ValueKey('swarm-needs-count'),
+    this.note,
     this.first = false,
   });
 
   final String text;
+
+  /// Quiet words at its right: what the card's column means, or a count in
+  /// words ("Points this week", "2 working · 1 waiting").
+  final String? note;
 
   /// How many there are: what waits on the person, in the warning colour
   /// unless [countColor] says otherwise; null shows none.
@@ -186,6 +192,9 @@ class SwarmCaption extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final tty = Tty.of(context);
+    final quiet = AppType.caption(
+      color: Color.lerp(AppPalette.textFaint, AppPalette.textSecondary, .5),
+    );
     return Padding(
       padding: EdgeInsets.fromLTRB(
         AppSpace.xs,
@@ -197,18 +206,18 @@ class SwarmCaption extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         children: [
-          Expanded(
-            child: Text(
-              text,
-              style: AppType.caption(
-                color: Color.lerp(
-                  AppPalette.textFaint,
-                  AppPalette.textSecondary,
-                  .5,
-                ),
+          Expanded(child: Text(text, style: quiet)),
+          if (note case final note? when note.isNotEmpty)
+            Flexible(
+              flex: 2,
+              child: Text(
+                note,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.end,
+                style: quiet,
               ),
             ),
-          ),
           if (count case final count? when count > 0)
             Text(
               '$count',
