@@ -1,4 +1,4 @@
-import { admitMachineStart, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
+import { admitMachineStart, teamAccountSwarm, teamWorkRefusal, teamPoolOf, BUDDY_WINDOWS_REFUSAL, cleanupOverdue, dropIdleBuddyMachines, NOT_SWARM_MACHINE, downSince, expireRemoval, expireRemovals, failTeamWork, removalEnded, machineContribution, machineOffline, machineSlots, ownedMachine, productManagerOn, projectFolder, projectsOnMachine, requireTeamWork, teamMachineFor, teamAccountPool, teamPoolsOf, teamStartRequest, teamWorkCheck, type ContributedMachine } from './machines.js'
 import { assignAgentDisplayNames } from './agentNames.js'
 import { keepUsernames, setUsername } from './usernames.js'
 import { z } from 'zod'
@@ -1574,11 +1574,26 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // the machine's account row (store.ts contribution), never the request's.
       const listed = machineContribution(state, command.machineId)
       const notOwn = () => fail('BUDDY_OWN_MACHINE', BUDDY_OWN_MACHINE_REFUSAL, 403)
-      if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id || grant.hostGrant || grant.hostMachineId || grant.teamSession) notOwn()
-      // Off the Swarm's list it is recorded Buddy-only (Dee, 10-29): its host starts and watches the Buddy there, and nothing
-      // else of the Swarm reaches it.
-      const pool = listed ?? (command.setup ? addBuddyMachine(command.machineId, command.setup, me) : fail('BUDDY_MACHINE', 'Update Harness, then add your Buddy again.', 403))
-      if (pool.contributorId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') notOwn()
+      if (grant.hostGrant || grant.hostMachineId || grant.teamSession) notOwn()
+      // A teammate's Mac in the Swarm (Dee, 10-29; changes Ken's 10-28 rule): the Buddy runs in that Mac's Harness Team account,
+      // never its owner's own, and only one that shows it is private. Teammates' agents there share its computer user, so it is
+      // chat-only (buddies.ts chatOnlyBuddy). The grant is the store's reading of the Mac's account row.
+      const teammate = listed && !listed.buddyOnly && !listed.hostMachineId && listed.contributorId !== me.id ? listed : undefined
+      let pool: ContributedMachine
+      if (teammate) {
+        if (grant.contributorId !== teammate.contributorId || !teamAccountSwarm(state)) notOwn()
+        const team = teamPoolOf(state, teammate, context.teamMachines) ?? notOwn()
+        const refusal = teamWorkRefusal(team, context.now, !!context.teamMachines?.includes(team.machineId), true,
+          !!context.otherWorkspaceMachines?.includes(team.machineId))
+        if (refusal) failTeamWork(refusal)
+        pool = team
+      } else {
+        if (grant.machineOwnerId !== me.id || grant.contributorId !== me.id) notOwn()
+        // Off the Swarm's list it is recorded Buddy-only (Dee, 10-29): its host starts and watches the Buddy there, and nothing
+        // else of the Swarm reaches it.
+        pool = listed ?? (command.setup ? addBuddyMachine(command.machineId, command.setup, me) : fail('BUDDY_MACHINE', 'Update Harness, then add your Buddy again.', 403))
+        if (pool.contributorId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') notOwn()
+      }
       // Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093): its machine
       // refused every agent's Swarm command while one ran there. None is added on Windows until a real caller check exists
       // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop, and its launch is checked again (machines.ts).
@@ -1590,7 +1605,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
-        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
+        requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation, ...(teammate ? { chatOnly: true as const } : {}) } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []
       if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')

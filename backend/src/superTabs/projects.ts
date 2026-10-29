@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { activeWork, agent, agentRole, author, conversation, fail, isLeads, nextConversationNumber, person, type Actor, type Agent, type Conversation, type SuperTabState } from './model.js'
 import type { SwarmRule } from './rules.js'
-import { buddyReads, isBuddy, isBuddyChat } from './buddies.js'
+import { buddyReads, chatOnlyBuddy, isBuddy, isBuddyChat } from './buddies.js'
 
 export type ProjectVisibility = 'public' | 'private'
 /** Which built-in skill texts the project's agents get: Default (the team process only) or today's Harness orchestration. */
@@ -164,6 +164,8 @@ export function audienceOf(state: SuperTabState, project: SwarmProject, personId
 }
 
 export function canReadAgent(state: SuperTabState, actor: Actor, target: Agent): boolean {
+  // A chat-only Buddy reads only itself (buddies.ts chatOnlyBuddy).
+  if (actor.kind === 'agent' && actor.agentId !== target.id && state.agents.some(a => a.id === actor.agentId && chatOnlyBuddy(a))) return false
   return canReadProject(state, actor, projectOf(state, agentProjectId(state, target)))
 }
 

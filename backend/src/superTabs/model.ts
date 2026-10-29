@@ -83,7 +83,8 @@ export interface Agent {
   avatar?: import('./profile.js').Avatar
   /** A Buddy (buddies.ts): the person it brainstorms with, at the membership they added it in. Its role stays a builder's
    *  for older readers; this is what makes it a Buddy, and what refuses it every command but its own chat and proposals. */
-  buddyOf?: { personId: string; generation: string }
+  /** `chatOnly`: a Buddy on a teammate's machine (its Team account), which reads and posts only its own chat (buddies.ts). */
+  buddyOf?: { personId: string; generation: string; chatOnly?: true }
   /** Joined on a Harness Team account's machine: kept, so a machine row that went never brings back the rules of an
    *  ordinary machine (projects.ts teamSessionAccess, security re-review of #2089). */
   teamAccount?: true
@@ -108,7 +109,8 @@ export interface AgentStartRequest {
   gridName?: string
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
-  buddyOf?: { personId: string; generation: string }
+  /** `chatOnly`: a Buddy on a teammate's machine (its Team account), which reads and posts only its own chat (buddies.ts). */
+  buddyOf?: { personId: string; generation: string; chatOnly?: true }
   /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
    *  agent becomes the Lead of the project's Lead conversation once it runs. */
   leadFor?: { projectId: string; personId: string; generation: string }

@@ -14,8 +14,14 @@ export const isBuddyChat = (group: Pick<Conversation, 'kind'>): boolean => group
 export function buddyReads(buddy: Agent, group: Conversation, leadConversationId: string, person: Pick<Person, 'id'> | undefined): boolean {
   if (!person) return false
   if (isBuddyChat(group)) return group.agentIds.includes(buddy.id) && group.audience?.people.some(p => p.id === person.id) === true
+  // On a teammate's machine its computer user is shared with every agent in that Team account, who could act as it: there it
+  // reads nothing but its own chat (Lead's ruling, 10-29).
+  if (chatOnlyBuddy(buddy)) return false
   return group.id === leadConversationId || !group.audience
 }
+
+/** A Buddy on a teammate's machine: it reads and posts only its own chat, and sends no proposal (Lead's ruling, 10-29). */
+export const chatOnlyBuddy = (target: Pick<Agent, 'buddyOf'>): boolean => !!target.buddyOf?.chatOnly
 
 /** The rows that tell how work is routed: a route and its override name the machines that could run a task and why others
  *  could not, and a rule row the routing rules. A Buddy reads none of them, as its Swarm read has no machines or rules. */
@@ -67,6 +73,9 @@ const BUDDY_COMMANDS: ReadonlySet<string> = new Set(['message.send', 'message.re
 
 export function requireBuddyCommand(buddy: Agent, command: { type: string; conversationId?: unknown; agentId?: unknown }, groups: readonly Conversation[]): void {
   if (!BUDDY_COMMANDS.has(command.type)) fail('BUDDY_FORBIDDEN', 'A Buddy only talks with its owner and sends the proposals they ask for.', 403)
+  if (command.type === 'buddy.propose' && chatOnlyBuddy(buddy)) {
+    fail('BUDDY_FORBIDDEN', 'A Buddy on a teammate\'s machine reads and posts only in its chat. Its person sends proposals to the PM.', 403)
+  }
   if ('agentId' in command && command.agentId !== buddy.id) fail('BUDDY_FORBIDDEN', 'A Buddy acts only for itself.', 403)
   if (command.type === 'message.send' || command.type === 'message.react' || command.type === 'buddy.propose') {
     const group = groups.find(g => g.id === command.conversationId)
