@@ -79,6 +79,20 @@ describe('stopping idle workers', () => {
     expect(target(state).workDecision).toBe('stop')
   })
 
+  // Swarm autonomous-harness, 2026-10-29: a Builder started by hand in a busy task's group never got that task, and every
+  // message there kept it up, idle, for 18+ minutes.
+  it('stops a worker that never had a task 15 minutes after its start, however busy a group it only sits in is', () => {
+    const busyGroup = group({ assignment: { ...done(), agentId: 'other', status: 'working' }, agentIds: ['L', 'other', 'w'], lastActivityAt: iso(at - MINUTE) })
+    const state = swarm({ groups: [busyGroup] })
+    expect(stopIdleWorkers(state, 'lead', at, new Set())).toEqual([expect.objectContaining({ source: { kind: 'idle-stop', agentId: 'w' } })])
+    // A Reviewer is never assigned work: a group's messages are its work, so they keep it as before.
+    const reviewer = swarm({ agents: [worker({ role: 'reviewer' } as Partial<Agent>)], groups: [busyGroup] })
+    expect(stopIdleWorkers(reviewer, 'lead', at, new Set())).toEqual([])
+    // Nor is one that had a task of its own and finished it: its group's last message still counts.
+    const finished = swarm({ groups: [group({ lastActivityAt: iso(at - MINUTE) })] })
+    expect(stopIdleWorkers(finished, 'lead', at, new Set())).toEqual([])
+  })
+
   it('never stops a worker with active work, a queued delivery, or uncommitted changes', () => {
     expect(stopIdleWorkers(swarm({ groups: [group({ assignment: done({ status: 'working' }) })] }), 'lead', at, new Set())).toEqual([])
     expect(stopIdleWorkers(swarm(), 'lead', at, new Set(['w']))).toEqual([])

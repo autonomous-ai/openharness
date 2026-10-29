@@ -57,6 +57,7 @@ class RoutingPolicy {
     required this.quotaReserve,
     required this.notes,
     this.localModels,
+    this.priorOverrides,
   });
 
   factory RoutingPolicy.fromJson(Map<String, dynamic> j) {
@@ -75,6 +76,12 @@ class RoutingPolicy {
       localModels: j['localModels'] is Map
           ? Map<String, dynamic>.unmodifiable(j['localModels'] as Map)
           : null,
+      priorOverrides: j['priorOverrides'] is List
+          ? List<Map<String, dynamic>>.unmodifiable([
+              for (final o in j['priorOverrides'] as List)
+                Map<String, dynamic>.from(o as Map),
+            ])
+          : null,
     );
   }
 
@@ -87,6 +94,10 @@ class RoutingPolicy {
   /// saving the rest does not reset it to the backend's default.
   final Map<String, dynamic>? localModels;
 
+  /// The owner's own quality per model and job kind (`{model, kind, quality}`), replacing a benchmark prior. Not edited
+  /// here; kept so that saving the rest does not erase it.
+  final List<Map<String, dynamic>>? priorOverrides;
+
   RoutingPolicy copyWith({
     List<RoutingModel>? models,
     Map<String, int>? floor,
@@ -98,6 +109,7 @@ class RoutingPolicy {
     quotaReserve: quotaReserve ?? this.quotaReserve,
     notes: notes ?? this.notes,
     localModels: localModels,
+    priorOverrides: priorOverrides,
   );
 
   Map<String, dynamic> toJson() => {
@@ -107,6 +119,7 @@ class RoutingPolicy {
     'notes': notes,
     'models': [for (final m in models) m.toJson()],
     if (localModels != null) 'localModels': localModels,
+    if (priorOverrides != null) 'priorOverrides': priorOverrides,
   };
 
   /// This policy with one field taken from [other], for a field that goes back

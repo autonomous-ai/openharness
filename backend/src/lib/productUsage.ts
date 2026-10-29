@@ -8,6 +8,7 @@ import { prisma } from './prisma.js'
 import { ensureIndex } from './db/indexes.js'
 import { PRODUCT_USAGE_DAYS, type ProductUsageChoice, type ProductUsageReport } from '../types/productUsage.js'
 import { ACTIVITY_DAYS, type ActivitySurface } from '../types/productUsageActivity.js'
+import { PRODUCT_USAGE_RECEIPT_DAYS, PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { incrementUsageTotals, type UsageIncrement } from './productUsageWrite.js'
 import { createUsageBatch } from './productUsageBatch.js'
 import { createRelayTotals } from './productUsageRelay.js'
@@ -39,7 +40,7 @@ function validDay(day: string, now: Date): boolean {
   const stamp = Date.parse(day + 'T00:00:00.000Z')
   const today = Math.floor(now.getTime() / DAY) * DAY
   return Number.isFinite(stamp) && new Date(stamp).toISOString().slice(0, 10) === day
-    && stamp <= today && stamp > today - PRODUCT_USAGE_DAYS * DAY
+    && stamp <= today && stamp > today - PRODUCT_USAGE_RECEIPT_DAYS * DAY
 }
 
 /** [productUsageChoice] for several accounts at once, in two reads: a batch's permission checks. */
@@ -141,7 +142,8 @@ async function commitReports(reports: QueuedReport[]): Promise<IngestResult[]> {
         for (const r of permitted) if (!received.has(r.id)) { received.add(r.id); fresh.push(r) }
         if (!fresh.length) return results
         await tx.productUsageReceipt.createMany({ data: fresh.map(r => ({
-          id: r.id, expiresAt: new Date(Date.parse(r.day) + (PRODUCT_USAGE_DAYS + 1) * DAY) })) })
+          // [life]: once the receipt sweep's rule is installed, a server that does not write it cannot count (productUsageReceiptSweep.ts).
+          id: r.id, expiresAt: new Date(Date.parse(r.day) + PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS * DAY), life: PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS })) })
         const apart = await apartPrefixes(tx, fresh)
         await incrementUsageTotals(tx, summed(fresh.flatMap((r, i) =>
           apart[i] ? r.increments.map(inc => ({ ...inc, metric: apart[i] + inc.metric })) : r.increments)))

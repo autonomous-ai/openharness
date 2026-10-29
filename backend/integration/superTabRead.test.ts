@@ -20,6 +20,7 @@ import { decisionsWaiting } from '../src/superTabs/decisions.js'
 import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
+import { sendsEmptyIn, watched, type Query } from '../src/lib/queryRecorder.test-support.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, outsider as outsiderActor, owner as ownerActor, peer as peerActor, swarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -343,6 +344,18 @@ describe('Swarm list and old routes (design 4.9, 4.11)', () => {
     const s = await scene()
     const { body } = await get('/api/super-tabs/list', outsider)
     expect(body.data.tabs).toContainEqual({ id: s.tabId, name: 'Pilot', ownerId: owner.sub, workspaceId: null, paused: false, lastChangedAt: MIGRATED })
+  })
+
+  it('sends no empty id list to the database, for a person with no Swarm or with Swarms all in parts', async () => {
+    await scene()
+    const queries: Query[] = []
+    const reads = new SwarmReads(new SuperTabStore(watched(db, queries)), { now: () => clock })
+
+    expect((await reads.list(outsider)).tabs.length).toBeGreaterThan(0)
+    expect((await reads.list({ ...outsider, sub: 'u-without-swarms' })).tabs).toEqual([])
+
+    expect(queries.some(q => q.model === 'superTab')).toBe(true)
+    expect(queries.filter(sendsEmptyIn)).toEqual([])
   })
 
   it('reads each Swarm\'s newest change over all its parts, without a groupBy (it once panicked the engine on Mongo)', async () => {
@@ -1156,6 +1169,32 @@ describe('what a read costs the database (group 3b)', () => {
 
   // Every host reads each second (a production backend went to 5 pods on it, 2026-10-27): a Swarm with no change for it
   // must not cost the newest-change aggregate, seven groupBy over all its parts.
+  it('the host poll reads a Swarm that keeps an old state without ever loading that state', async () => {
+    const machineId = `m-${randomUUID().slice(0, 8)}`
+    await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const s = await scene(f => { f.contribute(machineId, 'swarm') }, machineId)
+    const padding = 'old-state-'.repeat(2_000)
+    await db.superTab.update({ where: { id: s.tabId }, data: { legacyState: { padding } } })
+    const reads: Array<{ operation: string; select: Record<string, unknown> | undefined }> = []
+    const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
+      if (model === 'SuperTab') reads.push({ operation, select: (args as { select?: Record<string, unknown> }).select })
+      return query(args)
+    } } } }) as unknown as PrismaClient
+    const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
+    clock = Date.now()
+
+    const first = await hosts.changes(owner, machineId, { full: true })
+    clock = Date.now()
+    const idle = await hosts.changes(owner, machineId, { cursor: first.cursor })
+
+    expect(first.tabs).toHaveLength(1)
+    expect(JSON.stringify([first, idle])).not.toContain('old-state-')
+    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields: none is the old state.
+    expect(reads.length).toBeGreaterThan(0)
+    for (const read of reads) expect(read.select, read.operation).toBeDefined()
+    for (const read of reads) expect(read.select).not.toHaveProperty('legacyState')
+  })
+
   it('the host form asks for the newest change only of the Swarms it answers for', async () => {
     const machineId = `m-${randomUUID().slice(0, 8)}`
     await db.machine.create({ data: { machineId, userId: owner.sub, apiKey: 'fixture-only', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })

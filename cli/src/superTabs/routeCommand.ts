@@ -43,16 +43,31 @@ export function taskRequirement(group: Json): { machines: Set<string> | null; de
   const unseen = finite(requires.unseenMachines) && requires.unseenMachines > 0
   return { machines: Array.isArray(requires.machines) || unseen ? new Set(strings(requires.machines)) : null, devices: strings(requires.devices) }
 }
-export const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up), so it is left out until a start there succeeds. Its owner can check the machine.'
+export const STALLED = 'Its last 2 starts on this machine started no agent (they failed or were never picked up), so it is left out until a start there succeeds, its Harness is updated, or 30 minutes pass. Its owner can check the machine.'
+/** How long a machine whose last 2 starts started nothing stays out of routes before routing may try it once again. Without
+ *  it, nothing but a person's start by hand brought a machine back, even after the Harness bug behind its failures was
+ *  fixed and released (Mac Auto, Swarm autonomous-harness, 2026-10-29). A start that fails again keeps it out another window. */
+export const STALL_RETRY_MS = 30 * 60_000
+/** A Harness Team account's refusal of a Codex start for a model its owner's ChatGPT account does not offer (start.ts, before
+ *  anything launches): the request named the wrong model, the machine is fine, so it never counts toward [stalled]. Matched by
+ *  the refusal's fixed opening, which the Lead reads as the start's raw reason. */
+const MODEL_NOT_OFFERED = /^This machine's ChatGPT account \(.*\) does not offer \S+; /
 /** What a machine says it cannot do for this task (#229 v1 routing): `all` keeps out its new agents, `engines` those of an
  *  engine, `push` its new agents and members alike. Only a known failure is said; anything unknown says nothing. */
 export interface Unready { all: string[]; engines: Record<string, string>; push: string | null }
 const READY: Unready = { all: [], engines: {}, push: null }
 /** Whether the Swarm's last 2 starts on [machineId] both started nothing: failed, or queued and never picked up. A start
- *  being created (dispatched, no agent yet) is not counted, nor is a machine with fewer than 2 starts. */
-export function stalled(starts: Json[], machineId: string): boolean {
-  const last = starts.filter(s => object(s.request).machineId === machineId).slice(-2)
-  return last.length === 2 && last.every(s => !s.harnessId && (!!s.error || s.dispatched !== true))
+ *  being created (dispatched, no agent yet) is not counted, nor is a machine with fewer than 2 starts. The failures stop
+ *  counting once they say nothing about the machine as it is: its daemon now runs another CLI version than the newer one
+ *  was dispatched to ([pool] `clientVersion`, the backend's record of its last connection), or the newer one is
+ *  [STALL_RETRY_MS] old. A start from before either was recorded counts as before. */
+export function stalled(starts: Json[], machineId: string, pool: Json = {}, now = Date.now()): boolean {
+  const last = starts.filter(s => object(s.request).machineId === machineId && !MODEL_NOT_OFFERED.test(String(s.error ?? ''))).slice(-2)
+  if (last.length !== 2 || !last.every(s => !s.harnessId && (!!s.error || s.dispatched !== true))) return false
+  const newest = last[1]!
+  if (typeof pool.clientVersion === 'string' && typeof newest.dispatchedVersion === 'string' && newest.dispatchedVersion !== pool.clientVersion) return false
+  const at = finite(newest.dispatchedAt) ? newest.dispatchedAt : finite(newest.requestedAt) ? newest.requestedAt : null
+  return at === null || now - at < STALL_RETRY_MS
 }
 /** What a contributed machine's reading says it is not ready for, for work in [projectId] ([needsPush] unless a review).
  *  Its own login's push access counts only when it is the one that pushes: not for a teammate's project where the server
@@ -66,6 +81,10 @@ export function unreadyPool(pool: Json, project: Json | undefined, projectId: st
     if (e.installed === false) engines[String(e.engine)] = `${name} is not installed on this machine.`
     // Worded as a subscription's, so a Builder on a local model, which runs through the grid without one, is not kept out.
     else if (e.signedIn === false) engines[String(e.engine)] = `${name} is not signed in to a subscription on this machine. Its owner can sign in there; the next reading clears this.`
+  }
+  // The server's own count of failed starts (backend superTabs/engineHealth.ts), with its words; a server before it sends none.
+  for (const [engine, reason] of Object.entries(object(pool.suspendedEngines))) {
+    if (ENGINE_NAME[engine] && typeof reason === 'string' && !engines[engine]) engines[engine] = reason
   }
   // Only a Swarm folder's own checkout of the project is read; the repository's machine runs it from the Lead's checkout.
   const checkout = pool.scope === 'swarm' && repository.machineId !== pool.machineId ? list(readiness.checkouts).find(c => c.folder === projectId) : undefined
@@ -230,7 +249,9 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     machines.set(String(pool.machineId), { name: String(pool.name), status: 'contributed', account: false, pool,
       unready: unreadyPool(original, project, projectId, !review, object(value.tab).githubApp === true, projectOwner) })
   }
-  for (const [machineId, machine] of machines) machine.stalled = stalled(list(state.starts), machineId)
+  for (const [machineId, machine] of machines) {
+    machine.stalled = stalled(list(state.starts), machineId, list(state.machines).find(m => m.machineId === machineId))
+  }
   // One machine (docs/plans/2026-10-24-swarm-team-account.md): a Mac's Harness Team account is that Mac, under its name. A
   // teammate's project starts only in the team account and the Mac's owner's own projects only with the owner, so only one
   // of the two offers new agents here, and the other is not listed as unfit; agents already on either stay members.
@@ -474,7 +495,8 @@ async function probeMachine(machineId: string, { name: machineName, status, acco
     const observed = object(pool.observation), resources = object(observed.resources)
     const fresh = finite(observed.receivedAt) && Date.now() - observed.receivedAt < 45_000
     const quotas = list(observed.quotas)
-    const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })) }) : UNKNOWN_QUOTA }
+    const quota = (engine: string) => { const q = quotas.find(q => q.engine === engine); return fresh && q ? quotaOf2({ known: q.known === true, windows: list(q.windows).filter(w => finite(w.usedPercent)).map(w => ({ usedPercent: w.usedPercent as number, resetsAt: w.resetsAt, name: text(w.name) ?? undefined })),
+      why: text(object(observed.quotaReasons)[engine]) }) : UNKNOWN_QUOTA }
     const blocked = [...(!fresh ? [OFFLINE] : []), ...(pool.paused ? ['New work is paused on this machine.'] : [])]
     const tools = object(observed.tools)
     /** Work for a project its owner does not run here: a new agent runs under the contribution, a member under its own grant. */

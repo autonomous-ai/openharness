@@ -2,7 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, write
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { createConfidentialPurge, purgeRecord, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
+import { createSwarmAgents } from './agents.js'
+import { UNREADABLE_DETAIL, createConfidentialPurge, purgeRecord, rewriteIfUnchanged, scrubClaudeSession, sweepForSession, type PurgeTarget } from './teamPurge.js'
 
 // A confidential session the Swarm ended for good in a Harness Team account (#895): its data in the Team user's shared
 // engine homes goes, and the account stays held until a sweep finds nothing of it (security re-checks of #2089).
@@ -248,9 +249,45 @@ describe('the purge of a confidential session the Swarm ended', () => {
   })
 })
 
+// Security re-check 1 of 147777f54: with its record unreadable, a retry for a session already gone answered 'skipped', and its
+// close released the account. While the record cannot be read, no purge is answered: the close fails, the hold stays.
+describe('a purge while its record cannot be read', () => {
+  it('is refused, the session gone or not, so the close fails and the account stays held until a person clears it', async () => {
+    const home = dir(), file = join(home, 'super-tabs', 'team-purges.json')
+    mkdirSync(join(home, 'super-tabs'), { recursive: true })
+    writeFileSync(file, '{')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const record = purgeRecord(file)
+    const purge = vi.fn(async () => ({ ok: true }))
+    const refusal = { error: 'PURGE_RECORD_UNREADABLE', detail: UNREADABLE_DETAIL }
+    for (const session of [() => null, (id: string) => ({ agentId: id, sessionId: 'pm-session', registeredAt: 5, engine: 'claude', cwd: CWD })]) {
+      expect(await createConfidentialPurge({ confidential: () => true, home, session, purge, record })('pm')).toEqual(refusal)
+    }
+    expect(purge).not.toHaveBeenCalled()
+    // Said once, where it was kept.
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([`[super-tabs] the record of purges still to finish could not be read; kept aside at ${file}.unreadable until its owner clears it`])
+    warn.mockRestore()
+  })
+
+  it('is said once, with the path only, however often its close is refused and retried (review of #2142)', async () => {
+    const home = dir(), file = join(home, 'super-tabs', 'team-purges.json')
+    mkdirSync(join(home, 'super-tabs'), { recursive: true })
+    writeFileSync(file, '{')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const purgeEnded = createConfidentialPurge({ confidential: () => true, home, session: () => null, purge: async () => ({ ok: true }), record: purgeRecord(file) })
+    const agents = createSwarmAgents({ byAgent: () => null, stoppedIds: () => [], closeAgent: async () => ({ closed: true }), purgeEnded,
+      members: { leads: () => new Set(), harnesses: () => new Set() } } as never)
+    // Each refused close fails, so its host retries and the account stays held; the host logs what it was told.
+    for (let n = 0; n < 2; n++) expect(await agents.closeMember('pm')).toEqual({ error: 'PURGE_FAILED', detail: UNREADABLE_DETAIL })
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([`[super-tabs] the record of purges still to finish could not be read; kept aside at ${file}.unreadable until its owner clears it`])
+    warn.mockRestore()
+  })
+})
+
 describe('the record of purges still to finish', () => {
   it('keeps them across restarts, and says when it cannot be read, so the account stays held (teamApps.ts)', async () => {
     const file = join(dir(), 'team-purges.json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const record = purgeRecord(file)
     record.put(target())
     record.put(target({ pastes: ['abc'] }))
@@ -276,7 +313,45 @@ describe('the record of purges still to finish', () => {
     expect(purgeRecord(file).unknown()).toBe(true)
     rmSync(`${file}.unreadable.1`)
     expect(purgeRecord(file).unknown()).toBe(false)
-    writeFileSync(file, '{"pm": 3}')
-    expect([purgeRecord(file).get('pm'), purgeRecord(file).unknown()]).toEqual([undefined, false])
+    warn.mockRestore()
+  })
+
+  it('sets a record of the wrong shape aside too, never dropping the purges it may name (security review 2 of #2142)', async () => {
+    const { rmSync } = await import('node:fs')
+    const file = join(dir(), 'team-purges.json')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const entry = JSON.stringify(target())
+    for (const saved of ['3', 'null', '[]', '{"pm": 3}', `{"other": ${entry}}`, `{"pm": ${entry.replace('"engine":"claude"', '"engine":4')}}`,
+      `{"pm": ${entry.replace('"cwd":', '"cwd":7,"was":')}}`, `{"pm": ${entry.replace('}', ',"pastes":[1]}')}}`]) {
+      writeFileSync(file, saved)
+      expect([purgeRecord(file).unknown(), readFileSync(`${file}.unreadable`, 'utf8')]).toEqual([true, saved])
+      rmSync(`${file}.unreadable`)
+    }
+    // A record as this daemon writes it, older ones without codexHome included, is read as before.
+    writeFileSync(file, `{"pm": ${entry.replace(',"codexHome":null', '')}}`)
+    expect([purgeRecord(file).get('pm'), purgeRecord(file).unknown()]).toEqual([{ ...target(), codexHome: undefined }, false])
+    warn.mockRestore()
+  })
+
+  it('names where it was kept on every start while it is there, since the refusal points to the log (security review 2 of #2142)', async () => {
+    const { rmSync } = await import('node:fs')
+    const file = join(dir(), 'super-tabs', 'team-purges.json')
+    mkdirSync(join(file, '..'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const said = (paths: string) => `[super-tabs] the record of purges still to finish could not be read; kept aside at ${paths} until its owner clears it`
+    writeFileSync(file, '{')
+    purgeRecord(file)
+    purgeRecord(file)
+    writeFileSync(file, '[')
+    purgeRecord(file)
+    for (let n = 2; n <= 10; n++) writeFileSync(`${file}.unreadable.${n}`, '{')
+    purgeRecord(file)
+    // Cleared, it says nothing.
+    for (const n of ['', '.1', ...Array.from({ length: 9 }, (_, i) => `.${i + 2}`)]) rmSync(`${file}.unreadable${n}`)
+    purgeRecord(file)
+    const aside = `${file}.unreadable`
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([said(aside), said(aside), said(`${aside}, ${aside}.1`),
+      said([aside, ...Array.from({ length: 10 }, (_, i) => `${aside}.${i + 1}`)].join(', '))])
+    warn.mockRestore()
   })
 })

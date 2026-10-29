@@ -49,9 +49,14 @@ const groupsOf = (state: SuperTabState, worker: Agent, asleep: readonly GroupAct
   [...state.conversations, ...asleep.filter(g => !state.conversations.some(c => c.id === g.id))]
     .filter(c => c.agentIds.includes(worker.id) || c.assignment?.agentId === worker.id)
 
-/** When the worker last had anything to do: its start, its Lead's keep, its own progress, or a message in one of its groups. */
+/** When the worker last had anything to do: its start, its Lead's keep, its own progress, or a message in one of its groups.
+ *  A worker that never had an assignment (no task of its own, never lost one, not a Reviewer) only sits in its groups, and
+ *  their messages are about others' work: it is idle from its start or keep. One started by hand in a busy task's group
+ *  stayed up with nothing to do for 18+ minutes, its idle time renewed by each message there (Swarm autonomous-harness,
+ *  2026-10-29). A message waiting for it still keeps it (`busy`). */
 function idleSince(state: SuperTabState, worker: Agent, groups: GroupActivity[]): number {
-  const seen = [time(worker.startedSession?.createdAt), worker.keptAt, ...groups.flatMap(g => [time(g.lastActivityAt),
+  const worked = agentRole(worker) === 'reviewer' || !!worker.lostTask || groups.some(g => g.assignment?.agentId === worker.id)
+  const seen = [time(worker.startedSession?.createdAt), worker.keptAt, ...(worked ? groups : []).flatMap(g => [time(g.lastActivityAt),
     ...g.assignment?.agentId === worker.id ? [g.assignment.progressAt, g.assignment.lost?.at] : []])]
   return Math.max(...seen.filter((t): t is number => t !== undefined && Number.isFinite(t)))
 }
