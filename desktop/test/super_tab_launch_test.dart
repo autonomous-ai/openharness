@@ -54,6 +54,10 @@ class SuperTabFixtureConnection extends WsConn {
   /// after one answer never sees anything ready.
   final prepared = <Object?>{};
 
+  /// Preparation never finishes: every ask is answered `preparing`, as a setup
+  /// still running on the machine answers.
+  bool keepPreparing = false;
+
   /// The most agents preparation says this machine may run; null for a Harness
   /// from before setup reported it.
   int? maxAvailableAgents = 16;
@@ -173,7 +177,7 @@ class SuperTabFixtureConnection extends WsConn {
       }
       if (payload['action'] == 'wake') return {'ok': true};
       if (payload['action'] == 'prepareContribution') {
-        if (prepared.add(payload['operationId'])) {
+        if (prepared.add(payload['operationId']) || keepPreparing) {
           return {'ok': true, 'state': 'preparing'};
         }
         return {
