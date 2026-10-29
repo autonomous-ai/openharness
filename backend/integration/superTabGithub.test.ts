@@ -228,7 +228,8 @@ describe('the GitHub token endpoint', () => {
 describe('a queued start\'s preparation token', () => {
   /** The host's pool rows, now each Swarm's `pool` in the host form (design 4.10), in the shape the old pools route answered. */
   const hostPools = async (env: Env) => {
-    const response = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/changes?full=1', headers: { authorization: `Bearer ${host.sub}` } })
+    // gh-pool is a Team machine (`queued`): its host reads are its team session's.
+    const response = await env.app.inject({ method: 'GET', url: '/api/super-tabs/hosts/gh-pool/changes?full=1', headers: { authorization: `Bearer ${host.sub}`, 'x-test-team': '1' } })
     const rows = (response.json().data.tabs as Array<{ pool: unknown }>).flatMap(tab => tab.pool ? [tab.pool] : [])
     return { json: () => ({ data: rows }) }
   }
@@ -245,22 +246,31 @@ describe('a queued start\'s preparation token', () => {
       await env.run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string } as Command, contributor)
     }
     await env.run(tab, { type: 'machine.contribute', machineId, name: 'Pool', cwd: '/swarm-root', scope: 'swarm', engines: ['codex'], maxAgents: 2 } as Command, contributor)
-    const pool = (await poolRows(env.store, contributor, machineId)).find(p => p.tabId === tab)!
-    if (contributor === owner) await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
-    else {
+    if (contributor === owner) {
+      const pool = (await poolRows(env.store, contributor, machineId)).find(p => p.tabId === tab)!
+      await env.store.observeMachine(contributor, tab, machineId, { generation: pool.machine.generation, ...observed })
+    } else {
       // Another person's project runs only on a Team machine (#1694): this one is used only for agents (`harness team on`).
       const computerId = createHash('sha256').update(machineId).digest('hex').slice(0, 32)
       await db.machine.update({ where: { machineId }, data: { computerId, sessionKind: 'team' } })
       onTestFinished(async () => { await db.machine.update({ where: { machineId }, data: { computerId: null, sessionKind: null } }) })
       const team: AuthUser = { ...contributor, harnessSessionId: `team-${machineId}`, harnessSessionKind: 'team', harnessComputerId: computerId }
+      // Its host routes take its team session alone (security review 2 of #2089): `prepare` signs in as it.
+      if (!users.some(u => u.sub === team.sub && u.harnessSessionKind === 'team')) {
+        users.push(team)
+        onTestFinished(() => { users.splice(users.indexOf(team), 1) })
+      }
+      const pool = (await poolRows(env.store, team, machineId)).find(p => p.tabId === tab)!
       await env.store.observeMachine(team, tab, machineId, { generation: pool.machine.generation, ...observed, privacy: { mode: 'dedicated' } })
     }
     const startId = String((await env.run(tab, { type: 'agent.start', request: { conversationId: 'lead', machineId, engine: 'codex', name: 'Builder',
       cwd: '/swarm-root/lead', permissionMode: 'full', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command)).result.startId)
     return { tab, startId }
   }
-  const prepare = (env: Env, tab: string, startId: string, machineId = 'gh-pool', user = host, payload: Record<string, unknown> = {}) => env.app.inject({ method: 'POST',
-    url: `/api/super-tabs/hosts/${machineId}/starts/${tab}/${startId}/github-token`, headers: { authorization: `Bearer ${user.sub}` }, payload })
+  /** As [user]'s Harness Team account by default on `gh-pool`, the Team machine `queued` makes for another person's start. */
+  const prepare = (env: Env, tab: string, startId: string, machineId = 'gh-pool', user = host, payload: Record<string, unknown> = {},
+    team = user === host && machineId === 'gh-pool') => env.app.inject({ method: 'POST',
+    url: `/api/super-tabs/hosts/${machineId}/starts/${tab}/${startId}/github-token`, headers: { authorization: `Bearer ${user.sub}`, ...(team ? { 'x-test-team': '1' } : {}) }, payload })
 
   it('gives the host of another person\'s start a token that only reads the project\'s repository, and says whom the work is for', async () => {
     const env = await fresh()
@@ -434,7 +444,9 @@ describe('a queued start\'s preparation token', () => {
     expect((await prepare(env, tab, startId, 'gh-host-mini')).statusCode).toBe(403)
     expect((await prepare(env, tab, 'missing-start')).statusCode).toBe(404)
     expect((await prepare(env, tab, startId, 'gh-pool', host, { machineId: 'gh-pool' })).statusCode).toBe(400)
-    const hostRun = (command: Command) => env.store.execute(host, tab, { operationId: randomUUID(), command }, undefined, 'gh-pool')
+    // gh-pool is a Team machine (`queued`): its team session hosts it.
+    const team = users.find(u => u.sub === host.sub && u.harnessSessionKind === 'team')!
+    const hostRun = (command: Command) => env.store.execute(team, tab, { operationId: randomUUID(), command }, undefined, 'gh-pool')
     await hostRun({ type: 'agent.startDispatch', startId } as Command)
     await hostRun({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config } as Command)
     const settled = await prepare(env, tab, startId)

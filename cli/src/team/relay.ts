@@ -208,33 +208,43 @@ export function readTeamRelay(config: TeamConfig, deps: TeamRelayReadDeps = real
 
 /** What a Claude Code or Codex launch adds to spend the owner's subscription through the relay. */
 export interface OwnerRelayLaunch { env: Record<string, string>; args: string[] }
+/** Why a launch in a Codex home of its own (a Swarm Product Manager's) is not made: no sign-in there, and no relay to give it
+ *  one. The launch refuses or holds with it, never starting signed out (security re-checks of #2089). */
+export interface OwnerRelayRefusal { refused: string }
+export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
 
 export interface TeamRelayLaunchDeps {
   /** Whether this daemon runs team work only. */
   team(): boolean
   config(): TeamConfig | null
-  /** Whether the team account signed this engine in itself. */
-  signedIn(engine: 'claude' | 'codex'): Promise<boolean>
+  /** Whether the team account signed this engine in itself: in [home], the launch's own Codex home, when it has one. */
+  signedIn(engine: 'claude' | 'codex', home?: string): Promise<boolean>
   read(config: TeamConfig): TeamRelayGrant | null
   /** Claude Code that never ran in the team account opens on its first-run screens, which nobody is there to answer:
    *  recorded as done, in the team account's own home, before the first launch on the relay. */
   onboarded(engine: 'claude' | 'codex'): void
-  /** Codex's home made ready for the relay before each launch ([prepareCodexHome]). Never throws. */
-  codexHome(grant: TeamRelayGrant): Promise<void>
+  /** Codex's home made ready for the relay before each launch ([prepareCodexHome]): [home], the launch's own, when it has one.
+   *  Never throws. */
+  codexHome(grant: TeamRelayGrant, home?: string): Promise<void>
 }
 
-/** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. */
-export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunchDeps): Promise<OwnerRelayLaunch | null> {
+/** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. [codexHome]: the
+ *  launch's own Codex home (a Swarm Product Manager's, superTabs/teamDaemon.ts pmEngineHome), whose sign-in and model list
+ *  are its own, not the daemon's (security re-check of #2089: it started signed out, without the owner's models). */
+export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunchDeps, codexHome?: string): Promise<OwnerRelayLaunch | OwnerRelayRefusal | null> {
   if (engine !== 'claude' && engine !== 'codex') return null
   if (!deps.team()) return null
+  const home = engine === 'codex' ? codexHome : undefined
+  // A Codex home of its own holds no sign-in but what it was given: with no relay it is refused, not launched signed out.
+  const none = home === undefined ? null : { refused: NO_PM_RELAY }
   const config = deps.config()
-  if (!config) return null
-  if (await deps.signedIn(engine).catch(() => false)) return null
+  if (!config) return home !== undefined && !await deps.signedIn(engine, home).catch(() => false) ? none : null
+  if (await (home === undefined ? deps.signedIn(engine) : deps.signedIn(engine, home)).catch(() => false)) return null
   const grant = deps.read(config)
-  if (!grant) return null
+  if (!grant) return none
   try { deps.onboarded(engine) } catch { /* The engine asks on its screen, as it would have. */ }
   if (engine === 'claude') return { env: claudeRelayEnv(grant.url, grant.token), args: [] }
-  await deps.codexHome(grant).catch(() => {})
+  await (home === undefined ? deps.codexHome(grant) : deps.codexHome(grant, home)).catch(() => {})
   return { env: codexRelayEnv(grant.token), args: codexRelayArgs(grant.url) }
 }
 
@@ -289,16 +299,16 @@ export function installedCodexVersion(home: string): string | null {
 }
 
 /** The team daemon's own: its sign-in, the root-owned config, its engines' sign-ins in its own home. */
-export const realTeamRelayLaunch = (engine: AgentEngine) => teamRelayLaunch(engine, {
+export const realTeamRelayLaunch = (engine: AgentEngine, codexHome?: string) => teamRelayLaunch(engine, {
   team: () => readAuthSession()?.kind === 'team',
   config: () => readTeamConfig(),
   // Only presence is read, never a secret (lib/engineAccount.ts); the team daemon has no login shell to read.
-  signedIn: async (e) => (await engineAccount(e, { home: homedir(), env: process.env, lastUsed: false })).signedIn === true,
+  signedIn: async (e, home) => (await engineAccount(e, { home: homedir(), env: home ? { ...process.env, CODEX_HOME: home } : process.env, lastUsed: false })).signedIn === true,
   read: (config) => readTeamRelay(config),
   onboarded: (e) => { if (e === 'claude') recordAcceptanceIn(join(homedir(), '.claude.json'), 'hasCompletedOnboarding') },
-  codexHome: (grant) => prepareCodexHome(process.env.CODEX_HOME || join(homedir(), '.codex'), grant,
+  codexHome: (grant, home) => prepareCodexHome(home ?? (process.env.CODEX_HOME || join(homedir(), '.codex')), grant,
     { fetch, version: () => installedCodexVersion(homedir()), now: Date.now }),
-})
+}, codexHome)
 
 /** In the team daemon: whether the owner's relay is there for its engines (superTabs/machines.ts readiness). */
 export const teamRelayed = (): boolean => {

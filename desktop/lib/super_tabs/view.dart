@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderSliverMultiBoxAdaptor, SliverMultiBoxAdaptorParentData;
+import 'package:flutter/scheduler.dart' show SchedulerBinding, SchedulerPhase;
 import 'package:flutter/services.dart';
 
 import '../shared/theme/app_icons.dart';
@@ -18,6 +19,7 @@ import '../state/app_state.dart';
 import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
+import 'unread_line.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
 import 'identity.dart' show superTabPersonName;
@@ -41,6 +43,7 @@ import 'decisions_view.dart';
 import 'route_row.dart';
 import 'ship_row.dart';
 import 'terminal_row.dart';
+import 'thread_panel.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
@@ -102,6 +105,7 @@ class _SuperTabViewState extends State<SuperTabView>
   final _latest = <String, int>{};
   final _following = <String, bool>{};
   final _newAfter = <String, int>{};
+  final _unread = SuperTabUnreadLines();
   final _replies = <String, SuperTabMessage>{};
   String? _selected;
   int _scrollRequest = 0;
@@ -239,6 +243,7 @@ class _SuperTabViewState extends State<SuperTabView>
       _latest.clear();
       _following.clear();
       _newAfter.clear();
+      _unread.reset();
       _replies.clear();
       _jumpRequest++;
       _finding = null;
@@ -260,6 +265,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (c.accessRevoked) {
       _replies.clear();
       _newAfter.clear();
+      _unread.reset();
     }
     final visible =
         c.snapshot?.conversations.map((g) => g.id).toSet() ?? <String>{};
@@ -268,7 +274,9 @@ class _SuperTabViewState extends State<SuperTabView>
     final firstView = !_scroll.containsKey(id);
     final scroll = _scroll.putIfAbsent(
       id,
-      () => SuperTabChatScroll(rows: () => _built.entries),
+      () =>
+          SuperTabChatScroll(rows: () => _built.entries)
+            ..addListener(_checkUnreadLine),
     );
     final atEnd = scroll.hasClients
         ? scroll.position.extentAfter < 40
@@ -283,6 +291,7 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     final draft = c.accessRevoked ? '' : c.draft(id);
     if (_selected != id) {
+      _unread.forget(_selected);
       _scrollRequest++;
       _jumpingToEnd = false;
       // A search or a way back belongs to the conversation it started in.
@@ -302,7 +311,19 @@ class _SuperTabViewState extends State<SuperTabView>
     }
     _selected = id;
     setState(() {});
-    if (firstView || (grew && atEnd)) {
+    final mark = c.readMark(id), shown = _shownMessages(id);
+    if (_unread.startHistory(
+      id,
+      shown,
+      mark,
+      heldBack: c.heldBackTo(id, mark),
+    )) {
+      _loadBackToMark(id, mark);
+    } else if (_unread.waitsForHistory(id)) {
+      // The line is placed once the messages reach back to the mark.
+    } else if (_unread.decide(id, shown, mark, own: c.isOwn)) {
+      _revealUnreadLine(id);
+    } else if (firstView || (grew && atEnd)) {
       _followEnd(id);
     } else if (atEnd) {
       _readVisibleTailAfterFrame();
@@ -394,6 +415,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _readToEnd(String id, int sequence) {
     final scroll = _scroll[id];
     if (c.selectedId != id ||
+        _unread.waitsForHistory(id) ||
         !_chatIsVisible ||
         scroll == null ||
         !scroll.hasClients ||
@@ -410,6 +432,87 @@ class _SuperTabViewState extends State<SuperTabView>
   void _follow(String id, bool following) {
     _following[id] = following;
     c.readingBack(id, !following);
+  }
+
+  /// Reads [id]'s messages back to the reader's [mark] (bounded by the
+  /// controller), then places its line.
+  void _loadBackToMark(String id, int mark) {
+    unawaited(
+      c
+          .loadBackTo(id, mark, olderPages: _unread.retrying(id) ? 0 : null)
+          .then((reached) => reached, onError: (_) => false)
+          .then((reached) {
+            _unread.historyLoaded(id, reached: reached);
+            if (!mounted) return;
+            if (reached) return _changed();
+            // Failed: the line waits, and the read back is tried again shortly.
+            if (_unread.mayRetry(id)) {
+              _historyRetry?.cancel();
+              _historyRetry = Timer(_historyRetryAfter, _changed);
+            }
+          }),
+    );
+  }
+
+  Timer? _historyRetry;
+  static const _historyRetryAfter = Duration(seconds: 5);
+
+  /// Brings [id]'s New messages line into view near the top, and stops
+  /// following the end there: what came since the reader's mark is below.
+  void _revealUnreadLine(String id) {
+    final messageId = _unread.lineAt(id);
+    if (messageId == null) return;
+    _scrollRequest++;
+    _jumpingToEnd = false;
+    _follow(id, false);
+    _target = messageId;
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(
+          Scrollable.ensureVisible(row, alignment: .15).then((_) {
+            _checkUnreadLine();
+          }),
+        );
+      },
+    );
+  }
+
+  /// Shows the jump pill while the reader is scrolled away from the line.
+  void _checkUnreadLine() {
+    final scroll = _scroll[c.selectedId];
+    var away = false;
+    if (_unread.lineAt(c.selectedId) != null &&
+        scroll != null &&
+        scroll.hasClients) {
+      final line = _unread.key.currentContext;
+      final top = line == null ? null : _topInList(line);
+      away = top == null || top < 0 || top > scroll.position.viewportDimension;
+    }
+    if (away == _unread.away || !mounted) return;
+    // A list settling its extent moves the position mid-layout: draw the pill
+    // on the next frame then.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _checkUnreadLine());
+      return;
+    }
+    setState(() => _unread.away = away);
+  }
+
+  /// Esc: everything loaded in the open conversation is read, line and all.
+  bool _readAll() {
+    final id = c.selectedId, group = c.selected;
+    if (group == null || (!c.unread(group) && _unread.lineAt(id) == null)) {
+      return false;
+    }
+    setState(() {
+      _unread.clear(id);
+      _newAfter.remove(id);
+    });
+    c.markRead(id);
+    return true;
   }
 
   void _jumpToLatest() {
@@ -435,6 +538,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
+    _historyRetry?.cancel();
     _composer.dispose();
     _mentionIndex.dispose();
     _dismissedMention.dispose();
@@ -1261,6 +1365,12 @@ class _SuperTabViewState extends State<SuperTabView>
     widget.onCloseTerminal?.call();
     _closeSidebar();
     c.select(id);
+    // A thread reply opens its thread; one shown only there has no row in the
+    // chat to scroll to.
+    if (message.threadReply) {
+      c.openThread(message.thread!);
+      if (!message.inMainStream) return;
+    }
     final shownBy = _rowShowing(id, messageId) ?? messageId;
     setState(() {
       _showNotifications = false;
@@ -1367,8 +1477,18 @@ class _SuperTabViewState extends State<SuperTabView>
     if (!_showNotifications) return;
     _showNotifications = false;
     c.select(id);
+    // A tag in a thread opens the thread; one in a thread reply shown only
+    // there is not in the chat to scroll to.
+    if (message.thread case final root?) {
+      c.openThread(root);
+      if (!message.inMainStream) return;
+    }
     setState(() {
-      if (c.canWrite && c.selected?.archived == false) _replies[id] = message;
+      if (c.canWrite &&
+          c.selected?.archived == false &&
+          message.thread == null) {
+        _replies[id] = message;
+      }
       _target = message.id;
       // Stop following the end: the tagged message is what to see.
       _scrollRequest++;
@@ -1409,8 +1529,9 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The messages [id]'s list shows, in order.
+  /// A thread reply shows in its thread, and here only when also sent.
   List<SuperTabMessage> _shownMessages(String id) =>
-      c.messages(id).where(_shown).toList();
+      c.messages(id).where((m) => _shown(m) && m.inMainStream).toList();
 
   /// A message waiting for an agent is never announced; notices older
   /// backends stored stay hidden, in the list and as a reply's quote.
@@ -2065,17 +2186,22 @@ class _SuperTabViewState extends State<SuperTabView>
     bool grouped,
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
+    bool inThread = false,
   }) {
     _index();
     if (message.terminalEvent || message.source['kind'] == 'overlap') {
       return SuperTabTerminalRow(
-        key: ValueKey('super-message-${message.id}'),
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
         message: message,
       );
     }
     if (SuperTabShipRow.shows(message)) {
       return SuperTabShipRow(
-        key: ValueKey('super-message-${message.id}'),
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
         message: message,
         controller: c,
       );
@@ -2083,7 +2209,9 @@ class _SuperTabViewState extends State<SuperTabView>
     final route = message.route;
     if (route != null) {
       return SuperTabRouteRow(
-        key: ValueKey('super-message-${message.id}'),
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
         message: message,
         route: route,
         controller: c,
@@ -2100,8 +2228,15 @@ class _SuperTabViewState extends State<SuperTabView>
     final reply =
         byId[message.replyTo] ??
         (fetched != null && _shown(fetched) ? fetched : null);
+    final writable = c.canWrite && c.selected?.archived == false;
+    final root = message.thread;
+    final thread = inThread || root != message.id
+        ? null
+        : c.thread(message.conversationId, message.id);
     return SuperTabMessageRow(
-      key: ValueKey('super-message-${message.id}'),
+      key: ValueKey(
+        '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+      ),
       message: message,
       author: _shownAuthor(c, message),
       proposalOwner: _proposalOwner(message),
@@ -2132,11 +2267,21 @@ class _SuperTabViewState extends State<SuperTabView>
       ),
       linkTarget: _linkTarget,
       onOpenLink: _openLink,
-      onReply: c.canWrite && c.selected?.archived == false
-          ? () {
+      // A message with a thread is answered there; one from before threads
+      // keeps the inline reply.
+      onReply: !writable || inThread
+          ? null
+          : root != null
+          ? () => c.openThread(root)
+          : () {
               setState(() => _replies[c.selectedId] = message);
               _focus.requestFocus();
-            }
+            },
+      thread: thread,
+      threadUnread: thread != null && c.threadUnread(thread),
+      onOpenThread:
+          !inThread && root != null && (thread != null || message.threadReply)
+          ? () => c.openThread(root)
           : null,
       onReturnToComposer: _focus.requestFocus,
       readerId: c.accountId,
@@ -2175,6 +2320,21 @@ class _SuperTabViewState extends State<SuperTabView>
             },
           ),
       ],
+    );
+  }
+
+  /// The open thread of the selected conversation, beside the chat.
+  Widget? _threadPanel() {
+    final open = c.openedThread;
+    if (open == null || open.conversationId != c.selectedId) return null;
+    final rows = c.threadMessages(open.root);
+    final byId = {for (final m in rows) m.id: m};
+    return SuperTabThreadPanel(
+      controller: c,
+      root: open.root,
+      row: (message, grouped) =>
+          _message(message, grouped, byId, inThread: true),
+      outgoing: (sent) => _outgoingRow(sent, rows, byId),
     );
   }
 
@@ -2413,9 +2573,7 @@ class _SuperTabViewState extends State<SuperTabView>
     final latestOwn = c
         .messages(c.selectedId)
         .reversed
-        .where(
-          (m) => !m.fromAgent && !m.fromTerminal && m.authorId == c.accountId,
-        )
+        .where(c.isOwn)
         .firstOrNull;
     final messages = _shownMessages(c.selectedId);
     final entries = superTabTranscriptEntries(messages);
@@ -2446,6 +2604,8 @@ class _SuperTabViewState extends State<SuperTabView>
                 previous?.createdAt?.toLocal(),
               ))
             _date(time),
+          if (message.id == _unread.lineAt(c.selectedId))
+            SuperTabNewMessagesLine(key: _unread.key),
           // The message itself is kept in place: its
           // date moves above earlier ones as they come.
           _BuiltRow(
@@ -2484,7 +2644,10 @@ class _SuperTabViewState extends State<SuperTabView>
     // More came than were read: the count is a floor.
     final moreNew = c.hasNewer(c.selectedId);
     final reply = _replies[c.selectedId];
-    final outgoing = c.outgoing(c.selectedId);
+    final outgoing = c
+        .outgoing(c.selectedId)
+        .where((sent) => sent.inMainStream)
+        .toList();
     // A failed message says so in its own row, with what can be done.
     final errorInRow = outgoing.any(
       (sent) => switch (sent.state) {
@@ -2703,6 +2866,17 @@ class _SuperTabViewState extends State<SuperTabView>
                                 ],
                               ),
                             ),
+                          ),
+                        ),
+                      ),
+                    if (_unread.away && _unread.lineAt(c.selectedId) != null)
+                      Positioned(
+                        top: grid.AppDesktop.controlGap,
+                        left: grid.AppDesktop.panelPadding,
+                        right: grid.AppDesktop.panelPadding,
+                        child: Center(
+                          child: SuperTabJumpToUnread(
+                            onPressed: () => _revealUnreadLine(c.selectedId),
                           ),
                         ),
                       ),
@@ -2962,6 +3136,11 @@ class _SuperTabViewState extends State<SuperTabView>
                     return KeyEventResult.handled;
                   }
                 }
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.escape &&
+                    _readAll()) {
+                  return KeyEventResult.handled;
+                }
                 final enterDown =
                     _focus.hasFocus &&
                     event is KeyDownEvent &&
@@ -3176,8 +3355,12 @@ class _SuperTabViewState extends State<SuperTabView>
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       final showRoster =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
+      final thread = _threadPanel();
+      final threadDrawer = thread != null && !showRoster;
       final chatCovered =
-          (narrow && _sidebarOpen) || (!showRoster && _rosterOpen);
+          (narrow && _sidebarOpen) ||
+          (!showRoster && _rosterOpen) ||
+          threadDrawer;
       if (_chatCovered && !chatCovered) {
         // Both dismissing a drawer and widening the window reveal the cached
         // transcript without loading another message.
@@ -3215,7 +3398,8 @@ class _SuperTabViewState extends State<SuperTabView>
               storage: widget.app?.localStore,
               onLeave: _leaveResize,
               left: narrow ? null : _sidebar(),
-              right: showRoster ? roster : null,
+              // An open thread takes the roster's side, as in Slack.
+              right: !showRoster ? null : thread ?? roster,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),
@@ -3259,7 +3443,31 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-          if (!showRoster && _rosterOpen)
+          if (threadDrawer)
+            Positioned.fill(
+              child: BlockSemantics(
+                child: GestureDetector(
+                  onTap: c.closeThread,
+                  child: ColoredBox(
+                    color: grid.AppDesktop.veil(Theme.of(context).brightness),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: GestureDetector(
+                        // A click inside the thread stays there.
+                        onTap: () {},
+                        child: SizedBox(
+                          width: SuperTabPaneLayout.drawerWidth(
+                            constraints.maxWidth,
+                          ),
+                          child: thread,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (!showRoster && _rosterOpen && !threadDrawer)
             Positioned.fill(
               child: BlockSemantics(
                 child: FocusScope(

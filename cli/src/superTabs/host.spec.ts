@@ -982,7 +982,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       if (offline) throw new Error('Host offline')
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { creationStatus: vi.fn(async creationId => ({ creationId, state: 'created' as const, agentId: 'harness' })), byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const open = () => { const host = new SuperTabHost(core, 'machine-1', { log: vi.fn() }); hosts.push(host); return host }
@@ -1019,7 +1019,7 @@ describe('Super Tab waits for the Harness Pro', () => {
       agent: { id: 'agent', harnessId: 'harness', machineId: 'machine-1' } }]
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) => ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
     let here = true, clock = 0
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => (here ? { agentId: 'harness' } : undefined) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -1629,7 +1629,7 @@ describe('the members a host lets watch its agents', () => {
       if (path.includes('/hosts/') && answer === null) await new Promise<void>(resolve => { answer = resolve })
       return { status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }
     })
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const host = new SuperTabHost(core, 'machine-1', { log: vi.fn(), now: () => clock }); hosts.push(host)
@@ -1674,7 +1674,7 @@ describe('the members a host lets watch its agents', () => {
     let rows: unknown[] = [lead(true)], clock = 0
     const call: CoreApi['account']['backend'] = vi.fn(async (_method, path) =>
       ({ status: 200, body: { success: true, data: path.includes('/hosts/') ? hostForm(rows, { tabs: ['tab'] }) : [] } }))
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     const core = fakeCore({ dataDir: dir, superTabs, account: { backend: call },
       agents: { byAgent: vi.fn(() => ({ agentId: 'harness' }) as never), terminalAvailable: vi.fn(() => true) } })
     const source = observerSource(dir, () => 'machine-1', () => clock)
