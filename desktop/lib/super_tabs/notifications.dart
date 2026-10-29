@@ -158,6 +158,17 @@ class SuperTabMentions extends ChangeNotifier {
     }().whenComplete(() => _loading = null);
   }
 
+  /// Whether the server lists [mentionId] among the reader's waiting tags
+  /// now. A read that fails or is refused answers false: what was read before
+  /// never stands in for it.
+  Future<bool> waitingNow(String mentionId) async {
+    try {
+      return (await _list('waiting')).any((m) => m.id == mentionId);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<List<SuperTabMention>> _list(String state) async {
     final Map<String, dynamic> answer;
     try {

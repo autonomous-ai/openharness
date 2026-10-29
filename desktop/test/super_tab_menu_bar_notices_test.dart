@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/notify/system_notifications.dart';
 import 'package:harness/state/status_menu.dart';
+import 'package:harness/super_tabs/controller.dart' show SuperTabFailure;
 import 'package:harness/super_tabs/decisions.dart';
 import 'package:harness/super_tabs/notifications.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -46,6 +47,27 @@ class TwoSwarms extends SuperTabFixtureConnection {
           body: body is Map ? Map<String, dynamic>.from(body) : null,
         ),
       };
+    }
+    return super.request(type, payload: payload, timeout: timeout);
+  }
+}
+
+/// The fixture's machine, whose Swarm stops answering the person's tag list
+/// when [refusal] is set: refused (403) or failing (503).
+class RefusingTags extends SuperTabFixtureConnection {
+  RefusingTags(super.store) : super(local: true);
+  SuperTabFailure? refusal;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    if (refusal case final failure?
+        when type == 'super_tabs' &&
+            (payload['path'] as String? ?? '').contains('/mentions?')) {
+      throw failure;
     }
     return super.request(type, payload: payload, timeout: timeout);
   }
@@ -504,6 +526,68 @@ void main() {
         expect(f.app.activeSwarmId, before);
         expect(f.app.superTabs.peek(otherId), isNull);
         // The read marker's save settles.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    for (final (name, refusal) in [
+      (
+        'refused',
+        const SuperTabFailure(
+          'FORBIDDEN',
+          'No longer permitted',
+          statusCode: 403,
+        ),
+      ),
+      (
+        'failing',
+        const SuperTabFailure('UNAVAILABLE', 'Try again', statusCode: 503),
+      ),
+    ]) {
+      testWidgets(
+        'a click whose fresh tag check is $name opens nothing, though the tag '
+        'waits in what was read before',
+        (tester) async {
+          final f = SuperTabLaunchFixture(connectionFactory: RefusingTags.new);
+          await tester.runAsync(() => openWithNotices(f));
+          f.app.newSwarm(name: 'Desktop');
+          final before = f.app.activeSwarmId;
+          expect(
+            SuperTabMentions.of(f.app.superTabs.peek(tabId)!).waiting
+                .map((m) => m.id),
+            ['mention-1'],
+          );
+          (f.connection as RefusingTags).refusal = refusal;
+          final click = await clicker(tester, f);
+          await click('$tabId/mention-1');
+          expect(f.app.activeSwarmId, before);
+          expect(f.app.superTabs.peek(tabId)!.noticeRequest, isNull);
+          await tester.pump(const Duration(seconds: 1));
+          await tester.pumpWidget(const SizedBox());
+          f.dispose();
+        },
+        variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+      );
+    }
+
+    testWidgets(
+      'a click that opens nothing lets go of a Swarm it loaded for a tab not '
+      'shown yet',
+      (tester) async {
+        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        await tester.runAsync(() => openWithNotices(f));
+        f.app.newSwarm(name: 'Atlas');
+        f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
+        f.app.newSwarm(name: 'Desktop');
+        final before = f.app.activeSwarmId;
+        expect(f.app.superTabs.peek(otherId), isNull);
+        final click = await clicker(tester, f);
+        await click('$otherId/gone');
+        expect(f.app.activeSwarmId, before);
+        expect(f.app.superTabs.peek(otherId), isNull);
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpWidget(const SizedBox());
         f.dispose();

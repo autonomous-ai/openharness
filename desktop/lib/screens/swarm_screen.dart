@@ -7194,13 +7194,20 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// A click on a tag's system notice: the Swarm it is in, open here or not
   /// (not loaded yet, its tab closed), opens at the tag. The account must
-  /// still be in that Swarm, and the server must still list the tag as the
-  /// person's to answer; otherwise nothing opens, and a Swarm loaded only to
-  /// check is let go again.
+  /// still be in that Swarm, and the server must list the tag as the person's
+  /// to answer now, in a read that succeeded; otherwise nothing opens, and a
+  /// Swarm loaded only to check is let go again.
   Future<void> _openTagNotice(String tabId, String mentionId) async {
     final name = app.superTabName(tabId);
     if (name == null) return;
     final loadedHere = app.superTabs.peek(tabId) == null;
+    // Unless the person went to that Swarm meanwhile: its view holds it now.
+    void letGo() {
+      if (loadedHere && app.activeSwarm.superTabId != tabId) {
+        app.superTabs.release(tabId);
+      }
+    }
+
     final SuperTabController controller;
     try {
       controller = await app.superTabs.open(tabId);
@@ -7208,15 +7215,12 @@ class _SwarmScreenState extends State<SwarmScreen> {
       return;
     }
     final tags = SuperTabMentions.of(controller);
+    final waiting = await tags.waitingNow(mentionId);
+    if (!mounted || !waiting || controller.accessRevoked) return letGo();
+    // The view opens the tag from this list, so it has to hold it first.
     await tags.load();
-    final waiting = tags.waiting.any((m) => m.id == mentionId);
-    if (!mounted || !waiting || controller.accessRevoked) {
-      if (loadedHere && !app.swarms.any((s) => s.superTabId == tabId)) {
-        app.superTabs.release(tabId);
-      }
-      return;
-    }
-    if (_newHarness?.requestDismiss() == false) return;
+    if (!mounted) return letGo();
+    if (_newHarness?.requestDismiss() == false) return letGo();
     _closeNewHarness(restoreFocus: false);
     _closeSearch(restoreFocus: false);
     app.openSuperTab(tabId, name);
