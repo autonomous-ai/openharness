@@ -98,7 +98,9 @@ describe('answering a decision', () => {
     expect(answer(peer, open(s, { answeredAt: 5 }))).toThrow('already answered')
     expect(answer(peer, open(s), 2)).toThrow('Choose one of its options')
     // A person who can no longer read its conversation cannot answer it, though they stay in the Swarm.
-    const hidden = s.run({ type: 'conversation.create', title: 'Owner only', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    const hidden = 'owner-buddy'
+    s.state.conversations.push({ id: hidden, kind: 'buddy', projectId: 'lead', title: 'Owner\'s Buddy', leadId: null, agentIds: [], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: s.state.people[0]!.generation }] } })
     expect(answer(peer, open(s, { conversationId: hidden }))).toThrow('unavailable')
     expect(answer(peer, open(s, { conversationId: 'gone' }))).toThrow('unavailable')
   })
@@ -115,15 +117,19 @@ describe('leaving a decision to the PM', () => {
   const open = (s: ReturnType<typeof swarm>, overrides: Partial<DecisionTarget> = {}): DecisionTarget => ({ id: 'decision-1', personId: 'peer',
     conversationId: s.group, projectId: 'lead', askerAgentId: s.worker, question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1,
     answeredAt: null, createdAt: 0, assignmentId: null, ...overrides })
-  /** The peer's own Chat with PM in the project, as Desktop opens it. */
-  const pmChat = (s: ReturnType<typeof swarm>) => s.run({ type: 'conversation.create', projectId: 'lead', title: 'peer', brief: '', checks: [],
-    audience: { personIds: ['peer'] } }, peer).result.conversationId as string
+  /** The peer's own Buddy chat in the project, as adding a Buddy opens it (buddies.ts). */
+  const buddyChat = (s: ReturnType<typeof swarm>) => {
+    const generation = s.state.people.find(p => p.id === 'peer')!.generation
+    s.state.conversations.push({ id: 'peer-buddy', kind: 'buddy', projectId: 'lead', title: 'peer\'s Buddy', leadId: null, agentIds: [], archived: false,
+      brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation }] } })
+    return 'peer-buddy'
+  }
   const delegate = (s: ReturnType<typeof swarm>, actor: Actor, decision: DecisionTarget | undefined) =>
     s.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, actor, decision ? { decision } : {})
 
-  it('answers with the recommended option for the person asked, recorded as delegated, and the PM says so in their Chat with PM', () => {
+  it('answers with the recommended option for the person asked, recorded as delegated, and the PM says so in their Buddy chat', () => {
     const s = swarm()
-    const chat = pmChat(s)
+    const chat = buddyChat(s)
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toEqual({ id: 'decision-1', choice: 1, note: null, delegated: true })
     const [notice, line] = answered.messages
@@ -138,13 +144,13 @@ describe('leaving a decision to the PM', () => {
     expect(answered.messages).toHaveLength(2)
   })
 
-  it('posts no line when the person has no open Chat with PM in that project', () => {
+  it('posts no line when the person has no open Buddy chat in that project', () => {
     const s = swarm()
     const answered = delegate(s, peer, open(s))
     expect(answered.decisionAnswer).toMatchObject({ choice: 1, delegated: true })
     expect(answered.messages.map(m => m.conversationId)).toEqual([s.group])
     // An archived one refuses posts: the answer still stands, without the line.
-    const chat = pmChat(s)
+    const chat = buddyChat(s)
     s.state.conversations.find(c => c.id === chat)!.archived = true
     expect(delegate(s, peer, open(s)).messages.map(m => m.conversationId)).toEqual([s.group])
   })

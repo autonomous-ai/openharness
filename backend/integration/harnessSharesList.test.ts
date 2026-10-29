@@ -356,7 +356,6 @@ describe('the harness shares list as permissions change', () => {
     await store.observeMachine(a, tab, 'a-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
       diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
     quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-    await execute({ type: 'tab.buddies', enabled: true }, owner)
     const startId = String((await execute({ type: 'buddy.create', projectId: 'lead', machineId: 'a-mac', engine: 'claude' }, a)).result.startId)
     // Started by A's host, as a running host does.
     const harnessId = `perm-${n}-buddy`

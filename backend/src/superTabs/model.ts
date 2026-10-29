@@ -268,7 +268,8 @@ export interface SuperTabState {
   paused: boolean
   /** Idle workers stop and finished groups archive by themselves (tidy.ts); false once the owner turns it off. */
   tidy?: false
-  /** Buddies (buddies.ts): on once the owner turns them on; absent is off. Turning them off removes every Buddy. */
+  /** Buddies (buddies.ts) are on in every Swarm; readers are always told so (visibleState), as apps from before 10-29 hide
+   *  Buddies and show Chat with PM without it. A stored value from the old switch is ignored. */
   buddies?: true
   people: Person[]
   agents: Agent[]
@@ -524,6 +525,7 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     delete target.downNamed
     if (target.limitedUntil && Date.parse(target.limitedUntil) <= now) target.limitedUntil = null
   }
+  visible.buddies = true
   delete visible.sharing
   delete visible.harnessReservations
   delete visible.releasedHarnesses

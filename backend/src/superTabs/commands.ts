@@ -92,7 +92,6 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
-  z.object({ type: z.literal('tab.buddies'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
@@ -423,7 +422,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-  if (buddy) requireBuddyCommand(buddy, command, state.conversations, !!state.buddies)
+  if (buddy) requireBuddyCommand(buddy, command, state.conversations)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   if ('conversationId' in command && command.type !== 'invite.create') {
     const group = readConversation(state, actor, command.conversationId)
@@ -432,8 +431,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'tab.buddies') && command.askedIn) {
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -623,12 +621,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     return project
   }
-  /** No private channel to the PM while Buddies are on (Ken's spec, 10-28): a Chat with PM keeps its history, read only. */
-  const pmChatClosed = (pmChat: boolean) => {
-    if (state.buddies && pmChat) {
-      fail('PM_CHAT_READ_ONLY', 'Chat with PM is read-only while Buddies are on. Talk to the PM in the project chat, or brainstorm with your Buddy.', 403)
-    }
-  }
+  /** No private channel to the PM: Buddies replaced Chat with PM (Ken, 10-29). A closed one is nobody's to read or post in
+   *  (projects.ts isClosedPmChat); an app from before still sends this to open one. */
+  const pmChatClosed = (): never =>
+    fail('PM_CHAT_CLOSED', 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy, where the PM\'s private lines reach you.', 403)
   /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
    *  as rules are. */
   const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
@@ -1076,18 +1072,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       else state.tidy = false
       break
     }
-    case 'tab.buddies': {
-      swarmOwnerAsked(command.askedIn, 'turns Buddies on or off')
-      if (command.enabled) state.buddies = true
-      else {
-        delete state.buddies
-        // Off means no Buddy runs: each one's session closes, one still starting never joins, and its chat stays for its
-        // owner to read (privacy review of #1992).
-        for (const target of state.agents.filter(isBuddy)) removeAgent(target)
-        for (const start of state.starts ?? []) if (start.request.buddyOf && !start.harnessId && !start.error) start.error = 'Buddies were turned off in this Swarm.'
-      }
-      break
-    }
     case 'tab.routingPolicy':
       if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can change its routing policy.', 403)
       if (command.policy && Object.keys(command.policy).length) state.routingPolicy = command.policy
@@ -1120,14 +1104,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, project.leadConversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       requirable(command.task)
-      if (command.audience) {
-        pmChatClosed(true)
-        // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
-        if (command.task || command.checks.length || command.reviewOf || command.requesterId) fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
-        if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
-          fail('AUDIENCE_SELF', 'Open a private conversation with yourself in it.', 403)
-        }
-      } else if (actor.kind === 'agent' && (!brief || !command.checks.length)) {
+      if (command.audience) pmChatClosed()
+      if (actor.kind === 'agent' && (!brief || !command.checks.length)) {
         fail('BRIEF_REQUIRED', 'Delegated work needs a brief and acceptance checks.', 400)
       }
       const leadId = conversation(state, project.leadConversationId).leadId
@@ -1148,7 +1126,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
-        ...(command.audience ? { audience: audienceOf(state, project, command.audience.personIds) } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
@@ -1160,18 +1137,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'decision.ask': {
       const group = open(state, command.conversationId)
-      pmChatClosed(!!group.audience && !isBuddyChat(group))
       effects.decisions = askDecisions(state, group, command.personId, command.questions,
         { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
     case 'decision.answer': {
-      const { answer, recipients, source, line } = answerDecision(state, actor, context.decision,
+      const { answer, noticeIn, recipients, source, line } = answerDecision(state, actor, context.decision,
         { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
-      if (recipients.length) message(context.decision!.conversationId, answer.delegated ? DELEGATED_NOTICE : ANSWERED_NOTICE, recipients, null, source)
+      if (recipients.length) message(noticeIn, answer.delegated ? DELEGATED_NOTICE : ANSWERED_NOTICE, recipients, null, source)
       if (line) effects.messages.push({ id: stableId(operationId, 'delegated'), replyTo: null, recipients: [], ...line })
       result.decisionId = answer.id
       break
@@ -1210,12 +1186,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'conversation.audience': {
-      // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
+      // Who may read it already passed (readConversation), so no closed Chat with PM gets here: every reader list is fixed now.
       const group = open(state, command.conversationId)
       if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
-      if (!group.audience) fail('AUDIENCE_FIXED', 'A shared conversation stays shared. Open a private conversation instead.', 400)
-      group.audience = audienceOf(state, groupProject(state, group), command.personIds)
-      break
+      fail('AUDIENCE_FIXED', 'A shared conversation stays shared.', 400)
     }
     case 'conversation.archive': {
       controls(state, actor, command.conversationId)
@@ -1341,7 +1315,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'buddy.propose': {
       const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
       if (!self) fail('BUDDY_ONLY', 'Only a Buddy sends a proposal, for its owner.', 403)
-      if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       const owner = state.people.find(p => p.id === self.buddyOf!.personId && p.generation === self.buddyOf!.generation)
         ?? fail('BUDDY_OWNER_GONE', 'Your owner left this Swarm.', 403)
       const chat = conversation(state, command.conversationId)
@@ -1378,7 +1351,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
-      if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
       const chatId = buddyChatId(project.id, me)
@@ -1427,7 +1399,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.startFailed': {
       const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (start.actorKey !== actorKey(actor)) fail('FORBIDDEN', 'Only the initiating lead can complete this start.', 403)
-      if (start.request.buddyOf && !state.buddies && command.type !== 'agent.startFailed') fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
       controls(state, actor, start.request.conversationId)
       if (command.type === 'agent.startDispatch') {
@@ -1703,7 +1674,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'message.send': {
       const group = postable(state, actor, command.conversationId)
-      pmChatClosed(!!group.audience && !isBuddyChat(group))
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { applyCommand, type Command, type CommandContext } from './commands.js'
 import { createSuperTab, visibleState, type Actor, type Conversation } from './model.js'
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
+import { ANSWERED_NOTICE } from './decisions.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -30,8 +31,10 @@ function setup() {
   const pm = lead(app.conversationId, 'app-pm')
   lead(web.conversationId, 'web-pm')
   const group = run({ type: 'conversation.create', projectId: app.projectId, title: 'Offline', brief: 'Save edits.', checks: [] }).result.conversationId as string
-  const pmChat = run({ type: 'conversation.create', projectId: app.projectId, title: 'peer', brief: '', checks: [],
-    audience: { personIds: ['peer'] } }, peer).result.conversationId as string
+  // peer's Chat with PM from before Buddies replaced it: nobody opens one any more, so it is stored as it was left.
+  const pmChat = 'peer-pm-chat'
+  state.conversations.push({ id: pmChat, projectId: app.projectId, title: 'peer', leadId: pm, agentIds: [pm], archived: false, brief: '',
+    checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'peer', generation: 'first' }] } })
   state.agents.push({ id: 'buddy', projectId: app.projectId, machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'host',
     contributorId: 'peer', membershipGeneration: 'first', name: 'Buddy', configuration, buddyOf: { personId: 'peer', generation: 'first' } })
   const chat: Conversation = { id: 'peer-buddy', kind: 'buddy', projectId: app.projectId, title: 'Buddy', leadId: null, agentIds: ['buddy'],
@@ -100,36 +103,17 @@ describe('what a Buddy reads', () => {
   })
 })
 
-describe('the Swarm\'s Buddies setting', () => {
-  it('is off in a new Swarm, and only its owner turns it on', () => {
+describe('Buddies in every Swarm', () => {
+  it('are on in a Swarm whose owner never turned them on, and every reader is told so', () => {
     const f = setup()
     expect(f.state.buddies).toBeUndefined()
-    expect(() => f.run({ type: 'tab.buddies', enabled: true }, peer)).toThrow('Only the Swarm owner')
-    expect(() => f.run({ type: 'tab.buddies', enabled: true }, agentActor(f.pm))).toThrow('Only the Swarm owner')
-    f.run({ type: 'tab.buddies', enabled: true })
-    expect(f.state.buddies).toBe(true)
-    expect(visibleState(f.state, peer).buddies).toBe(true)
+    for (const reader of [owner, peer, agentActor(f.pm)]) expect(visibleState(f.state, reader).buddies).toBe(true)
   })
 
-  it('may be turned on by a Lead passing on the owner\'s own chat message from the last day', () => {
-    const f = setup(), askedIn = { conversationId: f.app.conversationId, messageId: 'owner-message' }
-    const asked = (author: { kind: 'person' | 'agent'; id: string }, createdAt = 1000) =>
-      ({ askedIn: { author: { ...author, name: author.id, membershipGeneration: 'g' }, source: false, createdAt } })
-    expect(() => f.run({ type: 'tab.buddies', enabled: true, askedIn }, agentActor(f.pm), asked({ kind: 'person', id: 'peer' }))).toThrow('Only the Swarm owner')
-    f.run({ type: 'tab.buddies', enabled: true, askedIn }, agentActor(f.pm), asked({ kind: 'person', id: 'owner' }))
-    expect(f.state.buddies).toBe(true)
-  })
-
-  it('removes every Buddy when turned off, closing its session, and keeps their chats for their owners', () => {
+  it('have no switch: turning them on or off is refused, whoever asks', () => {
     const f = setup()
-    f.run({ type: 'tab.buddies', enabled: true })
-    const off = f.run({ type: 'tab.buddies', enabled: false })
-    expect(f.state.buddies).toBeUndefined()
-    expect(f.state.agents.map(a => a.id)).not.toContain('buddy')
-    expect(off.cancelledAgents).toEqual(['buddy'])
-    expect(f.state.closingSessions).toEqual([{ agentId: 'buddy', machineId: 'machine', harnessId: 'buddy-harness', machineOwnerId: 'host' }])
-    expect(group(f, f.chat)).toMatchObject({ agentIds: [], archived: false })
-    expect(canReadGroup(f.state, peer, group(f, f.chat))).toBe(true)
+    for (const enabled of [true, false]) expect(() => f.run({ type: 'tab.buddies', enabled } as unknown as Command)).toThrow()
+    expect(f.state.agents.map(a => a.id)).toContain('buddy')
   })
 })
 
@@ -152,17 +136,10 @@ function fresh() {
   f.state.agents = f.state.agents.filter(a => a.id !== 'buddy')
   f.state.conversations = f.state.conversations.filter(c => c.id !== f.chat)
   machine(f, 'peer-mac', 'peer')
-  f.run({ type: 'tab.buddies', enabled: true })
   return f
 }
 
 describe('adding a Buddy', () => {
-  it('is refused while Buddies are off', () => {
-    const f = fresh()
-    f.run({ type: 'tab.buddies', enabled: false })
-    expect(() => addBuddy(f, peer, f.app.projectId)).toThrow('Buddies are off')
-  })
-
   it('opens the person\'s Buddy chat, read by them alone, and starts the Buddy on the machine they chose', () => {
     const f = fresh()
     const added = addBuddy(f, peer, f.app.projectId, 'peer-mac', 'codex')
@@ -258,7 +235,7 @@ describe('a Buddy\'s start on its machine', () => {
 
 describe('what a Buddy may do', () => {
   /** setup()'s Buddy, with Buddies on. */
-  const on = () => { const f = setup(); f.run({ type: 'tab.buddies', enabled: true }); return f }
+  const on = setup
   const buddy = agentActor('buddy')
 
   it('is post in its own chat; its owner\'s message there reaches it, and nobody else posts there', () => {
@@ -293,7 +270,6 @@ describe('what a Buddy may do', () => {
       { type: 'conversation.agent', conversationId: f.app.conversationId, agentId: 'buddy', present: true, lead: false },
       { type: 'message.react', conversationId: f.app.conversationId, messageId: 'm', emoji: 'thumbs_up', on: true },
       { type: 'agent.remove', agentId: f.pm },
-      { type: 'tab.buddies', enabled: false },
     ]
     for (const command of refused) expect(() => f.run(command, buddy), command.type).toThrow('A Buddy')
   })
@@ -311,7 +287,6 @@ describe('a Buddy\'s proposal to the PM', () => {
   /** setup()'s Buddy with Buddies on, and the message its owner asked with, as the store reads it. */
   function asked(author: { kind: 'person' | 'agent'; id: string; generation?: string } = { kind: 'person', id: 'peer' }, extra: Record<string, unknown> = {}) {
     const f = setup()
-    f.run({ type: 'tab.buddies', enabled: true })
     const ask = { conversationId: f.chat, source: false, createdAt: 900,
       author: { kind: author.kind, id: author.id, name: author.id, membershipGeneration: author.generation ?? 'first' }, ...extra }
     const propose = (ownerMessageId = 'ask', context: Record<string, unknown> = { proposalAsk: { id: ownerMessageId, ...ask } }) =>
@@ -357,12 +332,10 @@ describe('a Buddy\'s proposal to the PM', () => {
         author: { kind: 'person', id: 'peer', name: 'peer', membershipGeneration: 'first' } } }).messages).toHaveLength(1)
   })
 
-  it('is a Buddy\'s alone, and only while Buddies are on', () => {
-    const { f, propose } = asked()
+  it('is a Buddy\'s alone', () => {
+    const { f } = asked()
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.app.conversationId, ownerMessageId: 'ask', ...proposal }, agentActor(f.pm))).toThrow('Only a Buddy')
     expect(() => f.run({ type: 'buddy.propose', conversationId: f.chat, ownerMessageId: 'ask', ...proposal }, peer)).toThrow('Only a Buddy')
-    f.state.buddies = undefined
-    expect(() => propose()).toThrow('Buddies are off')
   })
 })
 
@@ -412,7 +385,6 @@ describe('removing a Buddy', () => {
 describe('a Buddy is never a worker', () => {
   it('is never assigned work nor added to a group', () => {
     const f = setup()
-    f.run({ type: 'tab.buddies', enabled: true })
     expect(() => f.run({ type: 'work.define', conversationId: f.group, brief: 'Do it', checks: [{ description: 'Done', independent: false }] })).not.toThrow()
     expect(() => f.run({ type: 'work.assign', conversationId: f.group, agentId: 'buddy' })).toThrow('A Buddy is never assigned work')
     expect(() => f.run({ type: 'conversation.agent', conversationId: f.group, agentId: 'buddy', present: true, lead: false })).toThrow('A Buddy stays in its own chat')
@@ -434,30 +406,43 @@ describe('a Buddy is never a worker', () => {
   })
 })
 
-describe('Chat with PM while Buddies are on', () => {
-  const on = () => { const f = setup(); f.run({ type: 'tab.buddies', enabled: true }); return f }
+describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
   const say = (conversationId: string) => ({ type: 'message.send' as const, conversationId, text: 'Hi', replyTo: null, recipientIds: [] })
+  const open = (personIds: string[]) => ({ type: 'conversation.create' as const, projectId: 'app', title: 'Private', brief: '', checks: [],
+    audience: { personIds } })
 
-  it('is read-only: no new one, and nobody posts in an old one, the PM included; its history stays readable', () => {
-    const f = on()
-    expect(() => f.run({ type: 'conversation.create', projectId: f.app.projectId, title: 'owner', brief: '', checks: [],
-      audience: { personIds: ['owner'] } })).toThrow('Chat with PM is read-only')
-    expect(() => f.run(say(f.pmChat), peer)).toThrow('Chat with PM is read-only')
-    expect(() => f.run(say(f.pmChat), agentActor(f.pm))).toThrow('Chat with PM is read-only')
-    expect(canReadGroup(f.state, peer, group(f, f.pmChat))).toBe(true)
-  })
-
-  it('takes no new decisions: the PM asks in the project chat or a workgroup', () => {
-    const f = on()
-    const ask = (conversationId: string) => f.run({ type: 'decision.ask', conversationId, personId: 'peer',
-      questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] }, agentActor(f.pm))
-    expect(() => ask(f.pmChat)).toThrow('Chat with PM is read-only')
-    expect(ask(f.app.conversationId).result.decisionIds).toHaveLength(1)
-  })
-
-  it('works as before while Buddies are off', () => {
+  it('is never opened again, by a person or the PM', () => {
     const f = setup()
-    expect(f.run(say(f.pmChat), peer).messages).toHaveLength(1)
+    expect(() => f.run({ ...open(['owner']), projectId: f.app.projectId })).toThrow('Chat with PM is closed')
+    expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId }, agentActor(f.pm))).toThrow('Chat with PM is closed')
+    expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
+  })
+
+  it('is hidden from everyone, its person and the PM included, and stays stored', () => {
+    const f = setup(), pmChat = group(f, f.pmChat)
+    for (const reader of [peer, owner, agentActor(f.pm), agentActor('buddy')]) {
+      expect(canReadGroup(f.state, reader, pmChat)).toBe(false)
+      expect(visibleState(f.state, reader).conversations.map(c => c.id)).not.toContain(f.pmChat)
+    }
+    expect(f.state.conversations.map(c => c.id)).toContain(f.pmChat)
+  })
+
+  it('takes no posts or decisions, the PM\'s included', () => {
+    const f = setup()
+    expect(() => f.run(say(f.pmChat), peer)).toThrow('unavailable')
+    expect(() => f.run(say(f.pmChat), agentActor(f.pm))).toThrow('unavailable')
+    expect(() => f.run({ type: 'decision.ask', conversationId: f.pmChat, personId: 'peer',
+      questions: [{ question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work' }] }, agentActor(f.pm))).toThrow('unavailable')
+  })
+
+  it('keeps a decision asked there before answerable by its person alone; the PM hears in the project chat, with none of the answer', () => {
+    const f = setup()
+    const decision = { id: 'old', personId: 'peer', conversationId: f.pmChat, projectId: f.app.projectId, askerAgentId: f.pm,
+      question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
+    expect(() => f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, owner, { decision: { ...decision, personId: 'owner' } })).toThrow('unavailable')
+    const answered = f.run({ type: 'decision.answer', decisionId: 'old', choice: 0 }, peer, { decision })
+    expect(answered.result.decisionId).toBe('old')
+    expect(answered.messages.map(m => [m.conversationId, m.recipients, m.text])).toEqual([[f.app.conversationId, [f.pm], ANSWERED_NOTICE]])
   })
 })
 
@@ -485,7 +470,6 @@ describe('a Buddy chat stored in parts', () => {
 describe('a Buddy\'s terminal alert', () => {
   it('tells its owner in their chat, never the PM in the project chat', () => {
     const f = setup()
-    f.run({ type: 'tab.buddies', enabled: true })
     const rows = f.run({ type: 'agent.alert', agentId: 'buddy', alert: 'prompt', active: true }, agentActor('buddy')).messages
     expect(rows.map(r => [r.conversationId, r.recipients])).toEqual([[f.chat, []]])
   })
@@ -498,8 +482,6 @@ describe('a decision left to the PM while Buddies are on', () => {
       question: 'Ship how?', options: ['Behind a flag', 'To everyone'], recommended: 1, answeredAt: null, createdAt: 0, assignmentId: null }
     const delegate = () => f.run({ type: 'decision.answer', decisionId: 'decision-1', delegate: true }, peer, { decision }).messages
       .filter(m => (m.source as { kind?: string } | undefined)?.kind === 'decision-delegated')
-    expect(delegate().map(m => m.conversationId)).toEqual([f.pmChat])
-    f.run({ type: 'tab.buddies', enabled: true })
     expect(delegate()).toEqual([expect.objectContaining({ conversationId: f.chat, recipients: [], text: 'PM decided: To everyone — Ship how?' })])
   })
 })
@@ -549,34 +531,9 @@ describe('starting a down Buddy again', () => {
 describe('a Buddy chat\'s readers are fixed (privacy review of #1992)', () => {
   it('refuses adding people or agents to it, the Swarm owner and the PM included', () => {
     const f = setup()
-    f.run({ type: 'tab.buddies', enabled: true })
     expect(() => f.run({ type: 'conversation.audience', conversationId: f.chat, personIds: ['peer', 'owner'] }, peer)).toThrow('A Buddy chat stays its owner\'s')
     expect(() => f.run({ type: 'conversation.agent', conversationId: f.chat, agentId: f.pm, present: true, lead: false }, peer)).toThrow('A Buddy chat stays its owner\'s')
     expect(group(f, f.chat)).toMatchObject({ agentIds: ['buddy'], audience: { people: [{ id: 'peer', generation: 'first' }] } })
-  })
-})
-
-describe('turning Buddies off while one starts (privacy review of #1992)', () => {
-  it('fails its pending start, refuses its join, and refuses a Buddy\'s posts', () => {
-    const f = fresh()
-    const added = addBuddy(f, peer, f.app.projectId)
-    f.run({ type: 'tab.buddies', enabled: false })
-    expect(f.state.starts!.find(s => s.id === added.result.startId)!.error).toBe('Buddies were turned off in this Swarm.')
-    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
-    expect(() => f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'late', configuration }, peer, host)).toThrow()
-    expect(f.state.agents.some(a => a.harnessId === 'late')).toBe(false)
-    // One that joined before the switch and is still listed cannot post.
-    const g = setup()
-    expect(() => g.run({ type: 'message.send', conversationId: g.chat, text: 'Still here', replyTo: null, recipientIds: [] }, agentActor('buddy'))).toThrow('Buddies are off')
-  })
-
-  it('refuses a dispatched Buddy start joining once Buddies are off, even if its start record has no error', () => {
-    const f = fresh()
-    const added = addBuddy(f, peer, f.app.projectId)
-    delete f.state.buddies
-    const host = { contribution: { machineOwnerId: 'peer', contributorId: 'peer' } }
-    expect(() => f.run({ type: 'agent.started', startId: added.result.startId as string, harnessId: 'late', configuration }, peer, host)).toThrow('Buddies are off')
-    expect(() => f.run({ type: 'agent.startDispatch', startId: added.result.startId as string }, peer, host)).toThrow('Buddies are off')
   })
 })
 

@@ -37,7 +37,7 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A Swarm whose PM runs on the owner's Mac, peer a member with their own Mac in the Machines list, and Buddies on. */
+/** A Swarm whose PM runs on the owner's Mac, and peer a member with their own Mac in the Machines list. */
 async function swarm() {
   const store = new SuperTabStore(db, () => Date.now())
   const tab = (await store.create(owner, randomUUID(), 'Buddies', 'public')).id
@@ -52,7 +52,6 @@ async function swarm() {
   await store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
   quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-  await execute({ type: 'tab.buddies', enabled: true })
   return { store, tab, execute, lead }
 }
 

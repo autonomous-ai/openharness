@@ -29,6 +29,12 @@ function fixture() {
   const create = (actor: Actor = owner, extra: Record<string, unknown> = {}) =>
     run(commandSchema.parse({ type: 'conversation.create', title: 'Offline editing', brief: 'Save edits.', checks, ...extra }), actor).result.conversationId as string
   const group = (id: string): Conversation => state.conversations.find(c => c.id === id)!
+  /** The owner's Buddy chat in the Swarm's project, as adding a Buddy opens it: the one private chat (buddies.ts). */
+  const buddyChat = () => {
+    state.conversations.push({ id: 'owner-buddy', kind: 'buddy', title: 'Owner\'s Buddy', leadId: null, agentIds: [], archived: false, brief: '',
+      checks: [], assignment: null, lastMessageSequence: 0, audience: { people: [{ id: 'owner', generation: state.people[0]!.generation }] } })
+    return 'owner-buddy'
+  }
   /** A worker on [id] with its task assigned, returning the assignment id. */
   const assign = (id: string, worker = add(`worker-${id}`, id)) => {
     run({ type: 'work.assign', conversationId: id, agentId: worker })
@@ -41,7 +47,7 @@ function fixture() {
   }
   const say = (id: string, actor: Actor, text = 'Go with the flag.', replyTo: string | null = null, reply?: CommandContext['reply']) =>
     run({ type: 'message.send', conversationId: id, text, replyTo, recipientIds: [] }, actor, reply ? { reply } : {})
-  return { run, invitePeer, add, asAgent, create, group, assign, status, passChecks, say,
+  return { run, invitePeer, add, asAgent, create, group, buddyChat, assign, status, passChecks, say,
     get state() { return state }, at(ms: number) { now = ms } }
 }
 
@@ -89,9 +95,9 @@ describe('who asked for a group', () => {
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: null }, f.asAgent(worker))).toThrow('coordinating lead')
   })
 
-  it('opens a private conversation without a requester: private chats never count', () => {
+  it('never names a requester for a Buddy chat: private chats never count', () => {
     const f = fixture()
-    const id = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
+    const id = f.buddyChat()
     expect(f.group(id).requesterId).toBeUndefined()
     expect(f.group(id).ledger).toBeUndefined()
     expect(() => f.run({ type: 'conversation.requester', conversationId: id, personId: 'owner' })).toThrow('chat only')
@@ -274,8 +280,7 @@ describe('when the Lead records a merge', () => {
     const { f, lead, id } = setup()
     const review = f.create(lead, { reviewOf: id, title: 'Review', brief: 'Review it.' })
     expect(() => f.run(merged(review), lead)).toThrow('review group')
-    const chat = f.run(commandSchema.parse({ type: 'conversation.create', title: 'Chat', brief: '', checks: [], audience: { personIds: ['owner'] } })).result.conversationId as string
-    expect(() => f.run(merged(chat))).toThrow('chat only')
+    expect(() => f.run(merged(f.buddyChat()))).toThrow('chat only')
   })
 })
 
@@ -497,7 +502,7 @@ describe('other ways a person unblocks work: decisions, approvals and tags', () 
 
   it('never credits a private conversation', () => {
     const f = fixture()
-    const chat = f.run({ type: 'conversation.create', title: 'Me and PM', brief: '', checks: [], audience: { personIds: ['owner'] } }).result.conversationId as string
+    const chat = f.buddyChat()
     tagged(f, chat, 'Hi.', [{ messageId: 'tag', createdAt: 0 }])
     expect(f.group(chat).ledger?.unblocks).toBeUndefined()
   })
