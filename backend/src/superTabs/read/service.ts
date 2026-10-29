@@ -188,11 +188,12 @@ export class SwarmReads {
       ...(after ? { id: { gt: after } } : {}) }, orderBy: { id: 'asc' }, take: 101, select: { id: true, ownerId: true, format: true, workspaceId: true } })
     // A Swarm of a Workspace the person is no longer in is not theirs to list, even before their removal from it has run.
     const workspaceIds = [...new Set(rows.flatMap(r => r.workspaceId ? [r.workspaceId] : []))]
-    const current = new Set((await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
-      select: { workspaceId: true } })).map(m => m.workspaceId))
+    const current = new Set((workspaceIds.length ? await this.db.swarmWorkspaceMember.findMany({ where: { workspaceId: { in: workspaceIds }, userId: user.sub, removedAt: null },
+      select: { workspaceId: true } }) : []).map(m => m.workspaceId))
     const page = rows.slice(0, 100).filter(r => r.workspaceId ? current.has(r.workspaceId) : !workspacesRequired())
     // A Swarm not yet in parts is migrated when it is opened; until then the list names it from its old row.
-    const legacy = await this.db.superTab.findMany({ where: { id: { in: page.filter(r => r.format !== 2).map(r => r.id) } }, select: { id: true, state: true } })
+    const unsplit = page.filter(r => r.format !== 2).map(r => r.id)
+    const legacy = unsplit.length ? await this.db.superTab.findMany({ where: { id: { in: unsplit } }, select: { id: true, state: true } }) : []
     const ids = page.filter(r => r.format === 2).map(r => r.id)
     // Every head changed after the epoch: one read of each listed Swarm's head part.
     const [heads, newest] = await transaction(this.db, tx => Promise.all([parts.loadChanged(tx, ids, new Date(0), ['head']), parts.lastChangedAt(tx, ids)]))
