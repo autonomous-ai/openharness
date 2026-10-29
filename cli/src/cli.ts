@@ -181,6 +181,7 @@ Machine:
   harness help agents          the agent commands, states, exit codes and rules on one screen
   harness settings [<name> on|off]  what agents may do (agents-start-agents, agents-tell-agents, pull-request-line, agent-messages): your account's experiments in Settings ▸ Experimental, each off by default
   harness mcp-servers [add|remove]  local MCP servers (a paired lamp's lamp-mcp) for the agents Harness starts here: yours alone to change
+  harness computer-use [on|off]  Harness OS: browser (Playwright) and desktop tools for agents to try what they build; off until you turn them on
   harness machines delete <id> remove ANOTHER machine (refuses this one; use \`harness logout\`)
   harness machines engines <machine> [--engine E]… [--json]
                                ask another of your machines now which engines it has: installed, signed in, first prompt
@@ -2718,6 +2719,7 @@ import { openUrlCommand } from './agentClient/openUrl.js'
 import { harnessRunner, mcpCommand } from './agentClient/mcp.js'
 import { settingsCommand } from './agentClient/settings.js'
 import { mcpServersCommand } from './agentClient/mcpServers.js'
+import { computerUseCommand } from './agentClient/computerUse.js'
 
 // ── arg parse ──────────────────────────────────────────────────────────────────────────────────
 // `hn` is the terminal client's short name (like tmux, fzf): the same CLI, entered at `tui`. A call
@@ -2786,6 +2788,12 @@ switch (cmd) {
     // the variables `outsideCaller` reads. A pty host pane (Windows) is always Harness's.
     const pane = sendPane(process.env)
     process.exitCode = mcpServersCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
+    break
+  }
+  case 'computer-use': {
+    // Machine MCP servers too, refused in a Harness pane alike.
+    const pane = sendPane(process.env)
+    process.exitCode = computerUseCommand(rest, { inPane: !!pane && (!pane.startsWith('%') || !!paneOwner(pane)) })
     break
   }
   case 'mcp': {

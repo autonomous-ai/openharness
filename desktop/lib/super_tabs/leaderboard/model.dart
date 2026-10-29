@@ -18,7 +18,6 @@ class SuperTabLeaderboard {
   SuperTabLeaderboard.fromJson(Map<String, dynamic> json)
     : projectId = json['projectId'] as String? ?? '',
       week = _int(json['week']),
-      goal = SuperTabTeamGoal.fromJson(_map(json['goal'])),
       people = _list(json['people']).map(SuperTabPersonScore.fromJson).toList(),
       waiting = SuperTabWaiting.fromJson(_map(json['waiting']));
 
@@ -26,29 +25,10 @@ class SuperTabLeaderboard {
 
   /// The week's Monday 00:00 UTC, in epoch milliseconds.
   final int week;
-  final SuperTabTeamGoal goal;
 
   /// Most points first.
   final List<SuperTabPersonScore> people;
   final SuperTabWaiting waiting;
-}
-
-class SuperTabWeekGoal {
-  SuperTabWeekGoal.fromJson(Map<String, dynamic> json)
-    : shipped = _int(json['shipped']),
-      points = _int(json['points']),
-      medianAskToShipMs = _optional(json['medianAskToShipMs']);
-  final int shipped, points;
-  final int? medianAskToShipMs;
-}
-
-class SuperTabTeamGoal {
-  SuperTabTeamGoal.fromJson(Map<String, dynamic> json)
-    : openRequests = _int(json['openRequests']),
-      thisWeek = SuperTabWeekGoal.fromJson(_map(json['thisWeek'])),
-      lastWeek = SuperTabWeekGoal.fromJson(_map(json['lastWeek']));
-  final int openRequests;
-  final SuperTabWeekGoal thisWeek, lastWeek;
 }
 
 class SuperTabPersonScore {
