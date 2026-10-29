@@ -69,7 +69,8 @@ A component's result is reused only when all of these hold; otherwise it runs as
   `scripts/ci-plan.py`). `backend/integration/` and `cli/e2e/` (apart from
   `cli/e2e/harness/`) are skipped because the PR jobs never read them.
 - No changed path is a shared input: `.github/`, `scripts/` (the planner and the merge
-  helper), `Makefile`, `.gitattributes`, `.gitignore`, `.gitmodules`, any lockfile or
+  helper; the style allowlists in `scripts/ui-style-allowlist/` are exempt because only the
+  process checks read them), `Makefile`, `.gitattributes`, `.gitignore`, `.gitmodules`, any lockfile or
   toolchain pin, or any path outside a component other than `docs/` (but `docs/images/`
   counts) and top-level `.md` files. A shared change reruns every component.
 - The PR itself changes no workflow, script, `Makefile` or Git setting: PR CI runs the

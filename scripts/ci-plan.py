@@ -81,6 +81,8 @@ NOT_READ = {"backend": ("backend/integration/",), "cli": ("cli/e2e/",)}
 # Inputs every suite shares: a change here reruns everything, and a PR that changes them
 # never reuses (PR CI runs the PR's own planner and workflow; the merge helper is in scripts/).
 SHARED_PREFIXES = (".github/", "scripts/")
+# Data only the always-running process checks read (scripts/check-ui-style.py): neither shared nor a suite input.
+PROCESS_ONLY = ("scripts/ui-style-allowlist/",)
 SHARED_FILES = {"Makefile", ".gitattributes", ".gitignore", ".gitmodules"}
 LOCKS_AND_TOOLCHAINS = {
     "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "pnpm-workspace.yaml", "bun.lockb",
@@ -125,13 +127,19 @@ def inert(path):
             or ("/" not in path and path.endswith(".md")))
 
 
+def process_only(path):
+    return path.startswith(PROCESS_ONLY) and path.endswith(".json") and path.count("/") == 2
+
+
 def shared_input(path):
     """Why a changed path invalidates every suite, or None."""
+    if process_only(path):
+        return None
     if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES:
         return "workflow, CI script, merge tool or repository setting"
     if PurePosixPath(path).name in LOCKS_AND_TOOLCHAINS:
         return "lockfile or toolchain pin"
-    if not select([path])[0] and not inert(path):
+    if not select([path])[0] and not inert(path) and not process_only(path):
         return "outside every component"
     return None
 
@@ -165,7 +173,8 @@ def update_parents(root, head, base):
 def own_shared_change(root, head, base):
     """A shared input this PR itself changes (its own CI runs its own planner), or None."""
     own = changed_paths(root, git(root, "merge-base", base, head), head)
-    return next((path for path in own if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES), None)
+    return next((path for path in own if (path.startswith(SHARED_PREFIXES) or path in SHARED_FILES)
+                 and not process_only(path)), None)
 
 
 def reuse_blocker(root, suite, origin, head):

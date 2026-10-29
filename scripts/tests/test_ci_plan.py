@@ -317,6 +317,12 @@ class ReuseTests(ReuseFixture):
         self.assertEqual(list(plan["reused"]), ["backend", "cli"])
         self.assertEqual(planner.select(["backend/integration/teams.test.ts"])[0], {"backend"})
 
+    def test_style_allowlists_only_the_process_checks_read_do_not_block_reuse(self):
+        # The mobile batch that waited behind a backend batch also shrank its style allowlist (#2154).
+        _, main, head = self.scenario(["mobile/lib/app.dart", "scripts/ui-style-allowlist/mobile.json"],
+                                      ["backend/src/app.ts", "scripts/ui-style-allowlist/desktop.json"], passed_suites={"mobile"})
+        self.assertEqual(list(self.plan(head, main)["reused"]), ["mobile"])
+
     def test_a_file_another_component_reads_reruns_the_reader(self):
         # mobile's measurement tests read the backend's product usage types.
         _, main, head = self.scenario(["mobile/lib/app.dart"], ["backend/src/types/productUsage.ts"])
