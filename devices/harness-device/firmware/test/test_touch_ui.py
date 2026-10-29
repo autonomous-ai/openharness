@@ -1660,6 +1660,19 @@ static void swarm_pane_checks(const char *dir) {
         // The window going to another tab first spends it.
         swarm_leave(); ui_swarms_replace(rows, 3, "t0"); ui_supertab_focus("s1", "L3");
         ui_swarms_replace(rows, 3, "t2"); ui_swarms_replace(rows, 3, "t1"); assert(!swarm_mode());
+        // Diego's dial, 2026-10-29: the window leaving the Swarm's desk tab for another takes the dial out with it,
+        // onto that tab's panes. It used to stay on the Swarm face until its desk tab was closed.
+        ui_swarms_replace(rows, 3, "t0"); ui_supertab_focus("s1", "L2"); ui_swarms_replace(rows, 3, "t1");
+        assert(swarm_mode() && !strcmp(sw.desk, "t1"));
+        s.view = AGENTS; ui_swarms_replace(rows, 3, "t0"); assert(!swarm_mode() && s.view == HOME);
+        // Not while talking or answering: the face keeps its recipient, as a focus does.
+        ui_supertab_focus("s1", "L2"); ui_swarms_replace(rows, 3, "t1"); assert(swarm_mode());
+        s.voice_open = true; ui_swarms_replace(rows, 3, "t0"); assert(swarm_mode()); s.voice_open = false;
+        swarm_leave(); ui_supertab_focus("s1", "L2"); ui_swarms_replace(rows, 3, "t1"); assert(swarm_mode());
+        s.view = QUESTION; ui_swarms_replace(rows, 3, "t0"); assert(swarm_mode());
+        // A frame that keeps the same tab, or names none, leaves the face alone.
+        s.view = HOME; swarm_leave(); ui_supertab_focus("s1", "L2"); ui_swarms_replace(rows, 3, "t1");
+        ui_swarms_replace(rows, 3, "t1"); assert(swarm_mode()); ui_swarms_replace(rows, 3, ""); assert(swarm_mode());
     }
     // The side button: STOP for a busy Lead on this computer (its harness id), HOME for a remote one.
     swarm_setup(); enter_at("s1", "L0"); ui_boot_pressed(); assert(s.view == STOP && !strcmp(s.stop_agent, "h0"));

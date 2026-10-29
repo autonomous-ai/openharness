@@ -4846,6 +4846,13 @@ static void swarms_apply(void)
     if (swarm_mode() && sw.desk[0] && workspace_index(sw.desk) < 0) {
         swarm_leave();
         if (s.view == HOME || s.view == AGENT || s.view == AGENTS) tabs_open();
+    } else if (swarm_mode() && sw.desk[0] && selected_changed && s.selected_tab[0] && strcmp(s.selected_tab, sw.desk) &&
+               !s.voice_open && (s.view == HOME || s.view == AGENT || s.view == AGENTS)) {
+        // The desktop went from the Swarm's desk tab to another (Diego's dial, 2026-10-29): the dial follows it onto
+        // that tab's panes, as it follows the desktop in. It stayed on the Swarm face until that desk tab was closed;
+        // the daemon's focus for the new tab only moves `s.active`, which a Swarm face never shows.
+        swarm_leave();
+        view(HOME);
     } else {
         swarm_desk_note();
     }
