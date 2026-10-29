@@ -1100,11 +1100,12 @@ class SuperTabController extends ChangeNotifier {
       final thread = SuperTabThread.fromJson(superTabMap(row));
       if ((held[thread.id]?.lastSequence ?? -1) > thread.lastSequence) continue;
       held[thread.id] = thread;
-      // A thread first seen here is read as far as the conversation is:
-      // replies the reader passed before threads were counted stay read.
+      // A thread first seen here is read as far as the conversation is,
+      // here or on another device: replies the reader passed before threads
+      // were counted stay read.
       _threadSeen.putIfAbsent(
         thread.id,
-        () => min(_readAt[id] ?? 0, thread.lastSequence),
+        () => min(readMark(id), thread.lastSequence),
       );
       if (openedThread?.root == thread.id) _seeThread(thread.id);
     }
@@ -1556,15 +1557,17 @@ class SuperTabController extends ChangeNotifier {
       max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
 
   /// What the reader missed in [id] after [after] (backend catchUp.ts).
-  Future<SuperTabCatchUp> readCatchUp(String id, int after) async =>
-      SuperTabCatchUp.fromJson(
-        superTabMap(
-          await request(
-            'GET',
-            '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
-          ),
-        ),
-      );
+  Future<SuperTabCatchUp> readCatchUp(
+    String id,
+    int after,
+  ) async => SuperTabCatchUp.fromJson(
+    superTabMap(
+      await request(
+        'GET',
+        '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
+      ),
+    ),
+  );
 
   late final _serverMarks = SuperTabReadMarkSender(
     (id, sequence) => request(
@@ -1667,6 +1670,10 @@ class SuperTabController extends ChangeNotifier {
       return true;
     });
   }
+
+  /// How many rows of [id] are kept for the saved view.
+  @visibleForTesting
+  int heldRows(String id) => _rows[id]?.length ?? 0;
 
   void _keepRows(String id, List rows) {
     if (!_policy.drawsSaved) return;

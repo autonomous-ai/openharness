@@ -478,6 +478,49 @@ void main() {
     expect(countWeight(tester, 'message-1'), isNot(FontWeight.w700));
   });
 
+  test('a thread read on another device, with no mark kept here, shows as '
+      'read', () async {
+    final server = threaded();
+    // The reader read the whole chat elsewhere, up to its last message.
+    server.markReadElsewhere('lead', server.revision);
+    final c = server.controller();
+    addTearDown(c.dispose);
+    await c.refresh();
+    await c.loadMessages('lead');
+    final thread = c.thread('lead', 'message-1')!;
+    // The last reply is the peer's, so only the read mark keeps it quiet.
+    expect(thread.authors.first['id'], 'peer');
+    expect(thread.lastSequence, 3);
+    expect(c.readMark('lead'), server.revision);
+    expect(c.threadUnread(thread), isFalse);
+  });
+
+  test(
+    'a reply past the mark read on another device is still unread',
+    () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', 2);
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadMessages('lead');
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+    },
+  );
+
+  test(
+    'another person\'s read mark never reads the reader\'s thread',
+    () async {
+      final server = threaded();
+      server.markReadElsewhere('lead', server.revision, reader: 'peer');
+      final c = server.controller();
+      addTearDown(c.dispose);
+      await c.refresh();
+      await c.loadMessages('lead');
+      expect(c.threadUnread(c.thread('lead', 'message-1')!), isTrue);
+    },
+  );
+
   testWidgets('the read mark passes thread replies after the last row shown', (
     tester,
   ) async {
