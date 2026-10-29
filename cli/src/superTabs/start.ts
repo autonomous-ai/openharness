@@ -10,7 +10,7 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
-import { teamRelayed } from '../team/relay.js'
+import { NO_PM_RELAY, teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -43,9 +43,6 @@ function requireSuccess(reply: Json): Json {
 function leadPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${mode ? `${swarmSkillUse('lead', mode)} ` : ''}Discuss first; build when authorized. Coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up. Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the request with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. Route only to start an agent or assign work, never your own: harness super-tab --tab ${tabId} route GROUP JSON. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
-
-/** Why a Codex Product Manager is not started in a Harness Team account without the owner's relay. */
-const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
 
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`

@@ -208,6 +208,10 @@ export function readTeamRelay(config: TeamConfig, deps: TeamRelayReadDeps = real
 
 /** What a Claude Code or Codex launch adds to spend the owner's subscription through the relay. */
 export interface OwnerRelayLaunch { env: Record<string, string>; args: string[] }
+/** Why a launch in a Codex home of its own (a Swarm Product Manager's) is not made: no sign-in there, and no relay to give it
+ *  one. The launch refuses or holds with it, never starting signed out (security re-checks of #2089). */
+export interface OwnerRelayRefusal { refused: string }
+export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
 
 export interface TeamRelayLaunchDeps {
   /** Whether this daemon runs team work only. */
@@ -227,15 +231,17 @@ export interface TeamRelayLaunchDeps {
 /** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. [codexHome]: the
  *  launch's own Codex home (a Swarm Product Manager's, superTabs/teamDaemon.ts pmEngineHome), whose sign-in and model list
  *  are its own, not the daemon's (security re-check of #2089: it started signed out, without the owner's models). */
-export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunchDeps, codexHome?: string): Promise<OwnerRelayLaunch | null> {
+export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunchDeps, codexHome?: string): Promise<OwnerRelayLaunch | OwnerRelayRefusal | null> {
   if (engine !== 'claude' && engine !== 'codex') return null
   if (!deps.team()) return null
-  const config = deps.config()
-  if (!config) return null
   const home = engine === 'codex' ? codexHome : undefined
+  // A Codex home of its own holds no sign-in but what it was given: with no relay it is refused, not launched signed out.
+  const none = home === undefined ? null : { refused: NO_PM_RELAY }
+  const config = deps.config()
+  if (!config) return home !== undefined && !await deps.signedIn(engine, home).catch(() => false) ? none : null
   if (await (home === undefined ? deps.signedIn(engine) : deps.signedIn(engine, home)).catch(() => false)) return null
   const grant = deps.read(config)
-  if (!grant) return null
+  if (!grant) return none
   try { deps.onboarded(engine) } catch { /* The engine asks on its screen, as it would have. */ }
   if (engine === 'claude') return { env: claudeRelayEnv(grant.url, grant.token), args: [] }
   await (home === undefined ? deps.codexHome(grant) : deps.codexHome(grant, home)).catch(() => {})

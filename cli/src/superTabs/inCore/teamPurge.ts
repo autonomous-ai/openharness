@@ -13,9 +13,9 @@
  * reviewed purge drops the session from the stopped catalog, so a retry after a failed sweep had nothing left to scrub from.
  * Everything here reads and writes asynchronously: a Team home holds gigabytes of transcripts, and this runs in the core.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { PM_HOMES } from '../teamDaemon.js'
 
 /** What a purge needs of a session, kept until it finishes. `pastes`: the paste cache files its history lines kept. */
@@ -28,19 +28,27 @@ export interface PurgeTarget {
   pastes?: string[]
 }
 
-/** The purges still to finish, by agent id, kept in [file] across restarts. One that cannot be read is `unknown`: the
- *  account then stays held, as it fails closed (inCore/teamApps.ts). */
+/** The purges still to finish, by agent id, kept in [file] across restarts. One that cannot be read is never written over,
+ *  which would forget the purges it names: it is kept aside at `<file>.unreadable` (`.1`, `.2`… when one already is), and while any is there the record is
+ *  `unknown` and the account stays held, as it fails closed (inCore/teamApps.ts), until a person clears it (security
+ *  re-check 2 of 9e49723b8). */
 export function purgeRecord(file: string) {
-  const load = (): { held: Map<string, PurgeTarget>; unknown: boolean } => {
-    if (!existsSync(file)) return { held: new Map(), unknown: false }
+  const aside = `${file}.unreadable`
+  const load = (): Map<string, PurgeTarget> => {
+    if (!existsSync(file)) return new Map()
     try {
       const saved = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
       const held = new Map<string, PurgeTarget>()
       for (const [id, entry] of Object.entries(saved)) if (entry && typeof entry === 'object' && (entry as PurgeTarget).agentId === id) held.set(id, entry as PurgeTarget)
-      return { held, unknown: false }
-    } catch { return { held: new Map(), unknown: true } }
+      return held
+    } catch {
+      let free = aside
+      for (let n = 1; existsSync(free); n++) free = `${aside}.${n}`
+      renameSync(file, free)
+      return new Map()
+    }
   }
-  const state = load()
+  const state = { held: load() }
   const save = () => {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
     writeFileSync(`${file}.next`, JSON.stringify(Object.fromEntries(state.held)), { mode: 0o600 })
@@ -49,7 +57,7 @@ export function purgeRecord(file: string) {
   return {
     pending: (): PurgeTarget[] => [...state.held.values()],
     get: (agentId: string): PurgeTarget | undefined => state.held.get(agentId),
-    unknown: (): boolean => state.unknown,
+    unknown: (): boolean => existsSync(aside) || readdirSync(dirname(file)).some(name => name.startsWith(`${basename(aside)}.`)),
     put(target: PurgeTarget): void { state.held.set(target.agentId, target); save() },
     drop(agentId: string): void { if (state.held.delete(agentId)) save() },
   }
@@ -66,6 +74,10 @@ const folderOf = (target: PurgeTarget) => target.cwd && target.cwd.startsWith('/
  * Rewrites [path] through [transform], unless it changed while being rewritten: another agent of the account may write the
  * same file (Claude Code's history, its config) at any moment, and a rewrite from an older copy would lose that write. Then
  * it reads it again and tries again; false when it never stood still. A missing file has nothing to rewrite.
+ *
+ * What it cannot close without a lock the engines do not take: a write landing between its last check and the rename, one
+ * system call wide, is lost to that other agent. It leaves nothing of the session behind: the sweep reads the file again
+ * afterwards and fails the purge, closed, while anything still names it.
  */
 export async function rewriteIfUnchanged(path: string, transform: (text: string) => string, tries = 5): Promise<boolean> {
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -107,21 +119,32 @@ function withoutFolder(text: string, folder: string): string {
  * project folder with its transcripts and memory, its file history, todos, session environment and debug log, and its
  * folder's entry and repository paths in the config and in every backup of it. The pastes its history named, for the record.
  */
-export async function scrubClaudeSession(home: string, target: PurgeTarget, pastes: readonly string[] = []): Promise<string[]> {
+export async function scrubClaudeSession(home: string, target: PurgeTarget, pastes: readonly string[] = [],
+  onPastes?: (pastes: string[]) => void): Promise<string[]> {
   const sessionId = target.sessionId && SESSION.test(target.sessionId) ? target.sessionId : null
   const folder = folderOf(target)
   if (!sessionId && !folder) return []
-  const claude = join(home, '.claude'), found: string[] = []
-  await rewriteIfUnchanged(join(claude, 'history.jsonl'), text => {
-    found.length = 0
+  const claude = join(home, '.claude'), history = join(claude, 'history.jsonl')
+  /** Its history's lines kept, and the pastes its own lines named. */
+  const split = (text: string) => {
+    const named: string[] = []
     const kept = text.split('\n').filter(line => {
       if (!line.trim()) return false
       let row: { sessionId?: unknown; project?: unknown; pastedContents?: Record<string, { contentHash?: unknown } | null> }
       try { row = JSON.parse(line) } catch { return !(sessionId && line.includes(sessionId)) && !(folder && line.includes(folder)) }
       const ours = (!!sessionId && row.sessionId === sessionId) || (!!folder && row.project === folder)
-      if (ours) for (const paste of Object.values(row.pastedContents ?? {})) if (typeof paste?.contentHash === 'string') found.push(paste.contentHash)
+      if (ours) for (const paste of Object.values(row.pastedContents ?? {})) if (typeof paste?.contentHash === 'string' && SESSION.test(paste.contentHash)) named.push(paste.contentHash)
       return !ours
     })
+    return { kept, named }
+  }
+  // Its pastes are handed on before the lines naming them go: a scrub that dies after the rewrite would otherwise lose them,
+  // and a paste left behind would pass the sweep (security re-check 2 of 9e49723b8).
+  const found = split(await readFile(history, 'utf8').catch(() => '')).named
+  if (found.length) onPastes?.([...new Set(found)])
+  await rewriteIfUnchanged(history, text => {
+    const { kept, named } = split(text)
+    found.push(...named)
     return kept.length ? `${kept.join('\n')}\n` : ''
   })
   for (const hash of new Set([...pastes, ...found])) if (SESSION.test(hash)) await rm(join(claude, 'paste-cache', `${hash}.txt`), { force: true })
@@ -137,7 +160,7 @@ export async function scrubClaudeSession(home: string, target: PurgeTarget, past
     const backups = await readdir(join(claude, 'backups')).catch(() => [] as string[])
     for (const name of backups) await rewriteIfUnchanged(join(claude, 'backups', name), text => withoutFolder(text, folder))
   }
-  return [...new Set(found)].filter(hash => SESSION.test(hash))
+  return [...new Set(found)]
 }
 
 /**
@@ -206,8 +229,11 @@ export function createConfidentialPurge(deps: {
     const homes = join(deps.home, PM_HOMES)
     if (target.codexHome && target.codexHome.startsWith(`${homes}/`)) await rm(dirname(target.codexHome), { recursive: true, force: true })
     if (target.engine === 'claude') {
-      const pastes = [...new Set([...target.pastes ?? [], ...await scrubClaudeSession(deps.home, target, target.pastes)])]
-      if (pastes.length !== (target.pastes ?? []).length) { target = { ...target, pastes }; deps.record.put(target) }
+      const keep = (found: readonly string[]) => {
+        const pastes = [...new Set([...target!.pastes ?? [], ...found])]
+        if (pastes.length !== (target!.pastes ?? []).length) { target = { ...target!, pastes }; deps.record.put(target) }
+      }
+      keep(await scrubClaudeSession(deps.home, target, target.pastes, keep))
     }
     const left = await sweepForSession(deps.home, target, target.pastes ?? [])
     if (left) return { error: 'SCRUB_INCOMPLETE', detail: `Something still names the session: ${left}` }

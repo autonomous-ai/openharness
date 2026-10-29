@@ -22,7 +22,7 @@ export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 export const ABANDONED = 'Abandoned before it started.'
 /** A Team account's host refusing a Codex Product Manager it cannot sign in (cli superTabs/start.ts): it names nothing of the
  *  machine but its lack of the owner's relay, which its project reads (security re-check 3 of #2089). */
-export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
+export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
 
 /** A host's refusal for memory (cli superTabs/capacity.ts memoryShort): its numbers alone, which members already see in the
  *  Machines view. Read only at the start of the reason, so nothing else a host wrote is ever told (Ken's MacBook Pro,

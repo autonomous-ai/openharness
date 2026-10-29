@@ -69,6 +69,10 @@ describe('scrubbing a Claude Code session from the Team user\'s shared home', ()
     expect(readFileSync(join(home, '.claude.json'), 'utf8')).toBe('{ not json')
     expect(await scrubClaudeSession(home, target({ cwd: null }))).toEqual([])
     expect(await scrubClaudeSession(home, target({ sessionId: '../x', cwd: '/' }))).toEqual([])
+    // A paste name from an earlier record that is no file name is never followed out of the paste cache.
+    writeFileSync(join(home, 'keep.txt'), 'kept')
+    await scrubClaudeSession(home, target(), ['../../keep'])
+    expect(existsSync(join(home, 'keep.txt'))).toBe(true)
     expect(existsSync(join(claude, 'projects', '-other', 'other.jsonl'))).toBe(true)
     // Every line its own: the history is left empty; a home where Claude Code never ran has nothing to scrub.
     writeFileSync(join(claude, 'history.jsonl'), `${JSON.stringify({ sessionId: 'pm-session' })}\n`)
@@ -197,6 +201,28 @@ describe('the purge of a confidential session the Swarm ended', () => {
     expect(purgeRecord(join(home, 'super-tabs', 'team-purges.json')).pending()).toEqual([])
   })
 
+  // Security re-check 2 of 9e49723b8: the paste names reached the record only after the history lines naming them were gone,
+  // so a scrub that died between the two lost them, and a paste left behind passed the sweep.
+  it('saves the pastes its history names before rewriting it, so a scrub that dies after the rewrite still finds them', async () => {
+    const { home, claude } = teamHome()
+    const s = service(home)
+    // A paste the scrub cannot remove (a folder in its place) fails it right after the history was rewritten.
+    const { rmSync: remove } = await import('node:fs')
+    remove(join(claude, 'paste-cache', 'abc123.txt'))
+    mkdirSync(join(claude, 'paste-cache', 'abc123.txt'))
+    const ended = createConfidentialPurge({ confidential: () => true, home, session: s.session, purge: s.purge, record: s.record })
+    await expect(ended('pm')).rejects.toThrow()
+    expect(readFileSync(join(claude, 'history.jsonl'), 'utf8')).not.toContain('pm-session')
+    expect(s.record.get('pm')?.pastes).toEqual(['abc123'])
+    // The retry, the history no longer naming it: the record's paste is still swept for, and fails it until it is gone.
+    const { rmSync } = await import('node:fs')
+    rmSync(join(claude, 'paste-cache', 'abc123.txt'), { recursive: true })
+    writeFileSync(join(claude, 'paste-cache', 'abc123.txt'), 'left behind')
+    const sweep = await sweepForSession(home, s.record.get('pm')!, s.record.get('pm')!.pastes!)
+    expect(sweep).toBe(join(claude, 'paste-cache', 'abc123.txt'))
+    expect(await ended('pm')).toEqual({ ok: true })
+  })
+
   it('of a Codex session in its own engine home, deletes that home whole', async () => {
     const home = dir(), codexHome = join(home, '.harness-pm-homes', 'super-start-1', 'codex')
     mkdirSync(join(codexHome, 'sessions'), { recursive: true })
@@ -223,7 +249,7 @@ describe('the purge of a confidential session the Swarm ended', () => {
 })
 
 describe('the record of purges still to finish', () => {
-  it('keeps them across restarts, and says when it cannot be read, so the account stays held (teamApps.ts)', () => {
+  it('keeps them across restarts, and says when it cannot be read, so the account stays held (teamApps.ts)', async () => {
     const file = join(dir(), 'team-purges.json')
     const record = purgeRecord(file)
     record.put(target())
@@ -233,8 +259,23 @@ describe('the record of purges still to finish', () => {
     record.drop('pm')
     expect(purgeRecord(file).pending()).toEqual([])
     expect(purgeRecord(file).unknown()).toBe(false)
+    // Unreadable, it is never written over (re-check 2 of 9e49723b8): kept aside, the purges it names unforgotten, and the
+    // account held until a person clears it, whatever is recorded after.
     writeFileSync(file, '{')
-    expect([purgeRecord(file).pending(), purgeRecord(file).unknown()]).toEqual([[], true])
+    const later = purgeRecord(file)
+    expect([later.pending(), later.unknown()]).toEqual([[], true])
+    expect(readFileSync(`${file}.unreadable`, 'utf8')).toBe('{')
+    later.put(target())
+    expect([purgeRecord(file).pending(), purgeRecord(file).unknown(), readFileSync(`${file}.unreadable`, 'utf8')]).toEqual([[target()], true, '{'])
+    // Unreadable again with one already aside: kept aside too, under a name of its own.
+    writeFileSync(file, '[')
+    expect(purgeRecord(file).unknown()).toBe(true)
+    expect(readFileSync(`${file}.unreadable.1`, 'utf8')).toBe('[')
+    const { rmSync } = await import('node:fs')
+    rmSync(`${file}.unreadable`)
+    expect(purgeRecord(file).unknown()).toBe(true)
+    rmSync(`${file}.unreadable.1`)
+    expect(purgeRecord(file).unknown()).toBe(false)
     writeFileSync(file, '{"pm": 3}')
     expect([purgeRecord(file).get('pm'), purgeRecord(file).unknown()]).toEqual([undefined, false])
   })

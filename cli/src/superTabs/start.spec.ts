@@ -317,7 +317,7 @@ it('refuses a Codex Product Manager on a Team daemon with no owner relay before 
     const f = fixture()
     f.start.request = { ...f.start.request, engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
     const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'no-relay', request: f.start.request }, f.scoped, where, f.open)
-    const reason = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
+    const reason = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
     expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
     expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
     expect(f.scoped.mock.calls.map(([input]) => (input as { command?: { type?: string; error?: string } }).command)).toContainEqual({ type: 'agent.startFailed', startId: expect.any(String), error: reason })
