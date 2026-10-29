@@ -207,6 +207,149 @@ class _AgentSlots extends StatelessWidget {
   }
 }
 
+/// A machine's Agents setting in its settings: as many as its memory allows
+/// (the [_maxAgentSlots] figure, stored in the same `maxAgents` every machine
+/// has), or at most a number its owner picks. Each start still checks free
+/// memory either way (Dee, 2026-10-29).
+///
+/// The number is a stepper rather than a field, so no keystroke can leave the
+/// dialog holding a count the backend would refuse; both buttons go dead at
+/// the bounds rather than staying lit and doing nothing. Changing it chooses
+/// At most, the only choice it belongs to. It sits beside the At most tile
+/// rather than inside it, so a screen reader reaches the number and its two
+/// buttons instead of one merged choice (review of #2084).
+class _AgentsLimit extends StatelessWidget {
+  const _AgentsLimit({
+    required this.memory,
+    required this.value,
+    required this.maximum,
+    required this.busy,
+    required this.onMemory,
+    required this.onAtMost,
+  });
+
+  final bool memory;
+  final int value;
+  final int maximum;
+  final bool busy;
+  final VoidCallback onMemory;
+  final ValueChanged<int> onAtMost;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final value = this.value;
+    final canFewer = !busy && value > _agentSlotsMin;
+    final canMore = !busy && value < maximum;
+    void fewer() => onAtMost(value > maximum ? maximum : value - 1);
+    void more() => onAtMost(value + 1);
+    return Row(
+      // "Agents" on the line of its first choice.
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text('Agents', style: DesktopChrome.text()),
+        const SizedBox(width: grid.AppDesktop.groupGap),
+        Expanded(
+          child: RadioGroup<String>(
+            key: const ValueKey('machine-agents'),
+            groupValue: memory ? 'memory' : 'atMost',
+            onChanged: (choice) {
+              if (busy) return;
+              choice == 'memory' ? onMemory() : onAtMost(value);
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Standard tiles: one Tab stop for the choice, and the arrow
+                // keys move it (re-review of #2084).
+                RadioListTile<String>(
+                  key: const ValueKey('machine-agents-memory'),
+                  value: 'memory',
+                  enabled: !busy,
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('As memory allows'),
+                ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: RadioListTile<String>(
+                        key: const ValueKey('machine-agents-at-most'),
+                        value: 'atMost',
+                        enabled: !busy,
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('At most'),
+                      ),
+                    ),
+                    // The number on its own: adjustable by a screen reader's
+                    // increase and decrease, with its two buttons beside it.
+                    Semantics(
+                      container: true,
+                      label: 'Most agents',
+                      value: '$value',
+                      increasedValue: canMore ? '${value + 1}' : null,
+                      decreasedValue: canFewer
+                          ? '${value > maximum ? maximum : value - 1}'
+                          : null,
+                      onIncrease: canMore ? more : null,
+                      onDecrease: canFewer ? fewer : null,
+                      child: Container(
+                        constraints: const BoxConstraints(
+                          minHeight: grid.AppControl.height,
+                        ),
+                        decoration: BoxDecoration(
+                          // The same recessed well the picker's control sits in.
+                          color: grid.AppSurface.recess,
+                          borderRadius: BorderRadius.circular(
+                            grid.AppControl.radius,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AppIconButton(
+                              key: const ValueKey('agent-limit-fewer'),
+                              icon: AppIcons.minus,
+                              size: grid.AppControl.iconSize,
+                              tooltip: 'Fewer agents',
+                              onPressed: canFewer ? fewer : null,
+                            ),
+                            ExcludeSemantics(
+                              child: Text(
+                                value.toString(),
+                                key: const ValueKey('agent-limit-value'),
+                                style: DesktopChrome.control().copyWith(
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            AppIconButton(
+                              key: const ValueKey('agent-limit-more'),
+                              icon: AppIcons.plus,
+                              size: grid.AppControl.iconSize,
+                              tooltip: 'More agents',
+                              onPressed: canMore ? more : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// Unlike an ordinary choice field, this inventory also explains computers
 /// that cannot be selected. Standard menu buttons own their disabled semantics
 /// and keyboard traversal; the shared menu theme supplies their appearance.
@@ -492,7 +635,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     super.dispose();
   }
 
-  Future<void> _contribute({Map<String, dynamic>? existing}) async {
+  /// Add machine, or with [existing] that machine's settings (its owner's).
+  Future<void> _contribute({
+    Map<String, dynamic>? existing,
+    _MachineView? view,
+  }) async {
     final app = widget.app;
     if (app == null) return;
     final isConfigure = existing != null;
@@ -585,6 +732,81 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
     var slots = slotsFor(machineId);
     var slotsEdited = false;
+
+    // Machine settings: As memory allows, or At most a number (Dee,
+    // 2026-10-29). Memory is known from this dialog's reading, the panel's
+    // sample, or what the machine last reported to the Swarm.
+    MachineResources? settingsResources() =>
+        _samples[existingId]?.$1 ?? view?.resources;
+    int? memoryMaximum() =>
+        maximums[existingId] ?? _maxAgentSlots(settingsResources());
+
+    // Until the owner touches either, both follow what is known: a stored
+    // limit at or above the maximum is as memory allows, and one below it is
+    // the owner's own. With the maximum unknown a stored number is kept, and
+    // a machine with no number of its own starts at At most its suggestion,
+    // as Add machine does (review of #2084).
+    bool? memoryEdited;
+    int? atMostEdited;
+    bool memoryChoice() {
+      if (memoryEdited != null) return memoryEdited!;
+      final stored = storedSlots(existingId);
+      final maximum = memoryMaximum();
+      return stored != null && maximum != null && stored >= maximum;
+    }
+
+    // With nothing known, every machine may offer four.
+    int atMostMaximum() =>
+        memoryMaximum() ??
+        _clampAgentSlots(storedSlots(existingId) ?? _agentSlotsFloor);
+    int atMostValue() {
+      if (atMostEdited != null) return atMostEdited!;
+      final stored = storedSlots(existingId);
+      final maximum = memoryMaximum();
+      if (stored != null && (maximum == null || stored < maximum)) {
+        return _clampAgentSlots(stored);
+      }
+      final suggested =
+          suggestions[existingId] ?? _suggestedAgentSlots(settingsResources());
+      return (suggested ?? maximum ?? stored ?? _agentSlotsFloor).clamp(
+        _agentSlotsMin,
+        atMostMaximum(),
+      );
+    }
+
+    /// Why this machine's settings cannot be saved from here, in settings'
+    /// own words; null when they can.
+    String? settingsUnavailable() {
+      final m = app.stateOf(existingId!);
+      if (m == null) {
+        return 'This computer can’t reach that machine. Sign in to Harness '
+            'there with this account to change its settings.';
+      }
+      // The machine by name: "this computer" is the one you're on.
+      final name = superTabMachineName(m.machine.displayName);
+      if (m.belongsToOtherAccount) {
+        return '$name is signed in to another account.';
+      }
+      if (m.needsLink) return 'Not linked. Link $name from Machines.';
+      if (m.isOffline) {
+        return 'Offline. Open Harness on $name to change its settings.';
+      }
+      return null;
+    }
+
+    // As memory allows saves the machine's maximum: its own figure from
+    // setup (it measured the machine just now), else the one known here,
+    // else what an older Harness's setup offered.
+    int memoryLimit(Map<String, dynamic> prepared) {
+      final offeredMaximum = prepared['maxAvailableAgents'];
+      if (offeredMaximum is num) return _clampAgentSlots(offeredMaximum);
+      final offered = prepared['maxAgents'];
+      return memoryMaximum() ??
+          (offered is num
+              ? _clampAgentSlots(offered)
+              : storedSlots(existingId) ?? _agentSlotsFloor);
+    }
+
     // The open dialog and its own setState, once it is built: a reading
     // answers while the form is open, and the field has to repaint when it
     // does. Both are read only while the dialog is still there — one that
@@ -645,6 +867,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   return;
                 }
                 final selected = machineId!;
+                // Settings save what is on screen now: preparation below may
+                // learn a different maximum, and that must not turn the
+                // owner's At most into As memory allows (review of #2084).
+                final atMost = isConfigure && !memoryChoice()
+                    ? atMostValue()
+                    : null;
                 update(() {
                   busy = true;
                   error = null;
@@ -737,7 +965,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     'cwd': prepared['cwd'],
                     if (prepared['scope'] != null) 'scope': prepared['scope'],
                     'engines': engines,
-                    'maxAgents': slots,
+                    'maxAgents': !isConfigure
+                        ? slots
+                        : atMost ?? memoryLimit(prepared),
                   });
                   if (result == null) {
                     throw SuperTabFailure(
@@ -771,8 +1001,75 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               final own = ownedMachines();
               final canSave =
                   machineId != null && canSelect(app.stateOf(machineId!));
+              if (isConfigure) {
+                final current = app.stateOf(existingId!);
+                final why = settingsUnavailable();
+                return SuperTabDetailDialog(
+                  title: superTabMachineName(
+                    current?.machine.displayName ??
+                        existing['name'] as String? ??
+                        existingId,
+                  ),
+                  body: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _AgentsLimit(
+                        memory: memoryChoice(),
+                        value: atMostValue(),
+                        maximum: atMostMaximum(),
+                        busy: busy,
+                        onMemory: () => update(() => memoryEdited = true),
+                        onAtMost: (next) => update(() {
+                          memoryEdited = false;
+                          atMostEdited = next;
+                        }),
+                      ),
+                      // Why it cannot be removed, in words rather than a dimmed button alone.
+                      if (view != null && _canRemove(view.id))
+                        if (_removeReason(view.id) case final reason?) ...[
+                          const SizedBox(height: grid.AppDesktop.controlGap),
+                          Text(reason, style: DesktopChrome.metadata()),
+                        ],
+                      if (!canSave && why != null) ...[
+                        const SizedBox(height: grid.AppDesktop.controlGap),
+                        Text(why, style: DesktopChrome.metadata()),
+                      ],
+                      if (error != null) ...[
+                        const SizedBox(height: grid.AppDesktop.controlGap),
+                        Text(error!, style: DesktopChrome.metadata()),
+                      ],
+                    ],
+                  ),
+                  // One clear action at the right; the rarer one quiet at the
+                  // left, as in the machine's details.
+                  leadingActions: [
+                    if (view != null && _canRemove(view.id))
+                      TextButton(
+                        style: superTabQuietAction,
+                        onPressed: busy || _removeReason(view.id) != null
+                            ? null
+                            : () {
+                                Navigator.pop(context);
+                                WidgetsBinding.instance.addPostFrameCallback((
+                                  _,
+                                ) {
+                                  if (mounted) unawaited(_remove(view));
+                                });
+                              },
+                        child: const Text('Remove from this Swarm'),
+                      ),
+                  ],
+                  actions: [
+                    FilledButton(
+                      onPressed: busy || !canSave ? null : save,
+                      child: Text(busy ? 'Saving…' : 'Save'),
+                    ),
+                  ],
+                );
+              }
               return SuperTabDetailDialog(
-                title: isConfigure ? 'Configure machine' : 'Add machine',
+                title: 'Add machine',
                 body: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -855,11 +1152,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                   if (own.isNotEmpty)
                     FilledButton(
                       onPressed: busy || !canSave ? null : save,
-                      child: Text(
-                        busy
-                            ? (isConfigure ? 'Saving…' : 'Preparing…')
-                            : (isConfigure ? 'Save' : 'Add machine'),
-                      ),
+                      child: Text(busy ? 'Preparing…' : 'Add machine'),
                     ),
                 ],
               );
@@ -1538,7 +1831,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     onPressed: () {
                       Navigator.pop(context);
                       unawaited(
-                        _contribute(existing: shared ?? {'machineId': id}),
+                        _contribute(
+                          existing: shared ?? {'machineId': id},
+                          view: v,
+                        ),
                       );
                     },
                     child: const Text('Configure'),
