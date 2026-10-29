@@ -16,10 +16,11 @@ import '../voice_fakes.dart';
 import '../swarm/swarm_fixture.dart';
 
 /// Renders a phone Swarm project as prototype B draws it — its project chat
-/// under the project's name, Chat with PM at the top right, the line under the
-/// header with nothing or something waiting on the person, and the sheet that
-/// line opens on its Work and its Team — in light and dark, at iPhone 14 size
-/// in the system fonts, to PNGs a reviewer can look at without a phone.
+/// under the project's name with its ⋮ menu at the top right and nothing under
+/// the header, the menu with nothing or something waiting on the person, and
+/// the sheet its status opens on its Work and its Team — in light and dark, at
+/// iPhone 14 size in the system fonts, to PNGs a reviewer can look at without
+/// a phone.
 ///
 /// Skipped unless PHONE_RENDER_DIR names a directory to write into:
 ///
@@ -246,8 +247,14 @@ void main() {
       return key;
     }
 
+    Future<void> openMenu(WidgetTester tester) async {
+      await tester.tap(find.byKey(const ValueKey('swarm-project-menu')));
+      await tester.pumpAndSettle();
+    }
+
     Future<void> openSheet(WidgetTester tester) async {
-      await tester.tap(find.byKey(const ValueKey('swarm-team-line')));
+      await openMenu(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-project-menu-status')));
       await tester.pumpAndSettle();
     }
 
@@ -261,6 +268,18 @@ void main() {
     ) async {
       final key = await page(tester, waiting: true);
       await shoot(tester, key, 'swarm-project-waiting-$look');
+    });
+
+    testWidgets('its menu ($look)', skip: skip, (tester) async {
+      final key = await page(tester);
+      await openMenu(tester);
+      await shoot(tester, key, 'swarm-project-menu-$look');
+    });
+
+    testWidgets('its menu, work waiting ($look)', skip: skip, (tester) async {
+      final key = await page(tester, waiting: true);
+      await openMenu(tester);
+      await shoot(tester, key, 'swarm-project-menu-waiting-$look');
     });
 
     testWidgets('the sheet on Work ($look)', skip: skip, (tester) async {

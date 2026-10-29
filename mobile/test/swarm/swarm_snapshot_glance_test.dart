@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_team_line.dart';
 import 'package:harness_mobile/swarm/team_glance.dart';
@@ -72,7 +73,7 @@ void main() {
 
   Finder key(String value) => find.byKey(ValueKey(value));
 
-  testWidgets('Home, the drawer and the project page draw one glance', (
+  testWidgets("Home, the drawer and the project's menu draw one glance", (
     tester,
   ) async {
     final host = await pump(tester);
@@ -93,7 +94,16 @@ void main() {
 
     await tester.tap(key('swarm-drawer-project-$tab-$project'));
     await tester.pumpAndSettle();
-    final page = glanceIn('swarm-team-line');
+    await tester.tap(key('swarm-project-menu'));
+    await tester.pumpAndSettle();
+    final page = tester
+        .widget<SwarmStatusText>(
+          find.descendant(
+            of: key('swarm-project-menu-status'),
+            matching: find.byType(SwarmStatusText),
+          ),
+        )
+        .glance;
 
     expect(reader.snapshot, same(read), reason: 'still the same read');
     expect(drawer, same(home));

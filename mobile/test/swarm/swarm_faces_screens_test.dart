@@ -164,7 +164,9 @@ void main() {
       tester,
       const SwarmProjectPage(swarmId: tab, projectId: project),
     );
-    await tester.tap(find.byKey(const ValueKey('swarm-team-line')));
+    await tester.tap(find.byKey(const ValueKey('swarm-project-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('swarm-project-menu-status')));
     await tester.pumpAndSettle();
     expect(within('swarm-conversation-g1', find.text('🦉')), findsOneWidget);
     // Nobody chose one: the initial, as before.

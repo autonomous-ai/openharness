@@ -182,12 +182,14 @@ void main() {
     await walk.waitFor(walk.key('swarm-agent-agent-builder'));
     await walk.shot('team-read');
     await tester.tap(walk.key('swarm-team-close'));
-    await walk.waitFor(walk.key('swarm-pm-chat'));
+    await walk.waitFor(walk.key('swarm-project-menu'));
     await walk.waitFor(find.textContaining('Fix login is next'));
     await walk.shot('page-read');
 
     // The sheet's work: a pull reads the Swarm again, then the older chats.
-    await tester.tap(walk.key('swarm-team-line'));
+    await tester.tap(walk.key('swarm-project-menu'));
+    await walk.waitFor(walk.key('swarm-project-menu-status'));
+    await tester.tap(walk.key('swarm-project-menu-status'));
     await walk.waitFor(walk.key('swarm-conversation-g0'));
     pulled = Completer<void>();
     await tester.fling(

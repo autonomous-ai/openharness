@@ -15,13 +15,18 @@ import 'waiting_work.dart';
 const swarmParseOffThreadParts = 100;
 
 /// What the screens draw of a Swarm, worked out from its parts.
-typedef _View = ({SuperTabSnapshot snapshot, Map<String, String> partners});
+typedef _View = ({
+  SuperTabSnapshot snapshot,
+  Map<String, String> partners,
+  bool buddies,
+});
 
 _View _viewOf(SuperTabParts parts) {
   final state = parts.state;
   return (
     snapshot: SuperTabSnapshot.fromJson(state),
     partners: swarmPartners(state),
+    buddies: state['buddies'] == true,
   );
 }
 
@@ -76,6 +81,12 @@ class SwarmReader extends ChangeNotifier {
 
   /// Each conversation's partner, the person its work needs ([swarmPartners]).
   Map<String, String> partners = const {};
+
+  /// The Swarm's Buddies setting (spec: Buddies, 10-28): each person's Buddy
+  /// takes Chat with PM's place, so there is no Chat with PM. Read from the raw
+  /// state: the model the phone shares with the desktop does not carry it yet.
+  /// Off from a backend before Buddies.
+  bool buddiesOn = false;
 
   /// What the last read could not do, as a sentence; null once one succeeds.
   String? error;
@@ -258,6 +269,7 @@ class SwarmReader extends ChangeNotifier {
   void _show(_View view) {
     snapshot = view.snapshot;
     partners = view.partners;
+    buddiesOn = view.buddies;
     _views++;
   }
 
@@ -275,6 +287,7 @@ class SwarmReader extends ChangeNotifier {
     accessRevoked = true;
     snapshot = null;
     partners = const {};
+    buddiesOn = false;
     _parts = null;
     _heldLoad = 0;
     generation++;

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
@@ -449,8 +450,11 @@ void main() {
         )
         .first;
 
+    /// The project's work and team, from its menu's status row.
     Future<void> openSheet(WidgetTester tester) async {
-      await tester.tap(key('swarm-team-line'));
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-project-menu-status'));
       await tester.pumpAndSettle();
     }
 
@@ -472,16 +476,14 @@ void main() {
       },
     );
 
-    testWidgets('opens on its project chat, the line under its header', (
-      tester,
-    ) async {
+    testWidgets('opens on its project chat, under its header', (tester) async {
       await pump(tester, backend(), page);
       await tester.pumpAndSettle();
 
       const said = 'Morning: Fix login waits on you.';
       expect(find.text(said), findsOneWidget, reason: 'its project chat');
       expect(
-        tester.getBottomLeft(key('swarm-team-line')).dy,
+        tester.getBottomLeft(key('swarm-chat-header')).dy,
         lessThanOrEqualTo(tester.getTopLeft(find.text(said)).dy),
       );
       expect(
@@ -645,14 +647,22 @@ void main() {
       await frames(tester);
     }
 
-    testWidgets('draws its title and the line under it on their way while '
-        'its Swarm is read, then its chat', (tester) async {
+    testWidgets('draws its title on its way while its Swarm is read, with '
+        'nothing under it, then its chat', (tester) async {
       final fake = backend();
       final read = hold(fake, '/api/super-tabs/$tab/parts');
       await pump(tester, fake, page, settle: false);
 
       expect(key('swarm-project-title-loading'), findsOneWidget);
       expect(key('swarm-project-loading'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-project-loading'),
+          matching: find.byType(Skeleton),
+        ),
+        findsNothing,
+        reason: 'no team strip comes under the header',
+      );
       expect(find.text(gone), findsNothing);
       expect(find.byType(SwarmConversationPage), findsNothing);
 
@@ -662,7 +672,7 @@ void main() {
       expect(key('swarm-project-loading'), findsNothing);
       expect(key('swarm-project-title-loading'), findsNothing);
       expect(tester.widget<Text>(key('swarm-title')).data, 'Mobile');
-      expect(key('swarm-pm-chat'), findsOneWidget);
+      expect(key('swarm-project-menu'), findsOneWidget);
       expect(find.byType(SwarmConversationPage), findsOneWidget);
     });
     testWidgets('says it is no longer in the Swarm only once a read since it '
@@ -691,7 +701,7 @@ void main() {
 
       expect(find.text(gone), findsOneWidget);
       expect(key('swarm-project-loading'), findsNothing);
-      expect(key('swarm-pm-chat'), findsNothing);
+      expect(key('swarm-project-menu'), findsNothing);
     });
 
     testWidgets('opening it reads its Swarm once', (tester) async {
@@ -703,7 +713,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(changeReads(fake), before + 1);
-      expect(key('swarm-pm-chat'), findsOneWidget);
+      expect(key('swarm-project-menu'), findsOneWidget);
     });
 
     testWidgets('its sheet has rows on their way while the Swarm is read', (
@@ -741,10 +751,12 @@ void main() {
       expect(key('swarm-agent-agent-builder'), findsOneWidget);
     });
 
-    testWidgets('a poll that changes its Swarm builds its line once, and not '
-        'its chat', (tester) async {
+    testWidgets("a poll that changes its Swarm builds its menu's status "
+        'once, and not its chat', (tester) async {
       final fake = backend();
       await pump(tester, fake, page);
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
       fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
         cursor: 'c3',
         lastChangedAt: 200,
@@ -782,7 +794,7 @@ void main() {
       );
       expect(chats, 0, reason: 'the chat follows its own messages');
       debugOnRebuildDirtyWidget = null;
-      await tester.tap(key('swarm-team-line'));
+      await tester.tap(key('swarm-project-menu-status'));
       await tester.pumpAndSettle();
       expect(find.text('Sync again'), findsOneWidget);
     });
@@ -821,6 +833,8 @@ void main() {
       await pump(tester, fake, page);
       // With two Swarms, the page names its own after who is in the chat.
       expect(find.text('River and everyone · Phone Swarm'), findsOneWidget);
+      await tester.tap(key('swarm-project-menu'));
+      await tester.pumpAndSettle();
       var builds = 0;
       debugOnRebuildDirtyWidget = (element, _) {
         if (element.widget is SwarmProjectStatus ||
