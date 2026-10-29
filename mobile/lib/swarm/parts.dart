@@ -316,6 +316,8 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    // Sent only where the server does not try Harness Team accounts yet.
+    if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     return state;
   }

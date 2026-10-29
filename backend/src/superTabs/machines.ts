@@ -31,6 +31,10 @@ export interface ContributedMachine {
    *  the host says it cleaned up (machine.cleaned) or REMOVAL_FALLBACK_MS passes. An offline one leaves the list at once and
    *  its cleanup waits for its host (expireRemovals). Each project's chat hears how it ended (removalEnded). */
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
+  /** Added by Desktop as its person joined the Swarm, not lent to teammates by choice: their work runs here only through
+   *  its Harness Team account whose privacy check passed, whether or not the Swarm requires that everywhere
+   *  (teamWorkRefusal). Kept when the contribution is saved again; gone with the machine. */
+  teamAccountOnly?: true
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
 }
@@ -226,7 +230,7 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
   // Its last reading stays fresh for a minute, and in that minute it read as taking teammates' work and a Lead's route
   // named it (local Team account run, 2026-10-28).
   if (pool.hostMachineId && !teamRow) return { code: 'TEAM_ACCOUNT_REQUIRED', reason: `The Harness Team account on ${name} was removed, ${ONLY_OWN}.` }
-  if (!teamRow && reading?.sessionKind !== 'team' && !required) return null
+  if (!teamRow && reading?.sessionKind !== 'team' && !required && !pool.teamAccountOnly) return null
   if (otherWorkspace) return { code: 'MACHINE_IN_OTHER_WORKSPACE', reason: `The Harness Team account on ${name} also serves another ${WORKSPACE_LABEL}'s Swarms, ${ONLY_OWN} here.` }
   if (!reading || now - reading.receivedAt > MACHINE_FRESH_MS) {
     // A Mac's team account goes by its Mac's name ("One machine"), and the Mac itself may well be online.
