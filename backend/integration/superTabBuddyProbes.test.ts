@@ -11,6 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { stableId } from '../src/superTabs/model.js'
 
 // Security review 1 of #2115: its two-person probes, kept as regressions. The three that showed a leak at db0379898
 // (routing history, archived tasks awaiting a report, sequence-only paging) now assert the fix; the rest are as written.
@@ -313,5 +314,29 @@ it('gives no reader a pointer to, or reply line for, an agent-only note it may n
     expect(read.messages.find(m => m.id === earlier)).toMatchObject({ thread: null, replyTo: null })
     expect(JSON.stringify(read)).not.toContain(note)
     expect(await f.store.messages(user, f.tab, 'lead', { thread: note }, as)).toMatchObject({ messages: [], next: null, threads: [] })
+  }
+})
+
+// Delta check of the #2168 merge: a task chat's copy of a lost-task notice stored before #2177 marked such copies, whose
+// Lead copy reached the PM, is read by no one (pageReads.ts deliveredCopies). Its thread reads as an invented root's for
+// every reader, so a page never shows the hidden notice's earlier replies, nor that its thread exists.
+it('reads the thread of a hidden task chat copy of a Lead notice as an invented root, for people, the PM and a Buddy', async () => {
+  const f = await swarm(), { agentId } = await buddy(f)
+  const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Copy probe', brief: '', checks: [] })).result.conversationId)
+  const last = await db.superTabMessage.findFirst({ where: { tabId: f.tab }, orderBy: { sequence: 'desc' } })
+  const sequence = (last?.sequence ?? 0) + 1, author = { kind: 'agent', id: f.lead, name: 'PM' }
+  const copy = randomUUID().replaceAll('-', '').slice(0, 24), earlier = randomUUID().replaceAll('-', '').slice(0, 24)
+  await db.superTabMessage.createMany({ data: [
+    { id: copy, tabId: f.tab, conversationId: group, sequence, author, text: 'COPY OF A LOST TASK NOTICE', replyTo: null, thread: copy,
+      recipientIds: [], mentions: [], source: { kind: 'work-lost' } },
+    { id: stableId(copy, 'lead'), tabId: f.tab, conversationId: 'lead', sequence, author, text: 'COPY OF A LOST TASK NOTICE', replyTo: null,
+      thread: stableId(copy, 'lead'), recipientIds: [f.lead], mentions: [], source: { kind: 'work-lost' } },
+    { id: earlier, tabId: f.tab, conversationId: group, sequence: sequence + 1, author: { kind: 'person', id: owner.sub, name: owner.email },
+      text: 'EARLIER REPLY UNDER THE COPY', replyTo: copy, thread: copy, recipientIds: [], mentions: [] }] })
+
+  for (const [user, as] of [[owner, undefined], [owner, f.lead], [peer, agentId]] as const) {
+    const invented = await f.store.messages(user, f.tab, group, { thread: 'a'.repeat(24) }, as)
+    expect(invented).toMatchObject({ messages: [], next: null, threads: [] })
+    expect(await f.store.messages(user, f.tab, group, { thread: copy }, as)).toEqual(invented)
   }
 })

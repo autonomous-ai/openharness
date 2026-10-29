@@ -1928,8 +1928,12 @@ export class SuperTabStore {
     // Buddy, a route row) reads as one that is not in this conversation, and as an exact message it may not see: an empty
     // page, never its replies alone (review 2 of #2168). By its id, through the primary key.
     if (cursor.thread) {
-      const root = await tx.superTabMessage.findFirst({ where: { tabId, conversationId, id: cursor.thread }, select: { source: true, recipientIds: true } })
-      if (!root || !readable(root)) return { messages: [], next: null, threads: [], reactionSeq: group.reactionSeq ?? 0 }
+      const root = await tx.superTabMessage.findFirst({ where: { tabId, conversationId, id: cursor.thread },
+        select: { id: true, source: true, recipientIds: true } })
+      // A task chat's copy of a Lead's notice stored before it was marked is read by no one either (pageReads.ts).
+      if (!root || !readable(root) || (await deliveredCopies(tx, tabId, [root])).size) {
+        return { messages: [], next: null, threads: [], reactionSeq: group.reactionSeq ?? 0 }
+      }
     }
     const forward = cursor.after !== undefined
     const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
