@@ -178,6 +178,11 @@ describe('what a Buddy reads', () => {
       machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' })
     // The Buddy's own read leaves the stored placement as it was.
     expect(project.lead).toEqual({ status: 'failed', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' })
+    // A placement an older server stored (#2089's queue) names its machines in more fields: the Buddy reads its status alone.
+    project.lead = { status: 'waiting', requestedAt: 1000, requestedBy: { personId: 'owner', generation: 'g' }, chosen: 'owner-studio',
+      skipped: ['owner-laptop'], failures: 1, request: { engine: 'claude', repositoryUrl: 'https://github.com/acme/app' } } as never
+    expect(leadOf(agentActor('buddy'))).toEqual({ status: 'waiting' })
+    expect(JSON.stringify(visibleState(f.state, agentActor('buddy')))).not.toMatch(/owner-studio|owner-laptop/)
   })
 
   it('is no other person\'s Buddy chat in the same project', () => {
