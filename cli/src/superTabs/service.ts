@@ -421,13 +421,16 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
-            const focus = cardId(asked.tabId) && cardId(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+            const focus = cardId(asked.tabId) && cardId(asked.conversationId)
+              ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
             cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
           if (payload.action === 'cardRecap' && cardId(payload.tabId) && cardId(payload.leadId)) return { ok: true, ...await cards().recap(payload.tabId, payload.leadId, chat) }
           if (payload.action === 'cardSay' && cardId(payload.harnessId) && typeof payload.text === 'string' && payload.text.trim() && payload.text.length <= 32_000) {
-            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...(cardId(payload.chatId) ? [payload.chatId] : []))
+            const pinned: [chatId?: string, reviewed?: boolean] = !cardId(payload.chatId) ? []
+              : payload.reviewed === true ? [payload.chatId, true] : [payload.chatId]
+            const result = await cards().say(payload.harnessId, payload.text.trim(), chat, ...pinned)
             // A refusal travels with its code and message, which the dial shows instead of typing the words anywhere.
             return { ok: true, said: result.said, ...(!result.said && result.refused ? { refused: result.refused } : {}) }
           }
