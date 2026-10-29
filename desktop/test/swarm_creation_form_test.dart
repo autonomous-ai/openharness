@@ -579,6 +579,129 @@ void main() {
     },
   );
 
+  void agentIn(
+    SuperTabLaunchFixture f, {
+    String? model,
+    String remote = 'git@github.com:autonomous-ai/lamp-os.git',
+  }) => f.app.machineStates['m']!.agents = [
+    Agent(
+      id: 'earlier',
+      name: 'Earlier',
+      engine: 'codex',
+      modelName: model,
+      terminalAvailable: true,
+      project: AgentProject(
+        name: 'lamp-os',
+        cwd: '/work/lamp-os',
+        root: '/work/lamp-os',
+        remote: remote,
+      ),
+    ),
+  ];
+
+  testWidgets('The line names the model the engine runs there', (tester) async {
+    await mount(
+      tester,
+      leadMachines: [studio],
+      setup: (f) => agentIn(f, model: 'GPT-5.5'),
+    );
+    final line = find.descendant(of: leadLine, matching: find.byType(Text));
+    expect(
+      tester.widget<Text>(line.first).data,
+      'Product Manager: Mac Studio · Codex · GPT-5.5',
+    );
+    await unmount(tester);
+  });
+
+  testWidgets('With no model reported the line says the default model', (
+    tester,
+  ) async {
+    await mount(tester, leadMachines: [studio]);
+    final line = find.descendant(of: leadLine, matching: find.byType(Text));
+    expect(
+      tester.widget<Text>(line.first).data,
+      'Product Manager: Mac Studio · Codex · Default model',
+    );
+    await unmount(tester);
+  });
+
+  testWidgets('Switching machines keeps the repo, found by its remote', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      setup: (f) {
+        addLaptop(f);
+        agentIn(f);
+      },
+      leadMachines: [
+        studio,
+        const LeadMachine(
+          id: 'laptop',
+          name: 'Ken MacBook',
+          online: true,
+          freeAgents: 2,
+          maySleep: true,
+          repositories: {'github.com/autonomous-ai/lamp-os'},
+          folders: {
+            'github.com/autonomous-ai/lamp-os': '/Users/ken/swarm/lamp-os',
+          },
+        ),
+      ],
+    );
+    expect(box.project.folder, '/work/lamp-os');
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-laptop')),
+    );
+    await tester.pumpAndSettle();
+    expect(box.machineId, 'laptop');
+    expect(box.project.folder, '/Users/ken/swarm/lamp-os');
+    expect(find.textContaining('will be cloned there'), findsNothing);
+    await unmount(tester);
+  });
+
+  testWidgets('A machine without the repo will clone it, and says so', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      setup: (f) {
+        addLaptop(f);
+        agentIn(f);
+      },
+      leadMachines: [studio, laptop],
+    );
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-laptop')),
+    );
+    await tester.pumpAndSettle();
+    expect(box.machineId, 'laptop');
+    // Cloned by the address the person's own checkout uses.
+    expect(
+      box.project.repository?.url,
+      'git@github.com:autonomous-ai/lamp-os.git',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('new-harness-field-project')),
+        matching: find.text('lamp-os'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: leadLine,
+        matching: find.textContaining('lamp-os will be cloned there'),
+      ),
+      findsOneWidget,
+    );
+    await unmount(tester);
+  });
+
   testWidgets('The Product Manager always starts in its own worktree', (
     tester,
   ) async {

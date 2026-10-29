@@ -622,6 +622,7 @@ void main() {
       }) => {
         'machineId': id,
         'name': name,
+        'cwd': '/swarm/$id',
         'contributorId': contributor,
         'maxAgents': max,
         'paused': false,
@@ -633,7 +634,7 @@ void main() {
           'readiness': {
             'checkouts': [
               for (final repository in repositories)
-                {'folder': 'p', 'repository': repository, 'git': true},
+                {'folder': 'p1', 'repository': repository, 'git': true},
             ],
           },
         },
@@ -669,6 +670,9 @@ void main() {
         isTrue,
       );
       expect(studio.maySleep, isFalse);
+      expect(studio.folders, {
+        'github.com/autonomous-ai/autonomous-os': '/swarm/m/p1',
+      });
       expect(machines[1].unavailable, 'Another person’s machine');
       expect(machines[2].maySleep, isTrue);
       expect(machines[2].unavailable, 'Not connected to this computer');

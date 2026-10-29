@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:path/path.dart' as p;
+
 import '../core/first_task.dart';
 import '../core/models.dart';
 import '../state/app_state.dart';
@@ -278,6 +280,24 @@ class SuperTabLaunch {
                 final String repository => repository,
                 _ => null,
               }),
+        },
+        // The Swarm's clone of each project there: its folder in the
+        // machine's Swarm folder, in that machine's own path style.
+        folders: {
+          if (pool['cwd'] case final String root when checkouts is List)
+            for (final checkout in checkouts.map(part))
+              if ((
+                    leadRepositoryKey(switch (checkout['repository']) {
+                      final String repository => repository,
+                      _ => null,
+                    }),
+                    checkout['folder'],
+                  )
+                  case (final String key, final String folder))
+                key: (root.contains('\\') ? p.windows : p.posix).join(
+                  root,
+                  folder,
+                ),
         },
         maySleep:
             superTabMachineSymbol(device is String ? device : null) ==

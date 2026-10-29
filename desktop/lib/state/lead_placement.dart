@@ -7,6 +7,7 @@ class LeadMachine {
     required this.online,
     required this.freeAgents,
     this.repositories = const {},
+    this.folders = const {},
     this.maySleep = false,
     this.unavailable,
     this.inSwarm = true,
@@ -25,6 +26,9 @@ class LeadMachine {
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.
   final Set<String> repositories;
+
+  /// Where those checkouts are on that machine, by the same key, when known.
+  final Map<String, String> folders;
 
   /// A laptop: it may sleep with the Product Manager on it.
   final bool maySleep;

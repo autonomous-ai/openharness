@@ -2159,7 +2159,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     textStyle: DesktopChrome.text(size: 12, medium: true),
   );
 
-  /// "Product Manager: Mac Studio · Claude Code · Opus · Change", or why
+  /// "Product Manager: Mac Studio · Claude Code · Opus 5.5 · Change", or why
   /// New Project waits.
   Widget _desktopLeadLine() {
     final blocked = box.leadBlocked;
@@ -2170,8 +2170,13 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         Flexible(
           child: Text(
             blocked ??
-                'Product Manager: $machine · ${box.agentLabel} · '
-                    '${box.modelLabel}',
+                [
+                  'Product Manager: $machine',
+                  box.agentLabel,
+                  box.leadModelLabel,
+                  if (box.leadClones)
+                    '${box.project.repository!.name} will be cloned there',
+                ].join(' · '),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: DesktopChrome.text(size: 12, color: DesktopChrome.muted),

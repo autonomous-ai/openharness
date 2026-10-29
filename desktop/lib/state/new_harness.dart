@@ -1610,8 +1610,83 @@ class NewHarnessController extends ChangeNotifier {
       return;
     }
     error = null;
+    final remote = _remoteOf(_machineId, _project);
     _selectMachine(id);
+    if (remote != null) _keepRepository(id, remote, listed.name);
     notifyListeners();
+  }
+
+  /// The model the Product Manager runs: the one chosen, else the one this
+  /// engine's agents on that machine last reported.
+  String get leadModelLabel {
+    if (_model != null) return modelLabel;
+    return _machine?.agents
+            .where((a) => a.engine == _engine)
+            .map((a) => a.modelName)
+            .nonNulls
+            .lastOrNull ??
+        'Default model';
+  }
+
+  /// The repo the Product Manager starts in is cloned on its machine first:
+  /// that machine has no checkout of it.
+  bool get leadClones => placesLead && _project.repository != null;
+
+  /// The remote [project] on [machineId] has, when anything says so: a
+  /// repository to clone, an agent that ran in that folder, or the Swarm's
+  /// own checkout there.
+  String? _remoteOf(String machineId, NewHarnessProject project) {
+    if (project.repository case final repository?) return repository.url;
+    final folder = project.folder;
+    if (folder == null) return null;
+    final machine = app.stateOf(machineId);
+    for (final agent in machine?.agents ?? const <Agent>[]) {
+      final known = machine!.projectOf(agent);
+      if (known?.remote case final remote?
+          when known!.root == folder || known.cwd == folder) {
+        return remote;
+      }
+    }
+    final listed = integration?.leadMachines
+        ?.where((m) => m.id == machineId)
+        .firstOrNull;
+    for (final MapEntry(:key, :value) in listed?.folders.entries ?? const []) {
+      if (value == folder) return key;
+    }
+    return null;
+  }
+
+  /// Keeps the repo [remote] names on [machineId]: its folder there, found by
+  /// its remote, or else the repository to clone there.
+  void _keepRepository(String machineId, String remote, String machineName) {
+    final key = leadRepositoryKey(remote);
+    String? folder;
+    final machine = app.stateOf(machineId);
+    for (final agent in machine?.agents ?? const <Agent>[]) {
+      final known = machine!.projectOf(agent);
+      if (known != null &&
+          !known.worktree &&
+          leadRepositoryKey(known.remote) == key) {
+        folder = known.root ?? known.cwd;
+        break;
+      }
+    }
+    folder ??= integration?.leadMachines
+        ?.where((m) => m.id == machineId)
+        .firstOrNull
+        ?.folders[key];
+    final clone = GitHubRepository.parse(
+      remote.startsWith('github.com/') ? 'https://$remote' : remote,
+    );
+    if (folder != null) {
+      _project = NewHarnessProject.folder(folder);
+    } else if (clone != null) {
+      _project = NewHarnessProject.clone(clone);
+    } else {
+      warn('$machineName has no copy of $remote. Choose its folder there.');
+      return;
+    }
+    if (_desktopChoices) _syncGitProject();
   }
 
   /// The GitHub repository a cloud coding agent works on: the one chosen to
