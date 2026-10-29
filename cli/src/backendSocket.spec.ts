@@ -2767,6 +2767,29 @@ describe('desk_changed relay', () => {
     await socket.stop()
   })
 
+  // WS roadmap Phase 2a: a Swarm the account is in changed (backend lib/swarmClientPushes.ts); the window reads it again.
+  it('hands the backend\'s swarm_changed to the window, only the backend\'s, and only an id, a time and its parts', async () => {
+    const socket = relaySocket('token')
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:swarm', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 5, parts: ['main'], text: 'x' } } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: {} } })
+    ws.message({ t: 'down', connId: '', frame: { type: 'swarm_changed', payload: { tabId: 'tab-2', lastChangedAt: 5, parts: ['all'] } } })
+    await vi.waitFor(() => expect(frames.filter((f) => f.type === 'swarm_changed')).toEqual([
+      { type: 'swarm_changed', payload: { tabId: 'tab-1', lastChangedAt: 5, parts: ['main'] } },
+      { type: 'swarm_changed', payload: {} }, { type: 'swarm_changed', payload: {} }]))
+    // A relayed client, or a local one, is not the backend: nothing is relayed.
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'swarm_changed', payload: { tabId: 'tab-3', lastChangedAt: 1, parts: ['main'] } } })
+    socket.handleLocalFrame('local:swarm', { type: 'swarm_changed', payload: { tabId: 'tab-4', lastChangedAt: 1, parts: ['main'] } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(frames.filter((f) => f.type === 'swarm_changed')).toHaveLength(3)
+    await socket.unregisterLocalClient('local:swarm')
+    await socket.stop()
+  })
+
   it('hands the backend\'s connectors_changed on, for the connectors service to merge, and only the backend\'s', async () => {
     const socket = relaySocket('token')
     const heard: unknown[] = []

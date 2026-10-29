@@ -472,6 +472,12 @@ export class BackendSocket {
       // Only the Swarm host acts on these (superTabs/host.ts): the windows have nothing to re-read.
       if (notice.type === 'super_tab_deliveries' || notice.type === 'swarm_host_changed') return
       if (notice.type === 'machines_changed' && notice.reason === 'harness_shares') { this.sharesNotice.tell(); return }
+      // A Swarm changed: its id, time and parts, or nothing for the server's word that it pushes (desktop swarm_pushes.dart).
+      if (notice.type === 'swarm_changed') {
+        const { type, ...payload } = notice
+        this.sendLocal({ type, payload })
+        return
+      }
       this.sendLocal(notice.type === 'machines_changed' ? { type: notice.type, payload: { reason: notice.reason } }
         : notice.type === 'device_keys_changed' ? { type: notice.type, payload: {} }
           : { type: notice.type, payload: { revision: notice.revision } })

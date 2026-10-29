@@ -818,6 +818,22 @@ export function subscribeSwarmHost(machineId: string, cb: (msg: unknown) => void
   return addSub(swarmHostChannel(machineId), cb)
 }
 
+// Per-USER Swarm changes: a commit changed a Swarm this person is in (superTabs/store.ts swarmChanged), on some REST worker;
+// every socket of theirs, daemon or web, tells their apps to read it again (lib/swarmClientPushes.ts).
+export interface SwarmMemberMsg { tabId: string; lastChangedAt: number; parts: Array<'main' | 'machine'> }
+/** One socket's own 4-minute repeat that the server pushes, named by that socket so its other sockets ignore it. */
+export interface SwarmMemberRepeat { pushes: string }
+
+const swarmMemberChannel = (userId: string): string => `swarm-member:${userId}`
+
+export function publishSwarmMember(userId: string, msg: SwarmMemberMsg | SwarmMemberRepeat): Promise<number> {
+  return safePublish(swarmMemberChannel(userId), JSON.stringify(msg))
+}
+
+export function subscribeSwarmMember(userId: string, cb: (msg: unknown) => void): Promise<() => void> {
+  return addSub(swarmMemberChannel(userId), cb)
+}
+
 // Per-USER desk invalidation: the account's tabs changed (routes/desk.ts) on some REST worker; every
 // adapter socket of that user — one per computer, possibly on other workers — is told to re-fetch.
 export interface DeskChangedMsg { revision: number }

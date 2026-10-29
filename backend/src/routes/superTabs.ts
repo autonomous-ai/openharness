@@ -140,8 +140,9 @@ const updateRequired = (_req: unknown, reply: FastifyReply) => sendError(reply, 
 
 /** The store this server runs on. Loaded only here: importing the bus opens its Redis connections. */
 async function productionStore(github: GitHubTokens | null): Promise<SuperTabStore> {
-  const [bus, { announceSwarmDeliveries }, { announceSwarmHostChanges }, { tellSessionViewers }] = await Promise.all([import('../lib/bus.js'),
-    import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('./harnessLinks.js')])
+  const [bus, { announceSwarmDeliveries }, { announceSwarmHostChanges }, { announceSwarmChanges }, { tellSessionViewers }] = await Promise.all([
+    import('../lib/bus.js'), import('../lib/swarmDeliveryPushes.js'), import('../lib/swarmHostPushes.js'), import('../lib/swarmClientPushes.js'),
+    import('./harnessLinks.js')])
   return new SuperTabStore(prisma, Date.now, attachmentsFromEnv(env),
     // A task that ends revokes the token it was given; a revoke that fails is logged inside and never blocks the write.
     { workEnded: (tabId, ended) => { void github?.release(tabId, ended).catch(error => logger.warn('[github] release failed', { tabId, error: String(error) })) },
@@ -154,6 +155,8 @@ async function productionStore(github: GitHubTokens | null): Promise<SuperTabSto
       deliveriesWaiting: announceSwarmDeliveries,
       // And each machine whose host read a commit changed, so hosts read their Swarm changes only when told (WS Phase 2a).
       hostsChanged: announceSwarmHostChanges,
+      // And each person in the Swarm, so their apps read it when told instead of every 3–15 s (WS Phase 2a).
+      swarmChanged: announceSwarmChanges,
       // The host's answer often lands on another instance than the sender's wait.
       terminalAnswered: requestId => { void bus.publishTerminalAnswered(requestId) },
       watchTerminal: (requestId, onChange) => bus.subscribeTerminalAnswered(requestId, onChange),

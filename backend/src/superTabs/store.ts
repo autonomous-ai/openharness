@@ -273,7 +273,13 @@ export interface SuperTabStoreHooks {
   /** A commit changed what these machines' hosts read (parts/commit.ts hostsToTell): each machine's daemon socket tells its
    *  host to read its Swarm changes now (lib/swarmHostPushes.ts). Called after the write commits; it must not throw. */
   hostsChanged?: (change: HostsChanged) => void
+  /** A commit changed a Swarm these people are in, or were in before it: each one's apps read it again
+   *  (lib/swarmClientPushes.ts). Called after the write commits; it must not throw. */
+  swarmChanged?: (change: SwarmChanged) => void
 }
+
+/** Which people's apps should read a Swarm again, the commit's time, and which of its stamps moved. */
+export interface SwarmChanged { tabId: string; userIds: string[]; lastChangedAt: number; parts: Array<'main' | 'machine'> }
 
 /** Which machines' hosts should read a Swarm's changes, and the commit's time. */
 export interface HostsChanged { tabId: string; machineIds: string[]; lastChangedAt: number }
@@ -647,6 +653,8 @@ export class SuperTabStore {
     const committed = await commitParts(tx, loaded, next, { stamp, touches })
     const told = this.hooks.hostsChanged
     if (told && committed.hosts.length) afterCommit(tx, () => told({ tabId: loaded.parts.tabId, machineIds: committed.hosts, lastChangedAt: stamp }))
+    const { userIds, parts } = committed.members, changed = this.hooks.swarmChanged
+    if (changed && userIds.length) afterCommit(tx, () => changed({ tabId: loaded.parts.tabId, userIds, lastChangedAt: stamp, parts }))
     return committed
   }
 
