@@ -33,6 +33,10 @@ export interface ContributedMachine {
   removal?: { id: string; state: 'cleaning'; requestedAt: string }
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
+  /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
+  engineFailures?: Record<string, number>
+  /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
+  engineSuspensions?: Record<string, { at: number; fine: boolean }>
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
