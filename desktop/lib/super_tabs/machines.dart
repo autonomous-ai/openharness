@@ -926,7 +926,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     // their own computer. Actions stay the Mac's; the backend changes its team account with it.
     final team = snapshot.teamPoolOf(id);
     final teamId = team?['machineId'] as String?;
-    final agents = snapshot.agents
+    final agents = snapshot.teamAgents
         .where((a) => snapshot.placeOf(a.machineId) == id)
         .toList();
     final contributor =

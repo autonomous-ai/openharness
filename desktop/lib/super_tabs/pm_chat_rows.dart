@@ -64,6 +64,8 @@ class SuperTabPmChatRow extends StatelessWidget {
     this.unreadCount = 0,
     this.tooltip,
     this.note,
+    this.detail,
+    this.status,
   });
 
   /// The Product Manager's agent, for its avatar; null while it has none.
@@ -81,6 +83,11 @@ class SuperTabPmChatRow extends StatelessWidget {
 
   /// A quiet word after the name, such as a Buddy's "offline".
   final String? note;
+
+  /// A line under the name, such as where a Buddy runs, with [status], its
+  /// activity mark, before it.
+  final String? detail;
+  final Widget? status;
 
   static const _column = SuperTabSectionHeading.actionWidth;
 
@@ -127,40 +134,63 @@ class SuperTabPmChatRow extends StatelessWidget {
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Flexible(
-                              child: Text(
-                                name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                // Unread is the name in bold, no dot (Dee, 2026-10-29).
-                                style:
-                                    DesktopChrome.control(
-                                      medium: selected,
-                                      color: color,
-                                    ).copyWith(
-                                      fontWeight: unread
-                                          ? grid.AppFont.semibold
-                                          : null,
-                                    ),
-                              ),
-                            ),
-                            if (project case final project?) ...[
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: Text(
-                                  '($project)',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: DesktopChrome.metadata(),
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                    style:
+                                        DesktopChrome.control(
+                                          medium: selected,
+                                          color: color,
+                                        ).copyWith(
+                                          fontWeight: unread
+                                              ? grid.AppFont.semibold
+                                              : null,
+                                        ),
+                                  ),
                                 ),
+                                if (project case final project?) ...[
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      '($project)',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ],
+                                if (note case final note?) ...[
+                                  const SizedBox(width: 8),
+                                  Text(note, style: DesktopChrome.metadata()),
+                                ],
+                              ],
+                            ),
+                            if (detail case final detail?)
+                              Row(
+                                children: [
+                                  if (status case final status?) ...[
+                                    status,
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Flexible(
+                                    child: Text(
+                                      detail,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                            if (note case final note?) ...[
-                              const SizedBox(width: 8),
-                              Text(note, style: DesktopChrome.metadata()),
-                            ],
                           ],
                         ),
                       ),

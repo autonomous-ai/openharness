@@ -312,6 +312,33 @@ void main() {
       },
     );
 
+    testWidgets(
+      'the reader\'s Buddy row says where it runs; other people\'s Buddies appear nowhere',
+      (tester) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        giveBuddy(
+          server,
+          person: 'owner',
+          id: 'moss',
+          name: 'Moss',
+          machineId: 'studio',
+          machineOwnerId: 'owner',
+        );
+        final c = await show(tester, server);
+        expect(
+          find.descendant(
+            of: buddyEntry,
+            matching: find.text('Pilot · Claude on Kens-MacBook'),
+          ),
+          findsOneWidget,
+        );
+        expect(find.text('Moss'), findsNothing);
+        expect(find.textContaining('Claude on Studio'), findsNothing);
+        await close(tester, c);
+      },
+    );
+
     testWidgets('with two Buddies, each row names its project', (tester) async {
       final server = buddySwarm();
       server.state['projects'] = [

@@ -363,8 +363,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? 'Product Manager'
             : agent.isReviewer
             ? 'Reviewer'
-            : agent.isBuddy
-            ? 'Buddy'
             : 'Engineer');
     final badge =
         customRole?.name ??
@@ -372,8 +370,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ? 'PM'
             : agent.isReviewer
             ? 'Rev'
-            : agent.isBuddy
-            ? 'Buddy'
             : 'Dev');
     final status = info.status ?? 'Status unavailable';
     final tooltip = [
@@ -491,7 +487,7 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
     // agents in it, the project's Lead.
     final audience = c.selected?.audience;
     final members =
-        state?.agents
+        state?.teamAgents
             .where(
               (agent) =>
                   (projectId == null || _agentProjectId(agent) == projectId) &&

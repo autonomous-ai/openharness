@@ -9,8 +9,11 @@ import '../shared/theme/app_icons.dart';
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/appearance_prefs_store.dart';
 import '../state/app_state.dart';
+import '../state/harness_activity.dart';
+import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/harness_activity_mark.dart';
 import 'controller.dart';
 import 'local_models.dart';
 import 'buddies.dart';
@@ -595,6 +598,15 @@ class ProjectSidebar extends StatelessWidget {
       name: name,
       project: named ? project.name : null,
       tooltip: 'Your Buddy · ${project.name}',
+      // Where it runs, as the Agents list once showed every Buddy: only its
+      // person reads this line now. The project is in the name when several.
+      detail: agent == null
+          ? null
+          : [
+              if (!named) project.name,
+              '${buddyEngineName(agent.engine)} on ${buddyMachineName(controller, agent.machineId)}',
+            ].join(' · '),
+      status: agent == null ? null : _buddyMark(agent),
       note: switch ((agent, controller.buddyStart(project.id))) {
         (null, {'error': String _}) => 'not started',
         (null, {'harnessId': null}) => 'starting',
@@ -609,6 +621,30 @@ class ProjectSidebar extends StatelessWidget {
       unread: controller.unread(chat),
       unreadCount: controller.unreadCount(chat),
       onTap: () => onSelect(chat.id),
+    );
+  }
+
+  /// The Buddy's activity mark, drawn as the Agents list draws an agent's.
+  Widget? _buddyMark(SuperTabAgent agent) {
+    final app = this.app;
+    if (app == null) return null;
+    final theme = terminalThemeFor(
+      grid.AppTheme.surfacePalette,
+      terminalThemeStore.value,
+    );
+    final activity = agent.downSince != null
+        ? HarnessActivity.offline
+        : harnessActivity(app, agent.machineId, agent.harnessId) ??
+              HarnessActivity.unknown;
+    return ActivityMark(
+      activity: activity,
+      tooltip: false,
+      showIdle: true,
+      color: activityColor(
+        activity,
+        theme,
+        color: appearancePrefsStore.value.prompt.color,
+      ),
     );
   }
 

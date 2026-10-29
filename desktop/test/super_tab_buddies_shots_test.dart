@@ -29,6 +29,15 @@ void main() {
     });
     giveBuddy(server);
     giveBuddy(server, projectId: 'web', id: 'moss', name: 'Moss');
+    // Other people's Buddies run in the Swarm too; no list shows them.
+    giveBuddy(
+      server,
+      person: 'owner',
+      id: 'sage',
+      name: 'Sage',
+      machineId: 'studio',
+      machineOwnerId: 'owner',
+    );
     ((server.state['agents'] as List).last as Map)['downSince'] =
         '2026-10-28T09:00:00Z';
     server.append(

@@ -491,10 +491,14 @@ void main() {
   );
 
   group('an expanded machine shows its agents as one count', () {
-    Future<dynamic> mount(WidgetTester tester, int agents) async {
+    Future<dynamic> mount(
+      WidgetTester tester,
+      int agents, {
+      int buddies = 0,
+    }) async {
       final server = ConversationServer();
       server.state['agents'] = [
-        for (var i = 0; i < agents; i++)
+        for (var i = 0; i < agents + buddies; i++)
           {
             'id': 'a$i',
             'name': 'Agent $i',
@@ -503,6 +507,11 @@ void main() {
             'harnessId': 'native-a$i',
             'contributorId': 'owner',
             'configuration': {'engine': 'codex'},
+            if (i >= agents)
+              'buddyOf': {
+                'personId': ['owner', 'maya', 'sam'][(i - agents) % 3],
+                'generation': 'fixture',
+              },
           },
       ];
       server.state['machines'] = [
@@ -577,6 +586,32 @@ void main() {
       );
       await unmount(tester, c);
     });
+
+    testWidgets(
+      'Buddies are personal: three running on the machine add nothing to its count or list',
+      (tester) async {
+        final c = await mount(tester, 2, buddies: 3);
+        expect(
+          find.descendant(of: line, matching: find.text('2 agents')),
+          findsOneWidget,
+        );
+        await tester.tap(line);
+        await tester.pumpAndSettle();
+        for (final id in ['a0', 'a1']) {
+          expect(
+            find.byKey(ValueKey('super-machine-agent-m-$id')),
+            findsOneWidget,
+          );
+        }
+        for (final id in ['a2', 'a3', 'a4']) {
+          expect(
+            find.byKey(ValueKey('super-machine-agent-m-$id')),
+            findsNothing,
+          );
+        }
+        await unmount(tester, c);
+      },
+    );
 
     testWidgets('twenty: one "20 agents" line, not twenty rows', (
       tester,
