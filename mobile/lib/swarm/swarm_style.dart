@@ -264,7 +264,6 @@ class SwarmSkeletonRows extends StatelessWidget {
         ),
     ];
     return SkeletonBlock(child: SwarmGroup(children: children));
-
   }
 }
 

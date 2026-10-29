@@ -507,7 +507,6 @@ class _Unavailable extends StatelessWidget {
         'Turn it on in Settings ▸ Experimental.',
         key: const ValueKey('swarm-unavailable'),
         style: AppType.body(color: AppPalette.textSecondary, height: 1.45),
-
       ),
     ],
   );

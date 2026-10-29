@@ -359,8 +359,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
     );
     return [
       if (reader != null &&
-          (swarmBuddyChat(reader, project.id) != null ||
-              swarmCanWrite(reader)))
+          (swarmBuddyChat(reader, project.id) != null || swarmCanWrite(reader)))
         SwarmDrawerRow(
           key: ValueKey('swarm-drawer-buddy-chat-$swarmId-${project.id}'),
           title: 'Buddy chat',
@@ -605,7 +604,6 @@ class SwarmDrawerRow extends StatelessWidget {
                                   : AppType.label(
                                       color: AppPalette.textPrimary,
                                     ),
-
                             ),
                           ),
                           for (final aside in asides) ...[

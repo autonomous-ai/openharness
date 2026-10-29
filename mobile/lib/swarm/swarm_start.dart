@@ -476,7 +476,6 @@ class _Mark extends StatelessWidget {
       decoration: BoxDecoration(
         color: ttyRaised(tty),
         borderRadius: BorderRadius.circular(AppCard.radius),
-
       ),
       child: icon != null
           ? Icon(icon, size: 30, color: tty.text)
