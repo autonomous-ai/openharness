@@ -269,7 +269,7 @@ export interface CommandContext {
   openTags?: Array<{ messageId: string; createdAt: number }>
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
   /** The proposal a new group names as its origin (conversation.create proposalMessageId), loaded from this tab by the store. */
-  proposal?: { id: string; conversationId: string; author: Author; source: { kind?: unknown } | null }
+  proposal?: { id: string; conversationId: string; author: Author; source: Record<string, unknown> | null }
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
     /** The owner's newest message in that chat, which may always be named. */
     newestOwnerMessageId?: string }

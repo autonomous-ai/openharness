@@ -1021,7 +1021,7 @@ export class SuperTabStore {
         const proposal = await tx.superTabMessage.findFirst({ where: { id: command.proposalMessageId, tabId },
           select: { id: true, conversationId: true, author: true, source: true } })
         if (proposal) context.proposal = { id: proposal.id, conversationId: proposal.conversationId, author: proposal.author as unknown as Author,
-          source: proposal.source as { kind?: unknown } | null }
+          source: proposal.source as Record<string, unknown> | null }
       }
       if (command.type === 'buddy.propose') {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.ownerMessageId, tabId, conversationId: command.conversationId } })
