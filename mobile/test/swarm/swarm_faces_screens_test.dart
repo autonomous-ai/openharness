@@ -6,10 +6,10 @@ import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_face.dart';
-import 'package:harness_mobile/swarm/swarm_page.dart';
+import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
+import 'package:harness_mobile/swarm/swarm_project_tabs.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
-import 'package:harness_mobile/swarm/swarm_style.dart';
 
 import '../voice_fakes.dart';
 import 'swarm_fixture.dart';
@@ -18,10 +18,11 @@ const leadPhoto = 'https://storage.googleapis.com/avatars/river.png?sig=1';
 const buddyPhoto = 'https://storage.googleapis.com/avatars/wren.png?sig=1';
 
 /// The faces people and agents chose, on the screens that showed only
-/// initials: Home's Buddies, the project page's work and team, and the
-/// chat's messages — with a person's status emoji beside their own.
+/// initials: the Buddy chat, the project's tasks and team, and the chat's
+/// messages — with a person's status emoji beside their own.
 void main() {
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
+  const buddyMessages = '/api/super-tabs/$tab/conversations/buddy-me/messages';
 
   /// With [buddy], the person's Buddy Wren wears an uploaded photo in its
   /// chat.
@@ -112,6 +113,20 @@ void main() {
       ],
       'next': null,
     };
+    fake.routes[buddyMessages] = (_) => {
+      'messages': [
+        if (buddy)
+          {
+            'id': 'msg-buddy',
+            'conversationId': 'buddy-me',
+            'text': 'Morning. Two reviews wait on you.',
+            'sequence': 1,
+            'author': {'kind': 'agent', 'id': 'agent-wren', 'name': 'Wren'},
+            'createdAt': '2026-10-27T01:00:00.000Z',
+          },
+      ],
+      'next': null,
+    };
     return fake;
   }
 
@@ -159,36 +174,44 @@ void main() {
   Finder within(String key, Finder finder) =>
       find.descendant(of: find.byKey(ValueKey(key)), matching: finder);
 
-  testWidgets("Home's Buddies show the Buddy's uploaded picture", (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1170, 2532);
-    addTearDown(tester.view.reset);
-    await pump(tester, const SwarmPage(), buddy: true);
-    expect(
-      within('swarm-home-buddy-$tab-$project', find.byType(SwarmAvatar)),
-      findsOneWidget,
-    );
-    expect(asked, [Uri.parse(buddyPhoto)]);
-  });
-
-  testWidgets("the project's work shows each worker's chosen face", (
+  testWidgets("the Buddy tab shows the Buddy's uploaded picture", (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1170, 2532);
     addTearDown(tester.view.reset);
     await pump(
       tester,
-      const SwarmProjectPage(swarmId: tab, projectId: project),
+      const SwarmProjectPage(
+        swarmId: tab,
+        projectId: project,
+        tab: SwarmProjectTab.buddy,
+      ),
+      buddy: true,
     );
-    await tester.tap(find.byKey(const ValueKey('swarm-project-menu')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('swarm-project-menu-status')));
-    await tester.pumpAndSettle();
-    expect(within('swarm-conversation-g1', find.text('🦉')), findsOneWidget);
+    expect(
+      within('swarm-message-msg-buddy', find.byType(SwarmChatAvatar)),
+      findsOneWidget,
+    );
+    expect(asked, contains(Uri.parse(buddyPhoto)));
+  });
+
+  testWidgets("the project's tasks show each worker's chosen face", (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1170, 2532);
+    addTearDown(tester.view.reset);
+    await pump(
+      tester,
+      const SwarmProjectPage(
+        swarmId: tab,
+        projectId: project,
+        tab: SwarmProjectTab.tasks,
+      ),
+    );
+    expect(within('swarm-task-g1', find.text('🦉')), findsOneWidget);
     // Nobody chose one: the initial, as before.
-    expect(within('swarm-conversation-g2', find.text('P')), findsOneWidget);
-    expect(within('swarm-conversation-g2', find.text('🦉')), findsNothing);
+    expect(within('swarm-task-g2', find.text('P')), findsOneWidget);
+    expect(within('swarm-task-g2', find.text('🦉')), findsNothing);
   });
 
   testWidgets("a chat shows each author's face and a person's status", (
