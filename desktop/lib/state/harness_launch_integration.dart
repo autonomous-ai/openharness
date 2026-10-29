@@ -2,7 +2,7 @@ import 'harness_attachments.dart';
 import 'lead_placement.dart';
 
 /// A new project's Product Manager the Swarm starts rather than this
-/// Desktop: on [machineId], or with none the first free machine.
+/// Desktop, on [machineId].
 class LeadSwarmStart {
   const LeadSwarmStart({
     required this.machineId,
@@ -12,8 +12,8 @@ class LeadSwarmStart {
     required this.task,
     this.files = const [],
   });
-  final String? machineId, repositoryUrl, title;
-  final String engine, task;
+  final String? repositoryUrl, title;
+  final String machineId, engine, task;
   final List<HarnessAttachment> files;
 }
 

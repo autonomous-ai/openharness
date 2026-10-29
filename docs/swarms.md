@@ -66,6 +66,10 @@ contributed machine, plus every machine an agent of the Swarm already runs on
 available, a person adds it to the Swarm under Machines; the host then clones
 the project there.
 
+A new project's Product Manager starts on any machine of the Swarm (Ken, 2026-10-29). On another person's Mac it runs in
+that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account,
+unless the Mac was added to the Swarm as its person joined: such a Mac takes it only in its Team account.
+
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
 date. A start that names no `branchRef` therefore bases its worktree on the
@@ -189,7 +193,7 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   it sends (Ken, 2026-10-28), and, as with any session, so does the owner of the machine running it. The product
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
-  list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
+  list, and Claude Code (a Codex Buddy is refused for now; see below). A Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
   Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
   runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named

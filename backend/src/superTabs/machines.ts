@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
+import { startFinished } from './parts/write.js'
 import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -488,7 +489,9 @@ function poolSlots(state: SuperTabState, pool: ContributedMachine) {
   let pending = 0
   for (const start of state.starts ?? []) {
     if (start.request.machineId !== pool.machineId || start.error) continue
-    if (start.harnessId) { if (!stopped.has(start.harnessId)) running.add(start.harnessId) }
+    // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
+    // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
+    if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
     else pending++
   }
   return running.size + pending
@@ -542,8 +545,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
   }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
-  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
-  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
+  // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.

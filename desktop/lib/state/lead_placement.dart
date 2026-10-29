@@ -174,44 +174,6 @@ List<LeadMachine> rankLeadMachines(
   );
 }
 
-/// Where the Swarm places the Product Manager, or null when no machine can
-/// take it now.
-LeadMachine? bestLeadMachine(
-  Iterable<LeadMachine> machines,
-  String? repository,
-) => rankLeadMachines(
-  machines,
-  repository,
-).where((m) => m.startable).firstOrNull;
-
-/// Where the Product Manager starts and with which engine, or null when no
-/// machine can start it now. Never a machine that cannot run the engine it
-/// proposes. Your own machines come first: among them the best that runs
-/// [engine], else the best with another engine, unless the person chose
-/// [engine] ([engineChosen]); then a teammate's the same way.
-({LeadMachine machine, String engine})? bestLeadPlacement(
-  Iterable<LeadMachine> machines,
-  String? repository, {
-  required String engine,
-  bool engineChosen = false,
-}) {
-  final ready = rankLeadMachines(
-    machines,
-    repository,
-  ).where((m) => m.startable).toList();
-  for (final own in [true, false]) {
-    final group = ready.where((m) => m.own == own);
-    if (group.where((m) => m.runs(engine)).firstOrNull case final machine?) {
-      return (machine: machine, engine: engine);
-    }
-    final other = engineChosen ? null : group.firstOrNull;
-    if (other != null) {
-      return (machine: other, engine: other.leadEngines.first);
-    }
-  }
-  return null;
-}
-
 /// A machine's row detail, in words, so colour is never the only signal.
 String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;

@@ -113,6 +113,8 @@ void main() {
       final next = await reopen(f, machineId: 'm');
       expect(next.checking, isFalse);
       expect(next.integration!.creationId, isNot(saved['creationId']));
+      // A new project: its person chooses the Product Manager's machine.
+      next.chooseLeadMachine('m');
       expect(
         await next.create(),
         NewHarnessOutcome.created,
