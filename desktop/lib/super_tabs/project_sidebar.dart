@@ -831,7 +831,7 @@ class ProjectSidebar extends StatelessWidget {
                       !controller.saving &&
                       !controller.hasPendingAction &&
                       buddyProjects(controller).isNotEmpty
-                  ? () => unawaited(showAddBuddy(context, controller))
+                  ? () => unawaited(showAddBuddy(context, controller, app: app))
                   : null,
               addTooltip: 'Add a Buddy',
               endInset: 0,
