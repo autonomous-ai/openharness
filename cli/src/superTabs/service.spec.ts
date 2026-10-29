@@ -815,6 +815,11 @@ describe('the Swarm cards the devices ask for', () => {
     const t = withCards()
     await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', extra: 1 } }, owner)
     expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
+    // A focus the device's own pick caused says so; anything but true is not that.
+    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: true } }, owner)
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1', fromDevice: true })
+    await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus: { tabId: 's1', conversationId: 'g1', fromDevice: 'yes' } }, owner)
+    expect(t.cards.want).toHaveBeenLastCalledWith(true, ['s1'], { tabId: 's1', conversationId: 'g1' })
     // A focus that is not two ids is none.
     for (const focus of [{ tabId: 'bad id', conversationId: 'g1' }, { tabId: 's1', conversationId: 'x'.repeat(48) }, { tabId: 's1' }, 'g1']) {
       await t.ask({ action: 'cardsWanted', on: true, include: ['s1'], focus }, owner)
@@ -853,6 +858,11 @@ describe('the Swarm cards the devices ask for', () => {
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'bad id' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
+    // Reviewed on the dial: only with the chat it was reviewed for.
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1', reviewed: true }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1', true)
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', reviewed: true }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
   })
   it('cardSay passes a refused post\'s code and message on, and says nothing of a refusal otherwise', async () => {
@@ -1005,6 +1015,19 @@ describe('the Harness Team account, offered by Desktop on this Mac', () => {
     await service.requests.super_tabs({ action: 'teamSetup', reason: 'contribute' }, owner)
     expect(make).toHaveBeenCalledTimes(1)
     expect(offer).toHaveBeenCalledTimes(2)
+  })
+
+  it('tells only Desktop on this Mac why there is no account, asking nothing and starting nothing', async () => {
+    const offer = vi.fn(async () => ({ state: 'started' as const }))
+    const status = vi.fn(async () => ({ state: 'failed' as const, detail: 'launchd would not start it' }))
+    const service = superTabService(fakeCore(), { teamSetup: async () => ({ offer, decline: vi.fn(), status }) })
+    expect(await service.requests.super_tabs({ action: 'teamSetupStatus' }, owner)).toEqual({ ok: true, state: 'failed', detail: 'launchd would not start it' })
+    // Through the relay, or anyone but the owner: the reason can name this Mac's own setup, so it stays on this Mac.
+    for (const asker of [visitor, { local: false, owner: true, accountOwner: true }]) {
+      expect(await service.requests.super_tabs({ action: 'teamSetupStatus' }, asker as never)).toEqual({ error: 'OWNER_REQUIRED' })
+    }
+    expect(status).toHaveBeenCalledOnce()
+    expect(offer).not.toHaveBeenCalled()
   })
 
   it('at app start, answers at once on a Mac that hosts no Swarm work, as no regular user\'s does', async () => {

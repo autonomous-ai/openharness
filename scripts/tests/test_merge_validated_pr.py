@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest import mock
 import zipfile
@@ -104,6 +105,55 @@ class MergeTests(unittest.TestCase):
                 self.assertEqual(result["status"], "not_merged")
                 self.assertIn("CI changed during verification", result["error"])
                 self.assertEqual(self.client.writes, [])
+
+    def reused_receipt(self):
+        record = dict(origin_sha="e" * 40, origin_tree="f" * 40, run_id=99, run_attempt=1,
+                      run_url="https://github.com/owner/repo/actions/runs/99", reason="passed in run 99")
+        self.client.receipt_patch = dict(suites=["mobile"], reused={"mobile": record},
+                                         reuse=dict(status="applied", passed_head="e" * 40, main_parent=self.base))
+        return record
+
+    def main_planner(self, verify):
+        calls = []
+
+        def verify_reuse(root, receipt, base, evidence):
+            calls.append((root, receipt["reused"], base, evidence))
+            return verify(receipt)
+        main = types.SimpleNamespace(GitHubEvidence=lambda client: ("main's reader", client), verify_reuse=verify_reuse)
+        loader = self.patch(merger.queue.planner, "main_planner", return_value=main)
+        return loader, calls
+
+    def test_reused_results_are_rederived_by_mains_planner_before_merging(self):
+        record = self.reused_receipt()
+        loader, calls = self.main_planner(lambda receipt: receipt["reused"])
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "merged")
+        loader.assert_called_once_with(self.root, self.base)
+        self.assertEqual(calls, [(self.root, {"mobile": record}, self.base, ("main's reader", self.client))])
+        self.assertEqual(result["pr_evidence"]["reused"], {"mobile": record})
+        self.assertIn("reused mobile from https://github.com/owner/repo/actions/runs/99", (self.output / "merge.md").read_text())
+
+    def test_reuse_that_mains_planner_refuses_or_cannot_check_blocks_the_merge(self):
+        self.reused_receipt()
+
+        def refuse(receipt):
+            raise ValueError("reused mobile refused: main changed its input backend/src/types/productUsage.ts")
+        self.main_planner(refuse)
+        result = self.finish(automatic=True)
+        self.assertEqual(result["status"], "not_merged")
+        self.assertIn("productUsage", result["error"])
+        self.assertEqual(self.client.writes, [])
+        self.output = self.output.with_name("no-verifier")
+        self.patch(merger.queue.planner, "main_planner", side_effect=ValueError("main's planner cannot verify reused results (X)"))
+        result = self.finish(automatic=True)
+        self.assertIn("cannot verify reused results", result["error"])
+        self.assertEqual(self.client.writes, [])
+
+    def test_a_receipt_that_skips_a_suite_it_did_not_reuse_blocks_the_merge(self):
+        self.client.receipt_patch = dict(suites=["mobile"])
+        result = self.finish(automatic=True)
+        self.assertIn("does not run every suite", result["error"])
+        self.assertEqual(self.client.writes, [])
 
     def test_default_command_uses_direct_merge_unless_github_requires_queue(self):
         direct = self.patch(merger, "finish", return_value={"status": "ready"})
@@ -283,7 +333,7 @@ class FakeClient:
         self.merged_sha, self.merged_tree = "c" * 40, fixture.tree
         self.tested_tree = fixture.tree
         self.required_gate, self.run_list_reads, self.superseding_run = False, 0, None
-        self.rules = []
+        self.rules, self.receipt_patch = [], {}
         self.pr = dict(number=5, state="open", draft=False, merged=False, mergeable=True, mergeable_state="clean",
                        html_url="https://github.com/owner/repo/pull/5", head=dict(sha=fixture.head),
                        base=dict(sha=fixture.base, ref="main", repo=dict(full_name=self.repository)))
@@ -325,6 +375,7 @@ class FakeClient:
                                source_tree=self.tested_tree, event="pull_request", run_id=123, run_attempt=1,
                                suites=[], required_jobs=["process-checks"],
                                results={"plan": "success", "process-checks": "success"})
+                receipt.update(self.receipt_patch)
                 buf = io.BytesIO()
                 with zipfile.ZipFile(buf, "w") as bundle:
                     bundle.writestr("ci-required.json", json.dumps(receipt))

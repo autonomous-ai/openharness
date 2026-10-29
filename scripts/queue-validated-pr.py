@@ -16,6 +16,10 @@ spec = importlib.util.spec_from_file_location("queue_ci_evidence", Path(__file__
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
 
+planner_spec = importlib.util.spec_from_file_location("queue_ci_plan", Path(__file__).with_name("ci-plan.py"))
+planner = importlib.util.module_from_spec(planner_spec)
+planner_spec.loader.exec_module(planner)
+
 STATE_QUERY = """query($owner:String!,$name:String!,$number:Int!) {
   repository(owner:$owner,name:$name) { pullRequest(number:$number) {
     id number state isDraft headRefOid baseRefName mergedAt
@@ -49,42 +53,21 @@ def state(client, number, head, branch):
     return pr
 
 
-def gate_evidence(client, run, output):
-    ci.check_run(run, client.repository, run["id"])
-    if run.get("event") not in {"pull_request", "merge_group"}:
-        raise ValueError("only automatic PR or merge-group CI can authorize queued integration")
-    jobs = client.pages(f"actions/runs/{run['id']}/jobs?filter=latest", "jobs")
-    gates = [j for j in jobs if j["name"] == "ci/required"]
-    if (len(gates) != 1 or gates[0].get("head_sha") != run["head_sha"]
-            or gates[0].get("status") != "completed" or gates[0].get("conclusion") != "success"):
-        raise ValueError("automatic required CI gate did not pass")
-    artifacts = client.pages(f"actions/runs/{run['id']}/artifacts", "artifacts")
-    matches = [a for a in artifacts if a.get("name") == "ci-required"]
-    if len(matches) != 1 or matches[0].get("size_in_bytes", 65537) > 65536:
-        raise ValueError("expected one bounded required-gate receipt")
-    artifact = matches[0]
-    archive = client.command("api", f"repos/{client.repository}/actions/artifacts/{artifact['id']}/zip", binary=True)
-    receipt = ci.summary_contents(artifact, archive, run, "ci-required")
-    commit = client.api(f"git/commits/{run['head_sha']}")
-    if (commit.get("sha") != run["head_sha"] or receipt.get("schema") != 1
-            or receipt.get("kind") != "ci-required" or receipt.get("status") != "passed"
-            or receipt.get("source_sha") != run["head_sha"] or receipt.get("event") != run["event"]
-            or receipt.get("source_tree") != commit.get("tree", {}).get("sha")
-            or receipt.get("run_id") != run["id"] or receipt.get("run_attempt") != gates[0].get("run_attempt")
-            or not receipt.get("required_jobs")
-            or any(receipt.get("results", {}).get(job) != "success" for job in receipt["required_jobs"])
-            or receipt.get("results", {}).get("plan") != "success"):
-        raise ValueError("required-gate receipt has inconsistent source, coverage or run identity")
-    after = client.api(f"actions/runs/{run['id']}")
-    ci.check_run(after, client.repository, run["id"])
-    if any(after[key] != run[key] for key in ["head_sha", "run_attempt", "updated_at"]):
-        raise ValueError("CI changed during queue evidence collection")
+def gate_evidence(client, run, output, root=None, base=None):
+    receipt, artifact, archive = planner.read_gate(client, run)
+    reused = receipt.get("reused") or {}
+    if reused:
+        # PR CI ran the PR's own planner. Re-derive its reuse with main's copy, from the reviewed checkout.
+        if root is None or base is None or run.get("event") != "pull_request":
+            raise ValueError("reused CI results can only be verified for a PR run against the reviewed checkout")
+        main = planner.main_planner(root, base)
+        main.verify_reuse(root, receipt, base, main.GitHubEvidence(client))
     output.mkdir(parents=True, exist_ok=True)
     (output / "ci-required.zip").write_bytes(archive)
     (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return dict(run_id=run["id"], run_attempt=run["run_attempt"], url=run["html_url"],
                 source_sha=receipt["source_sha"], source_tree=receipt["source_tree"],
-                suites=receipt["suites"], artifact_id=artifact["id"], artifact_digest=artifact["digest"])
+                suites=receipt["suites"], reused=reused, artifact_id=artifact["id"], artifact_digest=artifact["digest"])
 
 
 def pr_run(client, head):
@@ -96,8 +79,8 @@ def pr_run(client, head):
     return candidates[0]
 
 
-def pr_gate(client, head, output):
-    return gate_evidence(client, pr_run(client, head), output)
+def pr_gate(client, head, output, root=None, base=None):
+    return gate_evidence(client, pr_run(client, head), output, root, base)
 
 
 def merged_gate(client, tree, branch, started_at, output):
@@ -147,7 +130,7 @@ def finish(client, root, number, head, base, output, *, merge=False, wait_timeou
         pr = phase("preflight", lambda: state(client, number, head, branch))
         if pr["state"] != "OPEN":
             raise ValueError("PR is not open")
-        record["pr_evidence"] = phase("pr_validation", lambda: pr_gate(client, head, output / "pr-ci"))
+        record["pr_evidence"] = phase("pr_validation", lambda: pr_gate(client, head, output / "pr-ci", root, base))
         pr = state(client, number, head, branch)
         if pr["state"] != "OPEN":
             raise ValueError("PR state changed before enqueueing")

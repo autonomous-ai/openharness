@@ -117,6 +117,19 @@ void main() {
             LostReplyConnection(store, 'message.send'),
       );
       configure(f);
+      (f.connection.server.state['machines'] as List).add({
+        'machineId': 'far',
+        'name': 'Office Mini',
+        'contributorId': 'owner',
+        'maxAgents': 8,
+        'availableSlots': 3,
+        'paused': false,
+        'observation': {
+          'receivedAt': DateTime.now().millisecondsSinceEpoch,
+          'runningHarnessIds': <String>[],
+          'capabilities': ['leadStart'],
+        },
+      });
       SuperTabLaunch.uploadForTest = f.connection.server.upload;
       addTearDown(() => SuperTabLaunch.uploadForTest = null);
       final files = HarnessAttachments()
@@ -124,6 +137,7 @@ void main() {
           HarnessAttachment('plan.md', Uint8List.fromList([1, 2, 3])),
         ]);
       final box = await f.box(newProject: true, attachments: files);
+      box.chooseLeadMachine('far');
       expect(await box.create(), NewHarnessOutcome.failed);
       final recovered = await box.create();
       final c = f.connection as LostReplyConnection;

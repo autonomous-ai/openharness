@@ -458,6 +458,17 @@ describe('SwarmCards.say', () => {
     expect(t.call.mock.calls.filter(c => c[0] === 'POST')).toHaveLength(1)
   })
 
+  // Diego's dial, 2026-10-29: a Lead on another machine has no harness here, so the dial names it by its Swarm id.
+  it('posts words for a Lead on another machine, named by its Swarm id, in its conversation as the person', async () => {
+    const t = setup({ t1: { lastChangedAt: 1, state: swarm({ agents: [agent('a1', { machineId: 'm2' }), agent('a2')] }) } })
+    await t.cards.tick()
+    expect(await t.cards.say('a1', 'ship it')).toEqual({ said: true })
+    const post = t.call.mock.calls.find(c => c[0] === 'POST')!
+    expect(post[2]).toMatchObject({ command: { type: 'message.send', conversationId: 'lead-web', text: 'ship it' } })
+    expect(post[2]).not.toHaveProperty('asAgentId')
+    expect(await t.cards.say('zz', 'x')).toEqual({ said: false })
+  })
+
   // A refused post was typed into the Lead's terminal instead (spec 2026-10-29 Voice): the dial is told the refusal now.
   it('say reports a 403 as refused with the backend\'s message', async () => {
     let answer = { status: 403, body: { success: false, error: { code: 'PM_CHAT_READ_ONLY', message: 'Chat with PM is read-only.' } } }
@@ -986,6 +997,56 @@ describe('SwarmCards Buddy side', () => {
     t.cards.want(false)
   })
 
+  it('keeps the side through a desktop focus the dial itself caused, and clears it on the desktop\'s own next one', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    // The dial swiped to the next project: its select moved the desktop there, and that announce says so.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', fromDevice: true })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    // The person then opens another conversation on the desktop: newest wins, the side goes and the face follows it.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'group', id: 'g-web' })
+    t.cards.want(false)
+  })
+
+  it('says the Swarm\'s side on its card, so a dial follows the daemon\'s side even where no face changes', async () => {
+    // No Buddy chat in the Swarm: a side changes no face, and the card alone tells the dial (review of #2218).
+    const t = chatSwarm({})
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    t.cards.side('t1', 'buddy')
+    expect(t.seen.at(-1)?.[0].side).toBe('buddy')
+    // The desktop opens a group: the side goes, and the card says so.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    t.cards.want(false)
+  })
+
+  it('says the Buddy side when the desktop opens the Buddy chat, so the side and the face agree', async () => {
+    // Re-check of #2216: the face followed the desktop to the Buddy chat while the card said the PM side, and the dial
+    // (#2218) showed the PM screen without the Buddy's recap.
+    const t = chatSwarm({ 'pm-web': [said(2, 'y1', { text: 'from the Buddy' })] }, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    expect(t.seen.at(-1)?.[0].side).toBe('buddy')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy', id: 'pm-web' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ chatId: 'pm-web', text: 'from the Buddy' })
+    // A swipe down wins over that focus: both say the PM side.
+    t.cards.side('t1', 'pm')
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ chatId: 'lead-web' })
+    // The desktop moving to a group clears both.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'group' })
+    t.cards.want(false)
+  })
+
   it('keeps the side per Swarm, refuses a bad tab or side, and forgets every side when the devices go', async () => {
     const t = chatSwarm({}, true)
     t.cards.want(true, [], null)
@@ -1051,6 +1112,24 @@ describe('SwarmCards Buddy side', () => {
     t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
     expect(await t.cards.say('h-a1', 'still for my Buddy', 'buddy', 'pm-web')).toEqual({ said: false,
       refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } })
+    const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string } }).command.conversationId)
+    expect(posts).toEqual(['pm-web'])
+    t.cards.want(false)
+  })
+
+  it('reviewed words go to the chat they were reviewed for after the face moved, and never to a chat outside the Lead\'s project', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    // The person reviewed the words for their Buddy chat; the window opened the Lead before they pressed Send.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(await t.cards.say('h-a1', 'reviewed for my Buddy', 'buddy', 'pm-web', true)).toEqual({ said: true })
+    // Another project's chat, or one this reader cannot see, is not where this Lead's words go.
+    for (const chatId of ['lead-mobile', 'gone']) {
+      expect(await t.cards.say('h-a1', 'not here', 'buddy', chatId, true)).toEqual({ said: false,
+        refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } })
+    }
     const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string } }).command.conversationId)
     expect(posts).toEqual(['pm-web'])
     t.cards.want(false)

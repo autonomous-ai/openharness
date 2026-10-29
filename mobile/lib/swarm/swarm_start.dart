@@ -16,6 +16,10 @@ import 'swarm_session.dart';
 /// and whether it is away for real (`phoneMachineAway`).
 typedef SwarmComputer = ({String name, bool away});
 
+/// One of the person's own computers a Buddy may run on: never one shared
+/// with them, nor a Harness Team account. [away] ones are listed, not picked.
+typedef SwarmOwnComputer = ({String id, String name, bool away});
+
 /// What Swarm shows before there is a Swarm to show — one screen each, with
 /// one button. Swarm turned off is not one of them: the app is as it was, and
 /// Settings offers Swarm.
@@ -67,6 +71,17 @@ abstract interface class SwarmComputers implements Listenable {
 
   /// Opens the steps to connect a computer.
   void add(BuildContext context);
+
+  /// The person's own computers ([SwarmOwnComputer]); empty until the list
+  /// has answered.
+  List<SwarmOwnComputer> get own;
+
+  /// Asks the person's own computer [machineId] one Swarm question of its
+  /// own, such as preparing a Buddy's folder (`prepareContribution`).
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  );
 }
 
 /// The start screen Swarm Home shows in place of its body, or null when it
@@ -224,8 +239,21 @@ Future<void> _showHow(BuildContext context) => Navigator.of(
   rootNavigator: true,
 ).push(phoneSheetRoute<void>(context, builder: (_) => const _HowSheet()));
 
+/// The drawer's Join or create a Swarm: the phone makes no Swarm and sends
+/// no invitation, so the same sheet, with how one is joined too.
+Future<void> showSwarmJoinOrCreate(BuildContext context) =>
+    Navigator.of(context, rootNavigator: true).push(
+      phoneSheetRoute<void>(
+        context,
+        builder: (_) => const _HowSheet(join: true),
+      ),
+    );
+
 class _HowSheet extends StatelessWidget {
-  const _HowSheet();
+  const _HowSheet({this.join = false});
+
+  /// Says how a Swarm is joined, too.
+  final bool join;
 
   static const _steps = [
     'Open Harness on your computer.',
@@ -249,11 +277,18 @@ class _HowSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const TtyText(
-              'Start a Swarm',
+            TtyText(
+              join ? 'Join or create a Swarm' : 'Start a Swarm',
               size: TtySize.title,
               weight: FontWeight.w600,
             ),
+            if (join) ...[
+              const SizedBox(height: 12),
+              Text(
+                'To join one, ask its owner to invite you. To start one:',
+                style: tty.style(color: tty.dim, size: TtySize.row),
+              ),
+            ],
             const SizedBox(height: 18),
             for (final (index, step) in _steps.indexed)
               Padding(

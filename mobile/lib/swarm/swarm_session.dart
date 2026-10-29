@@ -11,6 +11,7 @@ import 'swarm_choices.dart';
 import 'swarm_dictation.dart';
 import 'swarm_face.dart';
 import 'swarm_home_cache.dart';
+import 'swarm_home_prefs.dart';
 import 'swarm_inbox.dart';
 import 'swarm_notices.dart';
 import 'swarm_profile.dart';
@@ -40,7 +41,8 @@ class SwarmSession extends ChangeNotifier {
          pollInterval: pollInterval,
          homeCache: homeCache,
          readMarks: readMarks,
-       ) {
+       ),
+       home = SwarmHomePrefs(accountId: accountId, store: readMarks) {
     _announcer = SwarmAnnouncer(
       notices,
       quiet: (_) => !swarmLocalNotices || _screens > 0,
@@ -52,6 +54,10 @@ class SwarmSession extends ChangeNotifier {
 
   final String accountId;
   final SwarmInbox inbox;
+
+  /// What the person chose for Home on this phone: the projects pinned and
+  /// the one Swarm shown. A Swarm the account no longer has takes its own.
+  final SwarmHomePrefs home;
 
   /// How long a decision's answer is held before it is sent.
   final Duration undoWindow;
@@ -147,6 +153,9 @@ class SwarmSession extends ChangeNotifier {
 
   void _needsChanged() {
     _show();
+    if (inbox.loaded) {
+      home.keepOnly({for (final swarm in inbox.swarms) swarm.id});
+    }
     _announcer.settle(inbox.needs);
     // Answered somewhere else meanwhile, or out of the list while the Swarm
     // is read again: nothing is sent, and a card that comes back says so.
@@ -172,6 +181,7 @@ class SwarmSession extends ChangeNotifier {
     inbox.removeListener(_needsChanged);
     _announcer.clear();
     inbox.dispose();
+    home.dispose();
     super.dispose();
   }
 }

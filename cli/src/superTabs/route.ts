@@ -33,7 +33,9 @@ export interface QuotaWindow { name: string | null; leftPercent: number; resetsA
 /** `leftPercent` and `resetsAt` are the tightest window's; `windows` is every window. `account` is the reading's hashed
  * account key, which models on one subscription share. `metered` is an engine on an API key or gateway: known, with no
  * usage window to run out. */
-export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true }
+export interface Quota { known: boolean; leftPercent: number | null; resetsAt: number | null; windows?: QuotaWindow[]; account?: string; metered?: true
+  /** Why an unknown allowance could not be read, as its machine said (cli superTabs/capacity.ts quotaUnknownReason). */
+  why?: string }
 /** The task's folder as the Lead's machine sees it. `unknown` means it could not be read, `none` that it is not a repository,
  * `missing` that the Lead's machine has no such folder (a member elsewhere may). */
 export interface TaskFolder { cwd: string; kind: 'git' | 'none' | 'missing' | 'unknown'; name: string | null; root: string | null; remote: string | null }
@@ -161,9 +163,9 @@ function resetMs(value: unknown): number | null {
   if (typeof value === 'string') { const ms = Date.parse(value); return Number.isFinite(ms) ? ms : null }
   return null
 }
-export function quotaOf2(q: { known: boolean; windows: Array<{ usedPercent: number; resetsAt: unknown; name?: string }>; account?: string | null }): Quota {
+export function quotaOf2(q: { known: boolean; windows: Array<{ usedPercent: number; resetsAt: unknown; name?: string }>; account?: string | null; why?: string | null }): Quota {
   const account = q.account ? { account: q.account } : {}
-  if (!q.known) return { known: false, leftPercent: null, resetsAt: null, ...account }
+  if (!q.known) return { known: false, leftPercent: null, resetsAt: null, ...account, ...(q.why ? { why: q.why } : {}) }
   if (!q.windows.length) return { known: true, leftPercent: null, resetsAt: null, metered: true, ...account }
   const tightest = q.windows.reduce((x, y) => y.usedPercent > x.usedPercent ? y : x)
   return { known: true, leftPercent: Math.max(0, 100 - tightest.usedPercent), resetsAt: resetMs(tightest.resetsAt),
@@ -298,7 +300,7 @@ function span(ms: number): string {
 const resetsIn = (resetsAt: number, now: number) => span(Math.max(0, resetsAt - now))
 function quotaText(q: Quota, now: number): string {
   if (q.metered) return 'quota metered'
-  if (!q.known || q.leftPercent === null) return 'quota unknown'
+  if (!q.known || q.leftPercent === null) return q.why ? `quota unknown (${q.why})` : 'quota unknown'
   if (q.windows?.length) {
     return `quota ${q.windows.map(w => `${w.name ?? 'window'} ${Math.round(w.leftPercent)}% left${w.resetsAt === null ? '' : ` (resets in ${resetsIn(w.resetsAt, now)})`}`).join(', ')}`
   }

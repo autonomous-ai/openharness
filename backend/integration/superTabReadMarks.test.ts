@@ -16,6 +16,8 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { CATCH_UP_SCAN } from '../src/superTabs/catchUp.js'
+import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -28,6 +30,9 @@ let app: FastifyInstance
 let clock = NOW
 const user = (actor: { userId: string; email: string }): AuthUser => ({ sub: actor.userId, email: actor.email, autonomousEnv: 'prod', role: 'user' })
 const [owner, peer, outsider] = [ownerActor, peerActor, outsiderActor].map(user) as [AuthUser, AuthUser, AuthUser]
+const ownerTeam: AuthUser = { ...owner, harnessSessionId: 'owner-team-session', harnessSessionKind: 'team' }
+const signedIn = (authorization: string | undefined) =>
+  authorization === 'Bearer team' ? ownerTeam : [owner, peer, outsider].find(u => `Bearer ${u.sub}` === authorization)
 const MIGRATED = NOW - 60_000
 
 beforeAll(async () => {
@@ -44,7 +49,7 @@ beforeAll(async () => {
   app.setErrorHandler(errorHandler)
   // External SSO is replaced with fixture accounts; every permission and write below is real.
   app.addHook('onRequest', async (request, reply) => {
-    const found = [owner, peer, outsider].find(u => `Bearer ${u.sub}` === request.headers.authorization)
+    const found = signedIn(request.headers.authorization)
     if (!found) return reply.code(401).send({ success: false })
     request.user = found
   })
@@ -78,7 +83,8 @@ async function scene() {
 }
 
 const call = async (method: 'GET' | 'POST', url: string, as: AuthUser, payload?: unknown) => {
-  const response = await app.inject({ method, url, headers: { authorization: `Bearer ${as.sub}` }, ...(payload ? { payload } : {}) })
+  const response = await app.inject({ method, url, headers: { authorization: as === ownerTeam ? 'Bearer team' : `Bearer ${as.sub}` },
+    ...(payload ? { payload } : {}) })
   return { status: response.statusCode, body: response.json() as { data: any; error?: { code: string } } }
 }
 const mark = (tabId: string, conversationId: string, sequence: number, as: AuthUser = owner, query = '') =>
@@ -158,5 +164,102 @@ describe('read marks (one per person and conversation)', () => {
     await mark(s.tabId, s.web, 25)
     expect(await changes(NOW + 63_000)).toEqual({ [s.web]: 25 })
     clock = NOW
+  })
+})
+
+describe('catch-up summary (what the reader missed since their mark)', () => {
+  const lead = { kind: 'agent', id: 'lead-agent', name: 'Lead', displayName: 'River', membershipGeneration: 'g' }
+  /** Rows written as the store writes them, numbered from 1 in `conversationId`; scenes repeat conversation ids, so the tab names them. */
+  const write = (tabId: string, conversationId: string, rows: Array<{ text: string; source?: object; mentions?: string[]; recipientIds?: string[] }>) =>
+    db.superTabMessage.createMany({ data: rows.map((row, i) => ({ id: `${tabId}-${conversationId}-m${i + 1}`, tabId, conversationId, sequence: i + 1, author: lead,
+      text: row.text, recipientIds: row.recipientIds ?? [], mentions: row.mentions ?? [], ...(row.source ? { source: row.source } : {}) })) })
+  const catchUp = (tabId: string, conversationId: string, after: number, as: AuthUser = owner, query = '') =>
+    call('GET', `/api/super-tabs/${tabId}/conversations/${conversationId}/catch-up?after=${after}${query}`, as)
+  const scenario = async () => {
+    const s = await scene()
+    await write(s.tabId, s.web, [
+      { text: 'Read already', mentions: [owner.sub] },
+      { text: '🎉 Shipped: Avatars. https://github.com/o/r/pull/7', source: { kind: 'ship', title: 'Avatars' } },
+      { text: 'Owner, which colour?', mentions: [owner.sub] },
+      { text: 'Peer, which font?', mentions: [peer.sub] },
+      // An agent-only notice is its recipient's alone, tag and all.
+      { text: 'Skill update for the Lead', source: { kind: 'agent-only' }, mentions: [owner.sub], recipientIds: ['lead-agent'] },
+      { text: 'Stuck\n\nNo simulator on this Mac.', source: { kind: 'system' } },
+    ])
+    await write(s.tabId, s.secretGroup, [{ text: 'Secret question', mentions: [owner.sub] }])
+    const decision = (id: string, personId: string, conversationId: string, answeredAt?: Date) => ({ id, tabId: s.tabId, batchId: id, projectId: 'p',
+      conversationId, personId, askerAgentId: 'lead-agent', question: 'Which?', options: ['A', 'B'], recommended: 0, unblocks: 'Work', createdAt: new Date(NOW),
+      ...(answeredAt ? { answeredAt } : {}) })
+    await db.superTabDecision.createMany({ data: [decision(`${s.tabId}-d1`, owner.sub, s.web), decision(`${s.tabId}-d2`, peer.sub, s.web),
+      decision(`${s.tabId}-d3`, owner.sub, s.web, new Date(NOW)), decision(`${s.tabId}-d4`, owner.sub, s.secretGroup)] })
+    return s
+  }
+
+  it('lists what landed, what is blocked and what needs the reader, from the rows past the mark they may read', async () => {
+    const s = await scenario()
+    const { status, body } = await catchUp(s.tabId, s.web, 1)
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ after: 1, through: 6, unread: 4, more: false, decisions: 1,
+      landed: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m2`, sequence: 2, author: 'River', text: 'Avatars' }] },
+      blocked: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m6`, sequence: 6, author: 'River', text: 'Stuck: No simulator on this Mac.' }] },
+      needsYou: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m3`, sequence: 3, author: 'River', text: 'Owner, which colour?' }] } })
+    // Another reader's tags and decisions are their own.
+    expect((await catchUp(s.tabId, s.web, 1, peer)).body.data).toMatchObject({ decisions: 1,
+      needsYou: { total: 1, items: [{ text: 'Peer, which font?' }] } })
+  })
+
+  // The #2213 merge with main (#2177): a task chat's copy of a Lead's notice stored before such copies were marked, whose Lead
+  // copy reached the Lead, is read by no one (pageReads.ts deliveredCopies). The summary leaves it out as the page does.
+  it('leaves out a task chat copy of a Lead notice that its Lead copy delivered, as the page does', async () => {
+    const s = await scene()
+    await write(s.tabId, s.web, [
+      { text: 'Read already' },
+      { text: 'COPY: "Avatars" lost its task. Owner, who takes it?', source: { kind: 'work-lost' }, mentions: [owner.sub] },
+      { text: 'Owner, which colour?', mentions: [owner.sub] },
+    ])
+    const copy = `${s.tabId}-${s.web}-m2`
+    await db.superTabMessage.create({ data: { id: stableId(copy, 'lead'), tabId: s.tabId, conversationId: 'lead', sequence: 1, author: lead,
+      text: 'COPY: "Avatars" lost its task.', recipientIds: ['lead-agent'], mentions: [], source: { kind: 'work-lost' } } })
+    const { status, body } = await catchUp(s.tabId, s.web, 1)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ unread: 1, needsYou: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m3` }] } })
+    expect(JSON.stringify(body.data)).not.toContain('COPY')
+  })
+
+  it('says when the span is longer than one summary reads, and lists no status from its first part as current', async () => {
+    const s = await scene()
+    // A task stuck early in the span, working again and asking the reader past the cap.
+    const rows = Array.from({ length: CATCH_UP_SCAN }, (_, i) => ({ text: i === 4 ? 'Stuck\n\nNo simulator.' : `Update ${i + 1}`,
+      ...(i === 4 ? { source: { kind: 'system' } } : {}) }))
+    await write(s.tabId, s.web, [...rows, { text: 'Working', source: { kind: 'system' } }, { text: 'Owner, which colour?', mentions: [owner.sub] }])
+    const { body } = await catchUp(s.tabId, s.web, 0)
+    expect(body.data).toMatchObject({ after: 0, through: CATCH_UP_SCAN, unread: CATCH_UP_SCAN, more: true,
+      blocked: { total: 0 }, landed: { total: 0 }, needsYou: { total: 0 } })
+  })
+
+  it('refuses a conversation the reader cannot read, and one that does not exist', async () => {
+    const s = await scenario()
+    expect((await catchUp(s.tabId, s.secretGroup, 0, outsider)).status).toBe(404)
+    expect((await catchUp(s.tabId, 'no-such-group', 0, outsider)).status).toBe(404)
+    // Its owner reads it.
+    expect((await catchUp(s.tabId, s.secretGroup, 0)).body.data).toMatchObject({ decisions: 1, needsYou: { total: 1 } })
+  })
+
+  it('stops summarizing a conversation once the reader can no longer read it', async () => {
+    const s = await scenario()
+    expect((await catchUp(s.tabId, s.web, 1, peer)).status).toBe(200)
+    await swarmTransaction(db, async tx => {
+      const current = (await parts.loadActive(tx, s.tabId, { groupIds: [s.web] })).groups.find(g => g.key === s.web)!
+      const data = { ...structuredClone(current.data!), audience: { people: [{ id: owner.sub, generation: 0 }] } } as Conversation
+      await guardedWrite(tx, s.tabId, { op: 'update', kind: 'group', key: s.web, seen: current.version, data }, clock)
+    })
+    expect((await catchUp(s.tabId, s.web, 1, peer)).status).toBe(404)
+  })
+
+  it('is for people reading as themselves: never an agent or a Team session', async () => {
+    const s = await scenario()
+    expect((await catchUp(s.tabId, s.web, 1, owner, '&asAgentId=lead-agent')).status).toBe(400)
+    expect((await catchUp(s.tabId, s.web, 1, ownerTeam)).status).toBe(403)
+    expect((await call('GET', `/api/super-tabs/${s.tabId}/conversations/${s.web}/catch-up`, owner)).status).toBe(400)
   })
 })

@@ -1,13 +1,14 @@
 import 'dart:async';
 
-import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter/foundation.dart';
 
 import 'model.dart';
+import 'prompt_alerts.dart';
 import 'swarm_chat_cache.dart';
 import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
+import 'swarm_uploads.dart';
 
 /// One conversation on the phone: its messages and what the person posts to
 /// it — the desktop's `SuperTabController` messages and composer, for one
@@ -24,7 +25,7 @@ import 'swarm_request.dart';
 /// and is asked for by id, as a closed one is in no full read; one it never
 /// had is asked for while its messages are read. One the person cannot read
 /// keeps nothing here: messages, draft and a post not confirmed.
-class SwarmConversation extends ChangeNotifier {
+class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   /// [shown] and [heldAt] as they are from the start, so what it kept is
   /// read only as far as it is seen.
   SwarmConversation(
@@ -39,6 +40,7 @@ class SwarmConversation extends ChangeNotifier {
       messages = kept.messages;
       _before = kept.before;
       _reactionSeq = kept.reactionSeq;
+      _threads.addAll(kept.threads);
       _read = _kept = true;
       _markRead();
     }
@@ -56,13 +58,73 @@ class SwarmConversation extends ChangeNotifier {
   /// The files waiting to go with the next post. They stay in memory, and go
   /// when the chat closes: only what the person typed is kept, and only while
   /// the chat is open.
+  @override
   final files = SwarmOutgoingFiles();
 
   /// The files of a post are on their way to the backend, before the post.
-  bool uploading = false;
+  bool get uploading => _uploads.uploading;
 
-  /// Oldest first.
+  late final _uploads = SwarmUploads(
+    reader,
+    id,
+    timeout: uploadTimeout,
+    onChanged: () {
+      if (!_disposed) _tell();
+    },
+    onProgress: _composer.changed,
+  );
+
+  /// The files waiting to go with each thread's next reply, by its root:
+  /// kept with its draft while the chat is open ([SwarmThread]).
+  final _threadFiles = <String, SwarmOutgoingFiles>{};
+
+  /// The files waiting to go with [root]'s thread's next reply.
+  SwarmOutgoingFiles threadFiles(String root) =>
+      _threadFiles.putIfAbsent(root, SwarmOutgoingFiles.new);
+
+  /// [root]'s thread closed: its [box] goes when it holds nothing.
+  void releaseThreadFiles(String root, SwarmOutgoingFiles box) {
+    if (identical(_threadFiles[root], box) && box.files.isEmpty) {
+      _threadFiles.remove(root);
+    }
+  }
+
+  /// Oldest first: every message read, a reply only in its thread too.
   List<SuperTabMessage> messages = const [];
+
+  /// The [messages] the chat lists: a reply only in its thread shows there
+  /// alone ([SuperTabMessage.inMainStream], the desktop's main stream).
+  List<SuperTabMessage> get stream {
+    if (!identical(_streamOf, messages)) {
+      _streamOf = messages;
+      _stream = List.unmodifiable(messages.where((m) => m.inMainStream));
+    }
+    return _stream;
+  }
+
+  List<SuperTabMessage>? _streamOf;
+  List<SuperTabMessage> _stream = const [];
+
+  /// Each thread's line, by its root, as the newest page that named it said
+  /// it (the desktop's `_keepThreads`): its replies, who wrote them and when
+  /// the last came.
+  final _threads = <String, SuperTabThread>{};
+
+  /// [root]'s thread, once a page named it with a reply.
+  SuperTabThread? thread(String root) => _threads[root];
+
+  /// Each thread's draft while the chat is open (the desktop's
+  /// `threadDraft`): a thread closed and opened again finds it.
+  final _threadDrafts = <String, String>{};
+
+  String threadDraft(String root) => _threadDrafts[root] ?? '';
+  void setThreadDraft(String root, String text) {
+    if (text.isEmpty) {
+      _threadDrafts.remove(root);
+    } else {
+      _threadDrafts[root] = text;
+    }
+  }
 
   /// On screen, no other screen covers it and Harness is in front: what it
   /// shows is read ([SwarmReader.readMarks]), now and as new messages come.
@@ -161,22 +223,10 @@ class SwarmConversation extends ChangeNotifier {
   })?
   _sent;
 
-  /// Files already uploaded for the post being sent, with their ids, so a
-  /// retry sends the ids rather than uploading the files again.
-  final _uploaded = <SwarmOutgoingFile, String>{};
-
-  /// How much of each file going up has gone, from 0 to 1.
-  final _progress = <SwarmOutgoingFile, double>{};
-
-  /// The files of the upload under way; [_uploadRun] moves when it is given
-  /// up, so an answer that lands after is dropped.
-  List<SwarmOutgoingFile>? _uploading;
-  int _uploadRun = 0;
-  CancelToken? _cancel;
-
   SuperTabMessage? _replyingTo;
 
-  String get _path =>
+  /// Where its messages are read, a thread's with `?thread=`.
+  String get messagesPath =>
       '/api/super-tabs/${Uri.encodeComponent(reader.tabId)}'
       '/conversations/${Uri.encodeComponent(id)}/messages';
 
@@ -220,14 +270,11 @@ class SwarmConversation extends ChangeNotifier {
       !uploading &&
       (_draft.trim().isNotEmpty || files.files.isNotEmpty);
 
-  /// Whether [file] is still on its way to the backend in a send.
-  bool isUploading(SwarmOutgoingFile file) =>
-      uploading &&
-      (_uploading?.contains(file) ?? false) &&
-      !_uploaded.containsKey(file);
+  @override
+  bool isUploading(SwarmOutgoingFile file) => _uploads.isUploading(file);
 
-  /// How much of [file] has gone up, from 0 to 1, while it is going up.
-  double? uploadProgress(SwarmOutgoingFile file) => _progress[file];
+  @override
+  double? uploadProgress(SwarmOutgoingFile file) => _uploads.progress(file);
 
   /// The message the draft answers: the reply bar over the composer, and the
   /// post's `replyTo`.
@@ -328,7 +375,20 @@ class SwarmConversation extends ChangeNotifier {
       // device.
       unawaited(_reread());
     }
+    // An agent's prompt answered hides its warning with no new message
+    // (prompt_alerts.dart): the page redraws for it.
+    final answered = answeredPromptAlerts(
+      messages,
+      reader.snapshot!.agent,
+    ).join(',');
+    if (answered != _answeredAlerts) {
+      _answeredAlerts = answered;
+      notifyListeners();
+    }
   }
+
+  /// The prompt warnings the page last hid, as one key.
+  String _answeredAlerts = '';
 
   /// Asks the reader for this conversation by id: a closed one comes back,
   /// and [_swarmChanged] reads it; one the person cannot read is lost.
@@ -346,6 +406,7 @@ class SwarmConversation extends ChangeNotifier {
   /// Drops the messages read, and the answer of any read under way.
   void _forget() {
     messages = const [];
+    _threads.clear();
     _before = null;
     _read = false;
     _epoch++;
@@ -370,6 +431,12 @@ class SwarmConversation extends ChangeNotifier {
     _refused = true;
     _forget();
     _draft = '';
+    _threadDrafts.clear();
+    // A thread's files go too; its own screen hears it and gives up theirs.
+    for (final box in _threadFiles.values) {
+      box.clear();
+    }
+    _threadFiles.clear();
     _mentions.clear();
     _pending = null;
     _sent = null;
@@ -468,7 +535,9 @@ class SwarmConversation extends ChangeNotifier {
           : again
           ? '?before=${tail + 1}'
           : '?after=$tail';
-      final answer = superTabMap(await reader.request('GET', '$_path$query'));
+      final answer = superTabMap(
+        await reader.request('GET', '$messagesPath$query'),
+      );
       if (_disposed || epoch != _epoch) return;
       final incoming = [
         for (final row in answer['messages'] as List)
@@ -492,6 +561,7 @@ class SwarmConversation extends ChangeNotifier {
           ? <String, SuperTabMessage>{}
           : {for (final m in messages) m.id: m};
       var changed = !_read || error != null || _refused || latest;
+      changed |= _keepThreads(answer['threads']);
       for (final m in incoming) {
         if (byId[m.id] case final shown? when _same(shown, m)) continue;
         byId[m.id] = m;
@@ -593,9 +663,7 @@ class SwarmConversation extends ChangeNotifier {
         // A refusal of the files themselves sends them up once more; one of
         // the post (a mention, a recipient) leaves them uploaded.
         if (failure.code.contains('ATTACHMENT')) {
-          for (final file in _sent?.files ?? const <SwarmOutgoingFile>[]) {
-            _uploaded.remove(file);
-          }
+          _uploads.forget(_sent?.files ?? const []);
         }
         _pending = null;
         _restore();
@@ -603,15 +671,13 @@ class SwarmConversation extends ChangeNotifier {
       error = failure.message;
       return false;
     } catch (_) {
-      error = 'Your message is not confirmed. Send again to check it.';
+      error = 'Your message was not sent. Retry to check it.';
       return false;
     } finally {
       sending = false;
       if (!_disposed) _tell();
     }
-    for (final file in _sent?.files ?? const <SwarmOutgoingFile>[]) {
-      _uploaded.remove(file);
-    }
+    _uploads.forget(_sent?.files ?? const []);
     unawaited(reader.refresh());
     // Shown as on its way until the read that brings it back.
     await load();
@@ -627,108 +693,22 @@ class SwarmConversation extends ChangeNotifier {
   /// files stay where they are.
   Future<List<String>?> _uploadAll(List<SwarmOutgoingFile> outgoing) async {
     if (outgoing.isEmpty) return const [];
-    final run = ++_uploadRun;
-    uploading = true;
     error = null;
-    _uploading = outgoing;
-    _uploaded.removeWhere((file, _) => !outgoing.contains(file));
-    _tell();
-    try {
-      final ids = <String>[];
-      for (final file in outgoing) {
-        var id = _uploaded[file];
-        if (id == null) {
-          final answer = await _uploadFile(file);
-          if (run != _uploadRun) return null;
-          id = superTabMap(answer['attachment'])['id'] as String;
-          _uploaded[file] = id;
-          _progress.remove(file);
-          _composer.changed();
-        }
-        ids.add(id);
-      }
-      return ids;
-    } catch (failure) {
-      if (!_disposed && run == _uploadRun) {
-        error = failure is SuperTabFailure
-            ? failure.message
-            : failure is TimeoutException
-            ? 'The upload stopped moving. Try again.'
-            : 'Could not upload ${outgoing.length == 1 ? 'the file' : 'the files'}. Try again.';
-      }
-      return null;
-    } finally {
-      if (run == _uploadRun) {
-        uploading = false;
-        _uploading = null;
-        _progress.clear();
-        if (!_disposed) _tell();
-      }
+    final up = await _uploads.upload(outgoing);
+    if (up.failure case final failure? when !_disposed) {
+      error = swarmUploadError(failure, outgoing.length);
+      _tell();
     }
-  }
-
-  /// Sends [file] to the backend and returns its attachment. Gives up when no
-  /// byte has moved for [uploadTimeout], or when the upload is given up.
-  Future<Map<String, dynamic>> _uploadFile(SwarmOutgoingFile file) async {
-    final token = _cancel = CancelToken();
-    Timer? watchdog;
-    var stalled = false;
-    void watch() {
-      watchdog?.cancel();
-      watchdog = Timer(uploadTimeout, () {
-        stalled = true;
-        token.cancel('stalled');
-      });
-    }
-
-    watch();
-    try {
-      // The token also ends a transport that ignores it.
-      return await Future.any([
-        reader.upload(
-          tabId: reader.tabId,
-          conversationId: id,
-          name: file.name,
-          mime: swarmMimeForName(file.name),
-          bytes: file.bytes,
-          cancel: token,
-          onProgress: (sent) {
-            if (token.isCancelled) return;
-            watch();
-            _progress[file] = sent;
-            _composer.changed();
-          },
-        ),
-        token.whenCancel.then<Map<String, dynamic>>(
-          (cancelled) => throw cancelled,
-        ),
-      ]);
-    } catch (_) {
-      if (stalled) throw TimeoutException('The upload stopped moving.');
-      rethrow;
-    } finally {
-      watchdog?.cancel();
-    }
+    return up.ids;
   }
 
   /// Gives up the files on their way: the composer is free again, and the
   /// draft and the files stay.
-  void cancelUpload() {
-    if (!uploading) return;
-    _cancel?.cancel('given up');
-    _uploadRun++;
-    uploading = false;
-    _uploading = null;
-    _progress.clear();
-    if (!_disposed) _tell();
-  }
+  void cancelUpload() => _uploads.cancel();
 
   /// Taking a file off while the files go up gives the upload up.
   void _filesChanged() {
-    final going = _uploading;
-    if (uploading && going != null && !files.files.toSet().containsAll(going)) {
-      cancelUpload();
-    }
+    _uploads.keepTo(files.files);
     _composer.changed();
   }
 
@@ -810,6 +790,40 @@ class SwarmConversation extends ChangeNotifier {
     return refused == null;
   }
 
+  /// Keeps the thread lines a page named ([thread]): one a later page said
+  /// is kept over an older one. True when a line drawn changed.
+  bool _keepThreads(Object? rows) {
+    if (rows is! List) return false;
+    var changed = false;
+    for (final row in rows) {
+      final next = SuperTabThread.fromJson(superTabMap(row));
+      final held = _threads[next.id];
+      if (held != null &&
+          (held.lastSequence > next.lastSequence || _sameThread(held, next))) {
+        continue;
+      }
+      _threads[next.id] = next;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// Thread lines a thread's own read brought ([SwarmThread]): the root's
+  /// line in the chat moves with them.
+  void keepThreads(Object? rows) {
+    if (!_disposed && _keepThreads(rows)) notifyListeners();
+  }
+
+  /// What a thread's line draws, the same in [a] as in [b].
+  static bool _sameThread(SuperTabThread a, SuperTabThread b) =>
+      a.replies == b.replies &&
+      a.lastSequence == b.lastSequence &&
+      a.lastAt == b.lastAt &&
+      listEquals(
+        [for (final who in a.authors) '${who['kind']}:${who['id']}'],
+        [for (final who in b.authors) '${who['kind']}:${who['id']}'],
+      );
+
   /// A post moved between the composer and the messages: both are told.
   void _tell() {
     notifyListeners();
@@ -880,8 +894,11 @@ class SwarmConversation extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
-    _cancel?.cancel('closed');
-    _uploadRun++;
+    _uploads.close();
+    for (final box in _threadFiles.values) {
+      box.clear();
+    }
+    _threadFiles.clear();
     files
       ..removeListener(_filesChanged)
       ..clear()
@@ -894,6 +911,7 @@ class SwarmConversation extends ChangeNotifier {
         messages: messages,
         before: _before,
         reactionSeq: _reactionSeq,
+        threads: _threads,
       );
     }
     reader.removeListener(_swarmChanged);
