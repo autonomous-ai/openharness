@@ -4,8 +4,9 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { inspectCapacity, startAgent } from './start.js'
 import { buildEngineCommandArgv } from '../lib/engineLaunch.js'
-const teamDaemon = vi.hoisted(() => ({ value: false }))
+const teamDaemon = vi.hoisted(() => ({ value: false, relayed: true }))
 vi.mock('./teamDaemon.js', async (original) => ({ ...await original<object>(), isTeamDaemon: () => teamDaemon.value }))
+vi.mock('../team/relay.js', async (original) => ({ ...await original<object>(), teamRelayed: () => teamDaemon.relayed }))
 const where = { port: 14001, machineId: 'lead-machine', dataDir: '/fixture' }
 /** A queued start is watched before the Lead moves on (startAgent); these tests read the queued answer at once. */
 const noPause = async () => {}
@@ -305,6 +306,29 @@ it('starts a Codex Product Manager on a Team daemon in an engine home of its own
   expect(await launch('codex', false, true)).toBeUndefined()
   expect(await launch('codex', true, false)).toBeUndefined()
   teamDaemon.value = false
+})
+
+// Security re-check 3 of #2089: a Codex Product Manager in a Team account starts signed in on the owner's relay, or is
+// refused with why. Its own engine home holds no sign-in, so with no relay it started signed out.
+it('refuses a Codex Product Manager on a Team daemon with no owner relay before anything launches, saying why', async () => {
+  teamDaemon.value = true
+  teamDaemon.relayed = false
+  try {
+    const f = fixture()
+    f.start.request = { ...f.start.request, engine: 'codex', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } } as typeof f.start.request
+    const result = await startAgent({ action: 'start', tabId: 'tab', operationId: 'no-relay', request: f.start.request }, f.scoped, where, f.open)
+    const reason = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
+    expect(result).toMatchObject({ error: 'START_FAILED', detail: reason })
+    expect(f.request.mock.calls.map(call => call[0])).not.toContain('agent_create')
+    expect(f.scoped.mock.calls.map(([input]) => (input as { command?: { type?: string; error?: string } }).command)).toContainEqual({ type: 'agent.startFailed', startId: expect.any(String), error: reason })
+    // A Claude Code one, and a Codex worker, are not this check's.
+    for (const request of [{ engine: 'claude', leadFor: { projectId: 'p', personId: 'owner', generation: 'g' } }, { engine: 'codex' }]) {
+      const g = fixture()
+      g.start.request = { ...g.start.request, ...request } as typeof g.start.request
+      await startAgent({ action: 'start', tabId: 'tab', operationId: `other-${request.engine}`, request: g.start.request }, g.scoped, where, g.open)
+      expect(g.request.mock.calls.map(call => call[0])).toContain('agent_create')
+    }
+  } finally { teamDaemon.value = false; teamDaemon.relayed = true }
 })
 
 describe('the skills of the project the agent joins', () => {

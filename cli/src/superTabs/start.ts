@@ -10,6 +10,7 @@ import { permissionModeFlags } from '../lib/engineLaunch.js'
 import type { AgentEngine } from '../engines/types.js'
 import { isSwarmSkillMode, swarmSkillUse, type SwarmSkillMode } from '../lib/swarmSkills.js'
 import { isTeamDaemon, pmEngineHome } from './teamDaemon.js'
+import { teamRelayed } from '../team/relay.js'
 
 type Json = Record<string, unknown>
 export type ScopedRequest = (payload: Json) => Promise<Json>
@@ -42,6 +43,9 @@ function requireSuccess(reply: Json): Json {
 function leadPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are the Product Manager of the project whose conversation is ${chat}, started by the Swarm on this machine. ${mode ? `${swarmSkillUse('lead', mode)} ` : ''}Discuss first; build when authorized. Coordinate: assign multi-part or 15+ minute work to Swarm agent groups; do only answers, lookups and work under 15 minutes yourself; your subagents only read/look up. Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Read the request with harness super-tab --tab ${tabId} messages ${chat}; if it is empty, ask there what to work on. Reply with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID [--reply-to MESSAGE_ID], and answer each message once. Route only to start an agent or assign work, never your own: harness super-tab --tab ${tabId} route GROUP JSON. Run harness super-tab help for commands. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
 }
+
+/** Why a Codex Product Manager is not started in a Harness Team account without the owner's relay. */
+const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
 
 function buddyPrompt(tabId: string, chat: string, mode: SwarmSkillMode | null): string {
   return `You are a person's Buddy in a shared Super Tab. ${mode ? `${swarmSkillUse('buddy', mode)} ` : ''}Run harness super-tab --tab ${tabId} status until this harness appears in the roster. Your chat with your owner is conversation ${chat}: read it with harness super-tab --tab ${tabId} messages ${chat}, and reply there with harness super-tab --tab ${tabId} post ${chat} 'your message' UNIQUE_OPERATION_ID. Then greet your owner there and ask what they have in mind. If sandbox restrictions block this local command, request permission to run it outside the sandbox.`
@@ -316,6 +320,13 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
     if (native.state === 'missing') {
       if (start.dispatched) return { error: 'START_UNCERTAIN', startId, creationId,
         detail: 'This start was submitted but its machine has no receipt. Inspect the machine before creating another agent.' }
+      // A Codex Product Manager in a Harness Team account runs in an engine home of its own, with no sign-in there: it signs
+      // in on the owner's relay, or not at all. With no relay it is refused before anything launches, and the queue moves it
+      // on (backend leadStart.ts), rather than starting signed out (security re-check 3 of #2089).
+      if (request.engine === 'codex' && request.leadFor && typeof request.leadFor === 'object' && isTeamDaemon() && !teamRelayed()) {
+        requireSuccess(await scoped({ action: 'command', operationId: `refused-${startId}`, command: { type: 'agent.startFailed', startId, error: NO_PM_RELAY } }))
+        return { error: 'START_FAILED', startId, detail: NO_PM_RELAY }
+      }
       const resources = await inspectCapacity(target, request)
       if (resources.capacity.error === 'GUEST_NOT_ALLOWED') return {
         error: 'CONTRIBUTION_REQUIRED', startId,

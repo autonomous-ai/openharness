@@ -20,6 +20,9 @@ const TIMEOUTS: Array<[string, string]> = [[TIMED_OUT_SUFFIX, TIMED_OUT],
 /** Reasons the server writes itself, which name nothing (commands.ts removeMachine and machine.contribute). */
 export const MACHINE_REMOVED = 'Its machine was removed from the Swarm.'
 export const ABANDONED = 'Abandoned before it started.'
+/** A Team account's host refusing a Codex Product Manager it cannot sign in (cli superTabs/start.ts): it names nothing of the
+ *  machine but its lack of the owner's relay, which its project reads (security re-check 3 of #2089). */
+export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
 
 /** A host's refusal for memory (cli superTabs/capacity.ts memoryShort): its numbers alone, which members already see in the
  *  Machines view. Read only at the start of the reason, so nothing else a host wrote is ever told (Ken's MacBook Pro,
@@ -27,7 +30,7 @@ export const ABANDONED = 'Abandoned before it started.'
 const MEMORY_SHORT = /^Not enough free memory: (\d+(?:\.\d)? GiB) free, (\d+(?:\.\d)? GiB) needed\./
 
 export function publicReason(error: string): string {
-  if (error === MACHINE_REMOVED || error === ABANDONED) return error
+  if (error === MACHINE_REMOVED || error === ABANDONED || error === NO_PM_RELAY) return error
   const memory = MEMORY_SHORT.exec(error)
   if (memory) return `Its machine has only ${memory[1]} of memory free, and it needs ${memory[2]}.`
   return TIMEOUTS.find(([suffix]) => error.endsWith(suffix))?.[1] ?? MACHINE_FAILED

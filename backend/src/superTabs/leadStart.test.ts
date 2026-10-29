@@ -171,6 +171,14 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     expect(f.lead('owner-mac').result.machineId).toBe('owner-mac')
   })
 
+  it('refused for want of the owner\'s relay, says so plainly to the project', async () => {
+    const f = swarm()
+    const reason = 'The owner\'s subscription relay is not available on this Mac, so a Codex Product Manager cannot sign in here.'
+    const startId = f.lead('mate-mac').result.startId as string
+    f.run({ type: 'agent.startFailed', startId, error: reason }, owner, hosted(f, 'mate-team'))
+    expect(f.project().lead).toMatchObject({ status: 'failed', reason })
+  })
+
   it('never taken by its machine, fails as a Buddy\'s does', async () => {
     const { sweepLiveness, BUDDY_PICKUP_MS } = await import('./liveness.js')
     const f = swarm()
