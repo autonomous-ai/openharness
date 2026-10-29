@@ -2055,69 +2055,108 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   /// New Project in a Swarm, as confirmed (Dee, 10-29): 📎, the repo and
   /// visibility, then the Product Manager line beside New Project.
-  Widget _desktopLeadActions(HarnessAttachments? attachments) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    spacing: 8,
-    children: [
-      Row(
-        children: [
-          Expanded(
-            child: attachments == null
-                ? const SizedBox.shrink()
-                : FocusTraversalOrder(
-                    order: const NumericFocusOrder(4.5),
-                    child: Row(
-                      children: [
-                        NewHarnessAttachButton(
-                          attachments: attachments,
-                          enabled: !box.locked,
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: NewHarnessAttachmentChips(
-                            attachments: attachments,
-                            enabled: !box.locked,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            flex: 2,
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.end,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                _desktopField(
-                  order: 4.6,
-                  anchor: _desktopAnchors[_Row.project]!,
-                  maxWidth: 260,
-                  child: _desktopChoiceButton(
-                    _Row.project,
-                    AppIcons.folder,
-                    label: _desktopProjectName,
-                    capsule: true,
-                  ),
+  Widget _desktopLeadActions(HarnessAttachments? attachments) => LayoutBuilder(
+    builder: (context, constraints) {
+      // Enlarged text or a narrow window: the chips wrap and the Product
+      // Manager line takes a line of its own above New Project.
+      final narrow =
+          constraints.maxWidth <
+          480 * MediaQuery.textScalerOf(context).scale(1);
+      final attach = attachments == null
+          ? null
+          : FocusTraversalOrder(
+              order: const NumericFocusOrder(4.5),
+              child: NewHarnessAttachButton(
+                attachments: attachments,
+                enabled: !box.locked,
+              ),
+            );
+      final chips = attachments == null
+          ? null
+          : FocusTraversalOrder(
+              order: const NumericFocusOrder(4.65),
+              child: NewHarnessAttachmentChips(
+                attachments: attachments,
+                enabled: !box.locked,
+              ),
+            );
+      // Capped, not flexible: a loose slot beside the attachments' would
+      // take half the free space and leave it empty.
+      final repo = _desktopField(
+        order: 4.6,
+        anchor: _desktopAnchors[_Row.project]!,
+        maxWidth: narrow
+            ? constraints.maxWidth
+            : math.min(260, constraints.maxWidth * .4),
+        child: _desktopChoiceButton(
+          _Row.project,
+          AppIcons.folder,
+          label: _desktopProjectName,
+          capsule: true,
+        ),
+      );
+      final visibility = box.integration?.projectVisibility != null
+          ? _desktopProjectVisibility(4.7)
+          : null;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: 8,
+        children: narrow
+            ? [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [?attach, repo, ?visibility],
                 ),
-                if (box.integration?.projectVisibility != null)
-                  _desktopProjectVisibility(4.7),
+                ?chips,
+                _desktopLeadLine(),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _desktopLaunchActions(),
+                ),
+              ]
+            : [
+                Row(
+                  children: [
+                    if (attach != null) ...[attach, const SizedBox(width: 6)],
+                    repo,
+                    const SizedBox(width: 8),
+                    Expanded(child: chips ?? const SizedBox.shrink()),
+                    if (visibility != null) ...[
+                      const SizedBox(width: 8),
+                      visibility,
+                    ],
+                  ],
+                ),
+                Row(
+                  children: [
+                    Expanded(child: _desktopLeadLine()),
+                    const SizedBox(width: 12),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: constraints.maxWidth * .6,
+                      ),
+                      child: _desktopLaunchActions(),
+                    ),
+                  ],
+                ),
               ],
-            ),
-          ),
-        ],
-      ),
-      Row(
-        children: [
-          Expanded(child: _desktopLeadLine()),
-          const SizedBox(width: 12),
-          Flexible(child: _desktopLaunchActions()),
-        ],
-      ),
-    ],
+      );
+    },
+  );
+
+  /// A quiet text control of the Product Manager line and its panel.
+  ButtonStyle get _desktopLeadLink => TextButton.styleFrom(
+    foregroundColor: DesktopChrome.accent,
+    backgroundColor: Colors.transparent,
+    side: BorderSide.none,
+    enabledMouseCursor: SystemMouseCursors.click,
+    disabledMouseCursor: SystemMouseCursors.basic,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+    minimumSize: Size.zero,
+    textStyle: DesktopChrome.text(size: 12, medium: true),
   );
 
   /// "Product Manager: Mac Studio · Claude Code · Opus · Change", or why
@@ -2145,12 +2184,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
             expanded: _leadOpen,
             child: TextButton(
               key: const ValueKey('new-harness-lead-change'),
-              style: TextButton.styleFrom(
-                enabledMouseCursor: SystemMouseCursors.click,
-                disabledMouseCursor: SystemMouseCursors.basic,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                textStyle: DesktopChrome.text(size: 12, medium: true),
-              ),
+              style: _desktopLeadLink,
               onPressed: box.locked
                   ? null
                   : () => setState(() => _leadOpen = !_leadOpen),
@@ -2210,12 +2244,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                   expanded: _leadAdvanced,
                   child: TextButton.icon(
                     key: const ValueKey('new-harness-lead-advanced'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: DesktopChrome.foreground,
-                      enabledMouseCursor: SystemMouseCursors.click,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      textStyle: DesktopChrome.text(size: 12, medium: true),
-                    ),
+                    style: _desktopLeadLink,
                     onPressed: () =>
                         setState(() => _leadAdvanced = !_leadAdvanced),
                     icon: Icon(

@@ -544,6 +544,41 @@ void main() {
     );
   }
 
+  testWidgets(
+    'The Product Manager line stays usable at 2x text in a compact window',
+    (tester) async {
+      final (_, boundary) = await mount(
+        tester,
+        width: 420,
+        textScale: 2,
+        leadMachines: [studio, rig],
+      );
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getRect(_start).right,
+        lessThanOrEqualTo(tester.getRect(_composer).right),
+      );
+      expect(
+        tester.getRect(_visibility).right,
+        lessThanOrEqualTo(tester.getRect(_composer).right),
+      );
+      // Too narrow to share a line: the Product Manager line gets its own.
+      expect(
+        tester.getRect(leadLine).bottom,
+        lessThanOrEqualTo(tester.getRect(_start).top),
+      );
+      expect(
+        tester.getSize(leadLine).width,
+        greaterThan(tester.getSize(_composer).width / 2),
+      );
+      await tester.tap(change);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await shot(tester, boundary, 'new-project-lead-compact');
+      await unmount(tester);
+    },
+  );
+
   testWidgets('The Product Manager always starts in its own worktree', (
     tester,
   ) async {
