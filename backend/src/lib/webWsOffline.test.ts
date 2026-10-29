@@ -30,7 +30,6 @@ vi.mock('./hub.js', () => ({ attachHubClient: m.attach, trackSocketLiveness: () 
 
 import { handleWebUpgrade, OFFLINE_RETRY_AFTER_MS } from './webWs.js'
 import { SsoAuthError } from './ssoAuth.js'
-import { env } from '../config/env.js'
 
 const owner = { sub: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' }
 const mac = { machineId: 'owner-mac', userId: 'owner', autonomousEnv: 'prod', billingStatus: 'not_required', authMode: 'remote', deletedAt: null }
@@ -118,7 +117,7 @@ describe('a refused machine select', () => {
 })
 
 // Roadmap Phase 1.3: a bad token used to finish the upgrade and then close 4401. A socket that says it reads an HTTP refusal
-// (`auth=http`, the daemon's relay from this release) is refused before the upgrade when WEB_WS_AUTH_HTTP_401 is on. A
+// (`auth=http`, the daemon's relay from this release) is refused before the upgrade. A
 // browser cannot read the status of a failed upgrade (it sees 1006), so the web build and the phone keep their 4401.
 describe('a bad token', () => {
   const upgradeWith = async (query: string) => {
@@ -130,28 +129,21 @@ describe('a bad token', () => {
     await flush()
     return { ws, socket }
   }
-  const switchedOn = (on: boolean) => { (env as { WEB_WS_AUTH_HTTP_401: boolean }).WEB_WS_AUTH_HTTP_401 = on }
 
-  it('is refused with HTTP 401 before the upgrade, when switched on, for a socket that reads it', async () => {
-    switchedOn(true)
-    try {
-      const { socket } = await upgradeWith('&client=relay&v=1.3.64&auth=http')
-      expect(m.upgrade).not.toHaveBeenCalled()
-      expect(socket.write).toHaveBeenCalledWith(expect.stringMatching(/^HTTP\/1\.1 401 /))
-      expect(socket.destroy).toHaveBeenCalled()
-    } finally { switchedOn(false) }
+  it('is refused with HTTP 401 before the upgrade for a socket that reads it', async () => {
+    const { socket } = await upgradeWith('&client=relay&v=1.3.64&auth=http')
+    expect(m.upgrade).not.toHaveBeenCalled()
+    expect(socket.write).toHaveBeenCalledWith(expect.stringMatching(/^HTTP\/1\.1 401 /))
+    expect(socket.destroy).toHaveBeenCalled()
   })
 
   it.each([
-    ['switched off', false, '&client=relay&auth=http'],
-    ['a socket that does not say it reads it', true, '&client=web'],
-  ])('closes 4401 after the upgrade when %s', async (_why, on, query) => {
-    switchedOn(on)
-    try {
-      const { ws, socket } = await upgradeWith(query)
-      expect(socket.write).not.toHaveBeenCalled()
-      expect(ws.close).toHaveBeenCalledWith(4401, 'auth expired')
-    } finally { switchedOn(false) }
+    ['a browser or phone that does not say it reads it', '&client=web'],
+    ['an older daemon that sends no auth', '&client=relay'],
+  ])('closes 4401 after the upgrade for %s', async (_why, query) => {
+    const { ws, socket } = await upgradeWith(query)
+    expect(socket.write).not.toHaveBeenCalled()
+    expect(ws.close).toHaveBeenCalledWith(4401, 'auth expired')
   })
 })
 
