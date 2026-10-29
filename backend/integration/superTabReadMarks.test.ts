@@ -16,6 +16,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { CATCH_UP_SCAN } from '../src/superTabs/catchUp.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -204,6 +205,17 @@ describe('catch-up summary (what the reader missed since their mark)', () => {
     // Another reader's tags and decisions are their own.
     expect((await catchUp(s.tabId, s.web, 1, peer)).body.data).toMatchObject({ decisions: 1,
       needsYou: { total: 1, items: [{ text: 'Peer, which font?' }] } })
+  })
+
+  it('says when the span is longer than one summary reads, and lists no status from its first part as current', async () => {
+    const s = await scene()
+    // A task stuck early in the span, working again and asking the reader past the cap.
+    const rows = Array.from({ length: CATCH_UP_SCAN }, (_, i) => ({ text: i === 4 ? 'Stuck\n\nNo simulator.' : `Update ${i + 1}`,
+      ...(i === 4 ? { source: { kind: 'system' } } : {}) }))
+    await write(s.tabId, s.web, [...rows, { text: 'Working', source: { kind: 'system' } }, { text: 'Owner, which colour?', mentions: [owner.sub] }])
+    const { body } = await catchUp(s.tabId, s.web, 0)
+    expect(body.data).toMatchObject({ after: 0, through: CATCH_UP_SCAN, unread: CATCH_UP_SCAN, more: true,
+      blocked: { total: 0 }, landed: { total: 0 }, needsYou: { total: 0 } })
   })
 
   it('refuses a conversation the reader cannot read, and one that does not exist', async () => {

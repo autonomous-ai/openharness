@@ -49,11 +49,12 @@ Map<String, dynamic> _summary({
   List<Map<String, dynamic>> needsYou = const [],
   int needsYouTotal = 0,
   int decisions = 0,
+  bool more = false,
 }) => {
   'after': 10,
   'through': 40,
   'unread': 30,
-  'more': false,
+  'more': more,
   'decisions': decisions,
   'landed': _list(landed),
   'blocked': _list(blocked),
@@ -114,6 +115,11 @@ void main() {
       expect(SuperTabCatchUp.fromJson(_summary()).isEmpty, isTrue);
       // Decisions alone are something that needs the reader.
       expect(SuperTabCatchUp.fromJson(_summary(decisions: 1)).isEmpty, isFalse);
+      // A span longer than one summary reads is shown even with nothing
+      // listed: the reader is told it is partial.
+      final partial = SuperTabCatchUp.fromJson(_summary(more: true));
+      expect(partial.more, isTrue);
+      expect(partial.isEmpty, isFalse);
       // A malformed answer is empty, never a crash.
       expect(SuperTabCatchUp.fromJson(const {}).isEmpty, isTrue);
     });
@@ -210,6 +216,25 @@ void main() {
     await show(tester, server);
     expect(inCard('3 more'), findsOneWidget);
     expect(inCard('2 decisions wait for you'), findsOneWidget);
+  });
+
+  testWidgets('says when it covers only the first part of a long absence', (
+    tester,
+  ) async {
+    final server = _server(40)..markReadElsewhere('lead', 10);
+    server.catchUps['lead'] = _summary(more: true);
+    await show(tester, server);
+    expect(find.byKey(_card), findsOneWidget);
+    // Never a count that reads as complete.
+    expect(inCard('30+ new messages'), findsOneWidget);
+    expect(inCard('30 new messages'), findsNothing);
+    expect(
+      inCard(
+        'Covers only the first part of what you missed. '
+        'Newer messages are below.',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Close dismisses it for this visit, without reading again', (

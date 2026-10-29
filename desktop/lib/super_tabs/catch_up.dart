@@ -50,6 +50,7 @@ class SuperTabCatchUpList {
 /// (catchUp.ts).
 class SuperTabCatchUp {
   const SuperTabCatchUp({
+    this.more = false,
     this.unread = 0,
     this.decisions = 0,
     this.landed = const SuperTabCatchUpList(),
@@ -58,6 +59,7 @@ class SuperTabCatchUp {
   });
 
   factory SuperTabCatchUp.fromJson(Map<String, dynamic> row) => SuperTabCatchUp(
+    more: row['more'] == true,
     unread: (row['unread'] as num?)?.toInt() ?? 0,
     decisions: (row['decisions'] as num?)?.toInt() ?? 0,
     landed: SuperTabCatchUpList.fromJson(row['landed']),
@@ -65,12 +67,18 @@ class SuperTabCatchUp {
     needsYou: SuperTabCatchUpList.fromJson(row['needsYou']),
   );
 
+  /// The span is longer than one summary reads (backend CATCH_UP_SCAN): the
+  /// lists and [unread] cover only its first part, and no status is listed.
+  final bool more;
+
   final int unread, decisions;
   final SuperTabCatchUpList landed, blocked, needsYou;
 
   /// Nothing landed, is blocked or needs the reader: no card, since a count
-  /// of new messages alone is what the New messages line already says.
+  /// of new messages alone is what the New messages line already says. A
+  /// partial summary always shows, so the reader learns it is partial.
   bool get isEmpty =>
+      !more &&
       decisions == 0 &&
       landed.items.isEmpty &&
       blocked.items.isEmpty &&

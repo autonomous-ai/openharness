@@ -23,7 +23,8 @@ export interface CatchUp {
   through: number
   /** Main-stream messages from others past the reader's own newest one. */
   unread: number
-  /** More rows past `through` than one summary reads. */
+  /** More rows past `through` than one summary reads: the lists and `unread` cover only the span up to `through`, and no
+   *  status is listed, since a later one past it may have replaced it. */
   more: boolean
   /** Decisions waiting for the reader in this conversation (decisions.ts). */
   decisions: number
@@ -72,7 +73,8 @@ const list = (items: CatchUpItem[]): CatchUpList => ({ total: items.length, item
 /**
  * The summary of `rows`, the reader's (`personId`) unread span in sequence order. As the New messages line does (Desktop
  * unread_line.dart), the reader's own newest main-stream message reads everything before it. Only the latest status counts,
- * so a task that was stuck and moved on is not listed as blocked.
+ * so a task that was stuck and moved on is not listed as blocked; with more rows past the span (`more`), its latest status
+ * is not known, so none is listed. Shipped rows and tags stand whatever came after them.
  */
 export function catchUpSummary(rows: CatchUpRow[], personId: string, span: CatchUpSpan): CatchUp {
   const read = rows.reduce((at, row) => own(row, personId) && inMainStream(row) ? row.sequence : at, span.after)
@@ -81,7 +83,7 @@ export function catchUpSummary(rows: CatchUpRow[], personId: string, span: Catch
     const title = (row.source as { title?: unknown }).title
     return item(row, typeof title === 'string' && title ? title : row.text)
   })
-  const latest = unread.filter(inMainStream).flatMap(row => {
+  const latest = span.more ? undefined : unread.filter(inMainStream).flatMap(row => {
     const status = statusOf(row)
     return status ? [{ row, ...status }] : []
   }).at(-1)

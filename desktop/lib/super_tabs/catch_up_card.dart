@@ -73,16 +73,16 @@ class SuperTabCatchUpCard extends StatelessWidget {
                   summary.landed,
                 ),
                 if (decisions > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(
-                      top: grid.AppDesktop.controlGap,
-                    ),
-                    child: Text(
-                      decisions == 1
-                          ? '1 decision waits for you'
-                          : '$decisions decisions wait for you',
-                      style: DesktopChrome.metadata(),
-                    ),
+                  _note(
+                    decisions == 1
+                        ? '1 decision waits for you'
+                        : '$decisions decisions wait for you',
+                  ),
+                // Never a partial summary read as the whole absence.
+                if (summary.more)
+                  _note(
+                    'Covers only the first part of what you missed. '
+                    'Newer messages are below.',
                   ),
               ],
             ),
@@ -91,6 +91,11 @@ class SuperTabCatchUpCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _note(String text) => Padding(
+    padding: const EdgeInsets.only(top: grid.AppDesktop.controlGap),
+    child: Text(text, style: DesktopChrome.metadata()),
+  );
 
   Widget _header() => Row(
     children: [
@@ -105,10 +110,11 @@ class SuperTabCatchUpCard extends StatelessWidget {
       // The count takes the spare width, so Close sits at the card's end.
       Expanded(
         child: Text(
-          switch (summary.unread) {
-            0 => '',
-            1 => '1 new message',
-            final count => '$count new messages',
+          switch ((summary.unread, summary.more)) {
+            (0, _) => '',
+            (final count, true) => '$count+ new messages',
+            (1, false) => '1 new message',
+            (final count, false) => '$count new messages',
           },
           style: DesktopChrome.metadata(),
           overflow: TextOverflow.ellipsis,

@@ -76,6 +76,16 @@ describe('catch-up summary of the unread span', () => {
     expect(texts(result.needsYou)).toEqual(['Question 3', 'Question 4', 'Question 5', 'Question 6', 'Question 7'])
   })
 
+  it('past the cap, never lists a status as current: a later one may have replaced it; shipped rows and tags stand', () => {
+    const shipped = row('🎉 Shipped: Avatars.', { source: { kind: 'ship', title: 'Avatars' } })
+    const tagged = row('Dee, which colour?', { mentions: [READER] })
+    const partial = summary([status('Stuck\n\nNo simulator.'), shipped, tagged], { more: true })
+    expect(partial.blocked.total).toBe(0)
+    expect(texts(partial.landed)).toEqual(['Avatars'])
+    expect(texts(partial.needsYou)).toEqual(['Dee, which colour?'])
+    expect(summary([status('Done\n\nMerged #42.')], { more: true }).landed.total).toBe(0)
+  })
+
   it('shortens an item to its first line and 140 characters', () => {
     const [item] = summary([row(`${'a'.repeat(200)}\nsecond line`, { mentions: [READER] })]).needsYou.items
     expect(item!.text).toBe(`${'a'.repeat(139)}…`)
