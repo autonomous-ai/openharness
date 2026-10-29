@@ -2,7 +2,6 @@ import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
 import '../../widgets/finger_target.dart';
@@ -35,23 +34,15 @@ TextStyle _pointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-TextStyle _trendStyle(Color color) =>
-    DesktopChrome.metadata(color: color)
-        .copyWith(fontFeatures: grid.AppFont.tabularFigures);
-
 /// A person as the leaderboard names them: the board's display name, else the
 /// email's first part, as before the board had names.
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
     score?.displayName ?? superTabPersonName(person.email);
 
-/// "Up 6 from last week", "down 7 …"; null when level, or from a server
-/// without last week.
-String? leaderboardTrend(SuperTabPersonScore score) {
-  final before = score.prevWeekPoints;
-  if (before == null || before == score.points) return null;
-  final change = score.points - before;
-  return '${change > 0 ? 'up' : 'down'} ${change.abs()} from last week';
-}
+/// Whether a person wears the crown: first on the board, with points. At the
+/// start of a week everyone ties at 0, and no one has taken #1 yet.
+bool leaderboardCrowned(SuperTabPersonScore? score) =>
+    score != null && score.rank == 1 && score.points > 0;
 
 /// "16 shipped", "1 unblocked", "43 hours lent": each number that would not
 /// read zero, in words; empty when all would.
@@ -65,13 +56,9 @@ List<String> leaderboardNumbers(SuperTabPersonScore score) {
 }
 
 /// The board's fixed numeric columns, each as wide as its widest value at
-/// the current text size, so rank, trend and points line up on every row.
+/// the current text size, so rank and points line up on every row.
 class LeaderboardColumns {
-  const LeaderboardColumns({
-    required this.rank,
-    required this.points,
-    this.trend,
-  });
+  const LeaderboardColumns({required this.rank, required this.points});
 
   factory LeaderboardColumns.of(
     BuildContext context,
@@ -93,35 +80,23 @@ class LeaderboardColumns {
     String widest(Iterable<int> values) => values
         .map((value) => '$value')
         .fold('0', (a, b) => b.length > a.length ? b : a);
-    final changes = [
-      for (final score in scores)
-        if (score.prevWeekPoints case final before? when before != score.points)
-          (score.points - before).abs(),
-    ];
     return LeaderboardColumns(
       rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
       points: width(
         widest(scores.map((score) => score.points)),
         _pointsStyle(),
       ),
-      trend: changes.isEmpty
-          ? null
-          : AppIcons.metadataSize +
-                width(widest(changes), _trendStyle(DesktopChrome.muted)),
     );
   }
 
   final double rank, points;
-
-  /// Null when no one on the board moved against last week.
-  final double? trend;
 }
 
 /// One person in the Humans section: their rank as a bold numeral in its own
-/// column, avatar, name and status, and a quiet line of their non-zero
-/// numbers beneath; at the right the change against last week, then their
-/// points, the one emphasized number. The viewer's own row carries
-/// the selected fill. Without a [score] (no board yet, or a server without
+/// column, avatar, name (number one's with a crown beside it) and status, and
+/// a quiet line of their non-zero numbers beneath; at the right their points,
+/// the one number (Dee, 2026-10-29). The viewer's own row carries the selected
+/// fill. Without a [score] (no board yet, or a server without
 /// one) only the name and status.
 class LeaderboardPersonRow extends StatelessWidget {
   const LeaderboardPersonRow({
@@ -149,7 +124,6 @@ class LeaderboardPersonRow extends StatelessWidget {
     final numbers = score == null
         ? const <String>[]
         : leaderboardNumbers(score);
-    final trend = score == null ? null : leaderboardTrend(score);
     final radius = BorderRadius.circular(DesktopChrome.rowRadius);
     Widget column(String kind, double width, Widget? child) => Padding(
       padding: const EdgeInsets.only(left: _gap),
@@ -218,18 +192,6 @@ class LeaderboardPersonRow extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (columns?.trend case final width?)
-                    column(
-                      'trend-column',
-                      width,
-                      trend == null || score == null
-                          ? null
-                          : _Trend(
-                              personId: person.id,
-                              score: score,
-                              trend: trend,
-                            ),
-                    ),
                   if (columns != null && score != null)
                     column(
                       'points',
@@ -253,7 +215,9 @@ class LeaderboardPersonRow extends StatelessWidget {
     );
   }
 
-  /// The name, then the status quietly; on hover the whole name, which a long one cut short needs, and the email.
+  /// The name, number one's crown, then the status quietly; on hover the whole name, which a long one cut short
+  /// needs, and the email. The crown is content artwork beside the name, said in words, at the metadata size so a
+  /// crowned row is as tall as any other (Team and celebration, design system).
   Widget _name() => Tooltip(
     message: '${leaderboardName(person, score)}\n${person.email}',
     child: SuperTabUntil(
@@ -262,6 +226,19 @@ class LeaderboardPersonRow extends StatelessWidget {
         TextSpan(
           text: leaderboardName(person, score),
           children: [
+            if (leaderboardCrowned(score))
+              WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: _halfGap),
+                  child: Semantics(
+                    key: ValueKey('leaderboard-crown-${person.id}'),
+                    label: 'Number one this week',
+                    excludeSemantics: true,
+                    child: Text('\u{1F451}', style: DesktopChrome.metadata()),
+                  ),
+                ),
+              ),
             if (person.statusAt(clock.now()) case final status?)
               TextSpan(
                 text: '  ${status.text}',
@@ -321,51 +298,6 @@ class _Numbers extends StatelessWidget {
             style: style,
           );
         },
-      ),
-    );
-  }
-}
-
-/// An arrow and the change against last week, by shape and colour both: up in
-/// the online green, down in the theme's error ink.
-class _Trend extends StatelessWidget {
-  const _Trend({
-    required this.personId,
-    required this.score,
-    required this.trend,
-  });
-  final String personId;
-  final SuperTabPersonScore score;
-  final String trend;
-
-  @override
-  Widget build(BuildContext context) {
-    final up = score.points > score.prevWeekPoints!;
-    final color = up
-        ? grid.AppPalette.online
-        : Theme.of(context).colorScheme.error;
-    return Tooltip(
-      key: ValueKey('leaderboard-trend-$personId'),
-      message: capitalized(trend),
-      excludeFromSemantics: true,
-      child: Semantics(
-        label: capitalized(trend),
-        excludeSemantics: true,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              up ? AppIcons.arrowUp : AppIcons.arrowDown,
-              size: AppIcons.metadataSize,
-              color: color,
-            ),
-            Text(
-              '${(score.points - score.prevWeekPoints!).abs()}',
-              style: DesktopChrome.metadata(color: color)
-                  .copyWith(fontFeatures: grid.AppFont.tabularFigures),
-            ),
-          ],
-        ),
       ),
     );
   }

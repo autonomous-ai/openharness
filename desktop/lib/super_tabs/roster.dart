@@ -21,7 +21,6 @@ import 'detail_dialog.dart';
 import 'dialog_scope.dart';
 import 'identity.dart';
 import 'leaderboard/format.dart';
-import 'leaderboard/goal_line.dart';
 import 'leaderboard/model.dart';
 import 'leaderboard/person_row.dart';
 import 'leaderboard/reader.dart';
@@ -555,11 +554,6 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
             ),
         ],
       ),
-      if (board != null)
-        LeaderboardGoalLine(
-          goal: board.goal,
-          weekName: weekName(_board.week, current),
-        ),
       if (_board.error case final error?)
         Padding(
           padding: const EdgeInsets.fromLTRB(
