@@ -1638,7 +1638,7 @@ class NewHarnessController extends ChangeNotifier {
     final target = leadMachine;
     final name = target == null
         ? machineLabel
-        : target.team
+        : target.inTeam(_engine)
         ? '${target.name}’s Team account'
         : target.name;
     return ['Product Manager on $name', agentLabel, leadModelLabel].join(' · ');

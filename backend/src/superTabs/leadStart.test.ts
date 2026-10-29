@@ -249,6 +249,72 @@ describe('a Product Manager\'s start, once its host reports it', () => {
   })
 })
 
+// Security reviews 1 and 2 of #2228: the Team account was chosen before checking it could run the requested engine, so a
+// busy account, or one with that engine signed out or not offered, refused the start though the Mac itself could run it.
+describe('where a Product Manager on a teammate\'s Mac runs, for its engine', () => {
+  /** Another project's agent in the Mac's Team account. */
+  function busy(f: ReturnType<typeof swarm>) {
+    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+    const group = f.run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    f.run({ type: 'agent.add', conversationId: group, machineId: 'mate-team', harnessId: 'web-worker', name: 'Builder', configuration: config, lead: false }, owner,
+      { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } })
+  }
+  const signedOut = (engine: string): Reading => ({ ...reading('team', PASSED),
+    readiness: { engines: [{ engine, installed: true, signedIn: false }] } } as unknown as Reading)
+
+  it('a Team account busy with another project\'s agents leaves it to the Mac itself, with the engine the Mac runs', () => {
+    const f = swarm()
+    f.machine('mate-team').engines = ['codex']
+    f.machine('mate-mac').engines = ['claude']
+    busy(f)
+    expect(f.lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-mac' })
+    const g = swarm()
+    g.machine('mate-team').engines = ['codex']
+    g.machine('mate-mac').engines = ['claude']
+    busy(g)
+    // Codex runs only in the busy account: refused for the Mac's reason, and nothing recorded.
+    expect(refusal(() => g.lead('mate-mac', { engine: 'codex' }))?.code).toBe('ENGINE_NOT_OFFERED')
+    expect((g.state.starts ?? []).filter(s => s.request.leadFor)).toEqual([])
+  })
+
+  it('a Team account with the engine signed out, or not offering it, leaves it to the Mac itself', () => {
+    const out = swarm()
+    out.machine('mate-team').observation = signedOut('claude')
+    expect(out.lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-mac' })
+    const offered = swarm()
+    offered.machine('mate-team').engines = ['codex']
+    expect(offered.lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-mac' })
+    // The engine it runs still goes to the Team account.
+    expect(swarm().lead('mate-mac', { engine: 'claude' }).result).toMatchObject({ machineId: 'mate-team' })
+  })
+
+  it('a Mac added as its person joined still runs it only in its Team account, refused when that cannot run the engine', () => {
+    const f = swarm()
+    f.machine('mate-mac').teamAccountOnly = true
+    f.machine('mate-team').observation = signedOut('claude')
+    expect(refusal(() => f.lead('mate-mac', { engine: 'claude' }))?.code).toBe('ENGINE_UNAVAILABLE')
+    expect(f.state.starts ?? []).toEqual([])
+  })
+
+  it('New Project reads the same decision for each engine before the project exists, naming no other project', async () => {
+    const { leadChoices } = await import('./leadStart.js')
+    const f = swarm()
+    f.machine('mate-team').engines = ['codex']
+    f.machine('mate-mac').engines = ['claude']
+    const context = { now: NOW, teamMachines: ['mate-team'] }
+    // The owner's own machines are left to Desktop; the Team account row is read through its Mac.
+    expect(Object.keys(leadChoices(f.state, 'owner', context))).toEqual(['mate-mac'])
+    expect(leadChoices(f.state, 'owner', context)['mate-mac']).toEqual({ claude: { machineId: 'mate-mac' }, codex: { machineId: 'mate-team' } })
+    busy(f)
+    const choices = leadChoices(f.state, 'owner', context)['mate-mac']!
+    expect(choices.claude).toEqual({ machineId: 'mate-mac' })
+    expect(choices.codex).toEqual({ refused: 'Codex isn’t offered on MacBook Pro.' })
+    expect(JSON.stringify(choices)).not.toContain('Web')
+    // The same answer the start gives.
+    expect(refusal(() => f.lead('mate-mac', { engine: 'codex' }))?.message).toBe('Codex isn’t offered on MacBook Pro.')
+  })
+})
+
 describe('the machine a Product Manager starts on', () => {
   it('is always named by its person: with none named it is refused, and nothing is recorded', () => {
     const f = swarm()
@@ -337,7 +403,8 @@ describe('the terminal of a Product Manager in a Team account', () => {
 })
 
 // The trust change Ken chose (10-29): with no Team account able to take it, a teammate's Mac runs the Product Manager in
-// its owner's own account. That owner can read whatever the Product Manager reads on their Mac; the Swarm adds no more.
+// its owner's own account. That owner can read whatever the Product Manager reads on their Mac. Project members watch its
+// terminal live whichever account it runs in (Lead's ruling on #2228).
 describe('the terminal of a Product Manager on a teammate\'s Mac, as its owner', () => {
   async function running(visibility: 'private' | 'public') {
     const f = swarm()
@@ -360,7 +427,7 @@ describe('the terminal of a Product Manager on a teammate\'s Mac, as its owner',
     expect((t.agent as { teamAccount?: boolean }).teamAccount).toBeUndefined()
   })
 
-  it('its project\'s owner follows its chat, but neither reads nor types in the terminal of another person\'s account', async () => {
+  it('its project\'s owner watches its terminal live, but neither types in it nor reads its screen in another person\'s account', async () => {
     for (const visibility of ['private', 'public'] as const) {
       const t = await running(visibility)
       expect(t.watch(owner)).toBe(true)

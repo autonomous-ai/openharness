@@ -14,6 +14,7 @@ class LeadMachine {
     this.own = true,
     this.native = true,
     this.team = false,
+    this.teamEngines,
     this.engineRefusals = const {},
   });
   final String id, name;
@@ -37,6 +38,14 @@ class LeadMachine {
 
   /// It runs in that machine's Harness Team account.
   final bool team;
+
+  /// The engines it runs in that Mac's Harness Team account, as the server
+  /// decided (backend leadStart.ts leadChoices); the others run on the Mac
+  /// itself. Null from a server that does not say: then [team] holds for all.
+  final Set<String>? teamEngines;
+
+  /// It runs with [engine] in that Mac's Harness Team account.
+  bool inTeam(String engine) => teamEngines?.contains(engine) ?? team;
 
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.
@@ -179,8 +188,9 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
   if (machine.unavailable case final why?) return why;
   if (!machine.online) return 'Offline';
   if (machine.leadEngines.isEmpty) {
+    // One reason for both engines (a paused or offline machine) said once.
     return 'Can’t run a Product Manager: '
-        '${[for (final engine in kLeadEngines) ?machine.engineRefusals[engine]].join(', ')}';
+        '${{for (final engine in kLeadEngines) ?machine.engineRefusals[engine]}.join(', ')}';
   }
   final free = machine.freeAgents;
   if (free == null) return 'Online · Not in this Swarm';

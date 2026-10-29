@@ -351,8 +351,41 @@ class SuperTabLaunch {
           pool['hostMachineId'] == null &&
           mac['sessionKind'] != 'team' &&
           (mac['capabilities'] as List?)?.contains('leadStart') == true;
-      // Where it would run: the Mac itself when its Team account cannot.
-      final host = teamReading && !team ? pool : reading;
+      // On a teammate's machine the server decides, by engine, where it runs
+      // (backend leadStart.ts leadChoices), as the start itself does: Desktop
+      // shows that rather than working it out (security reviews 1 and 2 of
+      // #2228). A backend from before sends none.
+      final decided = <String, String>{}, refused = <String, String>{};
+      if (!own && pool['lead'] is Map) {
+        for (final MapEntry(:key, :value) in superTabMap(
+          pool['lead'],
+        ).entries) {
+          switch (value) {
+            case {'machineId': final String machine}:
+              decided[key] = machine;
+            case {'refused': final String why}:
+              // Its line adds its own full stop.
+              refused[key] = why.endsWith('.')
+                  ? why.substring(0, why.length - 1)
+                  : why;
+          }
+        }
+      }
+      final server = decided.isNotEmpty || refused.isNotEmpty;
+      final shownHost = [for (final engine in kLeadEngines) ?decided[engine]]
+          .firstOrNull;
+      // Where it would run: the server's machine for its first engine that
+      // runs; else the Mac itself when its Team account cannot.
+      final host = server
+          ? (shownHost == null
+                ? pool
+                : snapshot.machines
+                          .where((m) => m['machineId'] == shownHost)
+                          .firstOrNull ??
+                      pool)
+          : teamReading && !team
+          ? pool
+          : reading;
       final hostReading = part(host['observation']);
       final online = fresh(hostReading);
       final running = hostReading['runningHarnessIds'];
@@ -360,41 +393,54 @@ class SuperTabLaunch {
       final checkouts = part(hostReading['readiness'])['checkouts'];
       final device = part(hostReading['resources'])['deviceType'];
       // The engines it can run there, read where it would run.
-      final engineRefusals = leadEngineRefusals(
-        offered: switch (host['engines']) {
-          final List engines => engines.whereType<String>().toSet(),
-          _ => null,
-        },
-        readiness: {
-          for (final raw
-              in part(hostReading['readiness'])['engines'] as List? ?? const [])
-            if (part(raw) case {'engine': final String engine} && final row)
-              engine: (
-                installed: row['installed'] as bool?,
-                signedIn: row['signedIn'] as bool?,
-              ),
-        },
-        usedPercents: {
-          for (final raw in hostReading['quotas'] as List? ?? const [])
-            if (part(raw) case {
-              'engine': final String engine,
-              'known': true,
-              'windows': final List windows,
-            })
-              engine: [
-                for (final window in windows)
-                  if (part(window)['usedPercent'] case final num used) used,
-              ],
-        },
-        // Read by servers with engine health (#2192); absent before.
-        suspended: {
-          for (final source in {pool, host})
-            if (source['suspendedEngines'] case final Map raw)
-              for (final MapEntry(:key, :value) in raw.entries)
-                if ((key, value) case (final String engine, final String why))
-                  engine: why,
-        },
-      );
+      final engineRefusals = server
+          ? {
+              for (final engine in kLeadEngines)
+                if (refused[engine] ?? (decided[engine] == null ? '' : null)
+                    case final why?)
+                  engine: why.isEmpty ? 'Not offered by this Swarm' : why,
+            }
+          : leadEngineRefusals(
+              offered: switch (host['engines']) {
+                final List engines => engines.whereType<String>().toSet(),
+                _ => null,
+              },
+              readiness: {
+                for (final raw
+                    in part(hostReading['readiness'])['engines'] as List? ??
+                        const [])
+                  if (part(raw)
+                      case {'engine': final String engine} && final row)
+                    engine: (
+                      installed: row['installed'] as bool?,
+                      signedIn: row['signedIn'] as bool?,
+                    ),
+              },
+              usedPercents: {
+                for (final raw in hostReading['quotas'] as List? ?? const [])
+                  if (part(raw) case {
+                    'engine': final String engine,
+                    'known': true,
+                    'windows': final List windows,
+                  })
+                    engine: [
+                      for (final window in windows)
+                        if (part(window)['usedPercent'] case final num used)
+                          used,
+                    ],
+              },
+              // Read by servers with engine health (#2192); absent before.
+              suspended: {
+                for (final source in {pool, host})
+                  if (source['suspendedEngines'] case final Map raw)
+                    for (final MapEntry(:key, :value) in raw.entries)
+                      if ((key, value) case (
+                        final String engine,
+                        final String why,
+                      ))
+                        engine: why,
+              },
+            );
       return LeadMachine(
         id: id,
         name: name,
@@ -440,7 +486,13 @@ class SuperTabLaunch {
             'laptopcomputer',
         own: own,
         native: own && connected,
-        team: team,
+        team: server ? shownHost != null && shownHost != id : team,
+        teamEngines: server
+            ? {
+                for (final MapEntry(:key, :value) in decided.entries)
+                  if (value != id) key,
+              }
+            : null,
         engineRefusals: engineRefusals,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused
@@ -450,6 +502,9 @@ class SuperTabLaunch {
                   : capable
                   ? null
                   : 'Not connected to this computer')
+            // The server's reasons are each engine's (engineRefusals).
+            : server
+            ? null
             : host['paused'] == true
             ? 'Paused in this Swarm'
             : team || macTakes

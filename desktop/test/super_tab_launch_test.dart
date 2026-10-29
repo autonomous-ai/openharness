@@ -1040,6 +1040,112 @@ void main() {
     },
   };
 
+  // Security reviews 1 and 2 of #2228: the server decides where a teammate's
+  // Mac runs the PM, by engine (backend leadStart.ts leadChoices), and New
+  // Project shows that rather than working it out from the readings.
+  group('the server’s decision of where the PM runs', () {
+    // Diego's Mac runs Claude Code; its Team account, fresh and private,
+    // offers only Codex.
+    List<Map<String, dynamic>> rows(Map<String, dynamic> lead) => [
+      {
+        ...offering(machineRow('diego-mac', 'Diego MacBook', lead: true), [
+          'claude',
+        ]),
+        'lead': lead,
+      },
+      offering(
+        machineRow(
+          'diego-team',
+          'Diego MacBook',
+          host: 'diego-mac',
+          kind: 'team',
+          lead: true,
+        ),
+        ['codex'],
+      ),
+    ];
+
+    test('a busy Team account: Codex is refused and Claude Code runs on the '
+        'Mac itself, so New Project starts it there', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = rows({
+        'claude': {'machineId': 'diego-mac'},
+        'codex': {'refused': 'Codex isn’t offered on Diego MacBook.'},
+      });
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, engine: 'codex', lead: null);
+      final mac = box.integration!.leadMachines!.singleWhere(
+        (m) => m.id == 'diego-mac',
+      );
+      expect(mac.engineRefusals, {
+        'codex': 'Codex isn’t offered on Diego MacBook',
+      });
+      expect((mac.startable, mac.inTeam('claude')), (true, false));
+      box.chooseLeadMachine('diego-mac');
+      // The engine it can run there, on the Mac itself, as the server said.
+      expect(box.engine, 'claude');
+      expect(box.leadBlocked, isNull);
+      expect(box.leadLine, startsWith('Product Manager on Diego MacBook · '));
+      expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+      expect(
+        commandsOf(f, 'lead.start').single,
+        containsPair('engine', 'claude'),
+      );
+      expect(
+        commandsOf(f, 'lead.start').single,
+        containsPair('machineId', 'diego-mac'),
+      );
+    });
+
+    test('each engine runs where the server says: Codex in the Team account, '
+        'Claude Code on the Mac whose account signed it out', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      knownRepo(f);
+      f.connection.server.state['machines'] = rows({
+        'claude': {'machineId': 'diego-mac'},
+        'codex': {'machineId': 'diego-team'},
+      });
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, engine: 'codex', lead: null);
+      box.chooseLeadMachine('diego-mac');
+      expect(box.engine, 'codex');
+      expect(
+        box.leadLine,
+        startsWith('Product Manager on Diego MacBook’s Team account · Codex'),
+      );
+      box.focusField(NewHarnessField.agent);
+      box.accept(box.options.where((o) => o.id == 'claude').single);
+      expect(
+        box.leadLine,
+        startsWith('Product Manager on Diego MacBook · Claude Code'),
+      );
+      expect(box.leadBlocked, isNull);
+    });
+
+    test('with every engine refused, the Mac cannot be chosen and says why '
+        'once', () async {
+      final f = SuperTabLaunchFixture();
+      addDiego(f);
+      f.connection.server.state['machines'] = rows({
+        'claude': {'refused': 'New work is paused on this machine.'},
+        'codex': {'refused': 'New work is paused on this machine.'},
+      });
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true, lead: null);
+      final mac = box.integration!.leadMachines!.singleWhere(
+        (m) => m.id == 'diego-mac',
+      );
+      expect(mac.startable, isFalse);
+      expect(
+        leadMachineDetail(mac, null),
+        'Can’t run a Product Manager: New work is paused on this machine',
+      );
+    });
+  });
+
   test('each machine says which Product Manager engines it cannot run, and '
       'why', () async {
     final f = SuperTabLaunchFixture();

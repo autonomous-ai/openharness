@@ -540,14 +540,16 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 
 /** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is
  *  admitted again when its host launches it, so a Team machine whose check failed or went stale since never launches it. */
+/** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
+ *  project exists (leadStart.ts leadChoices). */
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  otherWorkspaceMachines: readonly string[] = []) {
+  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  const project = groupProject(state, conversation(state, request.conversationId))
+  const project = forProject ?? groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
   if (held && held !== project.id) {

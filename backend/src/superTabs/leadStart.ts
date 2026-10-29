@@ -4,9 +4,9 @@
  *  Mac itself, as its owner, whatever the Swarm's switch (machines.ts teamAccountRequired) says for workers. Its person always
  *  names the machine: only they know which one stays on (Ken, 10-29). Desktop's own-machine flow (project.create, a local
  *  start, agent.add) is unchanged. */
-import { admitMachineStart, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
-  type ContributedMachine } from './machines.js'
-import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
+import { admitMachineStart, contributedEngines, failTeamWork, machineContribution, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf,
+  teamWorkRefusal, type ContributedMachine } from './machines.js'
+import { actorKey, fail, person, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { projectsOf, type SwarmProject } from './projects.js'
 import { failureNotice, publicReason } from './startFailure.js'
 
@@ -34,54 +34,15 @@ export interface LeadContext {
   teamAccountsIdle?: boolean
 }
 
-/** The contribution [project]'s Product Manager runs in when placed on [machineId]: the machine itself for its own owner;
- *  on another person's Mac, its Harness Team account when that takes it now, else the Mac itself, as its owner, unless the
- *  Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason. */
-function leadPool(state: SuperTabState, project: SwarmProject, machineId: string, context: LeadContext): ContributedMachine {
-  // A machine whose owner left the Swarm stays listed while its host cleans up. Its contribution is withdrawn; machineContribution
-  // would tell the person starting the Product Manager that they lost access themselves.
-  const listed = state.machines?.find(m => m.machineId === machineId)
-  if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
-  const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
-  if (named.contributorId === project.ownerId) return named
-  const teamMachines = context.teamMachines ?? []
-  // With no GitHub App, or outside the Swarms Team accounts are tried in, a Team account takes no work (machines.ts
-  // teamMachineFor).
-  const teamsWork = !context.teamAccountsIdle && teamAccountSwarm(state)
-  const refusal = (pool: ContributedMachine) => teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
-    (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
-  if (teamAccountPool(named)) {
-    if (!teamsWork) fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
-    const why = refusal(named)
-    if (why) failTeamWork(why)
-    return named
-  }
-  const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
-  // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
-  if (named.teamAccountOnly) {
-    const pool = team ?? named
-    const why = refusal(pool)
-    if (why) failTeamWork(why)
-    return pool
-  }
-  return team && !refusal(team) && takesLead(state, project, team) ? team : named
-}
+/** The engines a Product Manager runs on, as people read them. */
+const LEAD_ENGINES = { claude: 'Claude Code', codex: 'Codex' } as const
 
-/** Whether a Team account can host [project]'s Product Manager now: not paused, its host starts one, and it runs no other
- *  project's work (it will serve only this project, machines.ts productManagerOn). */
-const takesLead = (state: SuperTabState, project: SwarmProject, pool: ContributedMachine): boolean => !pool.paused
-  && !!pool.observation?.capabilities?.includes(LEAD_CAPABILITY) && ![...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)
-
-/** Records the start of [project]'s Product Manager on [machineId] for [by], and marks the project starting. Refuses, and
- *  changes nothing, when that machine cannot take it now. */
-export function placeLead(state: SuperTabState, project: SwarmProject, by: Person, machineId: string, request: LeadRequest,
-  startId: string, context: LeadContext): AgentStart {
-  const pool = leadPool(state, project, machineId, context)
-  const start: AgentStartRequest = { conversationId: project.leadConversationId, machineId: pool.machineId, engine: request.engine,
-    ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: LEAD_NAME,
-    cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}),
-    requirements: LEAD_REQUIREMENTS, leadFor: { projectId: project.id, personId: by.id, generation: by.generation } }
-  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
+/** Admits [project]'s Product Manager as [start] asks, in [pool], or throws why not. Writes nothing. */
+function admitLead(state: SuperTabState, project: SwarmProject, pool: ContributedMachine, start: AgentStartRequest, context: LeadContext): void {
+  if (!contributedEngines(pool).includes(start.engine)) {
+    fail('ENGINE_NOT_OFFERED', `${LEAD_ENGINES[start.engine as keyof typeof LEAD_ENGINES] ?? start.engine} isn’t offered on ${pool.name}.`, 403)
+  }
+  admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines, project)
   // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
   if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
     fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${LEAD_NAME} now.`, 409)
@@ -89,6 +50,92 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
   if (!pool.observation?.capabilities?.includes(LEAD_CAPABILITY)) {
     fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${LEAD_NAME} there.`, 409)
   }
+}
+
+/** Where [project]'s Product Manager with [request]'s engine runs when its person names [machineId], as its start request; or
+ *  throws why it cannot run there now. Writes nothing. The machine itself for its own owner; on another person's Mac, its
+ *  Harness Team account when that admits this Product Manager with this engine now, else the Mac itself, as its owner,
+ *  unless the Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason.
+ *  The start (placeLead) and New Project's machine list (leadChoices) both read it, so they never disagree. */
+export function leadHost(state: SuperTabState, project: SwarmProject, machineId: string, request: LeadRequest, leadFor: AgentStartRequest['leadFor'],
+  context: LeadContext): AgentStartRequest {
+  // A machine whose owner left the Swarm stays listed while its host cleans up. Its contribution is withdrawn; machineContribution
+  // would tell the person starting the Product Manager that they lost access themselves.
+  const listed = state.machines?.find(m => m.machineId === machineId)
+  if (listed && !state.people.some(p => p.id === listed.contributorId)) fail('CONTRIBUTION_REVOKED', 'This machine contribution was withdrawn.', 403)
+  const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
+  const startIn = (pool: ContributedMachine): AgentStartRequest => ({ conversationId: project.leadConversationId, machineId: pool.machineId,
+    engine: request.engine, ...(request.model ? { model: request.model } : {}), ...(request.effort ? { effort: request.effort } : {}), name: LEAD_NAME,
+    cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}), requirements: LEAD_REQUIREMENTS, leadFor })
+  const teamMachines = context.teamMachines ?? []
+  // With no GitHub App, or outside the Swarms Team accounts are tried in, a Team account takes no work (machines.ts
+  // teamMachineFor).
+  const teamsWork = !context.teamAccountsIdle && teamAccountSwarm(state)
+  const refusal = (pool: ContributedMachine) => teamWorkRefusal(pool, context.now, teamMachines.includes(pool.machineId), true,
+    (context.otherWorkspaceMachines ?? []).includes(pool.machineId))
+  let candidates: ContributedMachine[]
+  if (named.contributorId === project.ownerId) candidates = [named]
+  else if (teamAccountPool(named)) {
+    if (!teamsWork) fail('TEAM_ACCOUNT_REQUIRED', `Harness Team accounts take no work in this Swarm yet, so ${named.name} runs only its owner's projects.`, 403)
+    const why = refusal(named)
+    if (why) failTeamWork(why)
+    candidates = [named]
+  } else {
+    const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
+    // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
+    if (named.teamAccountOnly) {
+      const pool = team ?? named
+      const why = refusal(pool)
+      if (why) failTeamWork(why)
+      candidates = [pool]
+    } else candidates = team && !refusal(team) ? [team, named] : [named]
+  }
+  // The Team account first, with every check its start has (engine, sign-in, room, other projects' work, its host); refused
+  // there for any reason, the Mac itself (security reviews 1 and 2 of #2228). The last one's reason is the answer.
+  for (const [i, pool] of candidates.entries()) {
+    const start = startIn(pool)
+    try {
+      admitLead(state, project, pool, start, context)
+      return start
+    } catch (error) {
+      if (!(error instanceof SuperTabError) || i === candidates.length - 1) throw error
+    }
+  }
+  throw new Error('unreachable: a Product Manager has at least one candidate machine')
+}
+
+/** Where New Project's Product Manager would run on each teammate's machine, for [personId] as its owner, by engine: the
+ *  machine it runs in, or why it cannot run there now. The same answer leadHost gives the start, before the project exists, so
+ *  Desktop shows the server's decision rather than working one out (security review 1 of #2228). The person's own machines
+ *  are left to Desktop, which starts the Product Manager there itself; a Team account is read through its Mac. Reasons name
+ *  no other project. */
+export function leadChoices(state: SuperTabState, personId: string, context: LeadContext): Record<string, Record<string, { machineId: string } | { refused: string }>> {
+  const by = state.people.find(p => p.id === personId)
+  if (!by || state.paused) return {}
+  const project = { id: '', name: '', ownerId: personId, leadConversationId: '', visibility: 'private', members: [], updateMinutes: 5,
+    skillMode: 'default' } as unknown as SwarmProject
+  const leadFor = { projectId: '', personId, generation: by.generation }
+  const choices: Record<string, Record<string, { machineId: string } | { refused: string }>> = {}
+  for (const machine of state.machines ?? []) {
+    if (machine.hostMachineId || machine.removal || machine.contributorId === personId) continue
+    choices[machine.machineId] = Object.fromEntries(Object.keys(LEAD_ENGINES).map(engine => {
+      try {
+        return [engine, { machineId: leadHost(state, project, machine.machineId, { engine }, leadFor, context).machineId }]
+      } catch (error) {
+        if (!(error instanceof SuperTabError)) throw error
+        return [engine, { refused: error.message }]
+      }
+    }))
+  }
+  return choices
+}
+
+/** Records the start of [project]'s Product Manager on [machineId] for [by], and marks the project starting. Refuses, and
+ *  changes nothing, when that machine cannot take it now. */
+export function placeLead(state: SuperTabState, project: SwarmProject, by: Person, machineId: string, request: LeadRequest,
+  startId: string, context: LeadContext): AgentStart {
+  const start = leadHost(state, project, machineId, request, { projectId: project.id, personId: by.id, generation: by.generation }, context)
+  const pool = machineContribution(state, start.machineId)!
   state.starts ??= []
   if (state.starts.filter(s => !s.harnessId && !s.error).length >= 32) fail('STARTS_PENDING', 'Reconcile pending agent starts before adding more.')
   const contributor = person(state, pool.contributorId)

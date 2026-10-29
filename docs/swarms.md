@@ -78,12 +78,15 @@ Who can start it, where, and who then reaches it:
 - **Where**: a machine on the Swarm's Machines list whose contribution is still valid, not paused or offline, with a free
   agent slot, an engine it runs, and a Harness that starts Product Managers. New Project lists only these as choosable
   and greys out the rest with the reason.
-- **Whose account**: on the owner's own machine, theirs. On a teammate's Mac, its Harness Team account when it passes its
-  privacy check, its host starts Product Managers and it runs no other project's work; nobody types in it there, and the
-  Mac's owner does not watch it. Otherwise the Mac itself, in its owner's account: **that owner can read whatever the
-  Product Manager reads and writes on their Mac** (the trust change Ken chose, 10-29). Through the Swarm, the project's
-  owner follows its chat but neither reads nor types in its terminal there; the Mac's owner reaches its terminal only
-  when they may read the project, so a private project they are not in shows them nothing.
+- **Whose account**: on the owner's own machine, theirs. On a teammate's Mac, its Harness Team account when that account
+  admits this Product Manager with its engine now: privacy check passed, the engine offered, signed in and not suspended
+  there, a free slot, its host starts Product Managers, and no other project's work. Otherwise the Mac itself, in its
+  owner's account: **that owner can read whatever the Product Manager reads and writes on their Mac** (the trust change Ken
+  chose, 10-29). The server makes this choice for each engine (`leadChoices` in `leadStart.ts`), and New Project shows the
+  choice the start will make.
+- **Who watches it**: the project's members watch its terminal live, whichever account it runs in (the Mac's owner does
+  not when it runs in a Team account). Typing in it: nobody in a Team account; on a teammate's Mac itself, only that
+  Mac's owner, and only when they may read the project. A private project they are not in shows them nothing.
 
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to
