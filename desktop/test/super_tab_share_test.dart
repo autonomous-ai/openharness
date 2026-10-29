@@ -209,6 +209,9 @@ void main() {
           find.text('This Mac is shared. You can stop anytime in Machines.'),
           findsOneWidget,
         );
+        // The question has its answer for a title.
+        expect(find.text('Shared with Pilot'), findsOneWidget);
+        expect(find.text('Share this Mac with your team?'), findsNothing);
         expect(find.textContaining('osascript'), findsOneWidget);
         await tester.tap(find.widgetWithText(FilledButton, 'Done'));
         await tester.pumpAndSettle();

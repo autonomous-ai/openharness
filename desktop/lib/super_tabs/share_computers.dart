@@ -397,8 +397,14 @@ class _ShareDialogState extends State<_ShareDialog> {
     final outcome = _outcome[mac.id];
     final shared = outcome != null && !outcome.failed;
     final busy = _stage == _Stage.sharing;
+    final swarm = c.snapshot?.name;
     return SuperTabDetailDialog(
-      title: 'Share this Mac with your team?',
+      // Once shared, the question has its answer for a title.
+      title: !shared
+          ? 'Share this Mac with your team?'
+          : swarm == null || swarm.isEmpty
+          ? 'Shared'
+          : 'Shared with $swarm',
       body: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
