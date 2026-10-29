@@ -12,7 +12,11 @@ const parent = realpathSync(mkdtempSync(join(tmpdir(), 'buddy-guard-')))
 const root = join(parent, 'folder'), outside = join(parent, 'outside')
 mkdirSync(join(root, 'src'), { recursive: true }); mkdirSync(outside)
 writeFileSync(join(root, 'a.txt'), 'a\n'); writeFileSync(join(outside, 'secret.txt'), 'secret\n')
+// Links out of it, as a pull could bring them after launch: to a folder, to a file, and to nothing.
 symlinkSync(outside, join(root, 'out'))
+symlinkSync(join(outside, 'secret.txt'), join(root, 'outlink'))
+symlinkSync(join(parent, 'gone'), join(root, 'broken'))
+symlinkSync(join(root, 'a.txt'), join(root, 'inlink'))
 const script = join(root, 'buddy-guard.mjs')
 writeFileSync(script, buddyGuardSource(root))
 afterAll(() => rmSync(parent, { recursive: true, force: true }))
@@ -68,6 +72,9 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'git log --format=%H%x09%s main..HEAD',
     'git show HEAD:cli/src/superTabs/start.ts',
     'git diff origin/main...HEAD --stat',
+    'grep -rn needle src',
+    'cat inlink',
+    'git blame -L1,5 a.txt',
     'git blame -L 10,40 cli/src/lib/swarmSkills.ts',
     'git status --short',
     'gh issue view 2087 --comments',
@@ -178,6 +185,36 @@ describe('a Buddy\'s guard (Ken, 10-29: reads without a prompt, refuses everythi
     'gh issue view 1 --repo other/private',
     'gh pr view 1 --repo=other/private',
     'gh pr list -Rother/private',
+    // A path glued to a short option is a path too (review 3 of #2092).
+    'git blame -S/etc/passwd a.txt',
+    'git blame -S../outside/secret.txt a.txt',
+    'git grep -f/etc/passwd',
+    'git grep -fout/secret.txt',
+    'rg -f/etc/passwd needle',
+    'rg -f../outside/secret.txt needle',
+    'grep -f/etc/passwd needle a.txt',
+    'grep -fout/secret.txt needle a.txt',
+    'head -n1 -c5 -- -/etc/passwd',
+    // A link out of the folder, by its real path when the command runs, a link a pull brought after launch included.
+    'cat outlink',
+    'cat out/secret.txt',
+    'head -n 1 outlink',
+    'grep needle outlink',
+    'grep -r needle out',
+    'rg needle out',
+    'git blame outlink',
+    'cat broken',
+    'harness super-tab --tab t post chat x op --attach outlink',
+    'harness super-tab --tab t post chat x op --attach out/secret.txt',
+    // Nor following links while it walks the folder.
+    'grep -R needle .',
+    'grep -rS needle .',
+    'grep -O -r needle .',
+    'grep --dereference-recursive needle .',
+    'rg -L needle',
+    'rg --follow needle',
+    'ls -L out',
+    'ls -lL .',
     // Nothing that runs on.
     'tail -f a.txt',
     'tail -F a.txt',

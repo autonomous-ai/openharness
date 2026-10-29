@@ -215,11 +215,14 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   (18473) cannot run these commands, since reaching that daemon takes `--port`.
 - What a Buddy reads: the files in its own copy of the project (by real path, so a link out of it is out), the
   project's git history, the project's GitHub issues and pull requests through the person's own `gh` sign-in, its
-  own chat and the project chat. Nothing else on the machine: absolute paths and `..` are refused, and so are gh's
-  `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
+  own chat and the project chat. Nothing else on the machine: absolute paths and `..` are refused, glued to an option
+  too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
+  A link out of the folder, committed or broken, is removed when the Buddy launches; one that arrives later, from a
+  pull, is refused by its real path as each command runs, and grep, rg and ls may not follow links as they walk.
 - A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
   person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
-  in it: a hook a teammate commits would otherwise run with the person's credentials. Harness's own session, turn and
+  in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise
+  run with the person's credentials. Harness's own session, turn and
   Agent Messages hooks are copied into the folder's settings at each launch. File editing is turned off, and the files
   in its own copy of the project are read-only.
   A Claude Code too old for the mode keeps a Buddy stopped rather than relaunching it without. No Buddy gets the

@@ -16,8 +16,12 @@
  * and rg's `--pre`, `--pre-glob`, `-z` and `--hostname-bin`, which runs a program (rg 14.1.1, tried).
  *
  * What it reads stays in its folder (security review 2 of #2092): the machine is its person's, the folder is the project.
- * Read, Grep, Glob and LS take paths there only, by real path, so a link out is out; a Bash word that is an absolute path
- * or has a ".." part is refused, and so are gh's -R/--repo (any repository its person can read) and git's --no-index.
+ * Read, Grep, Glob and LS take paths there only, by real path, so a link out is out. Each part of a Bash word that could
+ * be a path (itself, after "=" or ":", and after each letter of a short option, as -S/x or -fout/x glue a value on) is
+ * refused when it is absolute, has a ".." part, or by its real path as the command runs leaves the folder: a link a pull
+ * brings after launch included (review 3 of #2092; lib/swarmSkills.ts removes those there at launch). So are the read
+ * commands' ways to follow links as they walk (grep -R/-S/-O, rg -L, ls -L), gh's -R/--repo (any repository its person
+ * can read) and git's --no-index.
  * Its Super Tab commands are a Buddy's own (status, messages, message, decisions, post, propose, help) as the pane it runs
  * in identifies it: never --agent, --port or --machine. Nothing runs on: no background shell, no tail -f.
  *
@@ -27,7 +31,7 @@
  */
 export const buddyGuardSource = (root: string): string => String.raw`#!/usr/bin/env node
 // A Buddy's guard, written by Harness (cli/src/lib/buddyGuard.ts). Do not edit: Harness writes it again at each launch.
-import { realpathSync } from 'node:fs'
+import { lstatSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 // The Buddy's folder, as its real path: what it reads stays in it.
@@ -90,9 +94,25 @@ function inside(path) {
   }
 }
 
-// A word that names a place out of the folder: an absolute path (the machine's files, /dev), or one with a ".." part,
-// alone or after "=" or ":" (--file=/x, HEAD:../x). A range such as main..HEAD has no ".." part.
-const outward = (word) => word.split(/[=:]/).some((part) => isAbsolute(part) || part.split('/').includes('..'))
+// Whether [part], read as a path from the folder, leaves it: absolute (the machine's files, /dev), a ".." part, or, by its
+// real path as the command runs, a link out (one a pull brought after launch too), a broken link, or a path under one.
+// A word that names nothing there (a pattern, a revision) is judged by the folder it would be in.
+function escapes(part) {
+  if (!part) return false
+  if (isAbsolute(part) || part.split('/').includes('..')) return true
+  const full = resolve(ROOT, part)
+  try { lstatSync(full) } catch { return !inside(part) }
+  try {
+    const real = realpathSync(full)
+    return !(real === ROOT || real.startsWith(ROOT + sep))
+  } catch { return true }
+}
+
+// A word that names a place out of the folder: itself, what follows "=" or ":" (--file=/x, HEAD:../x), and for a short
+// option what follows each of its letters, since a value may be glued on (-S/x, -f../x, -fout/x). A range such as
+// main..HEAD has no ".." part.
+const outward = (word) => word.split(/[=:]/).some(escapes)
+  || (/^-[^-]/.test(word) && [...word].some((_, at) => at >= 2 && escapes(word.slice(at))))
 
 const short = (word) => /^-[^-]/.test(word)
 // A long option naming one of these, or a unique prefix of one: git takes either.
@@ -120,6 +140,9 @@ function bashAllowed(command) {
   if (rest.some(outward)) return false
   // Nothing that runs on: a background shell, or tail following a file.
   if (name === 'tail') return !rest.some((word) => longNames(word, ['follow']) || (short(word) && /[fF]/.test(word)))
+  // Nor following links while walking the folder: grep -R/-S/-O, rg -L, ls -L.
+  if (name === 'grep') return !rest.some((word) => longNames(word, ['dereference-recursive']) || (short(word) && /[RSO]/.test(word)))
+  if (name === 'ls') return !rest.some((word) => longNames(word, ['dereference']) || (short(word) && word.includes('L')))
   if (READERS.has(name)) return true
   if (name === 'git') {
     return GIT.has(sub) && !rest.some((word) => longNames(word, GIT_LONG) || word === '--no-index' || (short(word) && word.includes('O')))
@@ -131,7 +154,7 @@ function bashAllowed(command) {
         || (short(word) && /[wR]/.test(word)))
   }
   if (name === 'rg') {
-    return !rest.some((word) => longNames(word, RG_LONG) || (short(word) && word.includes('z')))
+    return !rest.some((word) => longNames(word, [...RG_LONG, 'follow']) || (short(word) && /[zL]/.test(word)))
   }
   return false
 }

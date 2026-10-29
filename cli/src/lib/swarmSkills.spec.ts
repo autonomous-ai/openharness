@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -626,6 +626,25 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
       Stop: [{ hooks: [{ type: 'command', command: notify, timeout: 5 }] }],
       PostToolUse: [{ hooks: [{ type: 'command', command: inbox, timeout: 5 }] }],
     })
+  })
+
+  it('removes every link out of the folder, and keeps the links within it (review 3 of #2092)', () => {
+    // The guard also judges each path by its real path as a command runs (lib/buddyGuard.ts), which covers a link a pull
+    // brings while the Buddy runs; at launch none is left to follow at all, a committed one included.
+    const workspace = fixture(), outside = fixture()
+    writeFileSync(join(outside, 'secret.txt'), 'secret\n')
+    mkdirSync(join(workspace, 'docs'))
+    writeFileSync(join(workspace, 'docs', 'a.md'), 'a\n')
+    symlinkSync(join(outside, 'secret.txt'), join(workspace, 'docs', 'secret.md'))
+    symlinkSync(outside, join(workspace, 'outside'))
+    symlinkSync(join(workspace, 'gone'), join(workspace, 'broken'))
+    symlinkSync(join(workspace, 'docs', 'a.md'), join(workspace, 'readme.md'))
+    symlinkSync('docs', join(workspace, 'manual'))
+    prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })
+    const left = (name: string) => { try { return lstatSync(join(workspace, name)).isSymbolicLink() } catch { return false } }
+    expect([left('docs/secret.md'), left('outside'), left('broken')]).toEqual([false, false, false])
+    expect([left('readme.md'), left('manual')]).toEqual([true, true])
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('secret\n')
   })
 
   it('locks the folder even when the skill cannot be prepared (re-check of #1992)', () => {
