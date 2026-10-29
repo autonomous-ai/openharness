@@ -21,6 +21,7 @@ import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequ
 import { SuperTabStore } from './superTabs/store.js'
 import { announceSwarmDeliveries } from './lib/swarmDeliveryPushes.js'
 import { announceSwarmHostChanges } from './lib/swarmHostPushes.js'
+import { announceSwarmChanges } from './lib/swarmClientPushes.js'
 import { GitHubApp, githubAppConfig } from './github/app.js'
 import { env } from './config/env.js'
 import { machineBillingWorkerService } from './services/MachineBillingWorkerService.js'
@@ -74,7 +75,8 @@ async function start(): Promise<void> {
   configureSwarmStamps(redisSwarmStamps(), { reads: false })
   // Archive notes and Workspace removals write messages too: their recipients' hosts hear of them at once, and of the
   // groups they changed.
-  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges })
+  const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
+    swarmChanged: announceSwarmChanges })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
