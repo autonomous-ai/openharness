@@ -2630,7 +2630,7 @@ export class CableSession {
   private readonly cardSession = `c${++nextCardSession}`
   /** The project this Pro itself picked last and when: the desktop's announce of it is no news, and a stale one of another is held off. */
   private picked: { key: string; at: number } | null = null
-  private lastRecapGet: { key: string; at: number } | null = null
+  private lastRecapGet: { key: string; at: number; read: Promise<LeadRecap | null> } | null = null
   /** A swarmChat dial's alerts (`${tab}:${lead}`): the notice it was last given or shown as already there, and whether it
    *  was read on the desktop since. A notice is sent once, never on an attach or resync (it was there before), never for
    *  the chat the desktop has open; `notice.read` once when the desktop opens the chat of one that was sent. */
@@ -2819,12 +2819,18 @@ export class CableSession {
       this.host.superTabSelected?.(tab, projectId)
       return
     }
-    // A repeat for the same Lead inside a second is ignored: the first answer is on its way.
+    // A repeat for the same Lead inside a second is answered from the first read, not read again. Dropping it left a dial
+    // that had emptied its face on the resting pet until its own 5 s retry (Diego, 2026-10-29).
+    // Only while the Lead is still in the cards: one whose access went is read again, and the host refuses it.
     const asked = `${tab}/${lead}`, now = Date.now()
-    if (this.lastRecapGet?.key === asked && now - this.lastRecapGet.at < RECAP_REPEAT_MS) return
-    this.lastRecapGet = { key: asked, at: now }
-    let recap: LeadRecap | null = null
-    try { recap = await this.host.swarmCardRecap?.(tab, lead, ...this.chatFlag()) ?? null } catch (err) { this.log(`cable: recap for ${lead} failed (${(err as Error).message})`) }
+    const listed = this.host.swarmCards?.().find((c) => c.id === tab)?.leads.some((l) => l.id === lead) ?? false
+    if (this.lastRecapGet?.key !== asked || now - this.lastRecapGet.at >= RECAP_REPEAT_MS || !listed) {
+      const read = Promise.resolve()
+        .then(() => this.host.swarmCardRecap?.(tab, lead, ...this.chatFlag()) ?? null)
+        .catch((err) => { this.log(`cable: recap for ${lead} failed (${(err as Error).message})`); return null })
+      this.lastRecapGet = { key: asked, at: now, read }
+    }
+    const recap = await this.lastRecapGet.read
     // Nothing on a failure: the Pro keeps its "…" and asks again on the next open.
     if (recap) await this.queued(async () => { await this.send(recapFrame(recap)) })
   }
