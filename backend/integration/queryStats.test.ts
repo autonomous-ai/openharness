@@ -105,3 +105,14 @@ it('keeps each route apart when queries from two routes run in the same tick', a
   const rows = flushed().filter(r => r.op === 'User.findUnique')
   expect(rows.map(r => [r.route, r.n, r.docs]).sort()).toEqual([['http GET /api/a', 1, 1], ['http GET /api/b', 1, 1]])
 })
+
+it('never fails a query because its stats failed, and says so once', async () => {
+  const someone = person()
+  await db.user.create({ data: someone })
+  const broken: QueryStats = { record() { throw new Error('stats bug') }, flush() {} }
+  const problems: string[] = []
+  const guarded = withQueryStats(base, () => broken, (message, context) => problems.push(`${message} ${String(context.error)}`))
+  await expect(guarded.user.findUnique({ where: { email: someone.email } })).resolves.toMatchObject({ email: someone.email })
+  await expect(guarded.user.create({ data: someone })).rejects.toThrow(/Unique constraint/)
+  expect(problems).toEqual(['query stats failed stats bug'])
+})

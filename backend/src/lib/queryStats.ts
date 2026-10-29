@@ -249,8 +249,20 @@ export function startQueryStats(options: QueryStatsOptions & { reportMs?: number
 }
 
 /** The client with one query hook that times every operation, model calls and raw commands alike, for `db by shape`.
- *  Query extensions keep the client's types, so it is still a PrismaClient to its callers. */
-export function withQueryStats(client: PrismaClient, stats: () => QueryStats | undefined = () => active): PrismaClient {
+ *  Query extensions keep the client's types, so it is still a PrismaClient to its callers. A failure of the stats never
+ *  reaches the query: it is warned about once per client, and the query's own result or error goes back unchanged. */
+export function withQueryStats(client: PrismaClient, stats: () => QueryStats | undefined = () => active,
+  warn: (message: string, context: Record<string, unknown>) => void = (m, c) => logger.warn(m, c)): PrismaClient {
+  let warned = false
+  const note = (model: string | undefined, operation: string, args: unknown, ms: number, result: unknown, failed: boolean) => {
+    try {
+      stats()?.record(model, operation, args, ms, result, failed)
+    } catch (error) {
+      if (warned) return
+      warned = true
+      warn('query stats failed', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
   return client.$extends({
     query: {
       async $allOperations({ model, operation, args, query }) {
@@ -259,10 +271,10 @@ export function withQueryStats(client: PrismaClient, stats: () => QueryStats | u
         try {
           result = await query(args)
         } catch (error) {
-          stats()?.record(model, operation, args, performance.now() - started, undefined, true)
+          note(model, operation, args, performance.now() - started, undefined, true)
           throw error
         }
-        stats()?.record(model, operation, args, performance.now() - started, result)
+        note(model, operation, args, performance.now() - started, result, false)
         return result
       },
     },
