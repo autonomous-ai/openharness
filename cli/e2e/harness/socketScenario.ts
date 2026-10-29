@@ -95,10 +95,13 @@ export class DesktopWindow {
 }
 
 /**
- * A browser tab on machine `machineId`: web-ws with `client=web` (ws_conn.dart's query), select, then the
+ * A browser tab on machine `machineId`: web-ws with `client=web` and its version (ws_conn.dart's query), select, then the
  * end-to-end hello a paired browser sends. Redials like a window; 4403 stops it, as a sign-in for
  * another environment does.
  */
+/** The web build the tab stands for, as it reads its version from the host's release file. */
+const WEB_BUILD_VERSION = '1.3.64'
+
 export class WebTab {
   dials = 0
   sessions = 0
@@ -114,7 +117,8 @@ export class WebTab {
     if (this.closing) return
     this.dials++
     const { wsUrl, token, machineId, identity, machinePub } = this.options
-    const ws = new WebSocket(`${wsUrl}/api/web-ws?autonomousEnv=prod&client=web`, [token])
+    // The web build's version rides every socket since Phase 0 (#2029: ws_conn.dart `'v': declaredAppVersion`).
+    const ws = new WebSocket(`${wsUrl}/api/web-ws?autonomousEnv=prod&client=web&v=${WEB_BUILD_VERSION}`, [token])
     this.ws = ws
     const crypto = new RelaySessionCrypto({ machineId, selfIdentity: identity, peerPub: machinePub, groupSeen: new Map() })
     ws.on('error', () => { /* 'close' follows */ })

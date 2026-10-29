@@ -8,6 +8,7 @@ import '../e2ee/envelope.dart';
 import '../e2ee/relay_session_crypto.dart';
 import 'password_link.dart' show RelaySocketFactory, defaultRelaySocket;
 import 'viewer_key_store.dart';
+import '../ws/ws_conn.dart' show declaredAppVersion;
 
 /// The trust group, on a device with no harness CLI — the viewer's half of `cli/src/lib/e2ee/
 /// trustGroup.ts` and `groupSyncer.ts`.
@@ -240,9 +241,13 @@ Future<GroupSyncOutcome> syncTrustGroup({
       identity: identity,
       peerPub: pin.pub,
     );
-    // It says what it is (`?client=`; backend lib/wsAttribution.ts, WebSocket roadmap Phase 0).
+    // It says what it is and which build (`?client=`, `?v=`; backend lib/wsAttribution.ts, Phase 0).
     final uri = Uri.parse('$wsBaseUrl/api/web-ws').replace(
-      queryParameters: {'autonomousEnv': autonomousEnv, 'client': 'group-sync'},
+      queryParameters: {
+        'autonomousEnv': autonomousEnv,
+        'client': 'group-sync',
+        'v': ?declaredAppVersion,
+      },
     );
     final ch = channel = socket(uri, [accessToken]);
     final reply = await () async {
