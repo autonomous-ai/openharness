@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { CODEX_RELAY_ACCOUNT, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { engineAccount } from '../lib/engineAccount.js'
@@ -8,7 +8,7 @@ import type { TeamConfig } from './config.js'
 import {
   publishTeamRelay, publishWindowsTeamRelay, readTeamRelay, readWindowsTeamRelay, setfaclGrant, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile,
   teamRelayLaunch, teamRelayPublished, NO_PM_RELAY, type OwnerRelayLaunch, TeamRelayPublisher, prepareCodexHome, installedCodexVersion,
-  CODEX_CLIENT_VERSION_FALLBACK, dropUnofferedModel,
+  CODEX_CLIENT_VERSION_FALLBACK, dropUnofferedModel, offeredCodexModels, codexModelNotOffered,
   type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps, type WindowsRelayFs,
 } from './relay.js'
 
@@ -374,5 +374,43 @@ describe('Codex\'s home for the relay', () => {
     mkdirSync(join(root, '.codex'))
     writeFileSync(join(root, '.codex', 'auth.json'), JSON.stringify({ tokens: { access_token: TOKEN, account_id: CODEX_RELAY_ACCOUNT } }))
     expect((await engineAccount('codex', { home: root, env: {}, lastUsed: false })).signedIn).toBe(false)
+  })
+})
+
+// Mac Auto, 2026-10-29: its owner's ChatGPT account is offered GPT-6-Luna and the GPT-5.6 models, a start asked gpt-6.1-sol,
+// and the agent launched only to fail every request.
+describe('the Codex models a Team account\'s owner is offered', () => {
+  const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
+  const rows = [{ slug: 'gpt-6-luna', visibility: 'list' }, { slug: 'gpt-reserve', visibility: 'hide' }, { slug: 'gpt-5.6-terra', visibility: 'list' }, 'not a model']
+  const deps = (over: Partial<Parameters<typeof offeredCodexModels>[0] & object> = {}) => ({
+    team: () => true, config: () => config, read: () => grant, prepare: vi.fn(async () => rows as unknown[]), ...over,
+  })
+
+  it('reads them fresh through the relay: every slug, and the ones Codex lists, in its order', async () => {
+    const d = deps()
+    expect(await offeredCodexModels(d)).toEqual({ slugs: ['gpt-6-luna', 'gpt-reserve', 'gpt-5.6-terra'], listed: ['gpt-6-luna', 'gpt-5.6-terra'] })
+    expect(d.prepare).toHaveBeenCalledWith(grant)
+    expect(codexModelNotOffered('gpt-6.1-sol', { slugs: [], listed: ['gpt-6-luna', 'gpt-5.6-terra'] }))
+      .toBe('This machine\'s ChatGPT account (its owner\'s subscription, used through the owner\'s relay) does not offer gpt-6.1-sol; it offers gpt-6-luna, gpt-5.6-terra.')
+    expect(codexModelNotOffered('gpt-6.1-sol', { slugs: ['x'], listed: [] })).toContain('it lists no model to choose.')
+  })
+
+  it('says nothing outside a Team account on its relay, or when the list cannot be read', async () => {
+    expect(await offeredCodexModels(deps({ team: () => false }))).toBeNull()
+    expect(await offeredCodexModels(deps({ config: () => null }))).toBeNull()
+    expect(await offeredCodexModels(deps({ read: () => null }))).toBeNull()
+    expect(await offeredCodexModels(deps({ prepare: async () => null }))).toBeNull()
+    expect(await offeredCodexModels(deps({ prepare: async () => { throw new Error('relay down') } }))).toBeNull()
+    expect(await offeredCodexModels(deps({ prepare: async () => ['not a model'] }))).toBeNull()
+  })
+
+  it('is what prepareCodexHome kept, or null when it kept none', async () => {
+    const dir = join(mkdtempSync(join(tmpdir(), 'team-offered-')), '.codex')
+    onTestFinished(() => rmSync(dirname(dir), { recursive: true, force: true }))
+    const models = [{ slug: 'gpt-6-luna', visibility: 'list' }]
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ models }), { status: 200 }))
+    expect(await prepareCodexHome(dir, grant, { fetch: fetch as never, version: () => null, now: () => 0 })).toEqual(models)
+    expect(await prepareCodexHome(dir, grant, { fetch: (async () => new Response('{}', { status: 503 })) as never, version: () => null, now: () => 0 })).toBeNull()
+    expect(await prepareCodexHome(dir, grant, { fetch: (async () => { throw new Error('down') }) as never, version: () => null, now: () => 0 })).toBeNull()
   })
 })
