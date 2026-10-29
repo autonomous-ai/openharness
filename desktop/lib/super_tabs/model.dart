@@ -335,6 +335,13 @@ class SuperTabSnapshot {
   final List<Map<String, dynamic>> buddyStarts;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
+
+  /// The agents the Swarm lists and counts: its PM, Devs and Reviewers. A
+  /// Buddy is personal, so no list or count shows one, its person's included;
+  /// they see it in their Buddies section ([SuperTabController.buddy]).
+  late final List<SuperTabAgent> teamAgents = List.unmodifiable(
+    agents.where((a) => !a.isBuddy),
+  );
   final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;

@@ -392,6 +392,13 @@ class ConversationServer {
   /// Told of every messages read, by path.
   void Function(String path)? onRead;
   bool loseReply = false, reject = false, failSave = false, failReads = false;
+
+  /// Conversations whose single-message reads (`?messageId=`) the backend
+  /// refuses, as it does for one the reader may not read.
+  final forbidMessageReads = <String>{};
+
+  /// How many of the next single-message reads fail as if offline.
+  int failMessageReads = 0;
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
   Completer<void>? holdReads;
@@ -1051,6 +1058,19 @@ class ConversationServer {
       final before = int.tryParse(query['before'] ?? '');
       final afterId = query['afterId'], beforeId = query['beforeId'];
       final messageId = query['messageId'], thread = query['thread'];
+      if (messageId != null) {
+        if (forbidMessageReads.contains(conversationId)) {
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Forbidden.',
+            statusCode: 403,
+          );
+        }
+        if (failMessageReads > 0) {
+          failMessageReads--;
+          throw StateError('Offline');
+        }
+      }
       // Pages run in (sequence, id) order (section 4.6).
       int order(Map<String, dynamic> a, Map<String, dynamic> b) {
         final bySequence = (a['sequence'] as int).compareTo(
@@ -1223,6 +1243,7 @@ class ConversationServer {
   static final _reader = Object();
 
   SuperTabController controller({
+    String tabId = 'tab',
     Map<String, dynamic>? initial,
     String account = 'owner',
     SuperTabUpload? upload,
@@ -1230,7 +1251,7 @@ class ConversationServer {
   }) => SuperTabController(
     avatarUpload: uploadAvatar,
     reading: reading,
-    tabId: 'tab',
+    tabId: tabId,
     accountId: account,
     request: (method, path, {body}) => runZoned(
       () => request(method, path, body: body),

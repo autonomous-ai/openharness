@@ -6,6 +6,7 @@ import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
+import 'package:harness/super_tabs/message_link.dart';
 import 'package:harness/super_tabs/message_row.dart';
 import 'package:harness/super_tabs/model.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -340,6 +341,22 @@ void main() {
     tester.semantics.tap(node);
     expect(opened, 1);
     handle.dispose();
+  });
+
+  testWidgets('a link to a reply that lives only in its thread opens that '
+      'thread', (tester) async {
+    final c = await show(tester, threaded());
+    c.openMessageLink(
+      const SwarmMessageLink(
+        tabId: 'tab',
+        conversationId: 'lead',
+        messageId: 'message-3',
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, 'message-1');
+    expect(inPanel(find.text('Agreed.')), findsOneWidget);
+    expect(find.text('Message unavailable'), findsNothing);
   });
 
   testWidgets('in a window too narrow for the side, the thread opens over '
