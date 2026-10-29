@@ -334,6 +334,12 @@ describe('Models: temporary workers by engine, model and effort, never by agent 
     expect(model(view, 'opus').shipped).toMatchObject({ count: 1, medianAttemptMs: 0, medianRequestMs: 0 })
   })
 
+  it('times a request recorded before its first assignment was kept from its asked time once 20 attempts are kept', () => {
+    const runs = Array.from({ length: 20 }, (_, i) => run(`a${i}`, WEEK + (i + 1) * HOUR))
+    const view = board(swarm(), [landed(WEEK + 30 * HOUR, runs, { askedAt: WEEK })])
+    expect(model(view, 'opus').shipped.medianRequestMs).toBe(30 * HOUR)
+  })
+
   it('times the whole request from its first assignment, kept after its first attempt rolled off (review of #2097)', () => {
     const view = board(swarm(), [landed(WEEK + 5 * HOUR, [run('a21', WEEK + 4 * HOUR)], { firstAssignedAt: WEEK })])
     expect(model(view, 'opus').shipped).toMatchObject({ medianAttemptMs: HOUR, medianRequestMs: 5 * HOUR })
@@ -406,6 +412,22 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
       shipped('dee', WEEK, WEEK + HOUR, { leadId: 'river', ledger: ledger(null) }),
     ])
     expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2 })
+  })
+
+  it('keeps a removed Buddy and a replaced PM on the board for the weeks they earned in (full review of #2097)', () => {
+    const state = agents(swarm())
+    state.agents = state.agents.filter(a => a.id !== 'sparky')
+    state.agents.push({ ...state.agents.find(a => a.id === 'river')!, id: 'old-pm', displayName: 'Atlas' })
+    const ledger = (extra: object) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, ...extra })
+    const view = board(state, [
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'old-pm' }) }),
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: 'gone-pm' }) }),
+      shipped('dee', WEEK, WEEK + HOUR, { ledger: ledger({ shippedLeadId: null, proposal: { buddyId: 'sparky', messageId: 'm1' } }) }),
+    ])
+    expect(view.agents.map(a => [a.agentId, a.displayName, a.kind, a.points])).toEqual([
+      ['old-pm', 'Atlas', 'pm', 3], ['gone-pm', 'Former PM', 'pm', 3], ['sparky', 'Former Buddy', 'buddy', 3], ['river', 'River', 'pm', 0]])
+    // Last week they earned nothing, and only the current agents are listed.
+    expect(board(state, [], LAST).agents.map(a => a.agentId)).toEqual(['river'])
   })
 
   it('gives a Buddy 3 points per group opened from its proposal that shipped this week', () => {

@@ -224,7 +224,8 @@ class LeaderboardModelRow extends StatelessWidget {
       points: score.points,
       columns: columns,
       weekName: weekName,
-      crowned: score.rank == 1 && score.points > 0,
+      // Crowns are for people and agents, not models (full review of #2097).
+      crowned: false,
       identity: EngineMark(engine: score.engine),
       name: name,
       tag: score.grid ? 'grid' : null,

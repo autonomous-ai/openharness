@@ -8,7 +8,7 @@ import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
+import { firstAssignedAt, waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
 
@@ -103,21 +103,32 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   }
 }
 
-/** The project's PM and Buddies with the requests each shipped this week: the PM by the groups it led, a Buddy by the groups
- *  opened from its proposals. Builders and Reviewers are counted by model instead (modelScores). */
+/** The project's PM and Buddies with the requests each shipped this week: a PM by the groups it led when they shipped, a
+ *  Buddy by the groups opened from its proposals. One credited this week stays listed after it was removed or replaced,
+ *  as "Former PM" or "Former Buddy" once the Swarm no longer has it (full review of #2097). Builders and Reviewers are
+ *  counted by model instead (modelScores). */
 function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: Conversation[]): AgentScore[] {
   const pmId = state.conversations.find(c => c.id === projectOf(state, projectId).leadConversationId)?.leadId
-  const scored = state.agents
-    .filter(a => a.id === pmId || (isBuddy(a) && agentProjectId(state, a) === projectId))
-    .map(a => {
-      const buddy = isBuddy(a)
-      // The lead recorded when it shipped; a request shipped before that was recorded, its lead now.
-      const ledBy = (g: Conversation) => g.ledger?.shippedLeadId !== undefined ? g.ledger.shippedLeadId : g.leadId
-      const shipped = shippedThisWeek.filter(g => buddy ? g.ledger?.proposal?.buddyId === a.id : ledBy(g) === a.id).length
-      return { agentId: a.id, displayName: a.displayName ?? a.name, kind: buddy ? 'buddy' as const : 'pm' as const,
-        personId: a.buddyOf?.personId ?? null, machineId: a.machineId, points: shipped * SHIPPED_POINTS, shipped }
-    })
-    .sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
+  const shipped = new Map<string, { kind: 'pm' | 'buddy'; count: number }>()
+  for (const a of state.agents) {
+    if (a.id === pmId || (isBuddy(a) && agentProjectId(state, a) === projectId)) shipped.set(a.id, { kind: isBuddy(a) ? 'buddy' : 'pm', count: 0 })
+  }
+  const credit = (agentId: string, kind: 'pm' | 'buddy') => {
+    const entry = shipped.get(agentId) ?? { kind, count: 0 }
+    entry.count++
+    shipped.set(agentId, entry)
+  }
+  for (const g of shippedThisWeek) {
+    // The lead recorded when it shipped; a request shipped before that was recorded, its lead now.
+    const ledBy = g.ledger?.shippedLeadId !== undefined ? g.ledger.shippedLeadId : g.leadId
+    if (ledBy) credit(ledBy, 'pm')
+    if (g.ledger?.proposal) credit(g.ledger.proposal.buddyId, 'buddy')
+  }
+  const scored = [...shipped].map(([agentId, { kind, count }]) => {
+    const a = state.agents.find(agent => agent.id === agentId)
+    return { agentId, displayName: a ? a.displayName ?? a.name : kind === 'pm' ? 'Former PM' : 'Former Buddy', kind,
+      personId: a?.buddyOf?.personId ?? null, machineId: a?.machineId ?? '', points: count * SHIPPED_POINTS, shipped: count }
+  }).sort((a, b) => b.points - a.points || (a.kind === b.kind ? a.displayName.localeCompare(b.displayName) : a.kind === 'pm' ? -1 : 1))
   return scored.map(entry => ({ ...entry, rank: 1 + scored.filter(other => other.points > entry.points).length }))
 }
 
@@ -142,7 +153,7 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
     entry.shipped.count++
     // Merged before its attempt started: shipped at once, never in negative time (Lead, 2026-10-29).
     entry.attemptMs.push(Math.max(0, shippedAt - last.at))
-    const first = ledger.firstAssignedAt ?? runs[0]?.at
+    const first = firstAssignedAt(ledger)
     if (first != null) entry.requestMs.push(Math.max(0, shippedAt - first))
   }
   for (const group of requests) {

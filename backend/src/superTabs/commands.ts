@@ -2062,8 +2062,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (check.independent && actor.kind === 'agent' && actor.agentId === group.assignment.agentId) fail('INDEPENDENT_REVIEW', 'Another agent or a person must perform this check.')
       check.evidence = command.evidence
       check.passedBy = command.passed ? actorKey(actor) : null
-      recordReview(group, check, command.passed)
+      // Before the review's first verdict is kept: a check's verdict counts once per attempt.
       if (actor.kind === 'agent') recordVerdict(state, group, check, agent(state, actor.agentId), context.now)
+      recordReview(group, check, command.passed)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
       break
     }
