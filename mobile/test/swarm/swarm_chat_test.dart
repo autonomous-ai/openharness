@@ -742,15 +742,15 @@ void main() {
     });
   });
 
-  testWidgets('the header names the chat, Chat with PM for the person\'s own, '
-      'with its project under it', (tester) async {
+  testWidgets('the header names the chat, with its project under it; an old '
+      'private chat is no Chat with PM any more (#2090)', (tester) async {
     await pump(tester, backend([message('m1', 1)]));
     expect(find.text('Fix login'), findsOneWidget);
     expect(find.text('Mobile'), findsOneWidget);
 
     await pump(tester, backend([message('m1', 1)], audience: [me]));
-    expect(find.text('Chat with PM'), findsOneWidget);
-    expect(find.text('Fix login'), findsNothing);
+    expect(find.text('Chat with PM'), findsNothing);
+    expect(find.text('Fix login'), findsOneWidget);
   });
 
   testWidgets('a divider heads each day, Yesterday above Today', (

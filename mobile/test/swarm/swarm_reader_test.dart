@@ -42,32 +42,6 @@ void main() {
     expect(r.partners, {'g1': 'person-dee'});
   });
 
-  test("the Swarm's Buddies setting is kept beside it, and follows its "
-      'head', () async {
-    final swarm = FakeSwarm();
-    swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad();
-    var version = 1, buddies = true;
-    swarm.routes['/api/super-tabs/$tab/changes'] = (_) {
-      version++;
-      return {
-        ...changes(cursor: 'c$version', lastChangedAt: 100 * version),
-        'head': part('head', version, {...headData(), 'buddies': buddies}),
-      };
-    };
-    final r = reader(swarm);
-    addTearDown(r.dispose);
-
-    await r.refresh();
-    expect(r.buddiesOn, isFalse, reason: 'a head without it: off');
-
-    await r.refresh();
-    expect(r.buddiesOn, isTrue);
-
-    buddies = false;
-    await r.refresh();
-    expect(r.buddiesOn, isFalse, reason: 'turned off again');
-  });
-
   test('later reads ask only what changed since the cursor', () async {
     final swarm = FakeSwarm();
     swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(cursor: 'c1');

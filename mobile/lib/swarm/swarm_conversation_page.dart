@@ -18,6 +18,8 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'identity.dart';
 import 'model.dart';
 import 'swarm_attach.dart';
+import 'swarm_buddy.dart';
+import 'swarm_buddy_chat.dart';
 import 'swarm_choices.dart';
 import 'swarm_conversation.dart';
 import 'swarm_face.dart';
@@ -233,7 +235,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   void _see() {
     final session = _session, c = _conversation;
     if (session == null || c == null) return;
-    _view.value = _ChatView.of(session, c, _view.value);
+    final view = _view.value = _ChatView.of(session, c, _view.value);
+    _seeBuddy(c, view.buddyProject);
     final decisionId = widget.decisionId;
     if (!_noticeHandled &&
         decisionId != null &&
@@ -247,6 +250,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     }
   }
 
+  /// What the person does to their Buddy from its chat, while this is their
+  /// own Buddy chat in [project] ([SwarmBuddyActions]).
+  SwarmBuddyActions? _buddy;
+
+  void _seeBuddy(SwarmConversation c, String? project) {
+    final kept = _buddy;
+    if (kept?.reader == c.reader && kept?.projectId == project) return;
+    kept?.dispose();
+    _buddy = project == null ? null : SwarmBuddyActions(c.reader, project);
+  }
+
   void _close() {
     final session = _session;
     session?.inbox
@@ -257,6 +271,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       c.reader.removeListener(_see);
       c.dispose();
     }
+    _buddy?.dispose();
+    _buddy = null;
     _rows.clear();
     _madeFrom = null;
     if (_watching) session?.unwatch(widget.swarmId);
@@ -536,6 +552,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           tty,
           title: widget.title ?? (inbox.loaded ? 'Chat' : null),
           project: widget.subtitle,
+          action: widget.action,
         ),
         ?widget.below,
         Expanded(
@@ -563,12 +580,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
 
   /// The back button, then the chat's name and its project under it — or,
   /// while the chat is not known yet ([title] null), placeholders of their
-  /// size — and the page's [SwarmConversationPage.action] at its end.
+  /// size — and [action] at its end.
   Widget _header(
     BuildContext context,
     Tty tty, {
     required String? title,
     String? project,
+    Widget? action,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
     padding: const EdgeInsets.fromLTRB(0, 2, _headerEnd, 2),
@@ -619,7 +637,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         ),
         // The screen's side margin from its edge: the header's own end
         // inset, and the rest of the margin.
-        if (widget.action case final action?)
+        if (action != null)
           Padding(
             padding: const EdgeInsetsDirectional.only(
               start: AppSpace.s,
@@ -658,9 +676,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   ? view.title
                   : null),
           project: widget.subtitle ?? view.project,
+          // The person's own Buddy chat: Remove Buddy.
+          action:
+              widget.action ??
+              switch (_buddy) {
+                final buddy? => SwarmBuddyMenuButton(actions: buddy),
+                null => null,
+              },
         ),
       ),
       ?widget.below,
+      if (_buddy case final buddy?) SwarmBuddyBar(actions: buddy),
       Expanded(
         child: Stack(
           children: [
@@ -724,7 +750,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       if (view.canPost)
         ListenableBuilder(
           listenable: Listenable.merge([c.composer, _voice]),
-          builder: (context, _) => _composer(c, tty),
+          builder: (context, _) => _composer(c, tty, hint: view.hint),
         )
       else if (view.known)
         Padding(
@@ -745,8 +771,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   String _quoted(SwarmConversation c, SuperTabMessage m) =>
       !m.fromAgent && m.authorId == c.reader.accountId ? 'You' : _nameOf(c, m);
 
-  String _nameOf(SwarmConversation c, SuperTabMessage m) =>
-      c.reader.snapshot?.authorName(m) ?? m.authorName;
+  /// [m]'s author by name; in the person's own Buddy chat the PM's private
+  /// lines read as lines to them, "River (PM) → you": the PM writes there but
+  /// cannot read it (#2090).
+  String _nameOf(SwarmConversation c, SuperTabMessage m) {
+    final name = c.reader.snapshot?.authorName(m) ?? m.authorName;
+    return swarmIsPmLine(c.reader, m) ? '$name (PM) → you' : name;
+  }
 
   SwarmLook _lookOf(SwarmConversation c, SuperTabMessage m) =>
       c.reader.snapshot?.authorLook(m) ?? (picture: null, status: null);
@@ -856,7 +887,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           final reply = m.replyTo == null ? null : byId[m.replyTo];
           final name = _nameOf(c, m);
           final look = _lookOf(c, m);
-          final role = m.fromAgent ? view.roles[m.authorId] : null;
+          // "River (PM) → you" says the role already.
+          final role = m.fromAgent && !swarmIsPmLine(c.reader, m)
+              ? view.roles[m.authorId]
+              : null;
           final quoted = reply == null ? null : _quoted(c, reply);
           final lit = _lit == m.id, followed = _target == m.id;
           final acting = _acting == m.id;
@@ -1068,7 +1102,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   /// post, what the mic could not hear, then +, a field that grows with what
   /// is typed, the mic and a round Send. An @ is typed in the field: it has no
   /// button of its own.
-  Widget _composer(SwarmConversation c, Tty tty) {
+  Widget _composer(SwarmConversation c, Tty tty, {required String hint}) {
     final snapshot = c.reader.snapshot;
     final query = c.mentionQuery;
     final replying = c.replyingTo;
@@ -1202,7 +1236,11 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 ),
               const SizedBox(width: 6),
               Expanded(
-                child: _MessageField(controller: _text, focus: _focus),
+                child: _MessageField(
+                  controller: _text,
+                  focus: _focus,
+                  hint: hint,
+                ),
               ),
               if (_voice case final voice?)
                 SwarmVoiceMic(voice: voice)
@@ -1245,6 +1283,8 @@ class _ChatView {
     required this.roles,
     required this.mentionable,
     required this.decisions,
+    required this.buddyProject,
+    required this.hint,
   });
 
   /// [c] as its Swarm's read and asks have it now. The decisions of [before]
@@ -1259,6 +1299,18 @@ class _ChatView {
     final group = c.conversation;
     final agents = snapshot?.agents ?? const <SuperTabAgent>[];
     final names = [for (final agent in agents) snapshot!.agentName(agent.id)];
+    // The person's own Buddy chat (#2090): named after their Buddy, and
+    // holding every question the PM asked them in its project, as on Desktop.
+    final buddyProject = group != null && swarmIsOwnBuddyChat(reader, group.id)
+        ? group.projectId
+        : null;
+    final buddy = buddyProject == null
+        ? null
+        : swarmBuddyName(reader, buddyProject);
+    final project = snapshot?.projects
+        .where((p) => p.id == group?.projectId)
+        .firstOrNull
+        ?.name;
     // A chat not open to the person shows none of its questions either, even
     // while the decisions read has not caught up.
     final decisions = [
@@ -1266,20 +1318,15 @@ class _ChatView {
         if (group != null &&
             need is SwarmDecisionNeed &&
             need.swarmId == reader.tabId &&
-            need.conversationId == c.id)
+            (need.conversationId == c.id ||
+                (buddyProject != null &&
+                    need.decision.projectId == buddyProject)))
           need,
     ];
     return _ChatView(
       known: group != null,
-      title: group == null
-          ? 'Chat'
-          : swarmPmChat(reader, group.projectId)?.id == group.id
-          ? 'Chat with PM'
-          : group.label,
-      project: snapshot?.projects
-          .where((p) => p.id == group?.projectId)
-          .firstOrNull
-          ?.name,
+      title: group == null ? 'Chat' : buddy ?? group.label,
+      project: buddy != null && project != null ? '#$project' : project,
       canPost: c.canPost,
       archived: group?.archived ?? false,
       names: names,
@@ -1294,6 +1341,11 @@ class _ChatView {
       decisions: before != null && _sameAsks(before.decisions, decisions)
           ? before.decisions
           : List.unmodifiable(decisions),
+      buddyProject: buddyProject,
+      // "Message Wren"; plain while no Buddy runs to read it.
+      hint: buddyProject != null && swarmBuddy(reader, buddyProject) != null
+          ? 'Message $buddy'
+          : 'Message',
     );
   }
 
@@ -1314,6 +1366,13 @@ class _ChatView {
   /// The agents a post can mention, by id.
   final List<String> mentionable;
   final List<SwarmDecisionNeed> decisions;
+
+  /// The project whose Buddy chat of the person's own this is; null for any
+  /// other chat.
+  final String? buddyProject;
+
+  /// What the empty composer says.
+  final String hint;
 
   /// Whether [a] and [b] draw the same decisions, in the same order.
   static bool _sameAsks(List<SwarmDecisionNeed> a, List<SwarmDecisionNeed> b) {
@@ -1344,7 +1403,9 @@ class _ChatView {
       listEquals(other.names, names) &&
       mapEquals(other.roles, roles) &&
       listEquals(other.mentionable, mentionable) &&
-      identical(other.decisions, decisions);
+      identical(other.decisions, decisions) &&
+      other.buddyProject == buddyProject &&
+      other.hint == hint;
 
   @override
   int get hashCode => Object.hash(
@@ -1356,6 +1417,8 @@ class _ChatView {
     Object.hashAll(names),
     Object.hashAll(mentionable),
     decisions,
+    buddyProject,
+    hint,
   );
 }
 
@@ -2053,10 +2116,15 @@ Color _stateColor(Tty tty, SwarmAgentState state) => switch (state) {
 /// The composer's field: one rounded line that grows with what is typed, up
 /// to five, in the app's own face.
 class _MessageField extends StatelessWidget {
-  const _MessageField({required this.controller, required this.focus});
+  const _MessageField({
+    required this.controller,
+    required this.focus,
+    required this.hint,
+  });
 
   final TextEditingController controller;
   final FocusNode focus;
+  final String hint;
 
   @override
   Widget build(BuildContext context) {
@@ -2108,7 +2176,7 @@ class _MessageField extends StatelessWidget {
               focusedBorder: InputBorder.none,
               disabledBorder: InputBorder.none,
               contentPadding: EdgeInsets.zero,
-              hintText: 'Message',
+              hintText: hint,
               hintStyle: swarmChatText(
                 16,
                 height: 22 / 16,

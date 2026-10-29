@@ -741,67 +741,6 @@ void main() {
     });
   });
 
-  group('Chat with PM', () {
-    test(
-      "is the project's conversation whose audience is the person alone",
-      () async {
-        final r = rig();
-        r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
-          groups: [
-            groupData('shared', title: 'Team'),
-            groupData('mine', title: 'me', audience: [me]),
-            groupData('both', title: 'Pair', audience: [me, 'person-other']),
-          ],
-        );
-        await r.reader.refresh();
-
-        expect(swarmPmChat(r.reader, project)?.id, 'mine');
-      },
-    );
-
-    test('opening it the first time creates it, once per membership, and '
-        'answers it at once: the chat reads it as it opens', () async {
-      final r = rig();
-      var created = false;
-      r.swarm.routes['/api/super-tabs/$tab/commands'] = (_) {
-        created = true;
-        return {
-          'result': {'conversationId': 'pm-1'},
-        };
-      };
-      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
-        cursor: 'c2',
-        groups: created
-            ? [
-                part('pm-1', 40, groupData('pm-1', title: me, audience: [me])),
-              ]
-            : const [],
-      );
-      await r.reader.refresh();
-      final read = r.swarm.calls.length;
-
-      expect(await openSwarmPmChat(r.reader, project), 'pm-1');
-
-      expect(r.swarm.calls.skip(read).map((call) => call.method), [
-        'POST',
-      ], reason: 'nothing read before the chat opens');
-      final sent = r.swarm.calls.singleWhere((call) => call.method == 'POST');
-      expect(sent.body!['operationId'], 'pm-chat-$project-$me-gen-$me');
-      expect(sent.body!['command'], {
-        'type': 'conversation.create',
-        'projectId': project,
-        'title': me,
-        'brief': '',
-        'checks': <Object>[],
-        'audience': {
-          'personIds': [me],
-        },
-      });
-      await r.reader.refresh();
-      expect(swarmPmChat(r.reader, project)?.id, 'pm-1');
-    });
-  });
-
   // Desktop's reactions (backend reactions.ts): the person's own emoji counts
   // at once, the backend confirms it, and a change made anywhere reads the
   // page shown again so the counts match Desktop.

@@ -514,7 +514,7 @@ void main() {
       expect(
         key('swarm-conversation-g-pm'),
         findsNothing,
-        reason: 'Chat with PM is in the header, not listed again',
+        reason: 'an old Chat with PM is hidden (#2090)',
       );
       expect(
         key('swarm-conversation-$leadChat'),

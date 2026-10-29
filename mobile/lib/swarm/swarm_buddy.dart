@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'identity.dart';
 import 'model.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
@@ -120,6 +121,25 @@ SuperTabAgent? swarmBuddy(SwarmReader reader, String projectId) =>
 bool swarmIsBuddyChat(SwarmReader reader, String conversationId) =>
     reader.buddies.chatOwners.containsKey(conversationId);
 
+/// Whether [conversationId] is the person's own Buddy chat, in any project.
+bool swarmIsOwnBuddyChat(SwarmReader reader, String conversationId) =>
+    reader.buddies.chatOwners[conversationId] == reader.accountId;
+
+/// Whether [message] is one of the PM's private lines to the person: its
+/// project's Lead writing in the person's own Buddy chat, where it writes but
+/// cannot read (#2090; the desktop's `_shownAuthor`).
+bool swarmIsPmLine(SwarmReader reader, SuperTabMessage message) {
+  if (!message.fromAgent ||
+      !swarmIsOwnBuddyChat(reader, message.conversationId)) {
+    return false;
+  }
+  final snapshot = reader.snapshot;
+  final project = snapshot?.projectFor(message.conversationId);
+  return project != null &&
+      snapshot!.conversation(project.leadConversationId)?.leadId ==
+          message.authorId;
+}
+
 /// The newest start of the person's Buddy in [projectId]: under way while it
 /// has neither a harness nor an error, failed with an error (the desktop's
 /// `SuperTabController.buddyStart`).
@@ -188,13 +208,35 @@ List<SwarmBuddyMachine> swarmBuddyMachines(SwarmReader reader) => [
       (id: m['machineId'] as String, name: _machineName(m['name'])),
 ];
 
+/// The machine [machineId] by its name in the Swarm, as a Buddy's chat
+/// says what it runs on; "another machine" while the Swarm names none (the
+/// desktop's `buddyMachineName`).
+String swarmBuddyMachineName(SwarmReader reader, String machineId) =>
+    _machineName(
+      reader.snapshot?.pool(machineId)?['name'],
+      fallback: 'another machine',
+    );
+
 /// A machine's name without its `.local`, as the desktop shows it.
-String _machineName(Object? name) {
+String _machineName(Object? name, {String fallback = 'Your machine'}) {
   const suffix = '.local';
-  if (name is! String || name.isEmpty) return 'Your machine';
+  if (name is! String || name.isEmpty) return fallback;
   return name.length > suffix.length && name.toLowerCase().endsWith(suffix)
       ? name.substring(0, name.length - suffix.length)
       : name;
+}
+
+/// A person of [reader]'s Swarm by the name it shows them by: their address
+/// before the @; "its owner" while the Swarm does not list them (the
+/// desktop's `buddyPersonName`).
+String swarmBuddyPersonName(SwarmReader reader, String personId) {
+  final email = reader.snapshot?.people
+      .where((p) => p.id == personId)
+      .firstOrNull
+      ?.email;
+  return email == null || email.isEmpty
+      ? 'its owner'
+      : superTabPersonName(email);
 }
 
 /// Opens the person's Buddy chat in [projectId], on the server first when
@@ -245,6 +287,66 @@ Future<String?> startSwarmBuddy(
 Future<void> removeSwarmBuddy(SwarmReader reader, String projectId) async {
   await _command(reader, {'type': 'buddy.remove', 'projectId': projectId});
   await reader.refresh();
+}
+
+/// What the person does to their Buddy in one project from its chat: start
+/// it, start it again, remove it. One at a time — a second tap while one is
+/// under way does nothing — and what went wrong with the last, as a sentence
+/// to show; it lasts until the next.
+class SwarmBuddyActions extends ChangeNotifier {
+  SwarmBuddyActions(this.reader, this.projectId);
+
+  final SwarmReader reader;
+  final String projectId;
+
+  bool _busy = false, _disposed = false;
+  String? _error;
+
+  /// One is under way.
+  bool get busy => _busy;
+
+  /// What went wrong with the last one; null when it went through.
+  String? get error => _error;
+
+  /// Starts the Buddy on [machineId] with [engine] ([startSwarmBuddy]).
+  Future<void> start({required String machineId, required String engine}) =>
+      _run(
+        () => startSwarmBuddy(
+          reader,
+          projectId: projectId,
+          machineId: machineId,
+          engine: engine,
+        ),
+        "Couldn't start your Buddy. Try again.",
+      );
+
+  /// Removes the Buddy ([removeSwarmBuddy]); its chat stays.
+  Future<void> remove() => _run(
+    () => removeSwarmBuddy(reader, projectId),
+    "Couldn't remove your Buddy. Try again.",
+  );
+
+  Future<void> _run(Future<Object?> Function() act, String fallback) async {
+    if (_busy || _disposed) return;
+    _busy = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await act();
+    } on SuperTabFailure catch (failure) {
+      _error = failure.message;
+    } catch (_) {
+      _error = fallback;
+    }
+    _busy = false;
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 }
 
 /// Sends [command] to [reader]'s Swarm and answers its result.

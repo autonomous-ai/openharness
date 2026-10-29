@@ -19,7 +19,6 @@ const swarmParseOffThreadParts = 100;
 typedef _View = ({
   SuperTabSnapshot snapshot,
   Map<String, String> partners,
-  bool buddiesOn,
   SwarmBuddies buddies,
 });
 
@@ -30,7 +29,6 @@ _View _viewOf(SuperTabParts parts, String accountId) {
   return (
     snapshot: SuperTabSnapshot.fromJson(state),
     partners: swarmPartners(state),
-    buddiesOn: state['buddies'] == true,
     buddies: SwarmBuddies.read(state, accountId),
   );
 }
@@ -90,12 +88,6 @@ class SwarmReader extends ChangeNotifier {
 
   /// Each conversation's partner, the person its work needs ([swarmPartners]).
   Map<String, String> partners = const {};
-
-  /// The Swarm's Buddies setting (spec: Buddies, 10-28): each person's Buddy
-  /// takes Chat with PM's place, so there is no Chat with PM. Read from the raw
-  /// state: the model the phone shares with the desktop does not carry it yet.
-  /// Off from a backend before Buddies.
-  bool buddiesOn = false;
 
   /// The Buddy chats and Buddies held, the reader's own by project
   /// ([swarmBuddyChat], [swarmBuddy]).
@@ -282,7 +274,6 @@ class SwarmReader extends ChangeNotifier {
   void _show(_View view) {
     snapshot = view.snapshot;
     partners = view.partners;
-    buddiesOn = view.buddiesOn;
     buddies = view.buddies;
     _views++;
   }
@@ -301,7 +292,6 @@ class SwarmReader extends ChangeNotifier {
     accessRevoked = true;
     snapshot = null;
     partners = const {};
-    buddiesOn = false;
     buddies = SwarmBuddies.none;
     _parts = null;
     _heldLoad = 0;

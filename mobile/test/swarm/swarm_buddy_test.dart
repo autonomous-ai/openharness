@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_buddy.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
@@ -432,6 +435,170 @@ void main() {
       addTearDown(r.dispose);
 
       expect(swarmBuddyMachines(r), isEmpty);
+    });
+  });
+  group("the PM's private lines", () {
+    SuperTabMessage line(String chat, String author, {bool agent = true}) =>
+        SuperTabMessage.fromJson({
+          'id': 'm-$chat-$author',
+          'conversationId': chat,
+          'text': 'hello',
+          'sequence': 1,
+          'author': {'kind': agent ? 'agent' : 'person', 'id': author},
+        });
+
+    test("are the project Lead's lines in the person's own Buddy chat, and "
+        'no one else\'s', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        groups: [
+          groupData('g1', title: 'Fix login', number: 7),
+          buddyChatData('buddy-me', agentIds: ['agent-wren']),
+          buddyChatData('buddy-dee', owner: 'person-dee'),
+        ],
+        agents: [
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+          buddyData('agent-wren', displayName: 'Wren'),
+        ],
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      expect(swarmIsPmLine(r, line('buddy-me', 'agent-lead')), isTrue);
+      expect(
+        swarmIsPmLine(r, line('buddy-me', 'agent-wren')),
+        isFalse,
+        reason: 'the Buddy itself',
+      );
+      expect(
+        swarmIsPmLine(r, line('buddy-me', me, agent: false)),
+        isFalse,
+        reason: 'the person',
+      );
+      expect(
+        swarmIsPmLine(r, line('buddy-dee', 'agent-lead')),
+        isFalse,
+        reason: "someone else's Buddy chat",
+      );
+      expect(swarmIsPmLine(r, line('g1', 'agent-lead')), isFalse);
+      expect(swarmIsPmLine(r, line(leadChat, 'agent-lead')), isFalse);
+      expect(swarmIsOwnBuddyChat(r, 'buddy-me'), isTrue);
+      expect(swarmIsOwnBuddyChat(r, 'buddy-dee'), isFalse);
+    });
+  });
+
+  group('names in a Buddy chat', () {
+    test('a machine by its Swarm name without .local, another machine while '
+        'unnamed; a person by their address before the @', () async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        machines: [
+          {'machineId': 'mac-1', 'name': 'Tonys-MacBook-Pro.local'},
+          {'machineId': 'mac-2', 'name': ''},
+        ],
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      expect(swarmBuddyMachineName(r, 'mac-1'), 'Tonys-MacBook-Pro');
+      expect(swarmBuddyMachineName(r, 'mac-2'), 'another machine');
+      expect(swarmBuddyMachineName(r, 'mac-9'), 'another machine');
+      expect(swarmBuddyPersonName(r, me), 'person-me');
+      expect(swarmBuddyPersonName(r, 'person-gone'), 'its owner');
+    });
+  });
+
+  group('what the person does to their Buddy', () {
+    const commands = '/api/super-tabs/$tab/commands';
+
+    Future<(FakeSwarm, SwarmReader)> read() async {
+      final swarm = FakeSwarm();
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) =>
+          firstLoad(groups: [buddyChatData('buddy-me')]);
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+      return (swarm, r);
+    }
+
+    test('runs one at a time: a second tap while one is under way sends '
+        'nothing', () async {
+      final (swarm, r) = await read();
+      final answer = Completer<Object?>();
+      swarm.routes[commands] = (_) => answer.future;
+      final actions = SwarmBuddyActions(r, project);
+      addTearDown(actions.dispose);
+
+      final first = actions.start(machineId: 'mac-1', engine: 'codex');
+      expect(actions.busy, isTrue);
+      await actions.start(machineId: 'mac-1', engine: 'claude');
+      await actions.remove();
+      answer.complete({'result': <String, dynamic>{}});
+      await first;
+
+      expect(swarm.commands, [
+        {
+          'type': 'buddy.create',
+          'projectId': project,
+          'machineId': 'mac-1',
+          'engine': 'codex',
+        },
+      ]);
+      expect(actions.busy, isFalse);
+      expect(actions.error, isNull);
+    });
+
+    test('says why a start was refused, and forgets it once the next goes '
+        'through', () async {
+      final (swarm, r) = await read();
+      swarm.routes[commands] = (_) => throw const SuperTabFailure(
+        'MACHINE_OFFLINE',
+        'That machine is offline.',
+        statusCode: 409,
+      );
+      final actions = SwarmBuddyActions(r, project);
+      addTearDown(actions.dispose);
+
+      await actions.start(machineId: 'mac-1', engine: 'claude');
+      expect(actions.error, 'That machine is offline.');
+
+      swarm.routes[commands] = (_) => {'result': <String, dynamic>{}};
+      await actions.remove();
+      expect(actions.error, isNull);
+      expect(swarm.commands.last, {
+        'type': 'buddy.remove',
+        'projectId': project,
+      });
+    });
+
+    test('a failure with no reason says what failed', () async {
+      final (swarm, r) = await read();
+      swarm.routes[commands] = (_) => throw StateError('offline');
+      final actions = SwarmBuddyActions(r, project);
+      addTearDown(actions.dispose);
+
+      await actions.remove();
+
+      expect(actions.error, "Couldn't remove your Buddy. Try again.");
+    });
+
+    test('closed while one is under way, it tells no one', () async {
+      final (swarm, r) = await read();
+      final answer = Completer<Object?>();
+      swarm.routes[commands] = (_) => answer.future;
+      final actions = SwarmBuddyActions(r, project);
+      var told = 0;
+      actions.addListener(() => told++);
+
+      final running = actions.start(machineId: 'mac-1', engine: 'claude');
+      expect(told, 1);
+      actions.dispose();
+      answer.complete({'result': <String, dynamic>{}});
+      await running;
+
+      expect(told, 1);
     });
   });
 }
