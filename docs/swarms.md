@@ -313,6 +313,63 @@ never records what anyone wrote. The only text it shows is the title of a
 conversation the reader can read. Private conversations, Buddy chats among
 them, never count and never appear in it.
 
+## Routing
+
+The Lead routes each task before starting or assigning an agent. The route
+leaves out what cannot run it or breaks one of the owner's hard rules, then
+orders the rest by the owner's soft rules and the routing policy (strength,
+quota fit, effective cost).
+
+**Grid models.** A model served on the Swarm's grid counts as strong as the
+policy says. Kimi K3 and DeepSeek v4.1 are rated 2, Sonnet's tier; every other
+grid or local model takes the policy's local quality (1). An owner can change
+both, and add rows of their own, in the policy's local models (`models`: a name
+and a quality, first match first). A model whose host is offline is left out
+with that reason, so no Builder is sent to a machine that cannot start it.
+
+**Cheap first.** Low-risk work that is not a review ranks a grid model first:
+low-difficulty work, and medium work of kind `docs`, `copy`, `tests`,
+`fixtures`, `fix` or `refactor`. The floor still keeps a small model off medium
+work. An owner opts out with the `noGridFirst` rule.
+
+**Stepping up.** When a grid attempt's first review says Ready no, or its grid
+host never starts the agent (the start fails or misses its window), the Swarm
+steps the task up: it closes the attempt, tells its Builder to stop, and wakes
+the Lead to route it again. The next attempt runs on no grid model and nothing
+below quality 2 (Sonnet), and after a second failure nothing below 3 (Opus). A
+task steps up at most twice; after that the Lead decides. The route and the
+server both keep to the new floor. The next attempt's brief carries the pull
+request, the last result and the review's findings, and the step (attempt
+number and why) is kept on the attempt and its route decision.
+
+**Reviews.** A review never runs on a grid model, on a model the policy rates
+below 2, or on the reviewed Builder's own engine (a Builder on a grid model
+counts as that model's family). The server refuses such a start, assignment or
+pick from an agent, whatever the soft rules say, and lets a person through with
+a warning. A Claude model the policy cannot name is not refused for its
+strength.
+
+Design:
+
+- Growth: one step record per task, replaced at each step; it goes with its
+  group. Policy rows are capped at 40.
+- Concurrency: a step is recorded in the write that saw the failure (the
+  review's verdict, the failed start or the start timeout), so a newer write
+  retries on current data like every other Swarm write.
+- Read cost: no new reads beyond the tab's policy, which work commands read once.
+- Scale: at most two steps per task; a Swarm's 300 tasks a week add at most 600
+  small records. The step-up rate in `costs` is the first warning.
+- Compatibility: a policy saved before per-model rows reads the built-in rows.
+  An older CLI routes without the new exclusions, and the server still refuses
+  a grid or weak Reviewer and a pick below a step's floor.
+- Migration and rollback: additive fields, no migration. Rolling back leaves
+  them unread; a stepped-up task is then routed as before.
+- Audience: the step is part of its group, read by whoever reads the group.
+- Identity: steps are the Swarm's own notices, written as the project's Lead.
+- Failure: a step is told to the Lead and the Builder; a step that cannot be
+  taken (the cap) leaves the attempt with its Builder.
+- Platforms: server-side; the same on every host.
+
 ## Cost records
 
 Every task a Lead routes records what it ran on, what it cost and how it ended,
@@ -357,7 +414,9 @@ and what was actually spent per token (nothing on a plan or on own GPUs).
 set, at most 90), for the Product Manager, and later for the leaderboard and the
 nightly reflection. Per engine, model, effort and kind of job it gives:
 attempts, first-review pass rate, shipped, median minutes to ship, tokens,
-API-equivalent cost, actual spend, and cost per shipped change. A request ships
+API-equivalent cost, actual spend, cost per shipped change, and how many
+attempts stepped up from a cheaper model. The same figures per model alone (a
+grid model by its own name) compare models week over week. A request ships
 once, at its merge or first Done as the leaderboard records it, by the attempt
 that was running then; more attempts done afterwards ship nothing new. Time to
 ship runs from that attempt's start to when the request shipped. Cost per shipped change is shown only when every ended attempt's cost is
