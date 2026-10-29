@@ -172,6 +172,34 @@ void main() {
       if (call.$2['action'] == 'prepareContribution') call.$2['operationId'],
   ];
 
+  /// Ken's Mac in the Swarm, with its Team account reporting [teamAt].
+  void kensMac(SuperTabLaunchFixture f, {int? teamAt, bool team = true}) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    (f.connection.server.state['people'] as List).add({
+      'id': 'ken',
+      'email': 'ken@example.com',
+      'role': 'collaborator',
+    });
+    (f.connection.server.state['machines'] as List).addAll([
+      {
+        'machineId': 'ken-studio',
+        'name': 'Mac Studio',
+        'contributorId': 'ken',
+        'scope': 'swarm',
+        'observation': {'receivedAt': now},
+      },
+      if (team)
+        {
+          'machineId': 'ken-team',
+          'name': 'Mac Studio',
+          'contributorId': 'ken',
+          'hostMachineId': 'ken-studio',
+          'scope': 'swarm',
+          'observation': {'receivedAt': teamAt ?? now},
+        },
+    ]);
+  }
+
   final barMachine = find.byKey(const ValueKey('super-buddy-start-machine'));
   final dialogMachine = find.byKey(const ValueKey('super-buddy-machine'));
   final start = find.widgetWithText(FilledButton, 'Start');
@@ -462,34 +490,6 @@ void main() {
   // Dee, 10-29: a teammate's Swarm Mac, where the Buddy runs in its Team
   // account and reads only its own chat (backend chatOnlyBuddy).
   group('team machines', () {
-    /// Ken's Mac in the Swarm, with its Team account reporting [teamAt].
-    void kensMac(SuperTabLaunchFixture f, {int? teamAt, bool team = true}) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      (f.connection.server.state['people'] as List).add({
-        'id': 'ken',
-        'email': 'ken@example.com',
-        'role': 'collaborator',
-      });
-      (f.connection.server.state['machines'] as List).addAll([
-        {
-          'machineId': 'ken-studio',
-          'name': 'Mac Studio',
-          'contributorId': 'ken',
-          'scope': 'swarm',
-          'observation': {'receivedAt': now},
-        },
-        if (team)
-          {
-            'machineId': 'ken-team',
-            'name': 'Mac Studio',
-            'contributorId': 'ken',
-            'hostMachineId': 'ken-studio',
-            'scope': 'swarm',
-            'observation': {'receivedAt': teamAt ?? now},
-          },
-      ]);
-    }
-
     testWidgets('lists a teammate\'s Mac with a Team account under its own '
         'heading, by name with its owner, after your machines', (tester) async {
       final (:f, :c, :mac) = await open(tester, prepare: kensMac);
@@ -709,7 +709,10 @@ void main() {
         tester,
         machines: [rig()],
         brightness: brightness,
-        prepare: accountMachines,
+        prepare: (f) {
+          accountMachines(f);
+          kensMac(f);
+        },
       );
       await captureWindow(tester, shots, 'buddy-start-${brightness.name}');
       await tester.tap(barMachine);
@@ -722,7 +725,10 @@ void main() {
         machines: [rig()],
         bar: false,
         brightness: brightness,
-        prepare: accountMachines,
+        prepare: (f) {
+          accountMachines(f);
+          kensMac(f);
+        },
       );
       await captureWindow(tester, shots, 'buddy-add-${brightness.name}');
       await tester.tap(dialogMachine);
