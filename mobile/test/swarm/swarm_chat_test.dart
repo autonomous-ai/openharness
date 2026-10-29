@@ -34,6 +34,8 @@ void main() {
     String text = 'hello',
     String author = 'agent-builder',
     String? replyTo,
+    String? thread,
+    bool alsoInChat = false,
     int minute = 0,
     DateTime? at,
     List<Map<String, dynamic>> attachments = const [],
@@ -44,6 +46,8 @@ void main() {
     'text': text,
     'sequence': sequence,
     'replyTo': ?replyTo,
+    'thread': ?thread,
+    if (alsoInChat) 'alsoInChat': true,
     'author': author == me
         ? {'kind': 'person', 'id': me, 'name': 'tony'}
         : {
@@ -82,11 +86,13 @@ void main() {
   };
 
   /// One Swarm whose chat g1 has River (its project's Product Manager) and
-  /// Nova (an engineer), reading [page] as its latest messages, with
-  /// [decisions] open in it. With [audience], g1 is that person's own chat.
+  /// Nova (an engineer), reading [page] as its latest messages with the lines
+  /// of [threads], with [decisions] open in it. With [audience], g1 is that
+  /// person's own chat.
   FakeSwarm backend(
     List<Map<String, dynamic>> page, {
     Object? next,
+    List<Map<String, dynamic>> threads = const [],
     List<Map<String, dynamic>> decisions = const [],
     List<String>? audience,
     List<Map<String, dynamic>>? members,
@@ -134,6 +140,7 @@ void main() {
     fake.routes[messages] = (_) => {
       'messages': page.reversed.toList(),
       'next': next,
+      'threads': threads,
     };
     fake.routes[commands] = (_) => {'result': <String, dynamic>{}};
     return fake;
@@ -286,6 +293,67 @@ void main() {
     expect(find.text(time(1)), findsNothing, reason: 'a follow-up has none');
     expect(find.text(time(2)), findsOneWidget);
     expect(find.text('Then the build'), findsOneWidget);
+  });
+
+  // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the
+  // prompt was answered, and a new one came under every message after it.
+  testWidgets('a prompt warning shows once, while its agent still waits, '
+      'and goes once it is answered', (tester) async {
+    Map<String, dynamic> alert(String id, int sequence, String kind) => {
+      ...message(
+        id,
+        sequence,
+        text: kind == 'prompt'
+            ? 'Nova is waiting at a prompt in its terminal.'
+            : 'Nova hit a usage limit. Routing skips it until 15:00 UTC.',
+        minute: sequence,
+      ),
+      'source': {
+        'kind': 'terminal-alert',
+        'agentId': 'agent-builder',
+        'alert': kind,
+      },
+    };
+    Map<String, dynamic> nova(List<String> alerting) => {
+      ...agent('agent-builder', displayName: 'Nova'),
+      'alerting': alerting,
+    };
+    final fake = backend([
+      alert('a1', 1, 'prompt'),
+      message('m2', 2, text: 'Here is what I found', minute: 2),
+      alert('a3', 3, 'limit'),
+      alert('a4', 4, 'prompt'),
+    ]);
+    final parts = fake.routes['/api/super-tabs/$tab/parts']!;
+    fake.routes['/api/super-tabs/$tab/parts'] = (body) async => {
+      ...(await parts(body))! as Map<String, dynamic>,
+      'agents': [
+        part(
+          'agent-lead',
+          1,
+          agent('agent-lead', name: 'Lead', displayName: 'River'),
+        ),
+        part('agent-builder', 1, nova(['prompt'])),
+      ],
+    };
+    final host = await pump(tester, fake);
+
+    // Still waiting: only the newest warning, and the usage limit's own note.
+    expect(key('swarm-message-a1'), findsNothing);
+    expect(key('swarm-message-a4'), findsOneWidget);
+    expect(key('swarm-message-a3'), findsOneWidget);
+
+    // Answered: the backend clears the agent's alert, and its warning goes.
+    fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+      ...changes(cursor: 'c3', lastChangedAt: 200),
+      'agents': [part('agent-builder', 2, nova([]))],
+    };
+    await host.session!.inbox.reader(tab)!.refresh();
+    await tester.pumpAndSettle();
+    expect(key('swarm-message-a4'), findsNothing);
+    expect(key('swarm-message-a1'), findsNothing);
+    expect(key('swarm-message-a3'), findsOneWidget);
+    expect(find.text('Here is what I found'), findsOneWidget);
   });
 
   testWidgets('a file in a message opens', (tester) async {
@@ -1304,6 +1372,381 @@ void main() {
       expect(key('swarm-reaction-m1-rocket'), findsOneWidget);
       expect(key('swarm-react-rocket'), findsNothing);
       expect(fake.commands, isEmpty);
+    });
+  });
+
+  group('threads', () {
+    const parts = '/api/super-tabs/$tab/parts';
+    const root = 'Can you check the drawer mockup?';
+    const onlyThere = 'Looks good. One question.';
+    const alsoHere = 'Pushed the fix.';
+    const next = 'Next: the leaderboard.';
+
+    /// The line under [id]: [replies] replies, the last [ago], Nova's.
+    Map<String, dynamic> line(
+      String id,
+      int replies,
+      int last, {
+      Duration ago = const Duration(minutes: 5),
+    }) => {
+      'id': id,
+      'replies': replies,
+      'lastSequence': last,
+      'lastAt': DateTime.now().subtract(ago).toUtc().toIso8601String(),
+      'authors': [
+        {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
+      ],
+      'people': <String>[],
+    };
+
+    /// River's question with two replies in its thread, Nova's only there
+    /// and Nova's also sent to the chat; then a message of Nova's own. A
+    /// reply sent comes back in the page under its operation id, as the
+    /// backend writes it, and on the line; in both when also sent.
+    FakeSwarm threaded({List<Map<String, dynamic>>? members}) {
+      final page = [
+        message('m1', 1, author: 'agent-lead', text: root, thread: 'm1'),
+        message(
+          'm2',
+          2,
+          text: onlyThere,
+          thread: 'm1',
+          replyTo: 'm1',
+          minute: 2,
+        ),
+        message(
+          'm3',
+          3,
+          text: alsoHere,
+          thread: 'm1',
+          replyTo: 'm1',
+          alsoInChat: true,
+          minute: 8,
+        ),
+        message('m4', 4, text: next, thread: 'm4', minute: 9),
+      ];
+      final lines = [line('m1', 2, 3)];
+      final fake = backend(page, threads: lines, members: members);
+      for (final id in ['m1', 'm4']) {
+        fake.routes['$messages?thread=$id'] = (_) => {
+          'messages': [
+            for (final m in page.reversed)
+              if (m['thread'] == id) m,
+          ],
+          'next': null,
+          'threads': [
+            for (final l in lines)
+              if (l['id'] == id) l,
+          ],
+        };
+      }
+      fake.routes[commands] = (body) {
+        final command = body!['command'] as Map<String, dynamic>;
+        page.add(
+          message(
+            body['operationId'] as String,
+            5,
+            author: me,
+            text: command['text'] as String,
+            thread: 'm1',
+            replyTo: 'm1',
+            alsoInChat: command['alsoSend'] == true,
+            minute: 10,
+          ),
+        );
+        lines[0] = line('m1', 3, 5, ago: Duration.zero);
+        return {'result': <String, dynamic>{}};
+      };
+      return fake;
+    }
+
+    Finder inThread(String text) => find.descendant(
+      of: key('swarm-thread-messages'),
+      matching: find.text(text),
+    );
+
+    Future<void> back(WidgetTester tester) async {
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a root says how many replies and when the last came; a reply '
+        'only in its thread is not in the chat, and one also sent says where '
+        'it was written', (tester) async {
+      await pump(tester, threaded());
+
+      final under = key('swarm-thread-line-m1');
+      expect(
+        find.descendant(of: under, matching: find.text('2 replies')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: under, matching: find.text('Last reply 5 min ago')),
+        findsOneWidget,
+      );
+      expect(find.text(onlyThere), findsNothing);
+      expect(find.text(alsoHere), findsOneWidget);
+      expect(key('swarm-replied-in-thread-m3'), findsOneWidget);
+      expect(key('swarm-quote-m3'), findsNothing, reason: 'no quote of m1');
+      expect(key('swarm-thread-line-m4'), findsNothing, reason: 'no replies');
+    });
+
+    testWidgets('a tap on the line opens the thread: the root, how many '
+        'replies, each reply in order, and a box to reply in', (tester) async {
+      final fake = threaded();
+      await pump(tester, fake);
+
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      expect(fake.paths, contains('$messages?thread=m1'));
+      expect(find.text('Thread'), findsOneWidget);
+      expect(
+        tester.widget<Text>(key('swarm-thread-chat-title')).data,
+        'Fix login',
+      );
+      expect(
+        find.descendant(
+          of: key('swarm-thread-divider'),
+          matching: find.text('2 replies'),
+        ),
+        findsOneWidget,
+      );
+      final tops = [
+        for (final text in [root]) tester.getTopLeft(inThread(text)).dy,
+        tester.getTopLeft(key('swarm-thread-divider')).dy,
+        for (final text in [onlyThere, alsoHere])
+          tester.getTopLeft(inThread(text)).dy,
+      ];
+      expect(tops, orderedEquals([...tops]..sort()));
+      expect(key('swarm-replied-in-thread-m3'), findsNothing);
+      expect(key('swarm-thread-box'), findsOneWidget);
+      expect(find.text('Reply'), findsOneWidget, reason: 'the field hint');
+      expect(find.text('Also send to the chat'), findsOneWidget);
+    });
+
+    testWidgets('Reply in thread: a message\'s Reply opens its thread, with no '
+        'reply bar in the chat', (tester) async {
+      final fake = threaded();
+      await pump(tester, fake);
+
+      await tester.tap(find.text(next));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: key('swarm-reply-m4'),
+          matching: find.text('Reply in thread'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-reply-m4'));
+      await tester.pumpAndSettle();
+
+      expect(fake.paths, contains('$messages?thread=m4'));
+      expect(inThread(next), findsOneWidget);
+      expect(key('swarm-thread-divider'), findsNothing, reason: 'no replies');
+
+      await back(tester);
+      expect(key('swarm-reply-bar'), findsNothing);
+    });
+
+    testWidgets('Replied in thread opens the thread it was written in', (
+      tester,
+    ) async {
+      await pump(tester, threaded());
+
+      await tester.tap(key('swarm-replied-in-thread-m3'));
+      await tester.pumpAndSettle();
+
+      expect(inThread(root), findsOneWidget);
+      expect(inThread(onlyThere), findsOneWidget);
+      expect(inThread(alsoHere), findsOneWidget);
+    });
+
+    testWidgets('a reply goes to the thread alone: it shows there, and the '
+        'chat\'s line counts it', (tester) async {
+      final fake = threaded();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(key('swarm-thread-field'), 'Ship it as drawn.');
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single, {
+        'type': 'message.send',
+        'conversationId': 'g1',
+        'text': 'Ship it as drawn.',
+        'replyTo': 'm1',
+        'recipientIds': <String>[],
+      });
+      expect(inThread('Ship it as drawn.'), findsOneWidget);
+      expect(key('swarm-thread-pending'), findsNothing);
+
+      await back(tester);
+      expect(find.text('Ship it as drawn.'), findsNothing);
+      expect(
+        find.descendant(
+          of: key('swarm-thread-line-m1'),
+          matching: find.text('3 replies'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Also send to the chat posts the reply in both', (
+      tester,
+    ) async {
+      final fake = threaded();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(key('swarm-thread-field'), 'Ship it as drawn.');
+      await tester.tap(key('swarm-thread-also-send'));
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single['alsoSend'], isTrue);
+      expect(fake.commands.single['replyTo'], 'm1');
+      expect(inThread('Ship it as drawn.'), findsOneWidget);
+      // Ticked for this reply alone.
+      expect(
+        tester
+            .widget<Semantics>(key('swarm-thread-also-send'))
+            .properties
+            .checked,
+        isFalse,
+      );
+
+      await back(tester);
+      final sent = fake.calls
+          .lastWhere((call) => call.path == commands)
+          .body!['operationId'];
+      expect(find.text('Ship it as drawn.'), findsOneWidget);
+      expect(key('swarm-replied-in-thread-$sent'), findsOneWidget);
+    });
+
+    testWidgets('a notification of a reply only in its thread opens the '
+        'thread', (tester) async {
+      await pump(tester, threaded(), messageId: 'm2');
+
+      expect(find.text('Thread'), findsOneWidget);
+      expect(inThread(onlyThere), findsOneWidget);
+      expect(
+        find.text('The original message is no longer in this chat.'),
+        findsNothing,
+      );
+    });
+
+    testWidgets('a person who can only read opens the thread with no box to '
+        'reply in, and no Reply', (tester) async {
+      await pump(tester, threaded(members: [person(me, role: 'viewer')]));
+
+      await tester.tap(find.text(next));
+      await tester.pumpAndSettle();
+      expect(key('swarm-reply-m4'), findsNothing);
+
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      expect(inThread(onlyThere), findsOneWidget);
+      expect(key('swarm-thread-box'), findsNothing);
+      expect(
+        find.text('You can read this chat, not post in it.'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('taken out of the chat while its thread is open: nothing of '
+        'it stays, not even the chat\'s name', (tester) async {
+      final fake = threaded();
+      final host = await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      await tester.enterText(key('swarm-thread-field'), 'Half a reply');
+      await tester.pump();
+      expect(inThread(onlyThere), findsOneWidget);
+
+      final full = fake.routes[parts]!(null)! as Map;
+      fake.routes[parts] = (_) => {
+        ...full,
+        'groups': [
+          for (final g in full['groups'] as List)
+            if ((g as Map)['key'] != 'g1') g,
+        ],
+      };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {'reload': true};
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+      for (final text in [root, onlyThere, alsoHere, 'Half a reply']) {
+        expect(find.text(text), findsNothing, reason: text);
+      }
+      expect(key('swarm-thread-chat-title'), findsNothing);
+      expect(key('swarm-thread-box'), findsNothing);
+    });
+
+    testWidgets('a reply refused as the chat is no longer the person\'s '
+        'leaves nothing of the thread on screen', (tester) async {
+      final fake = threaded();
+      await pump(tester, fake);
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+      fake.routes[commands] = (_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+
+      await tester.enterText(key('swarm-thread-field'), 'Secret plan');
+      await tester.pump();
+      await tester.tap(key('swarm-thread-send'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('This chat is not open to you.'), findsOneWidget);
+      for (final text in [root, onlyThere, alsoHere, 'Secret plan']) {
+        expect(find.text(text), findsNothing, reason: text);
+      }
+      expect(key('swarm-thread-chat-title'), findsNothing);
+      expect(key('swarm-thread-box'), findsNothing);
+    });
+
+    testWidgets('a thread that fails to read shows what the chat has of it '
+        'and Try again, which reads it', (tester) async {
+      final fake = threaded();
+      final working = fake.routes['$messages?thread=m1']!;
+      var fails = true;
+      fake.routes['$messages?thread=m1'] = (body) => fails
+          ? throw SuperTabFailure('INTERNAL', 'Server error', statusCode: 500)
+          : working(body);
+      await pump(tester, fake);
+
+      await tester.tap(key('swarm-thread-line-m1'));
+      await tester.pumpAndSettle();
+
+      expect(inThread(root), findsOneWidget);
+      expect(find.text('Server error'), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      final reads = fake.paths.where((p) => p.contains('thread=m1')).length;
+      await tester.pump(const Duration(seconds: 30));
+      expect(
+        fake.paths.where((p) => p.contains('thread=m1')).length,
+        reads,
+        reason: 'no read again on its own',
+      );
+
+      fails = false;
+      await tester.tap(key('swarm-thread-retry'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Server error'), findsNothing);
+      expect(key('swarm-thread-retry'), findsNothing);
+      expect(inThread(onlyThere), findsOneWidget);
     });
   });
 

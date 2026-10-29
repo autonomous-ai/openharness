@@ -220,7 +220,7 @@ export interface SuperTabServiceOptions {
   /** The Swarm cards' reader (superTabs/cards.ts), for a spec. */
   cards?: (core: CoreApi, machineId: string) => SwarmCards
   /** What keeps Swarm sessions' GitHub tokens fresh (superTabs/github.ts), for a spec. */
-  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'>
+  githubTokens?: (core: CoreApi) => Pick<GitHubTokenRefresher, 'start' | 'stop'> & Partial<Pick<GitHubTokenRefresher, 'assigned'>>
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
@@ -246,7 +246,11 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
   let held: SwarmSources | null = null
   const sources = (): SwarmSources => {
     const machine = core.daemon.machineId()
-    if (held?.feed.machineId !== machine) held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+    if (held?.feed.machineId !== machine) {
+      held = { feed: new HostFeed(core, machine), reads: new SwarmReads(core) }
+      // A task's GitHub token is fetched as the host first sees the task, not at the refresher's next minute (github.ts).
+      held.feed.watch(read => tokens.assigned?.(read))
+    }
     return held
   }
   let host: SuperTabHost | null = null

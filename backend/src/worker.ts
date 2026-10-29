@@ -16,6 +16,7 @@ import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
+import { startLegacyDrop } from './superTabs/migration/dropLegacyJob.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
 import { appPullRequests, markFinishedGroups, startSwarmArchive, unknownPullRequests } from './superTabs/archive.js'
 import { SuperTabStore } from './superTabs/store.js'
@@ -54,6 +55,7 @@ async function start(): Promise<void> {
   await reconcileCommunityLikeCounts()
 
   let stopSweeps = (): void => {}
+  let stopLegacyDrop = (): void => {}
   let stopArchive = (): void => {}
   let stopDeliveries = (): void => {}
   let stopReceiptSweep = (): void => {}
@@ -64,6 +66,7 @@ async function start(): Promise<void> {
     machineBillingWorkerService.stop()
     productUsagePeopleRollupService.stop()
     stopSweeps()
+    stopLegacyDrop()
     stopArchive()
     stopDeliveries()
     stopReceiptSweep()
@@ -83,6 +86,8 @@ async function start(): Promise<void> {
   const swarms = new SuperTabStore(prisma, Date.now, null, { deliveriesWaiting: announceSwarmDeliveries, hostsChanged: announceSwarmHostChanges,
     swarmChanged: announceSwarmChanges })
   stopSweeps = startSwarmSweeps(prisma, undefined, () => swarms.workspaces.finishRemovals())
+  // The dead old state of migrated Swarms goes by itself, a few at a time (superTabs/migration/dropLegacyJob.ts).
+  stopLegacyDrop = startLegacyDrop(prisma)
   // Finished groups archive once GitHub says their pull requests are merged or closed; without the app, only groups that
   // link none do (superTabs/archive.ts).
   const githubConfig = githubAppConfig(env), githubApp = githubConfig ? new GitHubApp(githubConfig) : null
