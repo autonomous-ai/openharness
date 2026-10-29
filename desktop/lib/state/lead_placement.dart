@@ -1,3 +1,5 @@
+import '../super_tabs/model.dart' show SuperTabPerson;
+
 /// A machine of the Swarm a new project's Product Manager could start on, as
 /// New Project lists it under "Lead: … · Change".
 class LeadMachine {
@@ -16,6 +18,7 @@ class LeadMachine {
     this.team = false,
     this.teamEngines,
     this.engineRefusals = const {},
+    this.owner,
   });
   final String id, name;
   final bool online;
@@ -43,6 +46,10 @@ class LeadMachine {
   /// decided (backend leadStart.ts leadChoices); the others run on the Mac
   /// itself. Null from a server that does not say: then [team] holds for all.
   final Set<String>? teamEngines;
+
+  /// Whose machine it is, for a teammate's (its menu row wears their
+  /// avatar); null for the person's own.
+  final SuperTabPerson? owner;
 
   /// It runs with [engine] in that Mac's Harness Team account.
   bool inTeam(String engine) => teamEngines?.contains(engine) ?? team;
@@ -204,6 +211,9 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
     if (free > 0 && machine.maySleep) 'May sleep',
   ].join(' · ');
 }
+
+/// New Project's reason while no machine is chosen: its machine chip asks.
+const kLeadChooseMachine = 'Choose the machine the Product Manager runs on.';
 
 /// Why a paused Swarm's machines take no work, as its rows and the
 /// Product Manager line say it.

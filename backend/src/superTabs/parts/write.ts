@@ -76,7 +76,10 @@ export function extracted(kind: PartKind, data: unknown, stamp: number): Record<
     }
     case 'machine': {
       const machine = data as MachineData
-      return { machineId: machine.machineId, contributed: !!machine.contribution, cleanupOwnerIds: machine.cleanups.map(c => c.machineOwnerId) }
+      // A Buddy-only record is no contribution (machines.ts buddyOnly): another Swarm asking whether this machine serves a Swarm
+      // elsewhere (store.ts otherWorkspaceMachines) must not see it (security review 1 of #2234). Hosts find it by the index.
+      return { machineId: machine.machineId, contributed: !!machine.contribution && !machine.contribution.buddyOnly,
+        cleanupOwnerIds: machine.cleanups.map(c => c.machineOwnerId) }
     }
     case 'start': {
       const start = data as AgentStart

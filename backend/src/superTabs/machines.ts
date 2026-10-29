@@ -37,6 +37,11 @@ export interface ContributedMachine {
    *  its Harness Team account whose privacy check passed, whether or not the Swarm requires that everywhere
    *  (teamWorkRefusal). Kept when the contribution is saved again; gone with the machine. */
   teamAccountOnly?: true
+  /** One of its person's own machines that is not in the Swarm, recorded only so its host starts and watches their Buddies
+   *  there (Dee, 10-29: "I don't want to add my machine to the swarm"). It takes no other start, is no route or Product
+   *  Manager candidate, serves no local models, and no reader sees it (model.ts visibleState). It goes with its last Buddy
+   *  (commands.ts dropIdleBuddyMachines), or becomes an ordinary machine when its person adds it with Add machine. */
+  buddyOnly?: true
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
   /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
@@ -46,7 +51,10 @@ export interface ContributedMachine {
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
-export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string }
+export interface MachineCleanup { machineId: string; removalId: string; machineOwnerId: string; requestedAt?: string
+  /** Left by a Buddy-only machine (ContributedMachine.buddyOnly): like the record, no reader but its person learns of it, nor of
+   *  the part's removal once its host confirms (read/changes.ts; security review 1 of #2234). */
+  buddyOnly?: true }
 /** Was a day, until a host that kept reporting but never confirmed held Diego's Mac 'Cleaning up' for it (2026-10-28). */
 export const REMOVAL_FALLBACK_MS = 30 * 60_000
 /** A cleanup that has waited REMOVAL_FALLBACK_MS since its removal, or one too old to say when: it no longer holds its
@@ -186,7 +194,7 @@ export function observedPrivacy(previous: StoredPrivacy | undefined, reported: M
 }
 
 export type TeamWorkCode = 'MACHINE_OFFLINE' | 'TEAM_ACCOUNT_REQUIRED' | 'PRIVACY_UNCHECKED' | 'PRIVACY_CHECK_FAILED' | 'PRIVACY_CHECK_STALE'
-  | 'MACHINE_IN_OTHER_WORKSPACE'
+  | 'MACHINE_IN_OTHER_WORKSPACE' | 'NOT_SWARM_MACHINE'
 export interface TeamWorkRefusal { code: TeamWorkCode; reason: string }
 /** Refusals that hold until a person acts on the machine; a stale check or an offline machine may pass again by itself. */
 export const LASTING_TEAM_REFUSALS: readonly string[] = ['TEAM_ACCOUNT_REQUIRED', 'PRIVACY_UNCHECKED', 'PRIVACY_CHECK_FAILED', 'MACHINE_IN_OTHER_WORKSPACE']
@@ -272,8 +280,11 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
  */
 export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject, now: number,
   teamMachines: readonly string[] = [], otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  if (project.ownerId === contributorId) return null
   const pool = state.machines?.find(m => m.machineId === machineId)
+  // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's,
+  // whatever the Team account switches say (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
+  if (pool?.buddyOnly) return project.ownerId === pool.contributorId ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
+  if (project.ownerId === contributorId) return null
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
     if (!teamAccountRequired(state)) return null
@@ -394,6 +405,31 @@ export function recordAgentPresence(state: SuperTabState, machineId: string, run
   }
 }
 
+/** Why a start other than its own person's Buddy is refused on a Buddy-only machine: worded as for any machine outside the
+ *  Swarm, so the refusal says nothing about whose it is or what runs there. */
+/** Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093). */
+export const BUDDY_WINDOWS_REFUSAL = 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines.'
+export const NOT_SWARM_MACHINE = 'This machine is not one of the Swarm\'s machines.'
+
+/** A Buddy-only machine with no Buddy left on it, running or starting, leaves: its host deletes the Swarm's folders there as
+ *  for a removed machine, and no chat hears of it, since none ever saw it (Lead, 10-29). Run after every command (commands.ts)
+ *  and every liveness sweep (liveness.ts), so each way a Buddy goes (removed, failed or timed out, its person or project
+ *  gone) ends it, as expireRemovals does for removals. Written as a machine part change, guarded by its version. */
+export function dropIdleBuddyMachines(state: SuperTabState, now: number): void {
+  for (const pool of state.machines?.filter(m => m.buddyOnly) ?? []) {
+    if (state.agents.some(a => a.machineId === pool.machineId)
+      || state.starts?.some(s => s.request.machineId === pool.machineId && !s.harnessId && !s.error)) continue
+    state.machines = state.machines!.filter(m => m !== pool)
+    ;(state.machineCleanups ??= []).push({ machineId: pool.machineId, removalId: stableId('buddy-machine', pool.machineId, pool.generation),
+      machineOwnerId: pool.contributorId, requestedAt: new Date(now).toISOString(), buddyOnly: true })
+    state.harnessReservations = state.harnessReservations?.filter(r => r.machineId !== pool.machineId)
+    state.releasedHarnesses = state.releasedHarnesses?.filter(r => r.machineId !== pool.machineId)
+  }
+}
+
+/** The Swarm's own machines: every contribution but a Buddy-only one (ContributedMachine.buddyOnly). */
+export const swarmMachines = (state: Pick<SuperTabState, 'machines'>): ContributedMachine[] => (state.machines ?? []).filter(m => !m.buddyOnly)
+
 export function machineContribution(state: SuperTabState, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
   if (!pool) return null
@@ -408,6 +444,8 @@ export function machineContribution(state: SuperTabState, machineId: string) {
  *  contributed all of them. Not the Swarm owner (spec 2026-10-23-remove-machine.md, decision 1). */
 export function ownedMachine(state: SuperTabState, actor: Actor, machineId: string) {
   const pool = state.machines?.find(m => m.machineId === machineId)
+  // Not listed to anyone: it goes with its last Buddy (commands.ts dropIdleBuddyMachines), never by a removal that tells chats.
+  if (pool?.buddyOnly) fail('NOT_FOUND', 'This machine is not in the Swarm.', 404)
   const members = state.agents.filter(a => a.machineId === machineId)
   if (!pool && !members.length) fail('NOT_FOUND', 'This machine is not in the Swarm.', 404)
   const ownerId = pool?.contributorId ?? (members.every(a => a.contributorId === members[0]!.contributorId) ? members[0]!.contributorId : null)
@@ -522,7 +560,7 @@ export const hostLocalGrid = (state: SuperTabState) => state.localModels?.enable
 export function servedLocalModels(state: SuperTabState, now: number) {
   const grid = state.localModels?.enabled ? state.localModels.grid : null
   if (!grid) return []
-  return (state.machines ?? []).flatMap(m => !m.observation || now - m.observation.receivedAt > MACHINE_FRESH_MS ? []
+  return swarmMachines(state).flatMap(m => !m.observation || now - m.observation.receivedAt > MACHINE_FRESH_MS ? []
     : (m.observation.localModels ?? []).filter(l => l.grid === grid && !l.starting).map(l => ({ ...l, machineId: m.machineId })))
 }
 
@@ -546,6 +584,9 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
+  if (pool.buddyOnly && request.buddyOf?.personId !== pool.contributorId) fail('NOT_SWARM_MACHINE', NOT_SWARM_MACHINE, 403)
+  // At its add and again at its launch: a Buddy-only machine is first read after its Buddy was asked for.
+  if (request.buddyOf && pool.observation?.resources.os === 'Windows') fail('BUDDY_WINDOWS', BUDDY_WINDOWS_REFUSAL, 403)
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
@@ -577,7 +618,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (refused.length) {
     fail('OUTSIDE_CONTRIBUTION', `${pool.name} accepts only its contributed project folder, engines and default account settings, with full permissions for Swarm agents. Refused: ${refused.join('; ')}.`, 403)
   }
-  if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
+  // A Buddy-only machine is recorded with its Buddy's start, before its host ever read the Swarm: the start waits for it.
+  if (machineOffline(pool, now) && !(pool.buddyOnly && !pool.observation)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
   // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
   const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null

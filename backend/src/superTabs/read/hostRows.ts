@@ -38,7 +38,7 @@ async function roster(tabId: string, state: SuperTabState, machineId: string, us
   // Where its owner added this Mac and its team account is missing, this host adds that account (cli/src/superTabs/host.ts),
   // in a Swarm the team account is tried in (teamAccountSwarm).
   const mac = !teamAccountSwarm(state) ? undefined
-    : state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal)
+    : state.machines?.find(m => m.machineId === machineId && m.contributorId === user.sub && m.scope === 'swarm' && !m.removal && !m.buddyOnly)
   for (const team of mac ? lookups.teams : []) {
     if (state.machines?.some(m => m.machineId === team.machineId) || state.machineCleanups?.some(c => c.machineId === team.machineId)) continue
     rows.push({ tabId, joinTeam: { machineId: team.machineId, name: mac!.name, maxAgents: mac!.maxAgents } })
@@ -75,7 +75,9 @@ function agentRow(tabId: string, state: SuperTabState, machineId: string, user: 
     attention: waiting ? { assignmentId: waiting.id, status: waiting.status, result: waiting.result?.slice(0, 500) ?? null } : null,
     resume,
     agent: target,
-    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId)
+    // A Buddy-only record is not the machine in the Swarm: the owner's Lead there still joins it, which makes the record an ordinary
+    // machine (commands.ts machine.contribute ifMissing; security review 2 of #2234).
+    joinSwarm: state.ownerId === user.sub && target.contributorId === user.sub && !state.machines?.some(m => m.machineId === machineId && !m.buddyOnly)
       && state.conversations.some(c => !c.archived && c.leadId === target.id),
     skillMode: home ? skillModeOf(home) : 'orchestration',
     ...(custom ? { role: chosen && { ...chosen, projectId: custom.id } } : {}),
@@ -110,7 +112,8 @@ function pool(tabId: string, state: SuperTabState, machineId: string, user: Auth
         // A private conversation is chat only and never runs work here, so its id stays with its audience; a Buddy chat whose
         // Buddy starts here is named, so the host may prepare the project's folder for it.
         conversationIds: state.conversations.filter(c => !isLeads(c) && (!c.audience || buddyChats.has(c.id)) && groupProject(state, c).id === p.id).map(c => c.id) })) } : {}),
-    ...hostLocalGrid(state),
+    // A Buddy-only machine never joins the Swarm's grid: it serves nobody's models (machines.ts buddyOnly).
+    ...(contribution.buddyOnly ? {} : hostLocalGrid(state)),
     reservations: reservations.map(({ harnessId, generation }) => ({ harnessId, generation })),
     harnessIds: [...new Set([...state.agents.filter(a => a.machineId === machineId).map(a => a.harnessId), ...reservations.map(r => r.harnessId),
       ...(state.starts ?? []).filter(s => s.request.machineId === machineId && s.harnessId).map(s => s.harnessId!)])],

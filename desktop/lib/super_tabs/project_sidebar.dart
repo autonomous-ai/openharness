@@ -595,7 +595,7 @@ class ProjectSidebar extends StatelessWidget {
           ? null
           : [
               if (!named) project.name,
-              '${buddyEngineName(agent.engine)} on ${buddyMachineName(controller, agent.machineId)}',
+              '${buddyEngineName(agent.engine)} on ${buddyMachineName(controller, agent.machineId, app: app)}',
             ].join(' · '),
       status: agent == null ? null : _buddyMark(agent),
       note: switch ((agent, controller.buddyStart(project.id))) {
