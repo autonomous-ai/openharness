@@ -35,6 +35,8 @@ export interface SwarmProject {
   skillSet?: SkillSet
   /** The project's custom set, kept when the project switches away from it. */
   roles?: ProjectRole[]
+  /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
+  lead?: import('./leadStart.js').LeadPlacement
 }
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
@@ -208,7 +210,34 @@ export const watchClosed = (state: SuperTabState, target: Agent, elsewhere = fal
 /** Who may watch an agent's terminal: observe it or hold a share of it. Reading or typing in it on request is closed by
  *  `isConfidential` alone (terminal.ts mayDrive). Any other agent: every reader of its project, as before. */
 export function canWatchAgent(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): boolean {
-  return canReadAgent(state, actor, target) && (!watchClosed(state, target, elsewhere) || ownSession(actor, target))
+  if (!canReadAgent(state, actor, target)) return false
+  const team = teamSessionAccess(state, actor, target, elsewhere)
+  if (team) return team !== 'none'
+  return !watchClosed(state, target, elsewhere) || ownSession(actor, target)
+}
+
+/** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
+ *  from a team session). */
+export const teamAccountPool = (pool: import('./machines.js').ContributedMachine | null | undefined): boolean =>
+  !!pool && (!!pool.hostMachineId || pool.observation?.sessionKind === 'team')
+
+/** Whether [target] runs in a Harness Team account: read from its machine, whichever way it joined (security review 1 of
+ *  #2089), and kept from when it joined one, so a machine row that went never brings back the old rules (its re-review). */
+export const onTeamAccount = (state: SuperTabState, target: Agent): boolean =>
+  !!target.teamAccount || teamAccountPool(state.machines?.find(m => m.machineId === target.machineId))
+
+/**
+ * A confidential session in a Harness Team account (#895 R2): every teammate's work there runs as one macOS user whose
+ * folders hold other projects' clones, so typing in it is a shell that reads them. Nobody drives it through the Swarm. Its
+ * project's owner may watch it; its machine's owner neither watches nor drives it, as a member or as its machine's person.
+ * Other members watch it as they watch any confidential session (watchClosed). Null for every other session, and for
+ * agents, which keep their own rules (mayDrive).
+ */
+export function teamSessionAccess(state: SuperTabState, actor: Actor, target: Agent, elsewhere = false): 'watch' | 'none' | 'member' | null {
+  if (!onTeamAccount(state, target) || actor.kind !== 'person' || !isConfidential(state, target, elsewhere)) return null
+  if (actor.userId === projectOf(state, agentProjectId(state, target)).ownerId) return 'watch'
+  if (actor.userId === target.machineOwnerId) return 'none'
+  return watchClosed(state, target, elsewhere) ? 'none' : 'member'
 }
 
 /** Who could watch an agent's terminal before a commit and cannot after it (canWatchAgent, by the session the observer relay
@@ -222,7 +251,7 @@ export function watchersLost(before: SuperTabState, after: SuperTabState): Array
   const watchers = (state: SuperTabState, target: Agent) => {
     const closed = watchClosed(state, target)
     return state.people.map(p => ({ kind: 'person' as const, userId: p.id, email: p.email }))
-      .filter(actor => canReadAgent(state, actor, target) && (!closed || ownSession(actor, target)))
+      .filter(actor => canWatchAgent(state, actor, target))
   }
   return before.agents.flatMap(target => {
     const was = watchers(before, target)
