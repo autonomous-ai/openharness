@@ -727,7 +727,9 @@ export class SuperTabStore {
     const machine = await tx.machine.findFirst({ where: { machineId: command.machineId, autonomousEnv: state.environment, ...machineAlive } })
     if (!machine || !machineBillingAllowsDataPlane(machine)) fail('HOST_UNAVAILABLE', 'This machine is unavailable.', 403)
     // A Mac's Harness Team account names its Mac from its own account row, which only its owner's sign-in set (machines.ts).
-    const host = machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}
+    const host = { ...(machine.sessionKind === 'team' && machine.hostMachineId ? { hostMachineId: machine.hostMachineId } : {}),
+      // A Team sign-in with no Mac (`harness team on`) is no person's own machine either (commands.ts buddy.create).
+      ...(machine.sessionKind === 'team' ? { teamSession: true as const } : {}) }
     if (pooled) {
       const pool = machineContribution(state, command.machineId)
       if (pool) {

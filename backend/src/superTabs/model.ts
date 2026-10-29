@@ -604,6 +604,9 @@ export function createSuperTab(id: string, name: string, owner: { id: string; em
 export function visibleState(state: SuperTabState, actor: Actor, now = Date.now()): SuperTabState {
   author(state, actor)
   const visible = structuredClone(state)
+  // A Buddy-only machine is no machine of the Swarm to anyone, its own person included (machines.ts buddyOnly): their Buddy
+  // shows as a Buddy, and their machine stays theirs. Machines, status and the leaderboard's lent hours all read this.
+  if (visible.machines) visible.machines = visible.machines.filter(m => !m.buddyOnly)
   // A dormant conversation is read on demand, never in a whole-Swarm read (spec, Archive); a command may still load one.
   visible.conversations = visible.conversations.filter(c => !c.dormant)
   syncLeads(visible)

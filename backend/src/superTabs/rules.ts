@@ -135,7 +135,7 @@ export type MayRun = (target: RunTarget, contributorId: string) => boolean
  *  [mayRun] allows there (review of ee4ee6c9a: an engine the owner rules out blocked the fallback). */
 function otherFamilyReviews(state: SuperTabState, builder: { engine: string; gridModel?: string }, policy: RoutingPolicy, mayRun: MayRun): boolean {
   const places = [...state.agents.filter(a => !a.gridModel && !a.buddyOf).map(a => ({ machineId: a.machineId, contributorId: a.contributorId, engines: [a.configuration.engine] })),
-    ...(state.machines ?? []).map(m => ({ machineId: m.machineId, contributorId: m.contributorId, engines: m.engines }))]
+    ...(state.machines ?? []).filter(m => !m.buddyOnly).map(m => ({ machineId: m.machineId, contributorId: m.contributorId, engines: m.engines }))]
   return places.some(place => place.engines.some(engine => familyOf({ engine }) !== familyOf(builder) && policy.models.some(row => row.enabled && row.engine === engine
     && row.quality >= 2 && mayRun({ machineId: place.machineId, engine, model: row.model, effort: liftEffort(state.rules, engine, row.effort) }, place.contributorId))))
 }
