@@ -442,9 +442,11 @@ void main() {
     testWidgets('a tag opens the conversation from its text too', (
       tester,
     ) async {
-      await pump(tester, backend(), const SwarmNeedsPage());
-      await tester.tap(key('swarm-need-row-mention:m1'));
-      await tester.pumpAndSettle();
+      await pump(
+        tester,
+        backend(),
+        const SwarmActivityPage(focus: 'mention:m1'),
+      );
 
       await tester.tap(
         find.textContaining('Can you check the copy?', findRichText: true),
