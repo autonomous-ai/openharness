@@ -13,6 +13,7 @@ import 'avatar_upload.dart';
 import 'message_link.dart';
 import 'model.dart';
 import 'buddy_chat.dart';
+import 'catch_up.dart';
 import 'project_github.dart';
 import 'parts.dart';
 import 'read_marks.dart';
@@ -1284,6 +1285,17 @@ class SuperTabController extends ChangeNotifier {
   /// in while the server is out of reach.
   int readMark(String id) =>
       max(_readAt[id] ?? 0, snapshot?.readMarks[id] ?? 0);
+
+  /// What the reader missed in [id] after [after] (backend catchUp.ts).
+  Future<SuperTabCatchUp> readCatchUp(String id, int after) async =>
+      SuperTabCatchUp.fromJson(
+        superTabMap(
+          await request(
+            'GET',
+            '$_path/conversations/${Uri.encodeComponent(id)}/catch-up?after=$after',
+          ),
+        ),
+      );
 
   late final _serverMarks = SuperTabReadMarkSender(
     (id, sequence) => request(
