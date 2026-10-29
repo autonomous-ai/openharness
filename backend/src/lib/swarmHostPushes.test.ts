@@ -30,8 +30,8 @@ const pushes = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([frame])
 const told = (payload: object) => ({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload } })
 
 describe('Swarm host pushes on a daemon socket', () => {
-  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; vi.useFakeTimers(); vi.stubEnv('SWARM_HOST_PUSH', 'on') })
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
+  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
 
   it('says it pushes as soon as the socket is attached, so the host stops reading its changes each second', async () => {
     const send = vi.fn()
@@ -112,15 +112,13 @@ describe('Swarm host pushes on a daemon socket', () => {
     expect(pushes(send)).toEqual([])
   })
 
-  // Rollout: deployed off, so every host keeps its one-second read until SWARM_HOST_PUSH=on on every pod.
-  it('neither listens, says it pushes, nor publishes while SWARM_HOST_PUSH is not on', async () => {
-    vi.stubEnv('SWARM_HOST_PUSH', '')
+  // Ken's rule (2026-10-29): an optimization ships on, with no switch. Old daemons ignore the frame and keep reading each
+  // second; a server rolled back stops saying it pushes, and hosts go back to each second 5 minutes later.
+  it('says it pushes and publishes with no setting at all', async () => {
     const send = vi.fn()
     await relaySwarmHostChanges('machine-a', send)
+    expect(pushes(send)).toEqual([told({})])
     announceSwarmHostChanges({ tabId: 'tab-1', machineIds: ['machine-a'], lastChangedAt: 1_700 })
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(pushes(send)).toEqual([])
-    expect(bus.channels.size).toBe(0)
-    expect(bus.published).toEqual([])
+    await vi.waitFor(() => expect(bus.published).toEqual([['machine-a', { tabId: 'tab-1', lastChangedAt: 1_700 }]]))
   })
 })

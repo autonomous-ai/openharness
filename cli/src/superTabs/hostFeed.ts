@@ -15,7 +15,7 @@ export interface HostRead { roster: Json[]; pools: Json[]; assignments: Json[] }
 /** The bound on a roster that lags a revoked share (design section 8, Q2), and on one that missed a push. */
 export const HOST_FULL_MS = 60_000
 /** WS roadmap Phase 2a: a server that pushes (backend lib/swarmHostPushes.ts) says so every 4 minutes. Without that word for
- *  this long (an older server, a rollback, the switch turned off) the host reads each second again. */
+ *  this long (an older server, a rollback, Redis down) the host reads each second again. */
 export const HOST_PUSH_LEASE_MS = 5 * 60_000
 /** Told many times in a second, by a busy Swarm, the host still reads at most once a second, as it did before pushes. */
 export const HOST_PUSH_GAP_MS = 1_000
