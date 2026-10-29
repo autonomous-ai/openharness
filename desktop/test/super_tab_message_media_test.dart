@@ -1,7 +1,6 @@
 // What a chat message shows besides its words, as Slack does: pictures in
 // the row, up to 360 px with their shape kept, that open full screen; code
 // in a block with Copy; every other file one compact chip (Dee, 10-29).
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
