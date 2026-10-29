@@ -4660,6 +4660,73 @@ describe('swarm cards', () => {
       } finally { await session.stop() }
     })
 
+    // ── Review before posting (device voice in the Swarm chat): words for a chat everyone in the Swarm reads are shown with
+    // the chat's name, then Send or Discard. Without this, a held recording on a Swarm face was a draft typed into the
+    // Lead's terminal.
+    const reviewed = async (hello: Record<string, unknown>, leads: SwarmLead[], swarmSay: CableHost['swarmSay'], op: 'send' | 'discard') => {
+      const host = cardHost({ cards: [card('st1', leads)] }, { transcribe: vi.fn(async () => 'ship it'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(hello)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1' })
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end', uploadId: 'u-h1', review: true })
+        await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.draft' || m.t === 'voice.error')).toBe(true))
+        const draft = ofType(port, 'voice.draft')[0]
+        const calledBefore = vi.mocked(swarmSay!).mock.calls.length
+        if (draft) port.say({ t: 'draft.command', draftId: draft.id, revision: draft.revision, requestId: 'r1', op })
+        if (draft) await vi.waitFor(() => expect(port.sent.some(m => m.t === 'draft.state' && m.requestId === 'r1')).toBe(true))
+        return { draft, calledBefore, state: ofType(port, 'draft.state')[0], turns: vi.mocked(host.sendTurn).mock.calls }
+      } finally { await session.stop() }
+    }
+
+    it('words reviewed on a Swarm face are a draft named for that chat, posted there by Send and never typed into a terminal', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const r = await reviewed(BUDDY, [withBuddy({ local: 'h1' })], swarmSay, 'send')
+      expect(r.draft).toMatchObject({ t: 'voice.draft', active: true, name: "Project 1 · diego's Buddy", context: 'Swarm chat', text: 'ship it' })
+      expect(r.calledBefore).toBe(0)
+      expect(swarmSay.mock.calls).toEqual([['h1', 'ship it', 'buddy', 'pm1']])
+      expect(r.state).toMatchObject({ ok: true, sent: true })
+      expect(r.turns).toEqual([])
+    })
+
+    it('Discard posts nothing', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const lead = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      const r = await reviewed(ROUND, [withBuddy({ local: 'h1', chat: lead })], swarmSay, 'discard')
+      expect(r.draft).toMatchObject({ name: 'Project 1 · Lead' })
+      expect(r.state).toMatchObject({ ok: true, active: false })
+      expect(swarmSay).not.toHaveBeenCalled()
+      expect(r.turns).toEqual([])
+    })
+
+    it('a reviewed post the Swarm refuses or cannot take stays a draft with the reason, and nothing is typed', async () => {
+      const lead = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      const refusing = await reviewed(ROUND, [withBuddy({ local: 'h1', chat: lead })], vi.fn(async () => refused), 'send')
+      expect(refusing.state).toMatchObject({ ok: false, active: true, error: 'Chat with PM is read-only.' })
+      expect(refusing.turns).toEqual([])
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      const unreachable = await reviewed(ROUND, [withBuddy({ local: 'h1', chat: lead })], offline, 'send')
+      expect(unreachable.state).toMatchObject({ ok: false, active: true, error: 'Could not reach the Swarm. Try again.' })
+      expect(unreachable.turns).toEqual([])
+    })
+
+    it('says it reviews Swarm chat words, and refuses unreviewed ones from a dial that promised to review them', async () => {
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const transcribe = vi.fn(async () => 'ship it')
+      const host = cardHost({ cards: [card('st1', [withBuddy({ local: 'h1' })])] }, { transcribe, route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say({ ...BUDDY, swarmReview: 'v1' })
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        expect(ofType(port, 'welcome')[0].features).toContain('swarm.review')
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(ofType(port, 'voice.error')).toHaveLength(1))
+        expect(ofType(port, 'voice.error')[0].message).toBe('Review the words before they are posted.')
+        expect(transcribe).not.toHaveBeenCalled(); expect(swarmSay).not.toHaveBeenCalled(); expect(host.sendTurn).not.toHaveBeenCalled()
+      } finally { await session.stop() }
+    })
+
     /** 13 Leads (12 are sent), every name at its 48-byte cut, each working in a group with a Buddy; `id(kind, l)` names the ids. */
     const fullCards = (id: (kind: string, l: number) => string) => {
       const wide = 'é'.repeat(24)   // 48 bytes
