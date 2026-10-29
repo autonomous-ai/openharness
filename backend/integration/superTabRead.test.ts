@@ -17,6 +17,7 @@ import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { decisionsWaiting } from '../src/superTabs/decisions.js'
+import { buddyChatId } from '../src/superTabs/buddies.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -78,11 +79,14 @@ async function scene<T = void>(extra: (s: ReturnType<typeof swarm>, ids: { web: 
   const secretGroup = s.group('Secret work', secret)
   // peer's Chat with PM from before Buddies replaced it (closed: nobody reads it), and peer's Buddy chat.
   const privateId = s.group('Peer and PM')
-  const buddyId = s.group('Peer\'s Buddy')
+  // The Buddy chat keeps the id the backend gives it (buddies.ts buddyChatId), as the PM's lines find it by that id.
+  let buddyId = s.group('Peer\'s Buddy')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.sub)!.generation
     state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peer.sub, generation }] }
-    Object.assign(state.conversations.find(c => c.id === buddyId)!, { kind: 'buddy', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation }] } })
+    const chat = state.conversations.find(c => c.id === buddyId)!
+    buddyId = buddyChatId(chat.projectId ?? 'lead', { id: peer.sub, generation })
+    Object.assign(chat, { id: buddyId, kind: 'buddy', leadId: null, agentIds: [], audience: { people: [{ id: peer.sub, generation }] } })
     const finished = state.conversations.find(c => c.id === done)!
     finished.assignment = { ...state.conversations.find(c => c.id === web)!.assignment!, id: 'old-work', status: 'done' }
   })
