@@ -303,18 +303,20 @@ QUOTED_PATH = re.compile(r"""(?<![\w/.-])['"](?!\.\.?/)([A-Za-z0-9_.-]+/[^'"`\s$
 COMMENT_LINE = ("//", "#", "*", "/*", "<!--")
 
 
-def undeclared_reads(root, suite):
+def undeclared_reads(root, suite, known_paths=()):
     """Files of this suite that name another directory's path without a DEPENDS entry: [(source, target)].
 
     Run on a full checkout (the merge helper's, before accepting reuse; or locally). A read the scan
-    cannot see (a path built from parts) belongs in DEPENDS by hand."""
+    cannot see (a path built from parts) belongs in DEPENDS by hand. known_paths count as existing:
+    the helper passes every path main changed, deletions included, so a read of a deleted file stays a read."""
     listed = subprocess.check_output(["git", "ls-files", "-z"], cwd=root, timeout=60).decode().split("\0")
-    tracked = {path for path in listed if path}
+    sources = {path for path in listed if path}
+    tracked = sources | set(known_paths)
     folders = {str(PurePosixPath(path).parent) for path in tracked}
     folders |= {str(parent) for folder in list(folders) for parent in PurePosixPath(folder).parents}
     tops = {path.split("/", 1)[0] for path in tracked if "/" in path}
     found = []
-    for source in sorted(tracked):
+    for source in sorted(sources):
         if not SOURCE_FILE.search(source) or "/evidence/" in source or suite not in select([source])[0]:
             continue
         try:
@@ -423,7 +425,7 @@ def verify_reuse(root, receipt, base, evidence):
             raise ValueError(f"reused {suite} refused: {reason}")
         # The planner ran in a sparse checkout; this full one shows reads DEPENDS is missing.
         changed = changed_paths(root, record["origin_sha"], head)
-        for source, target in undeclared_reads(root, suite):
+        for source, target in undeclared_reads(root, suite, changed):
             hit = next((path for path in changed if covers(target, path)), None)
             if hit:
                 raise ValueError(f"reused {suite} refused: {source} reads {target}, which main changed ({hit}), "

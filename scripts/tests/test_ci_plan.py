@@ -2,6 +2,7 @@ import copy
 import hashlib
 import importlib.util
 import io
+import itertools
 import json
 from pathlib import Path
 import re
@@ -621,16 +622,22 @@ class VerifyReuseTests(ReuseFixture):
             planner.verify_reuse(self.root, self.receipt(plan), later, self.evidence)
 
     def test_a_look_alike_inside_the_component_cannot_hide_a_root_read_from_the_helper(self):
-        for name, line in (("root", "File(p.join(repo, 'backend/src/app.ts')).readAsStringSync();"),
-                           ("relative", "File('../backend/src/app.ts').readAsStringSync();")):
-            with self.subTest(form=name):
+        for (name, line), deleted in itertools.product(
+                (("root", "File(p.join(repo, 'backend/src/app.ts')).readAsStringSync();"),
+                 ("relative", "File('../backend/src/app.ts').readAsStringSync();")), (False, True)):
+            with self.subTest(form=name, main_deletes_it=deleted):
                 _, main, head, receipt = self.reusing(pr_paths=("mobile/lib/app.dart", "mobile/test/root_test.dart"))
                 self.git("checkout", "-q", "--detach", head)
                 (self.root / "mobile/test/root_test.dart").write_text(line)
                 self.write("mobile/backend/src/app.ts", "an unused look-alike")
                 reader = self.commit(f"reads the backend past a look-alike ({name})")
                 self.evidence.add(self.root, reader, {"mobile"}, run_id=51)
-                later = self.branch(main, ["backend/src/app.ts"], f"main-look-alike-{name}")
+                if deleted:  # The real read now fails; the look-alike must not make it look internal.
+                    self.git("checkout", "-q", "-B", f"main-delete-{name}", main)
+                    self.git("rm", "-q", "backend/src/app.ts")
+                    later = self.commit("main deletes the file")
+                else:
+                    later = self.branch(main, ["backend/src/app.ts"], f"main-look-alike-{name}")
                 merged = self.update(reader, later)
                 plan = self.plan(merged, later)
                 self.assertEqual(list(plan["reused"]), ["mobile"])
@@ -771,6 +778,14 @@ class CrossReadTests(unittest.TestCase):
         self.write("mobile/lib/notes.dart", "/// `../backend/src/app.ts` named in a doc comment is not a read")
         self.assertEqual(planner.undeclared_reads(self.root, "mobile"), [
             ("mobile/test/relative_test.dart", "backend/src/app.ts"), ("mobile/test/root_test.dart", "backend/src/app.ts")])
+
+    def test_a_read_of_a_path_main_deleted_counts_when_the_helper_names_it(self):
+        self.write("mobile/backend/gone/app.ts", "an unused look-alike")
+        self.write("mobile/test/root_test.dart", "File(p.join(repo, 'backend/gone/app.ts'));")
+        self.write("mobile/test/relative_test.dart", "File('../backend/gone/app.ts');")
+        self.assertEqual(planner.undeclared_reads(self.root, "mobile"), [])
+        self.assertEqual(planner.undeclared_reads(self.root, "mobile", ["backend/gone/app.ts"]), [
+            ("mobile/test/relative_test.dart", "backend/gone/app.ts"), ("mobile/test/root_test.dart", "backend/gone/app.ts")])
 
     def test_strings_that_are_only_data_are_listed_with_a_reason(self):
         for source, (reason, targets) in planner.NOT_READS.items():

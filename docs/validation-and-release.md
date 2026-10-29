@@ -87,7 +87,8 @@ reviewed checkout it also scans the reused component's sources for reads `DEPEND
 missing: relative paths (`../backend/...`) and quoted paths from the repository root
 (`ROOT / 'cli/src/cable/serial.ts'`), outside comments. A path that could name a file inside
 the component and also a real path elsewhere counts as a read of both, so a look-alike file
-cannot hide a read. Strings that only look like paths (test data, scripts
+cannot hide a read; every path main changed, deleted ones included, counts as existing, so a
+read of a deleted file is still a read. Strings that only look like paths (test data, scripts
 run by hand) are listed with a reason in `NOT_READS`; a path built from parts must be
 declared by hand. It refuses to merge on any mismatch, or when main's copy cannot verify reuse.
 To run everything again, push a commit to the PR.
