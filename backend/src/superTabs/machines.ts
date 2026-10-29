@@ -123,6 +123,9 @@ export const machineObservationSchema = z.object({ generation: z.string().max(16
    *  the engine), as of this report. Such a start waits past the 3 minutes while reports keep naming it (liveness.ts);
    *  the store keeps only this machine's own launched starts. Absent from hosts before it, whose starts get 3 minutes. */
   preparingStartIds: z.array(z.string().min(1).max(160)).max(100).optional(),
+  /** What this host can launch beyond workers: `leadStart`, a project's Product Manager (leadStart.ts). Absent from hosts
+   *  before it, which are never given one. */
+  capabilities: z.array(z.string().regex(/^[a-zA-Z]{1,40}$/)).max(16).optional(),
 }).strict()
 export type MachineObservation = z.infer<typeof machineObservationSchema>
 

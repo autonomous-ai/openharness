@@ -99,6 +99,9 @@ export interface AgentStartRequest {
   requirements: { memoryBytes: number; diskBytes: number; maxCpuPercent: number; tools: string[]; devices: string[]; quotaRequired: boolean }
   /** A Buddy's start (buddies.ts): written by buddy.create alone, never taken from an agent.start. */
   buddyOf?: { personId: string; generation: string }
+  /** A project's Product Manager's start (leadStart.ts): written by lead.start alone, never taken from an agent.start. Its
+   *  agent becomes the Lead of the project's Lead conversation once it runs. */
+  leadFor?: { projectId: string; personId: string; generation: string }
 }
 export interface AgentStart {
   poolGeneration?: string

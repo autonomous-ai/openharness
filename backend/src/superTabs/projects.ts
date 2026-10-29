@@ -35,6 +35,8 @@ export interface SwarmProject {
   skillSet?: SkillSet
   /** The project's custom set, kept when the project switches away from it. */
   roles?: ProjectRole[]
+  /** Its Product Manager started by the Swarm on one of its machines, or waiting for one (leadStart.ts). */
+  lead?: import('./leadStart.js').LeadPlacement
 }
 
 export const skillModeOf = (project: SwarmProject): SkillMode => project.skillMode ?? 'orchestration'
