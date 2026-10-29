@@ -41,14 +41,27 @@ class SuperTabPerson {
       generation = row['generation'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
       status = SuperTabPersonStatus.fromJson(row['status']),
-      chosenUsername = row['username'] as String?;
+      chosenUsername = row['username'] as String?,
+      username =
+          row['username'] as String? ??
+          superTabDefaultUsername(_text(row, 'email'));
+  SuperTabPerson._named(SuperTabPerson person, this.username)
+    : id = person.id,
+      email = person.email,
+      role = person.role,
+      generation = person.generation,
+      avatar = person.avatar,
+      status = person.status,
+      chosenUsername = person.chosenUsername;
   final String id, email, role;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
 
-  /// The username the person chose (desktop usernames); null for a default.
-  /// The phone still names people by their email prefix until it takes
-  /// usernames too.
+  /// How the Swarm tags them (`@username`), as the server sends it; from an
+  /// older server, their default ([superTabUsernames]). Desktop's rule.
+  final String username;
+
+  /// The name the server sent; null from a server without usernames.
   final String? chosenUsername;
 
   /// Their status while it lasts.
@@ -59,6 +72,43 @@ class SuperTabPerson {
   /// from a backend that does not send it.
   final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
+}
+
+/// The name an email's prefix makes: lowercased, only the characters a
+/// username takes, never too short. Unnumbered; [superTabUsernames] numbers
+/// it. Desktop's `superTabDefaultUsername`, byte for byte.
+String superTabDefaultUsername(String email) {
+  var prefix = email
+      .split('@')
+      .first
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9._-]'), '')
+      .replaceFirst(RegExp(r'^[._-]+'), '');
+  if (prefix.length > 30) prefix = prefix.substring(0, 30);
+  if (prefix.isEmpty) return 'user';
+  return prefix.length < 2 ? '${prefix}1' : prefix;
+}
+
+/// [people], each with their username: the one the server sent, else (an
+/// older server, which sends none) their email prefix numbered (`ken2`) after
+/// the people before them, as Desktop names them.
+List<SuperTabPerson> superTabUsernames(List<SuperTabPerson> people) {
+  final taken = {for (final p in people) ?p.chosenUsername};
+  return List.unmodifiable([
+    for (final person in people)
+      if (person.chosenUsername != null)
+        person
+      else
+        SuperTabPerson._named(person, () {
+          final root = superTabDefaultUsername(person.email);
+          var name = root;
+          for (var n = 2; taken.contains(name); n++) {
+            name = '$root$n';
+          }
+          taken.add(name);
+          return name;
+        }()),
+  ]);
 }
 
 class SuperTabAgent {
@@ -328,7 +378,7 @@ class SuperTabSnapshot {
       project = row['project'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['project'])),
-      people = _list(row['people'], SuperTabPerson.fromJson),
+      people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
       machines = _list(
         row['machines'] ?? const [],

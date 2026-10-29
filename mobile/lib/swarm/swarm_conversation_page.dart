@@ -1433,11 +1433,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
         children: [
           if (query != null && snapshot != null)
             _MentionPicker(
+              people: c.mentionablePeople,
               agents: c.mentionable,
               snapshot: snapshot,
               query: query,
-              onPick: (agent) {
-                c.completeMention(agent.id);
+              onPick: (id) {
+                c.completeMention(id);
                 _focus.requestFocus();
               },
             ),
@@ -2319,20 +2320,25 @@ class _Ask extends StatelessWidget {
   }
 }
 
-/// The chat's agents whose name starts with what follows the @ being typed,
-/// over the composer: each with its role and what it is doing.
+/// Over the composer, who the @ being typed can name, as Desktop offers
+/// them: the chat's people whose username holds what follows it, then its
+/// agents whose name starts with it, each with its role and what it is doing.
 class _MentionPicker extends StatelessWidget {
   const _MentionPicker({
+    required this.people,
     required this.agents,
     required this.snapshot,
     required this.query,
     required this.onPick,
   });
 
+  final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
   final SuperTabSnapshot snapshot;
   final String query;
-  final ValueChanged<SuperTabAgent> onPick;
+
+  /// The person's or agent's id.
+  final ValueChanged<String> onPick;
 
   @override
   Widget build(BuildContext context) {
@@ -2342,6 +2348,10 @@ class _MentionPicker extends StatelessWidget {
         glance.agent.id: glance,
     };
     final prefix = query.toLowerCase();
+    final shownPeople = [
+      for (final person in people)
+        if (person.username.contains(prefix)) person,
+    ];
     final shown = [
       for (final agent in agents)
         if (snapshot.agentName(agent.id).toLowerCase().startsWith(prefix))
@@ -2358,11 +2368,11 @@ class _MentionPicker extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppMenu.panelRadius),
         boxShadow: AppSurface.shadow,
       ),
-      child: shown.isEmpty
+      child: shown.isEmpty && shownPeople.isEmpty
           ? Padding(
               padding: const EdgeInsets.all(AppSpace.l),
               child: Text(
-                'No agent by that name.',
+                'No one by that name.',
                 style: swarmChatText(14, color: AppPalette.textSecondary),
               ),
             )
@@ -2370,12 +2380,43 @@ class _MentionPicker extends StatelessWidget {
               shrinkWrap: true,
               padding: EdgeInsets.zero,
               children: [
+                for (final person in shownPeople)
+                  TtyTap(
+                    key: ValueKey('swarm-pick-person-${person.id}'),
+                    semanticsLabel: person.username,
+                    minHeight: 52,
+                    onTap: () => onPick(person.id),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.l,
+                      ),
+                      child: Row(
+                        children: [
+                          SwarmChatAvatar(
+                            name: person.username,
+                            id: person.id,
+                            agent: false,
+                            picture: person.avatar,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              person.username,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: swarmChatText(16, weight: FontWeight.w500),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 for (final agent in shown)
                   TtyTap(
                     key: ValueKey('swarm-pick-${agent.id}'),
                     semanticsLabel: snapshot.agentName(agent.id),
                     minHeight: 52,
-                    onTap: () => onPick(agent),
+                    onTap: () => onPick(agent.id),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: AppSpace.l,

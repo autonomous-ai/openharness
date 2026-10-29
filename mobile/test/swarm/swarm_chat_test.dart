@@ -97,6 +97,8 @@ void main() {
     List<Map<String, dynamic>> decisions = const [],
     List<String>? audience,
     List<Map<String, dynamic>>? members,
+    List<Map<String, dynamic>>? projects,
+    Map<String, dynamic> g1 = const {},
   }) {
     // The Swarm's counts say a decision waits: what has its list read.
     final derived = {'decisionsWaiting': decisions.length};
@@ -109,19 +111,23 @@ void main() {
     };
     fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
       ...firstLoad(
+        head: projects == null ? null : headData(projects: projects),
         groups: [
-          groupData(
-            'g1',
-            title: 'Fix login',
-            agentIds: ['agent-lead', 'agent-builder'],
-            status: 'working',
-            audience: audience,
-            lastMessageSequence: page.isEmpty
-                ? 0
-                : page
-                      .map((m) => m['sequence'] as int)
-                      .reduce((a, b) => a > b ? a : b),
-          ),
+          {
+            ...groupData(
+              'g1',
+              title: 'Fix login',
+              agentIds: ['agent-lead', 'agent-builder'],
+              status: 'working',
+              audience: audience,
+              lastMessageSequence: page.isEmpty
+                  ? 0
+                  : page
+                        .map((m) => m['sequence'] as int)
+                        .reduce((a, b) => a > b ? a : b),
+            ),
+            ...g1,
+          },
         ],
         derived: derived,
       ),
@@ -643,7 +649,7 @@ void main() {
 
     await tester.enterText(find.byType(TextField), 'ask @zed');
     await tester.pump();
-    expect(find.text('No agent by that name.'), findsOneWidget);
+    expect(find.text('No one by that name.'), findsOneWidget);
 
     await tester.enterText(find.byType(TextField), 'ask @N');
     await tester.pump();
@@ -654,6 +660,215 @@ void main() {
       'ask @Nova ',
     );
     expect(key('swarm-mention-picker'), findsNothing);
+  });
+
+  group('@ people, by username, as Desktop tags them', () {
+    // Ken chose a username; Dee keeps the default her email makes.
+    final ken = {...person('ken', role: 'collaborator'), 'username': 'kenji'};
+    final dee = person('dee', role: 'collaborator');
+    final everyone = [person(me), ken, dee];
+    String field(WidgetTester tester) =>
+        tester.widget<TextField>(find.byType(TextField)).controller!.text;
+    Future<void> type(WidgetTester tester, String text) async {
+      await tester.enterText(find.byType(TextField), text);
+      await tester.pump();
+    }
+
+    testWidgets('@ lists the people who read the chat by username, before '
+        'its agents, never the reader; what follows narrows it', (
+      tester,
+    ) async {
+      await pump(tester, backend([message('m1', 1)], members: everyone));
+
+      await type(tester, '@');
+      expect(key('swarm-pick-person-ken'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-pick-person-ken'),
+          matching: find.text('kenji'),
+        ),
+        findsOneWidget,
+      );
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-person-$me'), findsNothing);
+      expect(
+        tester.getTopLeft(key('swarm-pick-person-dee')).dy,
+        lessThan(tester.getTopLeft(key('swarm-pick-agent-lead')).dy),
+      );
+
+      // Any part of the username, as on Desktop.
+      await type(tester, 'ask @enj');
+      expect(key('swarm-pick-person-ken'), findsOneWidget);
+      expect(key('swarm-pick-person-dee'), findsNothing);
+      expect(key('swarm-pick-agent-builder'), findsNothing);
+
+      await type(tester, 'ask @zed');
+      expect(find.text('No one by that name.'), findsOneWidget);
+    });
+
+    testWidgets('a picked person goes in as @username, and the post tags '
+        'them beside the agents it goes to, as Desktop sends it', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      await pump(tester, fake);
+
+      await type(tester, 'ask @ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      expect(field(tester), 'ask @kenji ');
+      expect(key('swarm-mention-picker'), findsNothing);
+
+      await type(tester, 'ask @kenji and @N');
+      await tester.tap(key('swarm-pick-agent-builder'));
+      await tester.pump();
+      expect(field(tester), 'ask @kenji and @Nova ');
+
+      await type(tester, 'ask @kenji and @Nova to look');
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single, {
+        'type': 'message.send',
+        'conversationId': 'g1',
+        'text': 'ask @kenji and @Nova to look',
+        'replyTo': null,
+        'recipientIds': ['agent-builder'],
+        'mentions': ['ken'],
+      });
+    });
+
+    testWidgets('a username taken out of the draft tags nobody', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      await pump(tester, fake);
+
+      await type(tester, '@ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      await type(tester, 'ask him later');
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single.containsKey('mentions'), isFalse);
+      expect(fake.commands.single['recipientIds'], <String>[]);
+    });
+
+    testWidgets('a refused tag puts the post back in the draft with the '
+        'backend\'s words, and the tag stays with it', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      var refuse = true;
+      fake.routes[commands] = (_) => refuse
+          ? throw const SuperTabFailure(
+              'INVALID_MENTION',
+              'kenji cannot read this conversation.',
+              statusCode: 400,
+            )
+          : {'result': <String, dynamic>{}};
+      await pump(tester, fake);
+
+      await type(tester, '@ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+
+      expect(field(tester), '@kenji ');
+      expect(find.text('kenji cannot read this conversation.'), findsOneWidget);
+
+      refuse = false;
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.last['mentions'], ['ken']);
+    });
+
+    testWidgets('a private chat offers only its own people', (tester) async {
+      await pump(
+        tester,
+        backend([message('m1', 1)], members: everyone, audience: [me, 'dee']),
+      );
+
+      await type(tester, '@');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-person-ken'), findsNothing);
+      expect(find.text('kenji'), findsNothing);
+    });
+
+    testWidgets('a private project offers its owner and members alone', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(
+          [message('m1', 1)],
+          members: everyone,
+          projects: [
+            {
+              'id': project,
+              'name': 'Mobile',
+              'ownerId': me,
+              'leadConversationId': leadChat,
+              'visibility': 'private',
+              'members': [
+                {'id': 'dee'},
+              ],
+              'updateMinutes': 5,
+            },
+          ],
+        ),
+      );
+
+      await type(tester, '@');
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+      expect(key('swarm-pick-person-ken'), findsNothing);
+    });
+
+    testWidgets('a Buddy chat and the Leads conversation offer no people', (
+      tester,
+    ) async {
+      for (final kind in [
+        {'kind': 'buddy', 'buddyOwnerId': me},
+        {'kind': 'leads'},
+      ]) {
+        await pump(
+          tester,
+          backend([message('m1', 1)], members: everyone, g1: kind),
+        );
+        await type(tester, '@');
+        expect(key('swarm-pick-person-ken'), findsNothing, reason: '$kind');
+        expect(key('swarm-pick-person-dee'), findsNothing, reason: '$kind');
+        expect(find.text('kenji'), findsNothing, reason: '$kind');
+      }
+    });
+
+    testWidgets('someone who leaves the Swarm leaves the list, and a tag of '
+        'them in the draft is not sent', (tester) async {
+      final fake = backend([message('m1', 1)], members: everyone);
+      final host = await pump(tester, fake);
+
+      await type(tester, '@ke');
+      await tester.tap(key('swarm-pick-person-ken'));
+      await tester.pump();
+      await type(tester, '@kenji and @');
+      expect(key('swarm-pick-person-ken'), findsOneWidget);
+
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3', lastChangedAt: 200),
+        'members': [
+          {'key': 'ken', 'version': 2, 'changedAt': 2, 'deleted': true},
+        ],
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+      expect(key('swarm-pick-person-ken'), findsNothing);
+      expect(key('swarm-pick-person-dee'), findsOneWidget);
+
+      await type(tester, '@kenji hello');
+      await tester.tap(key('swarm-send'));
+      await tester.pumpAndSettle();
+      expect(fake.commands.single.containsKey('mentions'), isFalse);
+    });
   });
 
   testWidgets('a post shows at once as Sending…, out of the field, and as '

@@ -207,7 +207,8 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   int _epoch = 0;
   String _draft = '';
 
-  /// Agents mentioned in the draft, by id, with the token that names them.
+  /// Agents and people mentioned in the draft, by id, with the token that
+  /// names them: an agent's is a recipient, a person's a tag.
   final _mentions = <String, String>{};
 
   /// The post on its way, then — while its answer never came — retried under
@@ -314,24 +315,26 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   String? get mentionQuery =>
       RegExp(r'(?:^|\s)@(\S*)$').firstMatch(_draft)?.group(1);
 
-  /// [agentId]'s name in place of the @ being typed ([mentionQuery]), as
-  /// [mention] adds it.
-  void completeMention(String agentId) {
+  /// [id]'s name — an agent's or a person's — in place of the @ being typed
+  /// ([mentionQuery]), as [mention] adds it.
+  void completeMention(String id) {
     if (mentionQuery case final query?) {
       _draft = _draft.substring(0, _draft.length - query.length - 1);
     }
-    mention(agentId);
+    mention(id);
   }
 
-  /// Adds [agentId]'s name to the draft; the post goes to it while the name
-  /// stays in the text.
-  void mention(String agentId) {
+  /// Adds [id]'s name to the draft: an agent's (the post goes to it) or a
+  /// person's username (the post tags them), while the name stays in the
+  /// text.
+  void mention(String id) {
     final snapshot = reader.snapshot;
     if (snapshot == null) return;
-    final token = '@${snapshot.agentName(agentId)}';
+    final person = snapshot.people.where((p) => p.id == id).firstOrNull;
+    final token = '@${person?.username ?? snapshot.agentName(id)}';
     final spaced = _draft.isEmpty || RegExp(r'\s$').hasMatch(_draft);
     _draft = '$_draft${spaced ? '' : ' '}$token ';
-    _mentions[agentId] = token;
+    _mentions[id] = token;
     _composer.changed();
   }
 
@@ -341,6 +344,31 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     final group = conversation;
     if (snapshot == null || group == null) return const [];
     return [for (final agentId in group.agentIds) ?snapshot.agent(agentId)];
+  }
+
+  /// The people a post can tag, as Desktop offers them: those who read this
+  /// conversation, never the reader. Nobody in the Leads conversation; in a
+  /// Buddy chat only its owner reads it. The backend checks each tag again.
+  List<SuperTabPerson> get mentionablePeople {
+    final snapshot = reader.snapshot;
+    final group = conversation;
+    if (snapshot == null || group == null || group.kind == 'leads') {
+      return const [];
+    }
+    final project = snapshot.projectFor(group.id);
+    bool reads(SuperTabPerson person) => switch (group) {
+      SuperTabConversation(:final audience?) => audience.contains(person.id),
+      _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
+      _ =>
+        project == null ||
+            !project.isPrivate ||
+            project.ownerId == person.id ||
+            project.memberIds.contains(person.id),
+    };
+    return [
+      for (final person in snapshot.people)
+        if (person.id != reader.accountId && reads(person)) person,
+    ];
   }
 
   /// The Swarm was read, changed or not.
@@ -367,6 +395,9 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
     }
     _listed = true;
     if (_lost) _lost = _refused = false;
+    // An open @ list follows who is in the Swarm and the chat now: someone
+    // who left, or lost the chat, leaves it.
+    if (mentionQuery != null) _composer.changed();
     final tail = messages.lastOrNull?.sequence ?? 0;
     if (!_read || group.lastMessageSequence > tail) {
       unawaited(load());
@@ -872,7 +903,14 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
   Map<String, dynamic>? _compose([List<String> attachmentIds = const []]) {
     final text = _draft.trim();
     final group = conversation;
+    final people = {...?reader.snapshot?.people.map((p) => p.id)};
     if ((text.isEmpty && attachmentIds.isEmpty) || group == null) return null;
+    // A person still in the Swarm whose username the text still says is
+    // tagged, as Desktop sends it; the backend refuses one who cannot read.
+    final tagged = [
+      for (final MapEntry(key: id, value: token) in _mentions.entries)
+        if (containsMention(text, token) && people.contains(id)) id,
+    ];
     return {
       'operationId': superTabOperationId(),
       'command': {
@@ -886,6 +924,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
                 group.agentIds.contains(agentId))
               agentId,
         ],
+        if (tagged.isNotEmpty) 'mentions': tagged,
         if (attachmentIds.isNotEmpty) 'attachmentIds': attachmentIds,
       },
     };
