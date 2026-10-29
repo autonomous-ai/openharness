@@ -117,7 +117,7 @@ describe('message page reads', () => {
     expect(threads).toHaveLength(130)
     expect(threads.filter(row => row.id !== row.thread).map(row => row.id).slice(0, 3)).toEqual(['t0-m100-r1', 't0-m100-r2', 't0-m100-r3'])
     expect(threads[0]).toEqual({ thread: 't0-m100', id: 't0-m100', author: expect.objectContaining({ id: 'owner' }), mentions: [],
-      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false })
+      sequence: 400, createdAt: new Date(T0 + 400_000), agentOnly: false, routing: false })
     expect(profile).toEqual({ plans: ['IXSCAN { tabId: 1, conversationId: 1, thread: 1, sequence: 1 }'], docsExamined: 130, returned: 130 })
   })
 
