@@ -128,6 +128,8 @@ describe('leadsOf', () => {
 /** `web`'s three kinds of chat: its Lead conversation, the reader's Buddy chat (where the PM's private lines land since
  *  Buddies replaced Chat with PM, 10-29), and a group. The backend sends a Buddy chat to its owner alone. */
 const pm = (over: Record<string, unknown> = {}) => conv('pm-web', null, { projectId: 'web', kind: 'buddy', buddyOwnerId: 'me', agentIds: [], ...over })
+/** The reader's Buddy, as the backend names it (buddies.ts). */
+const buddy = (over: Record<string, unknown> = {}) => agent('y1', { name: "diego's Buddy", buddyOf: { personId: 'me', generation: 'g1' }, configuration: { engine: 'codex' }, ...over })
 const group = (over: Record<string, unknown> = {}) => conv('g-web', null, { projectId: 'web', title: 'Fix login', agentIds: ['b1'], assignment: { status: 'working' }, ...over })
 const chats = (over: Record<string, unknown> = {}) => swarm({
   agents: [agent('a1'), agent('a2'), agent('b1', { projectId: 'web' })],
@@ -598,10 +600,13 @@ describe('SwarmCards open recaps and recap reads', () => {
 })
 
 /** `web` with its three chats at the given sequences, each conversation's page served from `pages` (newest first or not: the code orders). */
-function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>) {
-  const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({ conversations: [
-    conv('lead-web', 'a1', { projectId: 'web', lastMessageSequence: lead }), conv('lead-mobile', 'a2', { projectId: 'mobile' }),
-    pm({ lastMessageSequence: pmSeq }), group({ lastMessageSequence: groupSeq })] })
+/** With `withBuddy`, the Swarm has Buddies on and the reader's Buddy (`y1`, "diego's Buddy" on Codex) is in their `web` chat. */
+function chatSwarm(pages: Record<string, unknown[] | (() => unknown[])>, withBuddy = false) {
+  const state = (lead = 1, pmSeq = 1, groupSeq = 1) => chats({
+    ...(withBuddy ? { buddies: true, agents: [...chats().agents as object[], buddy()] } : {}),
+    conversations: [
+      conv('lead-web', 'a1', { projectId: 'web', lastMessageSequence: lead }), conv('lead-mobile', 'a2', { projectId: 'mobile' }),
+      pm({ lastMessageSequence: pmSeq, ...(withBuddy ? { agentIds: ['y1'] } : {}) }), group({ lastMessageSequence: groupSeq })] })
   const t = setup({ t1: { lastChangedAt: 1, state: state() } }, { messages: path => {
     const page = pages[/conversations\/([^/]+)\/messages/.exec(path)?.[1] ?? ''] ?? []
     return { messages: typeof page === 'function' ? page() : page, next: null }
@@ -841,5 +846,239 @@ describe('SwarmCards.worker', () => {
     await t.cards.tick()
     expect(t.cards.worker('m1', 'h-b1')).toBe(false)
     expect(t.cards.worker('m2', 'h-nobody')).toBe(false)
+  })
+})
+
+// Round dial PM and Buddy screens (spec 2026-10-29-round-dial-pm-buddy): a dial that speaks swarmBuddy keeps a side per
+// Swarm, sees the reader's own Buddy chat as `buddy`, and gets each Lead's buddy block; every other dial keeps today's face.
+describe('leadsOf Buddies', () => {
+  const on = (over: Record<string, unknown> = {}) => chats({ buddies: true, agents: [...chats().agents as object[], buddy()],
+    conversations: [...swarm().conversations, pm({ agentIds: ['y1'] }), group()], ...over })
+  const web = (state: Record<string, unknown>, focus?: string, side?: 'pm' | 'buddy') =>
+    leadsOf(state, 'm1', idle, 'me', focus, side).leads.find(l => l.projectId === 'web')!
+
+  it('gives each Lead a buddy block for the reader\'s own Buddy, with Desktop\'s avatar', () => {
+    expect(web(on()).buddy).toEqual({ chatId: 'pm-web', name: "diego's Buddy", engine: 'codex', cells: 25513, color: '#d6a79a', live: true })
+    // The project with no Buddy chat has no block.
+    expect(leadsOf(on(), 'm1', idle, 'me').leads.find(l => l.projectId === 'mobile')).not.toHaveProperty('buddy')
+    // A Buddy that is down is still the Buddy; its display name is the one Desktop draws and shows.
+    const down = on({ agents: [...chats().agents as object[], buddy({ downSince: '2026-10-29T00:00:00.000Z', displayName: "ken's Buddy" })] })
+    expect(web(down).buddy).toEqual({ chatId: 'pm-web', name: "ken's Buddy", engine: 'codex', cells: 30735, color: '#d69abb', live: false })
+  })
+
+  it('marks buddies only while the Swarm has them on', () => {
+    expect(leadsOf(on(), 'm1', idle, 'me').leads.map(l => l.buddies)).toEqual([true, true])
+    const off = on({ buddies: undefined })
+    expect(web(off)).not.toHaveProperty('buddies')
+    expect(web(off)).not.toHaveProperty('buddy')
+    expect(web(off)).not.toHaveProperty('sideChat')
+    // And with Buddies off a dial's side changes nothing: the face is today's.
+    expect(web(off, undefined, 'buddy').chat).toEqual({ kind: 'lead', id: 'lead-web', name: 'Lead', working: false })
+  })
+
+  it('shows no buddy block for a Buddy chat with no Buddy agent', () => {
+    const removed = on({ agents: chats().agents })
+    expect(web(removed)).not.toHaveProperty('buddy')
+    // Its screen is still the Buddy chat (the dial draws the empty state), and nothing is said there.
+    expect(web(removed, undefined, 'buddy').sideChat).toEqual({ kind: 'buddy', id: 'pm-web', name: 'Buddy', working: false })
+  })
+
+  it('never takes another person\'s Buddy chat or Buddy for a face or a block', () => {
+    const sams = (over: Record<string, unknown> = {}) => on({ agents: [...chats().agents as object[], buddy({ buddyOf: { personId: 'sam', generation: 'g2' } })],
+      conversations: [...swarm().conversations, pm({ agentIds: ['y1'], buddyOwnerId: 'sam' }), group()], ...over })
+    const lead = { kind: 'lead', id: 'lead-web', name: 'Lead', working: false }
+    for (const side of [undefined, 'pm', 'buddy'] as const) {
+      const l = web(sams(), 'pm-web', side)
+      expect([l.chat, l.sideChat]).toEqual([lead, lead])
+      expect(l).not.toHaveProperty('buddy')
+    }
+    // Sam's Buddy in the reader's own chat (an agent id reused or misfiled) is not the reader's Buddy either.
+    const misfiled = on({ agents: [...chats().agents as object[], buddy({ buddyOf: { personId: 'sam', generation: 'g2' } })] })
+    expect(web(misfiled)).not.toHaveProperty('buddy')
+    // With nobody signed in, no Buddy chat is anyone's.
+    expect(leadsOf(on(), 'm1', idle, undefined, 'pm-web').leads.find(l => l.projectId === 'web')).toMatchObject({ chat: lead, sideChat: lead })
+  })
+
+  it('never puts a read-only Chat with PM on the face while Buddies are on', () => {
+    const chatWithPm = conv('cpm-web', null, { projectId: 'web', agentIds: ['a1'], audience: { people: [{ id: 'me' }] } })
+    const state = on({ conversations: [...swarm().conversations, pm({ agentIds: ['y1'] }), chatWithPm] })
+    expect(web(state, 'cpm-web')).toMatchObject({ chat: { kind: 'lead' }, sideChat: { kind: 'lead' } })
+    // With Buddies off it is today's: a conversation of the project the window has open.
+    expect(web(on({ buddies: undefined, conversations: state.conversations }), 'cpm-web').chat).toMatchObject({ kind: 'group', id: 'cpm-web' })
+  })
+
+  it('keeps today\'s face for a dial without swarmBuddy: the Buddy chat the window has open is `pm`, whatever the side', () => {
+    for (const side of [undefined, 'pm', 'buddy'] as const) {
+      expect(web(on(), 'pm-web', side).chat).toEqual({ kind: 'pm', id: 'pm-web', name: 'PM', working: false })
+      expect(web(on(), undefined, side).chat).toEqual({ kind: 'lead', id: 'lead-web', name: 'Lead', working: false })
+    }
+  })
+
+  it('shows a swarmBuddy dial the Buddy chat the window has open as `buddy`, unless the dial swiped back to the PM', () => {
+    expect(web(on(), 'pm-web').sideChat).toEqual({ kind: 'buddy', id: 'pm-web', name: "diego's Buddy", working: false })
+    expect(web(on(), 'pm-web', 'pm').sideChat).toEqual({ kind: 'lead', id: 'lead-web', name: 'Lead', working: false })
+    // A group the window has open stays the PM screen's face on the PM side, and the Buddy side shows the Buddy chat.
+    expect(web(on(), 'g-web').sideChat).toMatchObject({ kind: 'group', id: 'g-web' })
+    expect(web(on(), 'g-web', 'buddy').sideChat).toMatchObject({ kind: 'buddy', id: 'pm-web' })
+  })
+})
+
+describe('SwarmCards Buddy side', () => {
+  const buddySays = [said(1, 'a1', { text: 'from the PM' }), said(2, 'y1', { text: 'from the Buddy' }), said(3, 'me', { author: { kind: 'person', id: 'me' }, text: 'mine' })]
+
+  it('puts the Buddy chat on the face on the buddy side, and its recap is the Buddy\'s last message', async () => {
+    const t = chatSwarm({ 'pm-web': buddySays }, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.calls.length = 0
+    t.cards.side('t1', 'buddy')
+    expect(t.webLead()?.sideChat).toEqual({ kind: 'buddy', id: 'pm-web', name: "diego's Buddy", working: false })
+    // Rebuilt from the last reads, with no request; an older dial's face did not move.
+    expect(t.calls).toEqual([])
+    expect(t.webLead()?.chat).toMatchObject({ kind: 'lead' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toEqual({ tabId: 't1', leadId: 'a1', text: 'from the Buddy', at: saidAt, none: false, chatId: 'pm-web', buddy: true })
+    t.cards.want(false)
+  })
+
+  it('keeps the Lead face on the buddy side when the project has no Buddy chat', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    expect(t.seen.at(-1)?.[0].leads.find(l => l.id === 'a2')?.sideChat).toEqual({ kind: 'lead', id: 'lead-mobile', name: 'Lead', working: false })
+    t.cards.want(false)
+  })
+
+  it('a later desktop focus clears the dial\'s side', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead' })
+    // Review Focus 1: the desktop opens the Buddy chat (the Buddy screen), then the person swipes down: the swipe wins.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    t.cards.side('t1', 'pm')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead', id: 'lead-web' })
+    // The same focus said again is no change; the desktop's next one clears the side.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead' })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    t.cards.want(false)
+  })
+
+  it('keeps the side per Swarm, refuses a bad tab or side, and forgets every side when the devices go', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t2', 'buddy')
+    t.cards.side('bad id', 'buddy')
+    t.cards.side('t1', 'sideways' as 'pm')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead' })
+    t.cards.side('t1', 'buddy')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    t.cards.want(false)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead' }))
+    t.cards.want(false)
+  })
+
+  it('keeps an older dial\'s recap of the Buddy chat on the PM\'s lines, and the new dial\'s on the Buddy\'s', async () => {
+    const t = chatSwarm({ 'pm-web': buddySays }, true)
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(await t.cards.recap('t1', 'a1', true)).toEqual({ tabId: 't1', leadId: 'a1', text: 'from the PM', at: saidAt, none: false, chatId: 'pm-web' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'from the Buddy', chatId: 'pm-web', buddy: true })
+    // Each answer is remembered apart: asking again reads nothing.
+    const reads = t.reads('pm-web')
+    expect(await t.cards.recap('t1', 'a1', true)).toMatchObject({ text: 'from the PM' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ text: 'from the Buddy' })
+    expect(t.reads('pm-web')).toBe(reads)
+    t.cards.want(false)
+  })
+
+  it('pushes the Buddy face\'s recap to the dial that has it open when the side changes, and only that one', async () => {
+    const t = chatSwarm({ 'lead-web': [said(1, 'a1', { text: 'lead says' })], 'pm-web': buddySays }, true)
+    const pushed: Array<{ text: string; buddy?: true }> = []
+    t.cards.onRecap = r => pushed.push({ text: r.text, ...(r.buddy ? { buddy: r.buddy } : {}) })
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.open('s1', 't1', 'a1', 'buddy')
+    t.cards.open('s2', 't1', 'a1', true)
+    t.cards.side('t1', 'buddy')
+    await vi.waitFor(() => expect(pushed).toEqual([{ text: 'from the Buddy', buddy: true }]))
+    t.cards.want(false)
+  })
+
+  it('say on the buddy side posts message.send to the Buddy chat', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    expect(await t.cards.say('h-a1', 'to my Buddy', 'buddy')).toBe(true)
+    expect(await t.cards.say('h-a1', 'to the Lead', true)).toBe(true)
+    const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string; text: string } }).command)
+    expect(posts.map(p => [p.conversationId, p.text])).toEqual([['pm-web', 'to my Buddy'], ['lead-web', 'to the Lead']])
+    t.cards.want(false)
+  })
+})
+
+describe('SwarmCards Buddy notices', () => {
+  it('raises a buddy notice for the Buddy\'s new message, never for the owner\'s', async () => {
+    const t = chatSwarm({ 'pm-web': [said(2, 'y1', { text: 'an idea' }), said(3, 'me', { author: { kind: 'person', id: 'me' } })] }, true)
+    await t.cards.tick()
+    await t.move(1, 3)
+    expect(t.webLead()?.buddyNotice).toEqual({ chat: 'buddy', chatId: 'pm-web', id: 'x2', text: 'an idea', at: saidAt })
+    // The Buddy's word is quiet: it is not the Lead's notice.
+    expect(t.webLead()).not.toHaveProperty('notice')
+    const mine = chatSwarm({ 'pm-web': [said(2, 'me', { author: { kind: 'person', id: 'me' } })] }, true)
+    await mine.cards.tick()
+    await mine.move(1, 2)
+    expect(mine.webLead()).not.toHaveProperty('buddyNotice')
+  })
+
+  it('keeps the PM\'s private line as the Lead\'s notice when the Buddy speaks after it', async () => {
+    const t = chatSwarm({ 'pm-web': [said(2, 'a1', { text: 'from the PM' }), said(3, 'y1', { text: 'from the Buddy' })] }, true)
+    await t.cards.tick()
+    await t.move(1, 3)
+    expect(t.webLead()).toMatchObject({ notice: { chat: 'pm', id: 'x2' }, buddyNotice: { chat: 'buddy', id: 'x3' } })
+  })
+
+  it('raises no buddy notice while Buddies are off, or from another person\'s Buddy chat', async () => {
+    const off = chatSwarm({ 'pm-web': [said(2, 'y1')] })
+    await off.cards.tick()
+    await off.move(1, 2)
+    expect(off.webLead()).not.toHaveProperty('buddyNotice')
+    // Sam's Buddy chat, were it ever sent here: not watched, not read.
+    const t = setup({ t1: { lastChangedAt: 1, state: chats({ buddies: true, agents: [...chats().agents as object[], buddy({ buddyOf: { personId: 'sam', generation: 'g2' } })],
+      conversations: [...swarm().conversations, pm({ agentIds: ['y1'], buddyOwnerId: 'sam', lastMessageSequence: 1 })] }) } },
+    { messages: () => ({ messages: [said(2, 'y1'), said(3, 'a1')], next: null }) })
+    await t.cards.tick()
+    t.tabs.t1.lastChangedAt++
+    t.tabs.t1.state = chats({ buddies: true, agents: [...chats().agents as object[], buddy({ buddyOf: { personId: 'sam', generation: 'g2' } })],
+      conversations: [...swarm().conversations, pm({ agentIds: ['y1'], buddyOwnerId: 'sam', lastMessageSequence: 3 })] })
+    await t.cards.tick()
+    const lead = t.seen.at(-1)?.[0].leads.find(l => l.id === 'a1')
+    expect(lead).not.toHaveProperty('buddyNotice')
+    expect(lead).not.toHaveProperty('notice')
+    expect(t.calls.filter(c => c.includes('/conversations/pm-web/messages'))).toEqual([])
+  })
+
+  it('drops a held buddy notice when access to the Swarm is lost', async () => {
+    const t = chatSwarm({ 'pm-web': [said(2, 'y1')] }, true)
+    await t.cards.tick()
+    await t.move(1, 2)
+    expect(t.webLead()?.buddyNotice).toMatchObject({ id: 'x2' })
+    t.failing.set('t1', 403)
+    t.tabs.t1.lastChangedAt++
+    await t.cards.tick()
+    expect(t.seen.at(-1)).toEqual([])
+    t.failing.delete('t1')
+    t.tabs.t1.lastChangedAt++
+    await t.cards.tick()
+    expect(t.webLead()).not.toHaveProperty('buddyNotice')
   })
 })
