@@ -275,10 +275,10 @@ void main() {
       );
       expect(
         text,
-        'River runs on $_computer, scholes@autonomous.ai’s computer. Its '
+        'River runs on $_computer, scholes’s computer. Its '
         'terminal is not shared with you yet: Harness there shares it with '
         'Swarm members once it is up to date and running. Ask '
-        'scholes@autonomous.ai to update and restart Harness, then Retry.',
+        'scholes to update and restart Harness, then Retry.',
       );
       expect(text, isNot(contains('must be online')));
     });
@@ -294,10 +294,10 @@ void main() {
       expect(superTabTerminalPrivate(pm, pm.agent('river')!), isFalse);
       expect(
         reason(pm, 'river'),
-        'River runs on $_computer, scholes@autonomous.ai’s computer. Its '
+        'River runs on $_computer, scholes’s computer. Its '
         'terminal is not shared with you yet: Harness there shares it with '
         'Swarm members once it is up to date and running. Ask '
-        'scholes@autonomous.ai to update and restart Harness, then Retry.',
+        'scholes to update and restart Harness, then Retry.',
       );
       // Marked confidential by the backend: in a private chat, or a Product Manager before.
       final private = reason(
@@ -306,7 +306,7 @@ void main() {
       );
       expect(
         private,
-        'River reads private chats, so only scholes@autonomous.ai can watch '
+        'River reads private chats, so only scholes can watch '
         'its terminal.',
       );
       // Its computer offline changes nothing: the terminal stays private once it is back.
@@ -326,7 +326,7 @@ void main() {
           .millisecondsSinceEpoch;
       expect(
         reason(snapshot(receivedAt: silent), 'river'),
-        'River runs on $_computer, scholes@autonomous.ai’s computer, which is '
+        'River runs on $_computer, scholes’s computer, which is '
         'offline. Its terminal shows here once that computer is back.',
       );
       expect(reason(snapshot(), 'river'), contains('which is offline'));
@@ -375,10 +375,7 @@ void main() {
       await _settle(tester);
       await _shoot(tester, 'teammate-without-invitation');
       expect(find.textContaining('must be online'), findsNothing);
-      expect(
-        find.textContaining('scholes@autonomous.ai’s computer'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('scholes’s computer'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
       expect(find.byType(SharedHarnessPanel), findsNothing);
 
@@ -412,10 +409,7 @@ void main() {
       final reads = api.reads;
       c.selectTerminal('lead', 'river');
       await _settle(tester);
-      expect(
-        find.textContaining('only scholes@autonomous.ai can watch'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('only scholes can watch'), findsOneWidget);
       expect(find.textContaining('update and restart'), findsNothing);
       expect(find.byType(SharedHarnessPanel), findsNothing);
       expect(api.reads, reads);

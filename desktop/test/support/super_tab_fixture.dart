@@ -80,6 +80,7 @@ class SwarmPartsBackend {
           'otherProjectsWork',
           'githubApp',
           'readMarks',
+          'teamAccounts',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -156,6 +157,8 @@ class SwarmPartsBackend {
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
+    // Only where the server does not try Team accounts (backend read/views.ts).
+    if (state['teamAccounts'] == false) 'teamAccounts': false,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -406,8 +409,10 @@ class ConversationServer {
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
   Completer<void>? holdReads;
-  // Makes every command answer with this refusal: {code, message}.
+  // Makes every command answer with this refusal: {code, message}, with
+  // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
+  int refuseStatus = 409;
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
@@ -635,8 +640,8 @@ class ConversationServer {
     };
   }
 
-  /// A person's own status or avatar, or an agent's avatar, as the backend
-  /// stores it (profile.ts).
+  /// A person's own status, username or avatar, or an agent's avatar, as the
+  /// backend stores it (profile.ts, usernames.ts).
   void _profile(Map command, String reader) {
     final (key, id) = command['type'] == 'agent.avatar'
         ? ('agents', command['agentId'])
@@ -659,6 +664,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.username')
+              'username': (command['username'] as String?)?.toLowerCase()
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -767,7 +774,7 @@ class ConversationServer {
         throw SuperTabFailure(
           refusal['code']!,
           refusal['message']!,
-          statusCode: 409,
+          statusCode: refuseStatus,
         );
       }
       final operationId = body['operationId'] as String;
@@ -796,6 +803,7 @@ class ConversationServer {
         }
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');

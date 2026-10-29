@@ -4,8 +4,10 @@ import 'package:flutter/foundation.dart';
 
 import 'model.dart';
 import 'swarm_conversation.dart';
+import 'swarm_outgoing_files.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
+import 'swarm_uploads.dart';
 
 /// One thread of a chat on the phone: its root, its replies and the reply
 /// box — the desktop's thread panel (`SuperTabThreadPanel`) and what its
@@ -16,18 +18,51 @@ import 'swarm_request.dart';
 /// ones on demand ([loadEarlier]), and the root by itself when no page
 /// brought it. Replies that arrive later come with the chat's own reads,
 /// which keep running under it. Nothing of it stays once the person cannot
-/// read the chat: its rows, its draft and a reply not confirmed.
-class SwarmThread extends ChangeNotifier {
-  SwarmThread(this.chat, this.root) : _draft = chat.threadDraft(root) {
+/// read the chat: its rows, its draft, its files and a reply not confirmed.
+///
+/// Files go with a reply as they go with a post in the chat: the same
+/// picker, limits and upload ([SwarmUploads]) to the chat's conversation,
+/// before the reply. They wait in the chat's box for this thread
+/// ([SwarmConversation.threadFiles]) while the chat is open.
+class SwarmThread extends ChangeNotifier implements SwarmFilesBox {
+  SwarmThread(this.chat, this.root)
+    : _draft = chat.threadDraft(root),
+      files = chat.threadFiles(root) {
     _listed = chat.conversation != null;
     chat.addListener(_chatChanged);
     reader.addListener(_chatChanged);
+    files.addListener(_filesChanged);
   }
 
   final SwarmConversation chat;
 
   /// The id of the message the thread hangs from.
   final String root;
+
+  /// The files waiting to go with the next reply.
+  @override
+  final SwarmOutgoingFiles files;
+
+  late final _uploads = SwarmUploads(
+    reader,
+    chat.id,
+    timeout: chat.uploadTimeout,
+    onChanged: () {
+      if (!_disposed) _tell();
+    },
+    onProgress: () {
+      if (!_disposed) _composer.changed();
+    },
+  );
+
+  /// The reply's files are on their way, before the reply.
+  bool get uploading => _uploads.uploading;
+
+  @override
+  bool isUploading(SwarmOutgoingFile file) => _uploads.isUploading(file);
+
+  @override
+  double? uploadProgress(SwarmOutgoingFile file) => _uploads.progress(file);
 
   SwarmReader get reader => chat.reader;
 
@@ -155,11 +190,14 @@ class SwarmThread extends ChangeNotifier {
   Map<String, dynamic>? _pending;
 
   /// What the box held when [_pending] left it: a refusal puts it back.
-  ({String draft, bool alsoSend})? _sent;
+  ({String draft, bool alsoSend, List<SwarmOutgoingFile> files})? _sent;
 
   /// The reply on its way or not confirmed: drawn under the replies,
   /// "Sending…" and then [unconfirmed], until it is read back.
   String? get pending => (_pending?['command'] as Map?)?['text'] as String?;
+
+  /// The files that went with [pending].
+  List<SwarmOutgoingFile> get pendingFiles => _sent?.files ?? const [];
 
   /// The backend took the reply on its way, which no read has brought back
   /// yet: it stays on its way, and is not sent again.
@@ -169,9 +207,20 @@ class SwarmThread extends ChangeNotifier {
   /// A reply was sent and not confirmed: [send] retries it.
   bool get unconfirmed => _pending != null && !sending && !_confirmed;
 
-  /// The box may send now: there is text, and no reply is under way.
+  /// The box may send now: there is text or a file, and no reply or upload
+  /// is under way.
   bool get canSend =>
-      canPost && _pending == null && !sending && _draft.trim().isNotEmpty;
+      canPost &&
+      _pending == null &&
+      !sending &&
+      !uploading &&
+      (_draft.trim().isNotEmpty || files.files.isNotEmpty);
+
+  /// Taking a file off while the files go up gives the upload up.
+  void _filesChanged() {
+    _uploads.keepTo(files.files);
+    if (!_disposed) _composer.changed();
+  }
 
   /// The chat or its Swarm changed: replies read since show, and a thread the
   /// person can no longer read keeps nothing.
@@ -212,10 +261,15 @@ class SwarmThread extends ChangeNotifier {
         !_refused ||
         _rows.isNotEmpty ||
         _draft.isNotEmpty ||
+        files.files.isNotEmpty ||
+        uploading ||
         _pending != null ||
         error != null;
     _refused = true;
     _forget();
+    // The files on their way stop, and none stays in the box.
+    _uploads.cancel();
+    files.clear();
     _draft = '';
     _alsoSend = false;
     _pending = null;
@@ -400,11 +454,43 @@ class SwarmThread extends ChangeNotifier {
   /// leaves the box at once and shows as [pending] until it is read back.
   /// True once the backend took it.
   Future<bool> send() async {
-    if (sending || _confirmed || _disposed || !canPost) return false;
+    if (sending || uploading || _confirmed || _disposed || !canPost) {
+      return false;
+    }
+    // An answer that comes back after the thread closed, or after what it
+    // held was dropped, changes nothing: no text or files back in a box, no
+    // read.
+    final epoch = _epoch;
+    bool current() => !_disposed && epoch == _epoch;
     var pending = _pending;
     if (pending == null) {
+      final outgoing = files.files;
+      if ((_draft.trim().isEmpty && outgoing.isEmpty) ||
+          chat.conversation == null) {
+        return false;
+      }
+      // The files go up first, the draft and the files staying in the box
+      // meanwhile, as the chat's do.
+      var ids = const <String>[];
+      if (outgoing.isNotEmpty) {
+        error = null;
+        final up = await _uploads.upload(outgoing);
+        if (!current()) return false;
+        if (up.failure case final failure?) {
+          if (failure is SuperTabFailure && _refusedChat(failure)) {
+            return false;
+          }
+          error = swarmUploadError(failure, outgoing.length);
+          _tell();
+          return false;
+        }
+        ids = up.ids ?? const [];
+        if (up.ids == null) return false;
+      }
       final text = _draft.trim();
-      if (text.isEmpty || chat.conversation == null) return false;
+      if ((text.isEmpty && ids.isEmpty) || chat.conversation == null) {
+        return false;
+      }
       pending = {
         'operationId': superTabOperationId(),
         'command': {
@@ -414,21 +500,22 @@ class SwarmThread extends ChangeNotifier {
           'replyTo': root,
           'recipientIds': const <String>[],
           if (_alsoSend) 'alsoSend': true,
+          if (ids.isNotEmpty) 'attachmentIds': ids,
         },
       };
-      _sent = (draft: _draft, alsoSend: _alsoSend);
+      _sent = (draft: _draft, alsoSend: _alsoSend, files: outgoing);
       _draft = '';
       chat.setThreadDraft(root, '');
       _alsoSend = false;
+      // Only what goes with this reply: more may have been added meanwhile.
+      for (final file in outgoing) {
+        files.remove(file);
+      }
     }
     _pending = pending;
     sending = true;
     error = null;
     _tell();
-    // An answer that comes back after the thread closed, or after what it
-    // held was dropped, changes nothing: no text back in a box, no read.
-    final epoch = _epoch;
-    bool current() => !_disposed && epoch == _epoch;
     try {
       await reader.request(
         'POST',
@@ -443,6 +530,9 @@ class SwarmThread extends ChangeNotifier {
       // reply.
       final status = failure.statusCode;
       if (status >= 400 && status < 500 && status != 408 && status != 429) {
+        // A refusal of the files themselves sends them up once more; one of
+        // the reply leaves them uploaded.
+        if (failure.code.contains('ATTACHMENT')) _uploads.forget(pendingFiles);
         _pending = null;
         _restore();
       }
@@ -457,6 +547,7 @@ class SwarmThread extends ChangeNotifier {
       if (!_disposed) _tell();
     }
     if (!current()) return true;
+    _uploads.forget(pendingFiles);
     unawaited(reader.refresh());
     // On its way until a read brings it back: this one, or the chat's next.
     await chat.load();
@@ -466,13 +557,20 @@ class SwarmThread extends ChangeNotifier {
     return true;
   }
 
-  /// A refused reply's text back in the box, before anything typed since.
+  /// A refused reply's text and files back in the box, before anything
+  /// typed or added since.
   void _restore() {
     final sent = _sent;
     _sent = null;
     if (sent == null) return;
     draft = _draft.trim().isEmpty ? sent.draft : '${sent.draft}\n$_draft';
     _alsoSend = _alsoSend || sent.alsoSend;
+    if (sent.files.isNotEmpty) {
+      final since = files.files;
+      files
+        ..clear()
+        ..add([...sent.files, ...since]);
+    }
   }
 
   /// A reply moved between the box and the messages: both are told.
@@ -485,6 +583,10 @@ class SwarmThread extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _epoch++;
+    // An upload on its way stops; the files wait in the chat's box.
+    _uploads.close();
+    files.removeListener(_filesChanged);
+    chat.releaseThreadFiles(root, files);
     chat.removeListener(_chatChanged);
     reader.removeListener(_chatChanged);
     _composer.dispose();

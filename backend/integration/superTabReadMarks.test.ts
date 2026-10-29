@@ -17,6 +17,7 @@ import { swarmTransaction } from '../src/superTabs/cache.js'
 import { guardedWrite } from '../src/superTabs/parts/write.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { CATCH_UP_SCAN } from '../src/superTabs/catchUp.js'
+import { stableId } from '../src/superTabs/model.js'
 import { HostReads } from '../src/superTabs/read/host.js'
 import type { Conversation, SuperTabState } from '../src/superTabs/model.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
@@ -205,6 +206,24 @@ describe('catch-up summary (what the reader missed since their mark)', () => {
     // Another reader's tags and decisions are their own.
     expect((await catchUp(s.tabId, s.web, 1, peer)).body.data).toMatchObject({ decisions: 1,
       needsYou: { total: 1, items: [{ text: 'Peer, which font?' }] } })
+  })
+
+  // The #2213 merge with main (#2177): a task chat's copy of a Lead's notice stored before such copies were marked, whose Lead
+  // copy reached the Lead, is read by no one (pageReads.ts deliveredCopies). The summary leaves it out as the page does.
+  it('leaves out a task chat copy of a Lead notice that its Lead copy delivered, as the page does', async () => {
+    const s = await scene()
+    await write(s.tabId, s.web, [
+      { text: 'Read already' },
+      { text: 'COPY: "Avatars" lost its task. Owner, who takes it?', source: { kind: 'work-lost' }, mentions: [owner.sub] },
+      { text: 'Owner, which colour?', mentions: [owner.sub] },
+    ])
+    const copy = `${s.tabId}-${s.web}-m2`
+    await db.superTabMessage.create({ data: { id: stableId(copy, 'lead'), tabId: s.tabId, conversationId: 'lead', sequence: 1, author: lead,
+      text: 'COPY: "Avatars" lost its task.', recipientIds: ['lead-agent'], mentions: [], source: { kind: 'work-lost' } } })
+    const { status, body } = await catchUp(s.tabId, s.web, 1)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ unread: 1, needsYou: { total: 1, items: [{ messageId: `${s.tabId}-${s.web}-m3` }] } })
+    expect(JSON.stringify(body.data)).not.toContain('COPY')
   })
 
   it('says when the span is longer than one summary reads, and lists no status from its first part as current', async () => {

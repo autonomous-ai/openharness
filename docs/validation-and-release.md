@@ -42,11 +42,61 @@ PR CI is deliberately fast. Each changed component runs only its own Linux suite
 | anything else (docs, workflows, scripts, store) | `process-checks` only | about 1.5 min |
 
 `plan` (actionlint and suite selection), `process-checks` and `ci/required` always
-run; `ci/required` is the only required check. On a draft PR only those three run
+run (after **Update branch**, untouched components reuse their earlier result: see
+[Reuse after Update branch](#reuse-after-update-branch)); `ci/required` is the only required check. On a draft PR only those three run
 and `ci/required` stays blocked; marking the PR ready runs the component checks.
 Normal merges directly squash the reviewed head after successful PR CI. If GitHub
 requires a merge queue, its runs rerun only the three always-on jobs (about 2 minutes):
 the PR run already tested the change. Queue setup is not required to merge or release.
+
+### Reuse after Update branch
+
+When main moves after a PR's `ci/required` passed, **Update branch** merges main into
+the PR and CI runs again. The new run reuses the earlier result of each selected
+component whose inputs main's new commits left untouched, and runs the rest. `plan`,
+`process-checks` and `ci/required` always run, so an update that touches nothing a
+component reads passes in about two minutes instead of 7–15.
+
+A component's result is reused only when all of these hold; otherwise it runs as before:
+
+- The new head is a merge with exactly two parents: the earlier head, then a commit on
+  the PR's base branch. Any other commit, including one you push by hand, runs everything.
+- The earlier head's latest `ci/required` check passed. The planner follows that check
+  to its exact run and attempt, and reads that run's receipt. A component the run
+  itself reused points at the run where it last ran.
+- Nothing that differs between the tested commit and the new head is a component input:
+  its own directory (by the map above) or a file it reads elsewhere (`DEPENDS` in
+  `scripts/ci-plan.py`). `backend/integration/` and `cli/e2e/` (apart from
+  `cli/e2e/harness/`) are skipped because the PR jobs never read them. Each Swarm UI
+  style allowlist (`scripts/ui-style-allowlist/mobile.json`, `desktop.json`) is an input
+  of the component whose job checks it, and a PR that changes one runs that component.
+- No changed path is a shared input: `.github/`, `scripts/` (the planner and the merge
+  helper; apart from the two style allowlists above), `Makefile`, `.gitattributes`, `.gitignore`, `.gitmodules`, any lockfile or
+  toolchain pin, or any path outside a component other than `docs/` (but `docs/images/`
+  counts) and top-level `.md` files. A shared change reruns every component.
+- The PR itself changes no workflow, script, `Makefile` or Git setting: PR CI runs the
+  PR's own planner.
+- Every GitHub read succeeded within a minute. The plan job has read-only `actions`
+  and `checks` access for these reads.
+
+The `ci/required` receipt lists each reused component with its run id, attempt, link,
+tested commit and tree, and the reason. The run summary also says why each other
+component ran again. `make merge-pr` loads the planner from main's tree, the reviewed
+base, and uses it to re-derive every reuse from Git and from the runs it names. In the
+reviewed checkout it also scans the reused component's sources for reads `DEPENDS` is
+missing: relative paths (`../backend/...`) and quoted paths from the repository root
+(`ROOT / 'cli/src/cable/serial.ts'`), outside comments. A path that could name a file inside
+the component and also a real path elsewhere counts as a read of both, so a look-alike file
+cannot hide a read; every path main changed, deleted ones included, counts as existing, so a
+read of a deleted file is still a read. Strings that only look like paths (test data, scripts
+run by hand) are listed with a reason in `NOT_READS`; a path built from parts must be
+declared by hand. It refuses to merge on any mismatch, or when main's copy cannot verify reuse.
+To run everything again, push a commit to the PR.
+
+`make merge-pr` itself runs from the PR checkout. Any change to the merge helper or the
+planner (`scripts/merge-validated-pr.py`, `scripts/queue-validated-pr.py`,
+`scripts/ci-plan.py`, `scripts/record-ci-validation.py`) needs two independent
+security reviews before it merges.
 
 The `plan` and `ci/required` jobs run `scripts/ci-plan.py` from the PR head. A branch
 created before #991 still carries the old planner, which expects removed jobs and
