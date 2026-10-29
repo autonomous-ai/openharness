@@ -167,6 +167,8 @@ const RECAP_FRAME_MAX = 6 * 1024
 /** Repeats of one Lead's recap request inside this are ignored; a device that picks another stale announce within this is not followed. */
 const RECAP_REPEAT_MS = 1000
 const PICK_ECHO_MS = 2000
+/** Cards still not read this long after attach: the dial is told there are none, not left on a list nobody vouches for. */
+const CARDS_UNREAD_MS = 10_000
 /** The recap frame, its text shortened (on a character) until the whole JSON fits what the Pro reads. A chat's recap names
  *  its chat (`chatId`), for a round dial that speaks swarmChat; any other is today's frame. */
 export function recapFrame(r: LeadRecap): Message {
@@ -2683,6 +2685,7 @@ export class CableSession {
   /** Each Swarm's `supertab` frame as the Pro was last sent it, and the ids list: only a difference is sent again. */
   private readonly cardKeys = new Map<string, string>()
   private cardIdsKey = ''
+  private cardsUnread: ReturnType<typeof setTimeout> | null = null
   private cardTimer: ReturnType<typeof setTimeout> | null = null
   /** The Lead whose recap the Pro has open: the only one a changed text is pushed for. */
   private openLead: { tabId: string; leadId: string } | null = null
@@ -2736,6 +2739,8 @@ export class CableSession {
   private dropCards(): void {
     if (this.cardTimer) clearTimeout(this.cardTimer)
     this.cardTimer = null
+    if (this.cardsUnread) clearTimeout(this.cardsUnread)
+    this.cardsUnread = null
     this.cardKeys.clear()
     this.cardIdsKey = ''
     this.focusedKey = ''
@@ -2777,7 +2782,21 @@ export class CableSession {
     // its face, onto TABS, 2 s before the real list came (Diego, 2026-10-29). Empty only ever means no Swarms, as it does for
     // a host with no cards at all.
     const read = this.host.swarmCards ? this.host.swarmCards() : []
-    if (!read) return
+    if (!read) {
+      // Bounded: a daemon that came back signed out never reads them, and a dial that kept its link would show the old
+      // Swarms on. After CARDS_UNREAD_MS it is told there are none; the real list replaces that whenever it comes.
+      if (force && !this.cardsUnread) {
+        this.cardsUnread = setTimeout(() => {
+          this.cardsUnread = null
+          if (this.host.swarmCards?.() || this.cardIdsKey) return
+          this.cardIdsKey = '[]'
+          this.queued(async () => { await this.send({ t: 'supertabs', ids: [] }) }).catch((err) => this.log(`cable: swarm cards failed (${(err as Error).message})`))
+        }, CARDS_UNREAD_MS)
+        this.cardsUnread.unref?.()
+      }
+      return
+    }
+    if (this.cardsUnread) { clearTimeout(this.cardsUnread); this.cardsUnread = null }
     const cards = read.slice(0, SWARM_CARDS_MAX)
     const desk = this.host.listSwarms().swarms
     const ids = JSON.stringify(cards.map((c) => c.id))
