@@ -58,12 +58,15 @@ const reserved = (name: string): boolean => BUDDY_RESERVED.has(nameKey(name).rep
 /** A name chosen in a Buddy chat, as the store reads every Buddy chat's, quiet ones included (store.ts buddyNames). */
 export interface ChosenBuddyName { conversationId: string; name: string }
 
-/** Whether [name] for [chat]'s Buddy is someone else's: another agent's name (the PM's included), a person's, another
- *  person's default Buddy name, or a name chosen in another Buddy chat, loaded or listed by the store in [chosen]. */
+/** Whether [name] for [chat]'s Buddy is someone else's: another agent's name (the PM's included) or one still starting, a
+ *  person's, another person's default Buddy name, or a name chosen in another Buddy chat, loaded or listed by the store in
+ *  [chosen]. Two commands claiming a name never both pass: each touches the head part (parts/touches.ts). */
 function nameTaken(state: SuperTabState, chat: Conversation, name: string, chosen: readonly ChosenBuddyName[]): boolean {
   const owner = chat.audience?.people[0]?.id
   const others = [
     ...state.agents.filter(a => !chat.agentIds.includes(a.id)).map(a => agentDisplayName(state.agents, a.id) ?? a.name),
+    // An agent still starting has its name already (review of #2094): its own Buddy's start excepted.
+    ...(state.starts ?? []).filter(st => !st.harnessId && !st.error && st.request.conversationId !== chat.id).map(st => st.request.name),
     ...state.people.map(p => p.email.split('@')[0]!),
     ...state.people.filter(p => p.id !== owner).map(defaultBuddyName),
     ...state.conversations.filter(c => isBuddyChat(c) && c.id !== chat.id && c.buddyName).map(c => c.buddyName!),

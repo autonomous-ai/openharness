@@ -201,6 +201,29 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
     await rename(f, mine, 'Fennel')
   })
 
+  it('refuses the name of an agent still starting (review of #2094)', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'agent.start', request: { conversationId: 'lead', machineId: 'peer-mac', engine: 'claude', name: 'Sparky', cwd: '/swarm/lead',
+      worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } } as Command, peer)
+    const mine = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    await expect(rename(f, mine, 'sparky')).rejects.toThrow('taken')
+  })
+
+  it('two people naming their Buddies alike at the same moment, on two servers: one wins, the other is refused (review of #2094)', async () => {
+    const f = await swarm()
+    const ours = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    const theirs = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, owner)).result.conversationId)
+    const other = new SuperTabStore(db, () => Date.now())
+    const settled = await Promise.allSettled([
+      f.store.execute(peer, f.tab, { operationId: randomUUID(), command: { type: 'buddy.rename', conversationId: ours, name: 'Sparky' } }),
+      other.execute(owner, f.tab, { operationId: randomUUID(), command: { type: 'buddy.rename', conversationId: theirs, name: 'Sparky' } }),
+    ])
+    expect(settled.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect(String((settled.find(r => r.status === 'rejected') as PromiseRejectedResult).reason)).toContain('taken')
+    const named = await db.swarmGroup.findMany({ where: { tabId: f.tab, key: { in: [ours, theirs] } }, select: { data: true } })
+    expect(named.filter(g => (g.data as { buddyName?: string }).buddyName === 'Sparky')).toHaveLength(1)
+  })
+
   it('goes back to the default when cleared, and is kept when the Buddy is removed and added again', async () => {
     const f = await swarm()
     const first = await buddy(f)
