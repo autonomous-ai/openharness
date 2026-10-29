@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -76,7 +77,24 @@ void main() {
         swarm: () => modelsSwarm(membersSwarm()),
         size: const Size(1300, 1000),
       );
+      // Codex's mark is a picture, which a test decodes only when asked.
+      await tester.runAsync(
+        () => precacheImage(
+          const AssetImage('assets/engine-icons/codex.png'),
+          tester.element(find.byKey(const ValueKey('super-models-heading'))),
+        ),
+      );
+      await tester.pumpAndSettle();
       await captureWindow(tester, shots, 'members-$name');
+      // A Models row's hover line.
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: Offset.zero);
+      await mouse.moveTo(
+        tester.getCenter(find.byKey(const ValueKey('super-model-Opus 5.5'))),
+      );
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureWindow(tester, shots, 'models-hover-$name');
+      await mouse.removePointer();
       await tester.pumpWidget(const SizedBox());
     }
   }, skip: shots == null);

@@ -10,6 +10,8 @@ const names = [
   'Hugo', 'Indigo', 'Jasper', 'Lark', 'Milo', 'Nico', 'Quinn', 'River',
 ]
 const defaults = /^(?:lead|builder|agent|new agent|product manager|engineer|pm|dev)(?:[\s#-]+\d+)?$/i
+/** A role's name, never a member's: an agent named so is given a member name instead (assignAgentDisplayNames). */
+export const isRoleName = (name: string): boolean => defaults.test(name.trim())
 const automatic = /^(?:claude|codex|pi|agent)-\d{4}-\d{2}-\d{2}(?:[-T].*)?$/i
 
 function chosen(agent: NamedAgent): string | undefined {

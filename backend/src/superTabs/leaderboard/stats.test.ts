@@ -313,6 +313,18 @@ describe('Models: temporary workers by engine, model and effort, never by agent 
     expect(model(view, 'opus').firstReview).toEqual({ reviewed: 3, passed: 2 })
   })
 
+  it('counts each model\'s attempts of the week, reviewed or not, never a review group\'s or another week\'s', () => {
+    const view = board(swarm(), [
+      group({ status: 'working', ledger: { runs: [run('a1', WEEK, 'opus', 'high', { firstReview: true }), run('a2', WEEK + HOUR),
+        run('a3', LAST), run('a4', WEEK + 2 * HOUR, 'gpt-6.1', 'medium')] } }),
+      group({ status: 'done', ledger: { runs: [run('b1', WEEK + 3 * HOUR)] } }),
+      // A review group's attempts are reviews, not tasks.
+      group({ status: 'done', reviewOf: 'g0', ledger: { runs: [run('c1', WEEK + HOUR, 'gpt-6.1', 'medium')] } }),
+    ])
+    expect(model(view, 'opus').attempts).toBe(3)
+    expect(model(view, 'gpt-6.1', 'medium').attempts).toBe(1)
+  })
+
   it('gives a reviewer model 1 point per finished review verdict of the week', () => {
     const counted = (week: number, count: number) => ({ week, engine: 'codex', model: 'gpt-5.5', effort: 'medium', count })
     const view = board(swarm(), [group({ status: 'review', ledger: { reviews: [counted(LAST, 1), counted(WEEK, 2)] } }),

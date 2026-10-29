@@ -69,6 +69,8 @@ export interface ModelScore {
   /** SHIPPED_POINTS per request it shipped this week, REVIEW_POINTS per review verdict it gave. */
   points: number
   rank: number
+  /** This week's attempts on it at requests, never reviews: its share of the week's tasks (Dee, 2026-10-29). */
+  attempts: number
   /** Requests its attempt shipped this week; median times to ship from that attempt's assignment, and from the request's first. */
   shipped: { count: number; medianAttemptMs: number | null; medianRequestMs: number | null }
   /** This week's attempts on it with a first review on record, and how many passed it. */
