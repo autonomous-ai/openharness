@@ -67,6 +67,16 @@ describe('live cards', () => {
     expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: card.id, mergedAt: 1000 }])
   })
 
+  it('keeps the first merge when one is recorded again, and posts nothing more', () => {
+    const f = fixture()
+    const id = f.create().result.conversationId as string
+    const card = f.post(id, `Opened ${PR}`, f.as(f.add('Kai', id)))
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 900 })
+    const again = f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: PR }, f.as(f.lead), { now: 2000 })
+    expect(again.messages).toEqual([])
+    expect(f.group(id).cards?.pullRequests).toEqual([{ url: PR, messageId: card.id, mergedAt: 900 }])
+  })
+
   it('makes the merged line the card of a pull request no message linked yet', () => {
     const f = fixture()
     const id = f.create().result.conversationId as string

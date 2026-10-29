@@ -37,8 +37,9 @@ export function bindPullRequestCards(group: Conversation, message: MessageDraft)
 export const pullRequestCard = (group: Conversation, url: string): PullRequestCard | undefined =>
   group.cards?.pullRequests?.find(card => card.url === url)
 
-/** A merge of [url] was recorded at [mergedAt]: its card shows it, even to a reader whose computer cannot read GitHub. */
+/** A merge of [url] was recorded at [mergedAt]: its card shows it, even to a reader whose computer cannot read GitHub. The
+ *  earliest record stands, as the leaderboard's does (leaderboard/record.ts recordMerged). */
 export function recordCardMerged(group: Conversation, url: string, mergedAt: number): void {
   const card = pullRequestCard(group, url)
-  if (card) card.mergedAt = mergedAt
+  if (card) card.mergedAt = Math.min(card.mergedAt ?? mergedAt, mergedAt)
 }
