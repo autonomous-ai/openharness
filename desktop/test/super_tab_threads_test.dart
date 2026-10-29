@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
@@ -127,6 +131,217 @@ void main() {
     expect(panel(), findsNothing);
   });
 
+  testWidgets('lost access closes the thread and forgets its rows and '
+      'summaries', (tester) async {
+    final c = await show(tester, threaded());
+    await tester.tap(line('message-1'));
+    await tester.pumpAndSettle();
+    expect(panel(), findsOneWidget);
+    c.revokeAccess('Access removed.');
+    await tester.pumpAndSettle();
+    expect(panel(), findsNothing);
+    expect(c.openedThread, isNull);
+    expect(c.threadMessages('message-1'), isEmpty);
+    expect(c.thread('lead', 'message-1'), isNull);
+    expect(find.text('Agreed.'), findsNothing);
+  });
+
+  testWidgets('a thread read answered after access was lost is dropped', (
+    tester,
+  ) async {
+    final server = threaded();
+    final c = await show(tester, server);
+    server.holdReads = Completer<void>();
+    await tester.tap(line('message-1'));
+    await tester.pump();
+    c.revokeAccess('Access removed.');
+    // The answer arrives as the thread is reopened, before the next frame.
+    c.openedThread = (conversationId: 'lead', root: 'message-1');
+    server.holdReads!.complete();
+    server.holdReads = null;
+    await tester.pumpAndSettle();
+    c.openedThread = null;
+    expect(c.threadMessages('message-1'), isEmpty);
+    expect(c.thread('lead', 'message-1'), isNull);
+  });
+
+  testWidgets('a long thread reads back on opening, and "Show earlier '
+      'replies" reads the rest', (tester) async {
+    final server = threaded()..messagePage = 2;
+    for (var i = 1; i <= 12; i++) {
+      server.append('Reply $i');
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1'
+        ..['author'] = peer;
+    }
+    final c = await show(tester, server);
+    // The root is older than the chat's newest page.
+    c.openThread('message-1');
+    await tester.pumpAndSettle();
+    List<String> texts() =>
+        c.threadMessages('message-1').map((m) => m.text).toList();
+    // Five pages of two, newest first, and the root read on its own.
+    expect(texts().first, 'Should we do thread replies?');
+    expect(texts(), containsAllInOrder(['Reply 3', 'Reply 12']));
+    expect(texts(), isNot(contains('Reply 2')));
+    final earlier = find.byKey(const ValueKey('super-thread-earlier'));
+    for (var i = 0; i < 5 && earlier.evaluate().isNotEmpty; i++) {
+      await tester.ensureVisible(earlier);
+      await tester.tap(earlier);
+      await tester.pumpAndSettle();
+    }
+    expect(earlier, findsNothing);
+    expect(
+      texts(),
+      containsAllInOrder([
+        'Should we do thread replies?',
+        'Yes, like Slack.',
+        'Agreed.',
+        'Reply 1',
+        'Reply 12',
+      ]),
+    );
+    expect(texts(), hasLength(15));
+  });
+
+  testWidgets('review: revoking access removes the open thread content', (
+    tester,
+  ) async {
+    final c = await show(tester, threaded());
+    await tester.tap(line('message-1'));
+    await tester.pumpAndSettle();
+    expect(inPanel(find.text('Agreed.')), findsOneWidget);
+    c.revokeAccess('Access removed');
+    await tester.pumpAndSettle();
+    expect(find.text('Agreed.'), findsNothing);
+    expect(panel(), findsNothing);
+    expect(c.threadMessages('message-1'), isEmpty);
+  });
+
+  testWidgets('review: an older thread reply remains reachable', (
+    tester,
+  ) async {
+    final server = threaded()..messagePage = 3;
+    // Keep the root in the main feed while the thread exceeds a page.
+    final c = await show(tester, server);
+    await c.loadMessages('lead', older: true);
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 8; i++) {
+      server.append('Later thread reply $i');
+      server.messages.last
+        ..['thread'] = 'message-1'
+        ..['replyTo'] = 'message-1'
+        ..['author'] = peer;
+    }
+    c.openThread('message-1');
+    await tester.pumpAndSettle();
+    // A thread needs a way to read replies between the cached page and its
+    // newest page.
+    expect(
+      c
+          .threadMessages('message-1')
+          .any((m) => m.text == 'Later thread reply 0'),
+      isTrue,
+    );
+  });
+
+  testWidgets('review: reply line exposes an accessible activation', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: SuperTabThreadLine(
+            thread: SuperTabThread.fromJson({
+              'id': 'root',
+              'replies': 2,
+              'lastSequence': 4,
+              'authors': [],
+              'people': [],
+            }),
+            unread: true,
+            onOpen: () {},
+          ),
+        ),
+      ),
+    );
+    final node = tester.getSemantics(
+      find.bySemanticsLabel('2 replies, unread'),
+    );
+    expect(node.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    // Released inside the test: Flutter checks for a live handle before
+    // tear-down runs.
+    semantics.dispose();
+  });
+
+  testWidgets('the reply line and "Replied in thread" are reached by Tab and '
+      'open the thread with Enter or Space', (tester) async {
+    final c = await show(tester, threaded(alsoSend: true));
+    Future<void> focus(Finder link) async {
+      final node = Focus.of(
+        tester.element(
+          find.descendant(of: link, matching: find.byType(Text)).first,
+        ),
+      );
+      node.requestFocus();
+      await tester.pump();
+      expect(node.hasFocus, isTrue);
+    }
+
+    await focus(line('message-1'));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, 'message-1');
+    c.closeThread();
+    await tester.pumpAndSettle();
+
+    await focus(find.byKey(const ValueKey('super-thread-also-message-3')));
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(c.openedThread?.root, 'message-1');
+  });
+
+  testWidgets('the reply line is a button assistive technology can press', (
+    tester,
+  ) async {
+    final handle = tester.ensureSemantics();
+    var opened = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: grid.buildAppTheme(brightness: Brightness.light),
+        home: Scaffold(
+          body: SuperTabThreadLine(
+            thread: SuperTabThread.fromJson({
+              'id': 'm1',
+              'replies': 2,
+              'lastSequence': 3,
+              'authors': [peer],
+              'people': ['peer'],
+            }),
+            unread: true,
+            onOpen: () => opened++,
+          ),
+        ),
+      ),
+    );
+    final node = find.semantics.byLabel('2 replies, unread');
+    expect(node, findsOne);
+    expect(
+      tester.getSemantics(find.bySemanticsLabel('2 replies, unread')),
+      isSemantics(
+        isButton: true,
+        hasTapAction: true,
+        label: '2 replies, unread',
+      ),
+    );
+    tester.semantics.tap(node);
+    expect(opened, 1);
+    handle.dispose();
+  });
+
   testWidgets('in a window too narrow for the side, the thread opens over '
       'the chat and a click beside it closes it', (tester) async {
     await show(tester, threaded());
@@ -147,10 +362,7 @@ void main() {
     final c = await show(tester, server);
     await tester.tap(line('message-1'));
     await tester.pumpAndSettle();
-    expect(
-      inPanel(find.text('Also send to the project chat')),
-      findsOneWidget,
-    );
+    expect(inPanel(find.text('Also send to the project chat')), findsOneWidget);
     await tester.enterText(
       find.byKey(const ValueKey('super-thread-composer')),
       'In the thread only.',
@@ -194,10 +406,7 @@ void main() {
     server.messages.last['thread'] = null;
     await show(tester, server);
     await tester.tap(
-      find.descendant(
-        of: row('message-4'),
-        matching: find.byTooltip('Reply'),
-      ),
+      find.descendant(of: row('message-4'), matching: find.byTooltip('Reply')),
       warnIfMissed: false,
     );
     await tester.pumpAndSettle();
@@ -207,10 +416,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(
-      find.descendant(
-        of: row('message-5'),
-        matching: find.byTooltip('Reply'),
-      ),
+      find.descendant(of: row('message-5'), matching: find.byTooltip('Reply')),
       warnIfMissed: false,
     );
     await tester.pumpAndSettle();

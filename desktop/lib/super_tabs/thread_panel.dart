@@ -169,6 +169,26 @@ class _SuperTabThreadPanelState extends State<SuperTabThreadPanel> {
                         ],
                       ),
                     ),
+                  if (c.hasEarlierReplies(widget.root))
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: grid.AppDesktop.controlGap,
+                        ),
+                        child: TextButton(
+                          key: const ValueKey('super-thread-earlier'),
+                          onPressed: c.readingEarlierReplies
+                              ? null
+                              : () => unawaited(c.loadThread(earlier: true)),
+                          child: Text(
+                            c.readingEarlierReplies
+                                ? 'Loading earlier replies…'
+                                : 'Show earlier replies',
+                          ),
+                        ),
+                      ),
+                    ),
                   for (final (index, reply) in replies.indexed)
                     widget.row(
                       reply,

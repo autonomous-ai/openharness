@@ -347,6 +347,7 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                     key: ValueKey(
                                       'super-thread-also-${message.id}',
                                     ),
+                                    label: 'Replied in thread, open thread',
                                     onTap: widget.onOpenThread!,
                                     child: Text(
                                       'Replied in thread',
@@ -575,22 +576,57 @@ class SuperTabMessageHighlight extends StatelessWidget {
   }
 }
 
-/// A quiet text link: a hand cursor and the whole label as its target.
-class SuperTabLink extends StatelessWidget {
-  const SuperTabLink({super.key, required this.onTap, required this.child});
+/// A quiet link in a message: a hand cursor, reached by Tab and pressed with
+/// Enter or Space, and a button with [label] to assistive technology. Focus
+/// draws the shared rim, reserved at rest so it never moves the words.
+class SuperTabLink extends StatefulWidget {
+  const SuperTabLink({
+    super.key,
+    required this.onTap,
+    required this.label,
+    required this.child,
+  });
 
   final VoidCallback onTap;
+  final String label;
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => MouseRegion(
-    cursor: SystemMouseCursors.click,
-    child: GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: child,
-    ),
-  );
+  State<SuperTabLink> createState() => _SuperTabLinkState();
+}
+
+class _SuperTabLinkState extends State<SuperTabLink> {
+  var _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final radius = BorderRadius.circular(DesktopChrome.controlRadius);
+    return Semantics(
+      button: true,
+      label: widget.label,
+      child: InkWell(
+        onTap: widget.onTap,
+        onFocusChange: (focused) => setState(() => _focused = focused),
+        mouseCursor: SystemMouseCursors.click,
+        borderRadius: radius,
+        hoverColor: Colors.transparent,
+        focusColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        splashFactory: NoSplash.splashFactory,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            border: Border.all(
+              color: _focused ? DesktopChrome.focusRing : Colors.transparent,
+              width: grid.AppDesktop.focusWidth,
+            ),
+          ),
+          child: ExcludeSemantics(child: widget.child),
+        ),
+      ),
+    );
+  }
 }
 
 /// The line under a thread's root: who replied, how many replies, and when
@@ -614,44 +650,40 @@ class SuperTabThreadLine extends StatelessWidget {
     final last = thread.lastAt;
     return Padding(
       padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
-      child: Semantics(
-        button: true,
+      child: SuperTabLink(
         label: unread ? '$count, unread' : count,
-        excludeSemantics: true,
-        child: SuperTabLink(
-          onTap: onOpen,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final author in thread.authors) ...[
-                SuperTabAvatar(
-                  identity: '${author['kind']}:${author['id']}',
-                  name: author['kind'] == 'agent'
-                      ? (author['displayName'] ?? author['name'] ?? 'Agent')
-                            as String
-                      : superTabPersonName(author['name'] as String? ?? ''),
-                  size: grid.AppDesktop.iconSize,
-                  pattern: author['kind'] == 'agent',
-                ),
-                const SizedBox(width: grid.AppDesktop.menuInset),
-              ],
-              Text(
-                count,
-                key: ValueKey('super-thread-count-${thread.id}'),
-                style: DesktopChrome.control(color: DesktopChrome.accent)
-                    .copyWith(
-                      fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
-                    ),
+        onTap: onOpen,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final author in thread.authors) ...[
+              SuperTabAvatar(
+                identity: '${author['kind']}:${author['id']}',
+                name: author['kind'] == 'agent'
+                    ? (author['displayName'] ?? author['name'] ?? 'Agent')
+                          as String
+                    : superTabPersonName(author['name'] as String? ?? ''),
+                size: grid.AppDesktop.iconSize,
+                pattern: author['kind'] == 'agent',
               ),
-              if (last != null) ...[
-                const SizedBox(width: grid.AppDesktop.controlGap),
-                Text(
-                  'Last reply ${superTabAgo(DateTime.now().difference(last))}',
-                  style: DesktopChrome.metadata(),
-                ),
-              ],
+              const SizedBox(width: grid.AppDesktop.menuInset),
             ],
-          ),
+            Text(
+              count,
+              key: ValueKey('super-thread-count-${thread.id}'),
+              style: DesktopChrome.control(color: DesktopChrome.accent)
+                  .copyWith(
+                    fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                  ),
+            ),
+            if (last != null) ...[
+              const SizedBox(width: grid.AppDesktop.controlGap),
+              Text(
+                'Last reply ${superTabAgo(DateTime.now().difference(last))}',
+                style: DesktopChrome.metadata(),
+              ),
+            ],
+          ],
         ),
       ),
     );

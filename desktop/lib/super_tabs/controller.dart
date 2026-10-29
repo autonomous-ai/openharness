@@ -365,6 +365,9 @@ class SuperTabController extends ChangeNotifier {
 
   /// Each thread's rows as its own read brought them.
   final _threadRows = <String, List<SuperTabMessage>>{};
+
+  /// Where each thread's earlier replies continue, while there are more.
+  final _threadBefore = <String, Map<String, dynamic>>{};
   final _threadDrafts = <String, String>{};
 
   /// The thread open beside the chat.
@@ -785,8 +788,29 @@ class SuperTabController extends ChangeNotifier {
     return null;
   }
 
+  /// Forgets what was read of threads in conversations [keep] refuses (all,
+  /// without it), as the transcript is forgotten when access goes.
+  void _forgetThreads([bool Function(String conversationId)? keep]) {
+    bool gone(String id) => keep == null || !keep(id);
+    _threads.removeWhere((id, _) => gone(id));
+    final roots = {
+      for (final MapEntry(key: root, value: rows) in _threadRows.entries)
+        if (rows.any((m) => gone(m.conversationId))) root,
+    };
+    _threadRows.removeWhere((root, _) => roots.contains(root));
+    _threadBefore.removeWhere((root, _) => roots.contains(root));
+    if (openedThread case final open? when gone(open.conversationId)) {
+      openedThread = null;
+    }
+  }
+
+  /// Whether [root]'s thread has replies before those read.
+  bool hasEarlierReplies(String root) => _threadBefore.containsKey(root);
+  bool readingEarlierReplies = false;
+
   /// Opens [root]'s thread of the selected conversation beside the chat.
   void openThread(String root) {
+    if (accessRevoked) return;
     openedThread = (conversationId: selectedId, root: root);
     _seeThread(root);
     _changed();
@@ -802,31 +826,88 @@ class SuperTabController extends ChangeNotifier {
   String threadDraft(String root) => _threadDrafts[root] ?? '';
   void setThreadDraft(String root, String text) => _threadDrafts[root] = text;
 
-  /// Reads the open thread: its root and its newest replies.
-  // ponytail: the newest 100 replies; page back when a thread outgrows that.
-  Future<void> loadThread() async {
+  /// How many pages a thread reads when it opens; past them "Show earlier
+  /// replies" reads on, a page at a time.
+  static const threadPagesOnOpen = 5;
+
+  /// Reads the open thread: from its newest reply back through
+  /// [threadPagesOnOpen] pages, or with [earlier] the page before those read,
+  /// and its root when no page brought it.
+  Future<void> loadThread({bool earlier = false}) async {
     final open = openedThread;
     if (open == null || _disposed || accessRevoked) return;
+    if (earlier && (!hasEarlierReplies(open.root) || readingEarlierReplies)) {
+      return;
+    }
+    final path = _messagesPath(open.conversationId);
+    final thread = Uri.encodeQueryComponent(open.root);
+    // Still open, still readable: an answer that comes back after access went
+    // or the thread closed is not kept.
+    bool current() =>
+        !_disposed &&
+        !accessRevoked &&
+        openedThread == open &&
+        snapshot?.conversation(open.conversationId) != null;
+    List<SuperTabMessage> rowsOf(Map<String, dynamic> page) => [
+      for (final row in page['messages'] as List)
+        if (SuperTabMessage.fromJson(superTabMap(row)) case final m
+            when m.conversationId == open.conversationId &&
+                m.thread == open.root)
+          m,
+    ];
+    readingEarlierReplies = earlier;
     try {
-      final answer = await request(
-        'GET',
-        '${_messagesPath(open.conversationId)}?thread=${Uri.encodeQueryComponent(open.root)}',
-      );
-      if (_disposed || openedThread != open) return;
-      _threadRows[open.root] = [
-        for (final row in answer['messages'] as List)
-          if (SuperTabMessage.fromJson(superTabMap(row)) case final m
-              when m.conversationId == open.conversationId &&
-                  m.thread == open.root)
-            m,
-      ];
-      _keepThreads(open.conversationId, answer['threads']);
+      final rows = {
+        if (earlier)
+          for (final m in _threadRows[open.root] ?? const <SuperTabMessage>[])
+            m.id: m,
+      };
+      Map<String, dynamic>? from = earlier ? _threadBefore[open.root] : null;
+      Object? threads;
+      for (var page = 0; page < (earlier ? 1 : threadPagesOnOpen); page++) {
+        final answer = await request(
+          'GET',
+          from == null
+              ? '$path?thread=$thread'
+              : '$path?thread=$thread&before=${from['sequence']}&beforeId=${Uri.encodeQueryComponent(from['id'] as String)}',
+        );
+        if (!current()) return;
+        threads ??= answer['threads'];
+        for (final m in rowsOf(answer)) {
+          rows[m.id] = m;
+        }
+        from = answer['next'] is Map ? superTabMap(answer['next']) : null;
+        if (from == null) break;
+      }
+      // A long thread's pages read so far start after its root.
+      if (!rows.containsKey(open.root) &&
+          !(_messages[open.conversationId] ?? const []).any(
+            (m) => m.id == open.root,
+          )) {
+        final root = await request(
+          'GET',
+          '$path?messageId=${Uri.encodeQueryComponent(open.root)}',
+        );
+        if (!current()) return;
+        for (final m in rowsOf(root)) {
+          if (m.id == open.root) rows[m.id] = m;
+        }
+      }
+      _threadRows[open.root] = rows.values.toList();
+      if (from == null) {
+        _threadBefore.remove(open.root);
+      } else {
+        _threadBefore[open.root] = from;
+      }
+      _keepThreads(open.conversationId, threads);
       _seeThread(open.root);
       _changed();
     } catch (failure) {
-      if (_disposed) return;
+      if (!current()) return;
       _readFailure(failure, revokeTab: false);
       _changed();
+    } finally {
+      if (earlier) readingEarlierReplies = false;
     }
   }
 
@@ -1154,6 +1235,7 @@ class SuperTabController extends ChangeNotifier {
     _messages.clear();
     _quoted.clear();
     _quoting.clear();
+    _forgetThreads();
     _rows.clear();
     _before.clear();
   }
@@ -1187,6 +1269,7 @@ class SuperTabController extends ChangeNotifier {
     _forgetNewer();
     _quoted.clear();
     _quoting.clear();
+    _forgetThreads();
     _sent.clear();
     _refused.clear();
     _poll?.cancel();
@@ -1770,6 +1853,7 @@ class SuperTabController extends ChangeNotifier {
         _messages.removeWhere((id, _) => !allowed.contains(id));
         _quoted.removeWhere((id, _) => !allowed.contains(id));
         _quoting.removeWhere((id, _) => !allowed.contains(id));
+        _forgetThreads(allowed.contains);
         _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => removed.contains(id));
         _attachments.removeWhere((id, files) {
@@ -2150,6 +2234,7 @@ class SuperTabController extends ChangeNotifier {
       _forgetNewer();
       _quoted.clear();
       _quoting.clear();
+      _forgetThreads();
       _poll?.cancel();
     }
   }
