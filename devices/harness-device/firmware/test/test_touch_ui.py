@@ -228,7 +228,7 @@ swarm_parts = {
     # with the last `swarms` list it keeps beside it
     'swarms_apply': source[source.index('// The last `swarms` list as it came'):source.index('void ui_swarms_replace(')],
 }
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'voice_lead', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'face_buddy_dots', 'face_buddy_avatar', 'render_buddy_empty', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'swarm_core', 'swarm_voice_id', 'voice_lead', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'mix_black', 'face_buddy_disc', 'face_buddy_ring', 'face_buddy_dots', 'face_buddy_avatar', 'render_buddy_empty', 'render_swarm_face', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'swarms_apply', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += swarm_parts[name] if name in swarm_parts else function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -311,7 +311,7 @@ static void dispatch(action_t a) {
     } else if (a.kind == A_SELECT_EXTEND) ht_selection_extend(&selection,3000);
 }
 '''
-code += function('habitat_touch') + function('habitat_touch_cancel') + function('habitat_next_wake_ms')
+code += function('swarm_scroll_reportable') + function('habitat_touch') + function('habitat_touch_cancel') + function('habitat_next_wake_ms')
 code += 'static bool audio_client_active(void);\n' + function('ui_boot_pressed')
 code += r'''
 static ht_scene_t scene;
@@ -1559,11 +1559,14 @@ static void swarm_pane_checks(const char *dir) {
         assert(asking_n && done_n && other);
         openharness_card(); card_send();
     }
-    // 2e "backend" on someone else's machine, working: "Working…" and no time; a tap on the face talks to nobody.
+    // 2e "backend" on someone else's machine, working: "Working…" and no time. A tap on the face talks to it by its Swarm
+    // id, to a daemon that posts such words in its chat (Diego's dial, 2026-10-29); to an older one, to nobody.
     enter_at("s1", "L4"); assert(title_is("backend") && scene_says("Working") && !scene_says(":"));
     FOCUS_PAGE("swarm-2e");
     // (the real dispatch drops a face voice turn with no recipient: test_voice_ui.py)
     assert(!make_action((hit_t){.action = A_VOICE}).id[0]);
+    { uint32_t was = host_features; host_features |= CABLE_FEATURE_SWARM_REMOTE;
+      assert(!strcmp(make_action((hit_t){.action = A_VOICE}).id, "L4")); host_features = was; }
     enter_at("s1", "L0"); assert(!strcmp(make_action((hit_t){.action = A_VOICE}).id, "h0"));
     tap(fake_ms, 233, 260); assert(!strcmp(target, "h0")); dispatch((action_t){.kind = A_VOICE_ABORT});
     enter_at("s1", "L4");
@@ -2016,6 +2019,12 @@ static void buddy_setup(void) {
 static void swipe_v(int from_y, int to_y) {
     fake_ms += 1000; habitat_touch(true, 233, from_y, fake_ms); habitat_touch(false, 233, to_y, fake_ms + 120); scene_take();
 }
+// A drag: held 660 ms, moving all the while, as a reading thumb does.
+static void drag_v(int from_y, int to_y) {
+    fake_ms += 1000; habitat_touch(true, 233, from_y, fake_ms);
+    for (int i = 1; i <= 10; i++) habitat_touch(true, 233, from_y + (to_y - from_y) * i / 10, fake_ms + 60 * (uint32_t)i);
+    habitat_touch(false, 233, to_y, fake_ms + 660); scene_take();
+}
 static void swipe_up(void) { swipe_v(330, 150); }
 static void swipe_down(void) { swipe_v(150, 330); }
 static void swipe_next(void) {
@@ -2055,6 +2064,20 @@ static bool avatar(void) {
     if (!a || !disc_at(233, a->y + 25, 92, 0x221b19)) return false;
     return !card_top() || a->y + 25 + 46 + 8 <= card_top();
 }
+// Nothing written in the middle of the glass under the avatar's disc and its 8 px: "Tap the name to switch panes" stood
+// under it with no recap (Diego's dial, 2026-10-29).
+static bool clear_of_text(void) {
+    const ht_run_t *a = avatar_sprite();
+    if (!a) return false;
+    int bottom = a->y + 25 + 46 + 8;
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        if (!r->text[0] || r->arc || r->y < 90 || r->y > 380) continue;
+        ht_rect_t b = ht_run_bounds(r);
+        if (b.x < 279 && b.x + b.w > 187 && b.y < bottom) return false;
+    }
+    return true;
+}
 static bool pm_dots(void) { return disc_at(442, 218, 12, 0xeaeaf0) && disc_at(442, 248, 9, 0x55565f); }
 static bool buddy_dots(void) { return disc_at(442, 218, 9, 0x55565f) && disc_at(442, 248, 12, 0xc49bff); }
 static bool any_dot(void) { return disc_at(442, 218, 12, 0xeaeaf0) || disc_at(442, 218, 9, 0x55565f); }
@@ -2065,14 +2088,44 @@ static void swarm_buddy_checks(const char *dir) {
     assert(title_is("web-api") && pm_dots() && !lilac_ring() && !avatar());
     FOCUS_PAGE("buddy-7a");
     int pm_runs = scene.count;
+    // A drag held past a flick scrolls the Swarm chat the desktop has open, and the side stays (Diego's dial, 2026-10-29:
+    // scrolling the recap did not scroll the chat). The daemon sends it to the Swarm the dial has open.
+    drag_v(330, 150);
+    assert(down_reports == 1 && moves > 0 && ups == 1 && travel != 0);
+    assert(!swarm_sent && pm_dots() && !lilac_ring());
+    // A tap while that fling coasts on the desktop stops it there (review of #2232: the tap was swallowed and the chat
+    // kept scrolling).
+    { int before = down_reports; habitat_touch(true, 233, 260, fake_ms + 700); habitat_touch(false, 233, 260, fake_ms + 760);
+      assert(down_reports == before + 1); }
+    // A thumb that rests before it flicks still switches the side: the drag's time runs from when it starts to move.
+    buddy_setup(); down_reports = moves = ups = 0;
+    fake_ms += 1000; habitat_touch(true, 233, 330, fake_ms); habitat_touch(true, 233, 330, fake_ms + 400);
+    habitat_touch(true, 233, 240, fake_ms + 450); habitat_touch(false, 233, 150, fake_ms + 500); scene_take();
+    assert(!moves && swarm_sent == 1 && !strcmp(swarm_wire[0], "side s1 buddy") && lilac_ring());
+    // A daemon that came back has forgotten the Lead open here (the dial's link dropped, as ui_set_connected(false)
+    // leaves it): the next frame tells it again, so a drag scrolls its Swarm and recaps reach the face (review of #2232).
+    buddy_setup(); sw.opened = false;
+    // Until then the daemon has no Lead open, and would hand a drag to the focused pane: none is sent.
+    drag_v(330, 150); assert(!moves && !ups);
+    buddy_card("lead");
+    assert(wire_has(0, "open s1 B0") && wire_has(0, "recap.get s1 B0"));
+    { int n = swarm_sent; buddy_card("lead"); assert(swarm_sent == n); }
+    buddy_setup();
+    // The PM chat's recap is on the face.
+    ui_supertab_recap("s1", "B0", "lead-web", "Merged.", 1792560000u, false); scene_take(); assert(scene_says("Merged."));
     // 7b swipe up: the dial says so, and draws the Buddy side at once: the ring, the avatar, the lower dot lit.
     swipe_up();
-    // A Swarm's face is no pane's terminal: the drag scrolls nothing (it used to scroll the pane still active behind it).
+    // A flick is the side's: it scrolls nothing (it used to scroll the pane still active behind it).
     assert(!down_reports && !moves && !ups);
     assert(swarm_sent == 1 && !strcmp(swarm_wire[0], "side s1 buddy"));
     assert(s.view == HOME && title_is("web-api") && lilac_ring() && avatar() && buddy_dots());
+    // The Buddy chat's recap can come before the frame that puts that chat on the face (a card is held 300 ms, a recap is
+    // not), and is refused as another chat's. The frame then asks for it again: the Buddy side showed no last message
+    // (Diego's dial, 2026-10-29).
+    ui_supertab_recap("s1", "B0", "b0", "Too early.", 1792560000u, false);
     // The daemon puts the Buddy chat on the face; its recap is the Buddy's last message.
     buddy_card("buddy");
+    assert(swarm_sent == 2 && !strcmp(swarm_wire[1], "recap.get s1 B0"));
     ui_supertab_recap("s1", "B0", "b0", "Two ways: cache the read, or move it to the host. I'd cache it.", 1792560000u, false); scene_take();
     assert(scene_says("Two ways") && lilac_ring() && avatar());
     // Without a recap it stands at 233, 158 exactly.
@@ -2084,8 +2137,9 @@ static void swarm_buddy_checks(const char *dir) {
         // With the bell too (an unread notice off the face) every run still fits the scene.
         assert(ui_supertab_notice("s1", "B1", HT_CHAT_LEAD, "lead-fw", "Flashed.", 1792560001u));
         scene_take(); assert(avatar() && scene.count < HT_RUNS);
-        ui_supertab_recap("s1", "B0", "b0", "", 1792560000u, true); scene_take();
-        assert(avatar() && avatar_sprite()->y == 133);
+        ui_supertab_recap("s1", "B0", "b0", "", 1792560000u, true);
+        // Nothing said yet: whatever the face writes instead stands clear of the avatar, at any of its captions.
+        for (int k = 0; k < 40; k++) { fake_ms += 9000; scene_take(); assert(avatar() && clear_of_text()); }
         ui_supertab_recap("s1", "B0", "b0", "Two ways: cache the read, or move it to the host. I'd cache it.", 1792560000u, false); scene_take();
     }
     FOCUS_PAGE("buddy-7b");
@@ -2103,7 +2157,7 @@ static void swarm_buddy_checks(const char *dir) {
         #undef AV
     }
     // Swipe up on the Buddy side does nothing.
-    swipe_up(); assert(swarm_sent == 1 && lilac_ring());
+    swipe_up(); assert(swarm_sent == 2 && lilac_ring());
     // The next project keeps the side, and the dial says it again with the move.
     swipe_next();
     assert(!strcmp(sw.lead, "B1") && title_is("firmware") && lilac_ring() && avatar() && wire_has(1, "side s1 buddy") && wire_has(1, "select s1 B1"));

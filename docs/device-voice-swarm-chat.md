@@ -7,8 +7,10 @@ shows the words first (device owner's choice 2a, 2026-10-27).
 
 ## Behaviour
 
-- Tap the Swarm face, speak, tap again. The dial shows the words with the project and chat it will post to
-  (`openharness · Lead`, `openharness · PM`, a group's title or the Buddy's name), then **Send** or **Discard**.
+- Tap the Swarm face, speak, tap again: the words go to that chat as any harness's do (owner, 2026-10-29: "like the
+  other agents"; until then every word was reviewed). Hold to finish instead and the dial shows the words with the
+  project and chat it will post to (`openharness · Lead`, `openharness · PM`, a group's title or the Buddy's name),
+  then **Send** or **Discard**.
 - Send posts them in that chat as the person, with the same command typing uses and the same access check. Discard posts
   nothing.
 - The chat is the one on the face when the person began to speak, even if the desktop moves while they speak or review.
@@ -20,12 +22,16 @@ shows the words first (device owner's choice 2a, 2026-10-27).
 | Direction | Field | Meaning |
 |---|---|---|
 | daemon → device | `welcome.features` has `swarm.review` | Words reviewed on a Swarm face are posted in its chat by Send |
-| device → daemon | `hello.swarmReview: "v1"` | This dial reviews every word for a Swarm chat |
+| daemon → device | `welcome.features` has `swarm.remote` | A Lead on another machine may be named by its Swarm id; its words go to its chat |
+| device → daemon | `hello.swarmReview: "v1"` | This dial reviews every word for a Swarm chat (no dial sends it since 2026-10-29) |
 | device → daemon | `voice.end.review: true` | As for any draft; then `voice.draft` with `name` and `context: "Swarm chat"` |
 
 - A dial asks for review on a Swarm face only from a daemon that lists `swarm.review`. An older daemon would type the
   reviewed draft into the Lead's terminal, so with one the face posts at once, as before, and a hold does not offer review.
 - Words begun on a Swarm face keep the face's Lead as their recipient: a pane focused in the window never takes them.
+- Where the Lead runs does not matter (owner, 2026-10-29). A Lead on another machine has no harness here, so the dial names it
+  by its Swarm id, and only to a daemon that lists `swarm.remote`: an older one would hand an unknown id to the pane
+  focused in the window. Its words go to its chat or nowhere: a post the Swarm cannot take is an error, never a turn.
 - Send passes `reviewed` with the chat: `SwarmCards.say` posts there while it is still the Lead conversation or an open chat
   of that Lead's project this reader may see, even if the face moved since. Unreviewed words keep today's rule (refused
   once the face moved).
