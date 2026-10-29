@@ -1,4 +1,8 @@
 import type { PrismaClient } from '@prisma/client'
+import { logger } from '../../utils/logger.js'
+
+/** Mongo's "not authorized" (code 13), as Prisma's raw command error carries it. */
+const notAuthorized = (error: unknown): boolean => /not authorized|Unauthorized|Code: `13`/.test(String((error as Error)?.message ?? error))
 
 /** One index as `createIndexes` takes it. */
 export type IndexSpec = { name: string; key: Record<string, number>; unique?: boolean; expireAfterSeconds?: number }
@@ -26,7 +30,14 @@ export async function ensureIndex(db: Pick<PrismaClient, '$runCommandRaw'>, coll
   if (found && sameKey(found.key, index.key) && !!found.unique === !!index.unique) {
     if (found.expireAfterSeconds === index.expireAfterSeconds) return
     if (index.expireAfterSeconds !== undefined) {
-      await db.$runCommandRaw({ collMod: collection, index: { name: index.name, expireAfterSeconds: index.expireAfterSeconds } })
+      try {
+        await db.$runCommandRaw({ collMod: collection, index: { name: index.name, expireAfterSeconds: index.expireAfterSeconds } })
+      } catch (error) {
+        // Production's app user may not run collMod (10-29: the worker crash-looped on the read-mark expiry). The index
+        // exists and serves reads; only its expiry waits for someone with the right to set it, so warn and carry on.
+        if (!notAuthorized(error)) throw error
+        logger.warn('index expiry not set: the database user may not run collMod', { collection, index: index.name, expireAfterSeconds: index.expireAfterSeconds })
+      }
       return
     }
   }
