@@ -2,13 +2,20 @@
 // account shows its owner's allowances, the ones its agents spend; an engine without a figure says why instead.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/status_line_style.dart';
 import 'package:harness/super_tabs/machines.dart';
+import 'package:harness/widgets/desktop_chrome.dart';
 
 import 'support/super_tab_fixture.dart';
 
 const _offlineAge = 10 * 60 * 1000;
 
-Map<String, dynamic> _quota(String engine, {int? used, bool known = true}) => {
+Map<String, dynamic> _quota(
+  String engine, {
+  int? used,
+  bool known = true,
+  Duration resetsIn = const Duration(hours: 2),
+}) => {
   'engine': engine,
   'known': known,
   'windows': [
@@ -16,9 +23,7 @@ Map<String, dynamic> _quota(String engine, {int? used, bool known = true}) => {
       {
         'name': '5-hour',
         'usedPercent': used,
-        'resetsAt': DateTime.now()
-            .add(const Duration(hours: 2))
-            .millisecondsSinceEpoch,
+        'resetsAt': DateTime.now().add(resetsIn).millisecondsSinceEpoch,
       },
   ],
 };
@@ -88,6 +93,11 @@ Finder _card(String id, String engine) =>
 String? _figure(WidgetTester tester, String id, String engine) => tester
     .widget<Text>(find.byKey(ValueKey('super-machine-figure-$id-$engine')))
     .data;
+
+Color? _figureInk(WidgetTester tester, String id, String engine) => tester
+    .widget<Text>(find.byKey(ValueKey('super-machine-figure-$id-$engine')))
+    .style
+    ?.color;
 
 Finder _inCard(String id, String engine, String text) =>
     find.descendant(of: _card(id, engine), matching: find.text(text));
@@ -164,6 +174,84 @@ void main() {
       ]);
       expect(_figure(tester, 'm', 'claude'), '62%');
       expect(find.textContaining('offline, read 10 min ago'), findsOneWidget);
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'an offline machine whose window reset since it was read keeps its last figure, muted, and says when it was read',
+    (tester) async {
+      final c = await _mount(tester, [
+        _pool(
+          'm',
+          engines: ['claude'],
+          // Read ten minutes ago; the 5-hour window it read has reset since (a Mac offline overnight).
+          quotas: [
+            _quota('claude', used: 38, resetsIn: const Duration(hours: -3)),
+          ],
+          age: _offlineAge,
+        ),
+      ]);
+      expect(_figure(tester, 'm', 'claude'), '62%');
+      expect(_inCard('m', 'claude', 'Waiting for a new reading'), findsNothing);
+      expect(find.textContaining('offline, read 10 min ago'), findsOneWidget);
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'a current reading whose window reset since says it waits for a new reading, with no figure',
+    (tester) async {
+      final c = await _mount(tester, [
+        _pool(
+          'm',
+          engines: ['claude'],
+          quotas: [
+            _quota('claude', used: 38, resetsIn: const Duration(minutes: -1)),
+          ],
+        ),
+      ]);
+      expect(_figure(tester, 'm', 'claude'), '—');
+      expect(
+        _inCard('m', 'claude', 'Waiting for a new reading'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('left now'), findsOneWidget);
+      await _unmount(tester, c);
+    },
+  );
+
+  testWidgets(
+    'an offline figure is muted, even a low one; a current low one keeps its warning tone',
+    (tester) async {
+      final c = await _mount(tester, [
+        _pool(
+          'old',
+          engines: ['claude'],
+          quotas: [_quota('claude', used: 95)],
+          age: _offlineAge,
+        ),
+        _pool('now', engines: ['claude'], quotas: [_quota('claude', used: 95)]),
+        _pool(
+          'fine',
+          engines: ['claude'],
+          quotas: [_quota('claude', used: 10)],
+        ),
+      ]);
+      expect(_figure(tester, 'old', 'claude'), '5%');
+      expect(
+        _figureInk(tester, 'old', 'claude'),
+        statusLineInkOnSurface(DesktopChrome.muted, DesktopChrome.surface),
+      );
+      // Current readings keep their ink: critical red below 10%, the plain foreground otherwise.
+      expect(
+        _figureInk(tester, 'now', 'claude'),
+        isNot(_figureInk(tester, 'old', 'claude')),
+      );
+      expect(
+        _figureInk(tester, 'fine', 'claude'),
+        statusLineInkOnSurface(DesktopChrome.foreground, DesktopChrome.surface),
+      );
       await _unmount(tester, c);
     },
   );

@@ -944,7 +944,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     );
   }
 
-  Map<String, Object?> _quotaRow(Map<String, dynamic> quota, String machineId) {
+  /// One engine's reading as an account row. [old]: the machine is offline, so this is its last reading, whose
+  /// windows may have reset since; the figures stay, as when they were read. A current reading whose window reset has
+  /// none, the next reading has it.
+  Map<String, Object?> _quotaRow(
+    Map<String, dynamic> quota,
+    String machineId, {
+    required bool old,
+  }) {
     final windows =
         [for (final raw in quota['windows'] as List? ?? []) superTabMap(raw)]
           ..sort(
@@ -959,9 +966,11 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         : raw is String
         ? DateTime.tryParse(raw)
         : null;
-    final expired = windows.any(
-      (w) => reset(w['resetsAt'])?.isBefore(DateTime.now()) == true,
-    );
+    final expired =
+        !old &&
+        windows.any(
+          (w) => reset(w['resetsAt'])?.isBefore(DateTime.now()) == true,
+        );
     final known = quota['known'] == true && windows.isNotEmpty && !expired;
     return {
       'accountKey': 'machine:$machineId:${quota['engine']}',
@@ -972,7 +981,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           : null,
       'details': [
         for (final w in windows)
-          '${w['name']}: ${100 - (w['usedPercent'] as num)}% remaining${reset(w['resetsAt']) == null ? '' : ' · resets in ${_until(reset(w['resetsAt'])!)}'}',
+          '${w['name']}: ${100 - (w['usedPercent'] as num)}% remaining${reset(w['resetsAt'])?.isAfter(DateTime.now()) == true ? ' · resets in ${_until(reset(w['resetsAt'])!)}' : ''}',
       ],
     };
   }
@@ -1044,7 +1053,9 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
             .toList() ??
         const <Map<String, Object?>>[];
     if (accounts.isEmpty && readAt != null) {
-      accounts = [for (final quota in quotas.values) _quotaRow(quota, poolId)];
+      accounts = [
+        for (final quota in quotas.values) _quotaRow(quota, poolId, old: stale),
+      ];
     }
     final reasons = observation['quotaReasons'];
     // Engines the server suspended here after failed starts, with why (backend superTabs/engineHealth.ts), on the Mac
