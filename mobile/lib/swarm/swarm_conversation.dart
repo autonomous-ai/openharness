@@ -671,7 +671,7 @@ class SwarmConversation extends ChangeNotifier implements SwarmFilesBox {
       error = failure.message;
       return false;
     } catch (_) {
-      error = 'Your message is not confirmed. Send again to check it.';
+      error = 'Your message was not sent. Retry to check it.';
       return false;
     } finally {
       sending = false;
