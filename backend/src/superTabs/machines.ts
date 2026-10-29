@@ -279,8 +279,11 @@ export function teamWorkRefusal(pool: ContributedMachine, now: number, teamRow =
  */
 export function teamWorkCheck(state: SuperTabState, machineId: string, contributorId: string, project: SwarmProject, now: number,
   teamMachines: readonly string[] = [], otherWorkspaceMachines: readonly string[] = []): TeamWorkRefusal | null {
-  if (project.ownerId === contributorId) return null
   const pool = state.machines?.find(m => m.machineId === machineId)
+  // A Buddy-only machine is its person's alone: an agent they added there takes their own projects' work and no other's,
+  // whatever the Team account switches say (security re-check 1 of #2234). New starts there are refused in admitMachineStart.
+  if (pool?.buddyOnly) return project.ownerId === pool.contributorId ? null : { code: 'NOT_SWARM_MACHINE', reason: NOT_SWARM_MACHINE }
+  if (project.ownerId === contributorId) return null
   if (!pool) {
     // Off the Machines list nothing reports a team account (store.ts teamMachines), so this is the switch alone.
     if (!teamAccountRequired(state)) return null

@@ -331,4 +331,54 @@ describe('a Buddy-only machine after its reviews', () => {
       ifMissing: true } as Command, peer, { contribution: { ...own('peer'), hostMachineId: 'peer-laptop' } })).toThrow('This machine is not one of the Swarm\'s machines')
     expect(f.state.machines!.map(m => m.machineId)).toEqual(['owner-mac', 'peer-laptop'])
   })
+
+  // Security re-check 1 of #2234: a pane its person added to someone else's public project made the private Mac take that
+  // project's work once Team account enforcement was off.
+  describe('an agent its person added there', () => {
+    const candidate = (id: string, patch: Record<string, unknown>) => ({ id, kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'opus',
+      effort: 'high', quality: 3, cost: 3, title: `Title ${id}`, label: `Label ${id}`, ...patch })
+    const decision = (pane: string) => ({ assessment: { difficulty: 'low', risk: 'low', why: 'Fix a typo.' },
+      candidates: [candidate('c0', { kind: 'member', agentId: pane, machineId: 'peer-laptop' }), candidate('c1', {})], excluded: [], floor: 3,
+      notes: false, pick: 'c0', via: 'jev', p: 0.8, belowFloor: false, why: 'Idle agent.' })
+    const paneIn = (f: Swarm, conversationId: string) => f.run({ type: 'agent.add', conversationId, harnessId: `pane-${conversationId}`,
+      machineId: 'peer-laptop', name: 'Pane', configuration, lead: false }, peer, { contribution: own('peer') }).result.agentId as string
+    const withSwitch = (value: string | undefined, act: () => void) => {
+      const before = process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+      if (value === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+      else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = value
+      try { act() } finally {
+        if (before === undefined) delete process.env.SWARM_TEAM_ACCOUNT_REQUIRED
+        else process.env.SWARM_TEAM_ACCOUNT_REQUIRED = before
+      }
+    }
+
+    for (const value of [undefined, '1']) {
+      it(`takes no work of another person's project, Team account enforcement ${value ? 'on' : 'off'}`, () => withSwitch(value, () => {
+        const f = setup()
+        running(f, f.app.projectId)
+        f.run({ type: 'work.define', conversationId: f.group, brief: 'Save edits.', checks: [{ description: 'Edits survive a reload.', independent: false }] })
+        const pane = paneIn(f, f.group)
+        expect(() => f.run({ type: 'route.record', conversationId: f.group, decision: decision(pane) } as unknown as Command, pmActor(f)))
+          .toThrow('This machine is not one of the Swarm\'s machines')
+        expect(() => f.run({ type: 'work.assign', conversationId: f.group, agentId: pane })).toThrow('This machine is not one of the Swarm\'s machines')
+        expect(f.state.conversations.find(c => c.id === f.group)!.assignment).toBeNull()
+      }))
+    }
+
+    it('takes its own person\'s project work, routed and assigned', () => {
+      const f = setup()
+      running(f, f.app.projectId)
+      const own = f.run({ type: 'project.create', name: 'Peer work', visibility: 'public', brief: '' }, peer).result as { projectId: string; conversationId: string }
+      const lead = f.run({ type: 'agent.add', conversationId: own.conversationId, harnessId: 'peer-pm', machineId: 'owner-mac', name: 'PM', configuration,
+        lead: true }, peer, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }).result.agentId as string
+      const work = f.run({ type: 'conversation.create', projectId: own.projectId, title: 'Notes', brief: 'Tidy notes.',
+        checks: [{ description: 'Notes are tidy.', independent: false }] }, peer).result.conversationId as string
+      const pane = paneIn(f, work)
+      const routed = f.run({ type: 'route.record', conversationId: work, decision: decision(pane) } as unknown as Command,
+        { kind: 'agent', agentId: lead, machineOwnerId: 'owner' })
+      expect(routed.result.routeDecisionId).toBeTruthy()
+      f.run({ type: 'work.assign', conversationId: work, agentId: pane }, peer)
+      expect(f.state.conversations.find(c => c.id === work)!.assignment).toMatchObject({ agentId: pane })
+    })
+  })
 })
