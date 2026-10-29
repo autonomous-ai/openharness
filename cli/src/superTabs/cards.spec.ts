@@ -986,6 +986,56 @@ describe('SwarmCards Buddy side', () => {
     t.cards.want(false)
   })
 
+  it('keeps the side through a desktop focus the dial itself caused, and clears it on the desktop\'s own next one', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    // The dial swiped to the next project: its select moved the desktop there, and that announce says so.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web', fromDevice: true })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy' })
+    // The person then opens another conversation on the desktop: newest wins, the side goes and the face follows it.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'group', id: 'g-web' })
+    t.cards.want(false)
+  })
+
+  it('says the Swarm\'s side on its card, so a dial follows the daemon\'s side even where no face changes', async () => {
+    // No Buddy chat in the Swarm: a side changes no face, and the card alone tells the dial (review of #2218).
+    const t = chatSwarm({})
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    t.cards.side('t1', 'buddy')
+    expect(t.seen.at(-1)?.[0].side).toBe('buddy')
+    // The desktop opens a group: the side goes, and the card says so.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    t.cards.want(false)
+  })
+
+  it('says the Buddy side when the desktop opens the Buddy chat, so the side and the face agree', async () => {
+    // Re-check of #2216: the face followed the desktop to the Buddy chat while the card said the PM side, and the dial
+    // (#2218) showed the PM screen without the Buddy's recap.
+    const t = chatSwarm({ 'pm-web': [said(2, 'y1', { text: 'from the Buddy' })] }, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'pm-web' })
+    expect(t.seen.at(-1)?.[0].side).toBe('buddy')
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'buddy', id: 'pm-web' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ chatId: 'pm-web', text: 'from the Buddy' })
+    // A swipe down wins over that focus: both say the PM side.
+    t.cards.side('t1', 'pm')
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'lead' })
+    expect(await t.cards.recap('t1', 'a1', 'buddy')).toMatchObject({ chatId: 'lead-web' })
+    // The desktop moving to a group clears both.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    expect(t.webLead()?.sideChat).toMatchObject({ kind: 'group' })
+    t.cards.want(false)
+  })
+
   it('keeps the side per Swarm, refuses a bad tab or side, and forgets every side when the devices go', async () => {
     const t = chatSwarm({}, true)
     t.cards.want(true, [], null)

@@ -277,10 +277,12 @@ export class SwarmCards {
     const wanted = include.filter(cardId).slice(0, MAX_CARDS)
     const moved = wanted.join(',') !== this.include.join(',')
     this.include = wanted
-    const next = focus && cardId(focus.tabId) && cardId(focus.conversationId) ? { tabId: focus.tabId, conversationId: focus.conversationId } : null
+    const next = focus && cardId(focus.tabId) && cardId(focus.conversationId)
+      ? { tabId: focus.tabId, conversationId: focus.conversationId, ...(focus.fromDevice === true ? { fromDevice: true as const } : {}) } : null
     const refocused = `${next?.tabId}/${next?.conversationId}` !== `${this.focus?.tabId}/${this.focus?.conversationId}`
     this.focus = next
-    if (refocused) this.sides.clear()
+    // The desktop's own move clears the dial's side; the move a dial's pick caused is the dial's, and keeps it.
+    if (refocused && !next?.fromDevice) this.sides.clear()
     if (this.timer) {
       if (refocused && this.live) { this.emit(); void this.pushOpen() }
       if (moved) void this.tick()
@@ -289,6 +291,19 @@ export class SwarmCards {
     this.timer = setInterval(() => { void this.tick() }, this.intervalMs)
     this.timer.unref?.()
     void this.tick()
+  }
+
+  /**
+   * The side a swarmBuddy dial is shown for a Swarm, which its faces, recaps and card all follow: the one it swiped to, else
+   * the Buddy side while the window has the reader's Buddy chat open there (spec 2026-10-29: opening it on the desktop
+   * shows the Buddy screen). Taken from the swipes alone, the card said the PM side over a Buddy face (re-check of #2216).
+   */
+  private sideOf(tabId: string, state: Json): CardSide | undefined {
+    const swiped = this.sides.get(tabId)
+    if (swiped) return swiped
+    const focus = this.focus?.tabId === tabId ? this.focus.conversationId : undefined
+    return focus !== undefined && state.buddies === true &&
+      list(state.conversations).some(c => c.id === focus && isReadersBuddyChat(c, this.me) && c.archived !== true) ? 'buddy' : undefined
   }
 
   /** A swarmBuddy dial swiped to a side of a Swarm (spec 2026-10-29): every project of it shows that side until the window
@@ -396,12 +411,14 @@ export class SwarmCards {
       const tab = this.tabs.get(row.id)
       if (!tab) continue
       const focus = this.focus?.tabId === row.id ? this.focus.conversationId : undefined
-      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus, this.sides.get(row.id))
+      const side = this.sideOf(row.id, tab.state)
+      const { count, leads } = leadsOf(tab.state, this.machineId, live, this.me, focus, side)
       const noticed = leads.map(lead => {
         const notice = this.notices.get(recapKey(row.id, lead.id)), buddyNotice = this.buddyNotices.get(recapKey(row.id, lead.id))
         return { ...lead, ...(notice ? { notice } : {}), ...(buddyNotice ? { buddyNotice } : {}) }
       })
-      cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed })
+      cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed,
+        ...(side === 'buddy' ? { side: 'buddy' as const } : {}) })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
     // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is
@@ -500,7 +517,7 @@ export class SwarmCards {
     if (!chat) return { id: found.lead.id, sequence: sequenceOf(found.lead), voices: new Set([leadId]) }
     const focus = this.focus?.tabId === tabId ? this.focus.conversationId : undefined
     const conversations = list(state.conversations), projectId = projectKey(found.project), buddies = state.buddies === true
-    const face = chat === 'buddy' && buddies ? sideFaceOf(conversations, projectId, found.lead, focus, this.me, this.sides.get(tabId))
+    const face = chat === 'buddy' && buddies ? sideFaceOf(conversations, projectId, found.lead, focus, this.me, this.sideOf(tabId, state))
       : faceOf(conversations, projectId, found.lead, focus, this.me, buddies)
     if (!face) return null
     const id = face.conversation.id as string

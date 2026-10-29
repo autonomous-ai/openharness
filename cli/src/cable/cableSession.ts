@@ -2842,7 +2842,8 @@ export class CableSession {
     for (const card of cards) {
       // The desk tab of the same Swarm, when the window has one: empty when it is closed or never opened it.
       const tab = desk.find((s) => s.superTabId === card.id)?.id ?? ''
-      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count,
+      // A swarmBuddy dial follows the Swarm's side as the daemon's (review of #2218); no other device hears one.
+      const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count, ...(this.swarmBuddy ? { side: card.side ?? 'pm' } : {}),
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l) : this.swarmChat ? chatLead(l) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
       fitFrame(frame)

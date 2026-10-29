@@ -33,6 +33,14 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCards).toHaveBeenCalledWith([])
   })
 
+  it('passes a Swarm\'s Buddy side on, and nothing else as a side', () => {
+    const { cards, swarmCards } = setup()
+    cards.cards([card('t1', [lead('l1')], { side: 'buddy' }), card('t2', [lead('l2')], { side: 'pm' }), card('t3', [lead('l3')], { side: true })])
+    const sent = swarmCards.mock.calls.at(-1)?.[0] as Array<Record<string, unknown>>
+    expect(sent.map((c) => c.side)).toEqual(['buddy', undefined, undefined])
+    expect('side' in sent[1]).toBe(false)
+  })
+
   it('checks ids, counts and strings, and drops a malformed list whole, keeping the last good one', () => {
     const { cards, swarmCards, log } = setup()
     cards.cards([card('t1')])
@@ -239,6 +247,11 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
       cards.want(true, ['t1'], bad)
       expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
     }
+    // A focus the device's own pick caused says so, as a change of its own; anything but true is not that.
+    cards.want(true, ['t1'], { ...focus, fromDevice: true })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { ...focus, fromDevice: true } })
+    cards.want(true, ['t1'], { ...focus, fromDevice: 1 })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
     // The devices gone take the focus with them.
     cards.want(true, ['t1'], focus)
     cards.devicesGone()

@@ -630,6 +630,9 @@ describe('what the windows say, reaching the dial', () => {
       expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'] })
       port.swarms(open('tab-st1'))
       expect(superTabRequest).toHaveBeenCalledTimes(3)
+      // The window followed a device's own pick: the focus says so, for the cards to keep the dial's side.
+      port.swarms({ ...open('tab-st1', 'g2'), fromDevice: true })
+      expect(superTabRequest).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['st1'], focus: { tabId: 'st1', conversationId: 'g2', fromDevice: true } })
       port.swarms(open('tab-st1', 'g1'))
       superTabRequest.mockClear()
       reconnected.forEach((run) => run())
