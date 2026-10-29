@@ -25,8 +25,9 @@ import { SwarmReads } from './swarmReads.js'
 import { UPDATE_REQUIRED } from './readContract.js'
 
 type Json = Record<string, unknown>
-// A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and its guard
-// refuses any --agent, so it can never act as another agent (security review 2 of #2092, lib/buddyGuard.ts).
+// A Buddy is told its commands without --agent: the pane it runs in says who it is (command.ts callerOf), and the daemon
+// refuses an --agent that is not its pane's own, so it can never act as another agent (security review 2 of #2092,
+// service.ts AGENT_MISMATCH).
 const agentCommandOf = (entry: Entry, prefix: string, buddy = false) =>
   `${prefix} --tab ${shellQuote(entry.tabId)}${buddy ? '' : ` --agent ${shellQuote(entry.agentId)}`}`
 const readCommand = (entry: Entry, prefix: string, group: string, id: string, buddy = false) =>

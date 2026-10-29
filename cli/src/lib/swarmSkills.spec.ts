@@ -608,6 +608,10 @@ describe('the Buddy skill (Ken\'s Buddy spec, 10-28)', () => {
     // It started a loop polling its chat, which stopped it at a permission prompt nobody at its terminal answered.
     expect(text).toContain('Your owner\'s new messages reach you by themselves. Never poll your chat, loop or start a background '
       + 'wait for them: post your reply and end your turn.')
+    // He typed "go with 1" in its terminal; it answered about him, repeated the scope it had sent, and narrated its workings.
+    expect(text).toContain('Your owner may type to you in your terminal too. Answer them once, in your chat, as you would a chat '
+      + 'message: to them, as "you", never about them; without repeating what you already sent; and without describing your own '
+      + 'workings (commands, watchers, what you will send next).')
   })
 })
 

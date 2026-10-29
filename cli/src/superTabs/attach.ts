@@ -67,7 +67,7 @@ export interface CheckedFile { name: string; type: string; bytes: Buffer }
 
 /**
  * A Buddy's proposal files, each read from the one descriptor its checks were made on (security review of #2103): only a
- * regular file inside its own folder, the one place it may read (lib/buddyGuard.ts), never under its repository's or
+ * regular file inside its own folder, the only files it may send its owner's PM, never under its repository's or
  * Harness's records. The last name is opened without following a link or waiting; the file must have that one name (a hard link
  * would give a file outside a second name inside), and the real path's file must be the one opened, so a name swapped
  * for a link after the check is refused or never read. Each is at most a chat file's size, so read whole.
