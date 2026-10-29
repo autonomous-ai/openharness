@@ -590,6 +590,32 @@ describe('messages from an agent whose task moved', () => {
     await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed any more' }, host, f.lead)
     expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.'))).toEqual([f.lead])
   })
+
+  // Review of #2243: only the current assignment and the latest lost attempt were recognized.
+  it('reach the Lead after the task was cancelled and assigned to another agent', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it' }, host, f.lead)
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
+    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
+      .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
+  })
+
+  it('reach the Lead from the first agent after the next agent lost the task too', async () => {
+    const f = await swarm()
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker, f.harness.other] })
+    expect(await f.assignment()).toMatchObject({ id: next, status: 'lost' })
+    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, other, 'Lost my session.'))).toEqual([f.lead])
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
+      .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: null }, host, other))
+      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
+  })
 })
 
 /** A client that records the key of every SwarmGroup row a read returns. */

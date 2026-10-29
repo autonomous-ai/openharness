@@ -1944,19 +1944,19 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const workerToLead = actor.kind === 'agent' && activeWork(group) && group.assignment?.agentId === actor.agentId
         && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? group.leadId : null
       const agentRecipient = leadToWorker ?? workerToLead
-      // The agent whose task here ended (lost, cancelled, stopped, done), or was lost and then moved on, still reaches the Lead,
-      // beside anyone it names: its status and results are refused, so its posts are all the Lead hears from it. They reached
-      // no one until 10-29, when a moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's
-      // questions had no delivery, and the worker stayed down 4 h 50 min. A note to itself stays its own.
-      const heldEnded = actor.kind === 'agent' && !command.agentOnly && assigned !== actor.agentId
-        && (group.assignment?.agentId === actor.agentId || group.lostAttempt?.agentId === actor.agentId)
-      const endedToLead = heldEnded && group.leadId && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
+      // Any other agent in the group reaches its Lead, beside anyone it names: an agent whose task here was lost, moved or
+      // cancelled has its status and results refused, so its posts are all the Lead hears from it. They reached no one until
+      // 10-29, when a moved prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions had no
+      // delivery, and the worker stayed down 4 h 50 min. Membership, not a record of past attempts, decides (Lead's ruling on
+      // #2243): the Lead already reads the group. The assigned worker keeps its own rule above; a note to itself stays its own.
+      const memberToLead = actor.kind === 'agent' && !command.agentOnly && assigned !== actor.agentId && group.leadId
+        && group.leadId !== actor.agentId && group.agentIds.includes(group.leadId) ? [group.leadId] : []
       // A Buddy chat has no Lead: its owner talks to its Buddy.
       const automatic = actor.kind === 'person' ? (replyAgent && group.agentIds.includes(replyAgent) ? replyAgent
         : isBuddyChat(group) ? group.agentIds[0] ?? null : group.leadId) : agentRecipient
       // In the Leads conversation everything posted reaches every other Lead; naming some only adds emphasis.
       const everyLead = isLeads(group) ? group.agentIds.filter(id => actor.kind !== 'agent' || id !== actor.agentId) : []
-      const recipients = [...new Set([...command.recipientIds, ...everyLead, ...endedToLead,
+      const recipients = [...new Set([...command.recipientIds, ...everyLead, ...memberToLead,
         ...(command.recipientIds.length || everyLead.length || !automatic ? [] : [automatic])])]
       for (const id of recipients) {
         agent(state, id)
