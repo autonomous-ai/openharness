@@ -90,6 +90,9 @@ const hasTmux = (() => { try { execFileSync('tmux', ['-V'], { stdio: 'ignore' })
 const API_KEY = 'sk-ant-not-a-key-0123456789abcdefghij'
 const HARNESS_MESSAGE = 'A message from a teammate, through Harness'
 const SECRET = 'TOP-SECRET-outside-the-buddy-folder'
+const HOME_SECRET = 'TOP-SECRET-in-the-persons-home'
+const MEMORY = 'Project memory a teammate committed'
+const INSIDE_IMPORT = 'Imported from inside the folder'
 
 describe.skipIf(!hasClaude).each([
   { mode: 'print', skip: false },
@@ -131,6 +134,8 @@ describe.skipIf(!hasClaude).each([
     lateLink: bash('cat late-link'),
     lateDir: bash('cat late-dir/secret.txt'),
     lateGrep: bash('grep -r TOP late-dir'),
+    // Claude Code's grep is its built-in ugrep: its --dereference-files follows a link out while it walks the folder.
+    ugrepFollow: bash('grep -r --dereference-files TOP .'),
     lateRead: { name: 'Read', input: { file_path: '' } } as Call,
     committedCat: bash('cat committed-link'),
     committedRead: { name: 'Read', input: { file_path: '' } } as Call,
@@ -179,7 +184,16 @@ describe.skipIf(!hasClaude).each([
     mkdirSync(join(root, 'elsewhere'))
     writeFileSync(join(root, 'elsewhere', 'secret.txt'), `${SECRET}\n`)
     symlinkSync(join(root, 'elsewhere', 'secret.txt'), join(folder, 'committed-link'))
-    git('add', '.claude/settings.json', '.mcp.json', 'committed-link'); git('commit', '-qm', 'a teammate\'s settings')
+    // Project memory a teammate could commit, importing files from outside the folder (security re-check of #2092): the
+    // read happens as Claude Code starts, never past the guard. One import from inside the folder shows imports load.
+    writeFileSync(join(root, 'home', 'private.txt'), `${HOME_SECRET}\n`)
+    mkdirSync(join(folder, 'docs'))
+    writeFileSync(join(folder, 'docs', 'inside.md'), `${INSIDE_IMPORT}\n`)
+    const imports = ['@docs/inside.md', '@../elsewhere/secret.txt', `@${join(root, 'elsewhere', 'secret.txt')}`, '@~/private.txt']
+    writeFileSync(join(folder, 'CLAUDE.md'), `# Notes\n\n${MEMORY}\n\n${imports.join('\n')}\n`)
+    writeFileSync(join(folder, 'CLAUDE.local.md'), `${imports.slice(1).join('\n')}\n`)
+    git('add', '.claude/settings.json', '.mcp.json', 'committed-link', 'CLAUDE.md', 'CLAUDE.local.md', 'docs/inside.md')
+    git('commit', '-qm', 'a teammate\'s settings')
     const before = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = join(root, 'config')
     try { prepareSwarmSkill(folder, { role: 'buddy', key: 'session' }) } finally {
@@ -282,7 +296,8 @@ describe.skipIf(!hasClaude).each([
   it.skipIf(skip)('wrote no file', () => {
     expect(readFileSync(join(folder, 'notes.txt'), 'utf8')).toBe('first\n')
     expect(existsSync(join(folder, 'created.txt'))).toBe(false)
-    expect(readdirSync(folder).sort()).toEqual(['.claude', '.git', '.harness', '.mcp.json', 'committed-link', 'late-dir', 'late-link', 'notes.txt'])
+    expect(readdirSync(folder).sort()).toEqual(['.claude', '.git', '.harness', '.mcp.json', 'CLAUDE.local.md', 'CLAUDE.md', 'committed-link', 'docs',
+      'late-dir', 'late-link', 'notes.txt'])
   })
   it.skipIf(skip)('POSTed nothing and fetched nothing', () => {
     expect(posts.filter((post) => post.includes(sinkPath))).toEqual([])
@@ -291,6 +306,14 @@ describe.skipIf(!hasClaude).each([
   it.skipIf(skip)('added the late links only once Claude Code was running, as the PR says', () => {
     expect(api.started()).toBe(true)
     expect(lstatSync(join(folder, 'late-link')).isSymbolicLink()).toBe(true)
+  })
+
+  // It reads only its folder's settings (--setting-sources local), and with them no project memory: none of a committed
+  // CLAUDE.md or CLAUDE.local.md, and so none of their imports, from inside the folder or out (Claude Code 2.1.312).
+  // Without that flag the same run loads the CLAUDE.md text and its inside import, which is how this test sees memory.
+  it.skipIf(skip)('loads no project memory a teammate committed, and so nothing it imports from outside the folder', () => {
+    expect([MEMORY, INSIDE_IMPORT, SECRET, HOME_SECRET].map((text) => api.bodies.some((body) => body.includes(text))))
+      .toEqual([false, false, false, false])
   })
 
   it.skipIf(skip)('never lets a file elsewhere on the machine reach the model, through a link committed or added later', () => {

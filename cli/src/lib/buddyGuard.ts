@@ -46,6 +46,14 @@ const GIT = new Set(['grep', 'log', 'show', 'diff', 'blame', 'status'])
 const GH = { issue: new Set(['view', 'list']), pr: new Set(['view', 'list', 'diff']) }
 const GIT_LONG = ['output', 'open-files-in-pager', 'ext-diff']
 const RG_LONG = ['pre', 'pre-glob', 'search-zip', 'hostname-bin']
+// A Buddy's grep is Claude Code's shell function around its built-in ugrep (2.1.312), whose long options go much further
+// than grep's: --dereference-files follows links while it walks, and others filter through commands, read configs, page
+// or index (security re-check of #2092). Only these, each by its whole name, with or without =VALUE.
+const GREP_LONG = new Set(['include', 'exclude', 'exclude-dir', 'include-dir', 'line-number', 'ignore-case', 'smart-case',
+  'recursive', 'count', 'files-with-matches', 'files-without-match', 'word-regexp', 'line-regexp', 'fixed-strings',
+  'extended-regexp', 'basic-regexp', 'perl-regexp', 'context', 'after-context', 'before-context', 'max-count',
+  'invert-match', 'only-matching', 'no-filename', 'with-filename', 'color', 'colour', 'regexp', 'text', 'no-messages',
+  'quiet', 'silent'])
 // A Buddy's own Super Tab commands: reading its chats and posting in its own, and its owner's proposal. The pane it runs in
 // says who it is (superTabs/command.ts), so it never names an agent, a port or a machine.
 const SUPER_TAB = new Set(['status', 'messages', 'message', 'decisions', 'post', 'propose', 'help'])
@@ -145,8 +153,11 @@ function bashAllowed(command) {
   if (rest.some(outward)) return false
   // Nothing that runs on: a background shell, or tail following a file.
   if (name === 'tail') return !rest.some((word) => longNames(word, ['follow']) || (short(word) && /[fF]/.test(word)))
-  // Nor following links while walking the folder: grep -R/-S/-O, rg -L, ls -L.
-  if (name === 'grep') return !rest.some((word) => longNames(word, ['dereference-recursive']) || (short(word) && /[RSO]/.test(word)))
+  // Nor following links while walking the folder: grep -R/-S/-O, rg -L, ls -L; nor ugrep's query screen (-Q).
+  if (name === 'grep') {
+    return !rest.some((word) => (word.startsWith('--') && word !== '--' && !GREP_LONG.has(word.slice(2).split('=')[0]))
+      || (short(word) && /[RSOQ]/.test(word)))
+  }
   if (name === 'ls') return !rest.some((word) => longNames(word, ['dereference']) || (short(word) && word.includes('L')))
   if (READERS.has(name)) return true
   if (name === 'git') {

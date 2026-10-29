@@ -580,6 +580,8 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     const guard = join(realpathSync(workspace), '.claude', 'buddy-guard.mjs')
     expect(settings).toEqual({
       permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
+      // No memory file at all: a committed CLAUDE.local.md importing files from outside the folder (security re-check of #2092).
+      claudeMdExcludes: ['**/*'],
       // The person's own settings may turn hooks off; these, the folder's local settings, outrank theirs.
       disableAllHooks: false,
       hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },

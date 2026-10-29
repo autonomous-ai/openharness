@@ -635,6 +635,11 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
  *  commands (lib/buddyGuard.ts), editing is denied outright, and Harness's own hooks come with them. */
 const buddyClaudeSettings = (guard: string) => ({
   permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
+  // No memory file at all. The local settings source still loads a CLAUDE.local.md, and a committed one importing files
+  // from outside the folder (@/x, @~/x) stopped an interactive Buddy at "Allow external CLAUDE.md file imports?", which
+  // nobody answers, while a yes would read those files past its guard. CLAUDE_CODE_DISABLE_CLAUDE_MDS did not stop it;
+  // this does (Claude Code 2.1.312, tried; security re-check of #2092). The Buddy can still read instructions with Read.
+  claudeMdExcludes: ['**/*'],
   disableAllHooks: false,
   hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }],
     ...harnessClaudeHooks() },
