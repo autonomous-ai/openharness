@@ -33,6 +33,8 @@ const VERIFIED_TOOL_TTL_MS = 10 * 60_000
  *  is heard from within this long. */
 const FIELD_REFUSED_MS = 10 * 60_000
 const UNVERIFIED_TOOL_TTL_MS = 60_000
+/** How long a tool found missing stands before it is probed again: a tool installed meanwhile is seen within a minute. */
+const MISSING_TOOL_TTL_MS = 60_000
 /** How long a session's folder stands as clean or not before git is asked again: a minute bounds the work to one
  *  `git status` per running session a minute, and the backend stops an idle worker only on a report under 2 minutes old. */
 const UNCOMMITTED_TTL_MS = 60_000
@@ -383,7 +385,7 @@ export class ContributedMachines {
         for (const name of probeTools) {
           const value = typeof measuredTools[name] === 'boolean' ? measuredTools[name] as boolean : null
           const detail = value === null ? String(measuredErrors[name] ?? 'The tool probe did not complete.') : undefined
-          this.toolCache.set(name, { value, detail, until: sampledAt + (value === null ? UNVERIFIED_TOOL_TTL_MS : VERIFIED_TOOL_TTL_MS) })
+          this.toolCache.set(name, { value, detail, until: sampledAt + (value === null ? UNVERIFIED_TOOL_TTL_MS : value ? VERIFIED_TOOL_TTL_MS : MISSING_TOOL_TTL_MS) })
         }
         const reportedTools: Record<string, boolean> = {}, toolProbeErrors: Record<string, string> = {}
         for (const name of tools) {

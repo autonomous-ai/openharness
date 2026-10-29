@@ -280,6 +280,24 @@ describe('contributed machine executor', () => {
     await f.machine.tick()
     expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['flutter'] })
   })
+  it('probes a missing tool again after a minute and a present tool only after ten minutes', async () => {
+    const f = fixture()
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { git: true, node: true, npm: true, flutter: true, gh: false, cargo: true, python3: true } } as never)
+    await f.machine.tick()
+    f.capabilities.mockResolvedValueOnce({ ok: true, resources: { cpuPercent: 20, memoryTotalBytes: 1000, memoryUsedBytes: 200, projectDiskFreeBytes: 1000 },
+      tools: { gh: true } } as never)
+    f.step(61_000)
+    await f.machine.tick()
+    expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['gh'] })
+    // Once found, gh is a present tool: the ten minute window applies to it like the others.
+    f.step(61_000)
+    await f.machine.tick()
+    expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: [] })
+    f.step(10 * 60_000)
+    await f.machine.tick()
+    expect(f.capabilities.mock.lastCall?.[0]).toMatchObject({ tools: ['git', 'node', 'npm', 'flutter', 'gh', 'cargo', 'python3'] })
+  })
   // v1 routing (#229): the route left out nothing it could not see, and picked machines signed out, without the project or
   // unable to push. The reading now says what the machine is ready for.
   describe('readiness', () => {
