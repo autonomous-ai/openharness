@@ -368,7 +368,18 @@ export interface MessageDraft {
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
-export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
+/** Notices written for the Lead or an agent alone, read only by their recipients like an agent-only notice, under their own
+ *  kind so their recipients receive them as before: the Lead's wake for a stalled, lost or resumed task, the old agent's
+ *  moved notice, and the Lead's scheduled report and digest requests. People read the task's state on its status line (Ken,
+ *  2026-10-29: shown under the Lead's name in the project chat, they read as requests to act). By kind, so the ones already
+ *  stored are hidden as well. */
+const RECIPIENT_NOTICES = new Set<unknown>([AGENT_ONLY.kind, 'work-stalled', 'work-lost', 'work-resumed', 'update-request', 'digest-request'])
+/** Marks a notice of a kind people also read (a cancel, a failed start) as its recipients' alone. */
+export const forRecipients = (source: Record<string, unknown>) => ({ ...source, recipientsOnly: true as const })
+export const agentOnly = (source: unknown): boolean => {
+  const notice = source as { kind?: unknown; recipientsOnly?: unknown } | null | undefined
+  return RECIPIENT_NOTICES.has(notice?.kind) || notice?.recipientsOnly === true
+}
 /** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
 /** A lost task's reason without the machine it ran on (lostReason.ts). */
 export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harnessId' | 'replacement' | 'lostTask'>>(target: T): T => {

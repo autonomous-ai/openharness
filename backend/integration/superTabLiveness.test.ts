@@ -216,7 +216,11 @@ describe('work that loses its owner', () => {
     await resume()
     expect(await f.assignment()).toMatchObject({ id: f.assignmentId, agentId: f.worker, status: 'working' })
     expect((await row()).resume).toBeNull()
-    expect((await f.leadInbox()).map(m => m.text)).toContain(`${await f.name(f.worker)} resumed its task after its usage limit reset.`)
+    const said = `${await f.name(f.worker)} resumed its task after its usage limit reset.`
+    const resumed = (await f.leadInbox()).find(m => m.text === said)!
+    // The Lead's alone, like the loss it follows: people read the task working again on its status line.
+    expect((await f.timed.messages(host, f.tab, resumed.conversationId, {}, f.lead)).messages.map(m => m.id)).toContain(resumed.id)
+    expect((await f.timed.messages(owner, f.tab, resumed.conversationId, {})).messages.map(m => m.id)).not.toContain(resumed.id)
   })
 
   // 2026-10-28: a resumed task keeps its id. When its session then stopped, the second loss wrote the first loss's notice
@@ -420,6 +424,26 @@ describe('work that loses its owner', () => {
     const notice = (await db.superTabMessage.findMany({ where: { id: { in: told.map(d => d.messageId) } } }))
       .find(m => (m.source as { kind?: string }).kind === 'work-lost')!
     expect(notice.text).toBe('Your task "Ship the parser" moved: its session on Worker Mac stopped. Stop working on it; your status and results for it are no longer accepted.')
+  })
+
+  // Ken, 2026-10-29: a notice telling an agent to stop is the agent's alone; people read the cancel on the task itself.
+  it('tells the worker of a cancelled task to stop, a notice no person reads, and shows a cancel with nobody to tell', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed' })
+    const told = await f.timed.deliveries(host, f.tab, f.worker)
+    const notice = (await db.superTabMessage.findMany({ where: { id: { in: told.map(d => d.messageId) } } }))
+      .find(m => m.text === 'The tab owner cancelled this task: Not needed. Stop working on it.')!
+    const page = async (user: AuthUser, asAgentId?: string) => (await f.timed.messages(user, f.tab, f.group, {}, asAgentId)).messages.map(m => m.id)
+    expect(await page(host, f.worker)).toContain(notice.id)
+    for (const user of [owner, host]) expect(await page(user)).not.toContain(notice.id)
+    expect(await page(host, f.lead)).not.toContain(notice.id)
+    expect(await f.assignment()).toMatchObject({ status: 'cancelled', result: 'Not needed' })
+
+    // A lost task's agent was told already: its cancel reaches no agent, so it stays the task's record for people.
+    const lost = await swarm()
+    await lost.observe('test-host', [], { stoppedHarnessIds: [lost.harness.worker] })
+    await lost.execute({ type: 'work.cancel', conversationId: lost.group, assignmentId: lost.assignmentId, reason: 'Not needed' })
+    expect((await lost.timed.messages(owner, lost.tab, lost.group, {})).messages.map(m => m.text)).toContain('The tab owner cancelled this task: Not needed.')
   })
 
   it('lets the Lead assign the lost work to another agent, and keeps the old one fenced', async () => {
@@ -825,6 +849,48 @@ describe('a task that stalls', () => {
     expect((await f.assignment()).status).toBe('working')
   })
 
+  // Ken, 2026-10-29: these showed under the Lead's name in the project chat, and people read them as requests to act. They
+  // reach only the Lead and the agent; people read the task's state on its status line.
+  it('wakes the Lead and tells the worker, but no person or other agent reads the stalled, lost or moved notice', async () => {
+    const f = await swarm()
+    const posted = f.clock.now
+    await f.beat(posted)
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
+    const inbox = await tick(f, posted + 30 * MINUTE)
+    const [stalled] = await stalledRows(f)
+    expect(inbox.map(m => m.id)).toContain(stalled!.id)
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    const wake = (await f.leadInbox()).find(m => (m.source as { kind?: string }).kind === 'work-lost')!
+    const told = await f.timed.deliveries(host, f.tab, f.worker)
+    const moved = (await db.superTabMessage.findMany({ where: { id: { in: told.map(d => d.messageId) } } }))
+      .find(m => (m.source as { kind?: string }).kind === 'work-lost')!
+    expect(moved.text).toContain('Stop working on it')
+    const notices = [stalled!, wake, moved]
+    const ids = notices.map(m => m.id)
+    const page = async (user: AuthUser, conversationId: string, asAgentId?: string, messageId?: string) =>
+      (await f.timed.messages(user, f.tab, conversationId, messageId ? { messageId } : {}, asAgentId)).messages.map(m => m.id)
+    // Each recipient reads its own notice where it was written.
+    expect(await page(host, stalled!.conversationId, f.lead)).toContain(stalled!.id)
+    expect(await page(host, wake.conversationId, f.lead)).toContain(wake.id)
+    expect(await page(host, moved.conversationId, f.worker)).toContain(moved.id)
+    // People read none of them: not in the project chat, not in the task's chat, not by its id, which reads as no such message.
+    // Neither the Lead's owner (the tab's owner added it) nor its machine's owner: each reads as a person, not as the agent.
+    expect((await f.timed.read(owner, f.tab)).state.agents.find(a => a.id === f.lead)).toMatchObject({ contributorId: owner.sub, machineOwnerId: host.sub })
+    for (const user of [owner, host]) {
+      for (const conversationId of new Set(notices.map(m => m.conversationId))) {
+        expect((await page(user, conversationId)).filter(id => ids.includes(id))).toEqual([])
+      }
+      for (const m of notices) expect(await page(user, m.conversationId, undefined, m.id)).toEqual([])
+    }
+    // Nor does an agent it is not for: the worker never reads the Lead's wake, nor the Lead the worker's notice.
+    expect(await page(host, wake.conversationId, f.worker, wake.id)).toEqual([])
+    expect(await page(host, moved.conversationId, f.lead, moved.id)).toEqual([])
+    // Nothing a person must act on is hidden: the task's own state says it is lost.
+    expect(await liveness(f)).toBeDefined()
+    expect((await f.assignment()).status).toBe('lost')
+  })
+
   it('is orphaned when its agent is removed, and the Lead is woken once by the next time checks', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
@@ -929,6 +995,10 @@ describe('the delivery poll of an agent with nothing waiting', () => {
     f.clock.now += 5 * MINUTE
     const told = await f.leadInbox()
     expect(told.map(m => (m.source as { kind?: string }).kind)).toEqual(['update-request'])
+    // It is the Lead's to act on, with a command to run: the Lead reads it in its chat, and the people there do not.
+    const read = async (asAgentId?: string) => (await f.timed.messages(asAgentId ? host : owner, f.tab, told[0]!.conversationId, {}, asAgentId)).messages.map(m => m.id)
+    expect(await read(f.lead)).toContain(told[0]!.id)
+    expect(await read()).not.toContain(told[0]!.id)
   })
 
   // Prod, 2026-10-28: a Lead's host received an update request on 26 Oct and the Lead never answered it. Every later poll
@@ -1411,6 +1481,10 @@ describe('the morning digest', () => {
     expect(counted.ops).not.toContain('SuperTabDecision.groupBy')
     const digest = (await db.superTabMessage.findMany({ where: { tabId: f.tab } })).find(m => (m.source as { kind?: string } | null)?.kind === 'digest-request')!
     expect(digest.text).toMatch(/\nDecisions waiting:\n- #1 Ship the parser: 2 for owner@example\.com$/)
+    // The Lead's to write up: the people in its chat read the digest it posts, not this request.
+    const read = async (asAgentId?: string) => (await f.timed.messages(asAgentId ? host : owner, f.tab, digest.conversationId, {}, asAgentId)).messages.map(m => m.id)
+    expect(await read(f.lead)).toContain(digest.id)
+    expect(await read()).not.toContain(digest.id)
   })
 
   it('lists a decision still waiting in a conversation that has gone quiet', async () => {
