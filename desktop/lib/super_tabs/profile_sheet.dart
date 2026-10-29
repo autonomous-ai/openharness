@@ -13,6 +13,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'profile_actions.dart';
 import 'status_editor.dart';
+import 'username_editor.dart';
 
 /// Picks one picture from this computer, or null when the person cancels.
 Future<Uint8List?> pickSuperTabPicture() async {
@@ -25,7 +26,8 @@ Future<Uint8List?> pickSuperTabPicture() async {
 }
 
 /// The reader's own profile, or [agentId]'s avatar for its contributor or
-/// Lead: a picture to pick or upload and, for the reader, a status.
+/// Lead: a picture to pick or upload and, for the reader, a username and a
+/// status.
 Future<void> showSuperTabProfile(
   BuildContext context,
   SuperTabController controller, {
@@ -73,6 +75,17 @@ class _ProfileSheetState extends State<_ProfileSheet> {
     });
   }
 
+  /// A refused name is said under its own field, not at the foot of the sheet.
+  Future<String?> _saveUsername(String username) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final error = await c.setUsername(username);
+    if (mounted) setState(() => _busy = false);
+    return error;
+  }
+
   Future<void> _upload() async {
     final picked = await widget.pickPicture();
     if (picked == null) return;
@@ -110,6 +123,14 @@ class _ProfileSheetState extends State<_ProfileSheet> {
               children: [
                 ?avatar,
                 const SizedBox(height: 16),
+                if (agent == null && person != null) ...[
+                  SuperTabUsernameEditor(
+                    username: person.username,
+                    busy: _busy,
+                    onSave: _saveUsername,
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 Text('Picture', style: DesktopChrome.control(medium: true)),
                 const SizedBox(height: 8),
                 Wrap(

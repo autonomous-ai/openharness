@@ -224,8 +224,21 @@ Future<void> _showHow(BuildContext context) => Navigator.of(
   rootNavigator: true,
 ).push(phoneSheetRoute<void>(context, builder: (_) => const _HowSheet()));
 
+/// The drawer's Join or create a Swarm: the phone makes no Swarm and sends
+/// no invitation, so the same sheet, with how one is joined too.
+Future<void> showSwarmJoinOrCreate(BuildContext context) =>
+    Navigator.of(context, rootNavigator: true).push(
+      phoneSheetRoute<void>(
+        context,
+        builder: (_) => const _HowSheet(join: true),
+      ),
+    );
+
 class _HowSheet extends StatelessWidget {
-  const _HowSheet();
+  const _HowSheet({this.join = false});
+
+  /// Says how a Swarm is joined, too.
+  final bool join;
 
   static const _steps = [
     'Open Harness on your computer.',
@@ -249,11 +262,18 @@ class _HowSheet extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const TtyText(
-              'Start a Swarm',
+            TtyText(
+              join ? 'Join or create a Swarm' : 'Start a Swarm',
               size: TtySize.title,
               weight: FontWeight.w600,
             ),
+            if (join) ...[
+              const SizedBox(height: 12),
+              Text(
+                'To join one, ask its owner to invite you. To start one:',
+                style: tty.style(color: tty.dim, size: TtySize.row),
+              ),
+            ],
             const SizedBox(height: 18),
             for (final (index, step) in _steps.indexed)
               Padding(

@@ -59,6 +59,9 @@ export const AUTO_SETUP_RETRY_MS = 24 * 60 * 60_000
 export type AutoSetupState = 'unsupported' | 'signed-out' | 'dedicated' | 'running' | 'exists' | 'declined' | 'waiting' | 'not-shared'
   | 'no-prompt' | 'wanted' | 'started'
 
+/** What [TeamAutoSetup.status] answers. `detail`: a failed setup's own sentence, at most 300 characters. */
+export interface TeamSetupStatus { state: 'none' | 'running' | 'exists' | 'declined' | 'failed'; detail?: string }
+
 /** The moment the person is at this Mac: they joined a Swarm, added this Mac to one, or opened the app (`startup`); or
  *  they asked for it (`manual`: Desktop's explanation was accepted, or the machine row's Set up button). */
 export type AutoSetupReason = 'join' | 'contribute' | 'startup' | 'manual'
@@ -125,6 +128,19 @@ export class TeamAutoSetup {
     if (this.running) return 'running'
     this.running = this.run().finally(() => { this.running = null })
     return 'started'
+  }
+
+  /**
+   * Why this Mac has no Harness Team account, for its own Desktop's machine row: the person cancelled (the prompt, "Not
+   * now" or `harness team remove`), setup failed and why, it is running now, or nothing was tried yet. Asks nothing.
+   */
+  async status(): Promise<TeamSetupStatus> {
+    const { deps } = this
+    if (this.running) return { state: 'running' }
+    if (deps.readConfig() || await deps.accountExists(TEAM_USER)) return { state: 'exists' }
+    const decision = deps.readDecision()
+    if (!decision) return { state: 'none' }
+    return { state: decision.state, ...(decision.state === 'failed' && decision.detail ? { detail: decision.detail } : {}) }
   }
 
   /** "Not now" in Desktop's explanation: not offered again on its own, as a cancelled prompt is not. */

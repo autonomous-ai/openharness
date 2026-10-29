@@ -1,18 +1,14 @@
 import 'dart:async';
 
-import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/phone_shell_scope.dart';
-import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
-import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
@@ -20,14 +16,19 @@ import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
 import 'swarm_conversation_page.dart';
 import 'swarm_home_keeper.dart';
+import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
+import 'swarm_leaderboard.dart';
 import 'swarm_message_row.dart';
 import 'swarm_pm_chat.dart';
+import 'swarm_project_tabs.dart';
+import 'swarm_project_tasks.dart';
 import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
 import 'swarm_task_status.dart';
+import 'swarm_unread.dart';
 import 'team_glance.dart';
 
 /// The conversations of one project the person may read, as its sheet lists
@@ -74,21 +75,25 @@ Set<String> swarmWaitingOnYou(SwarmInbox inbox, String swarmId) => {
     if (need is SwarmWorkNeed && need.swarmId == swarmId) need.conversationId,
 };
 
-/// One project, as prototype B draws it (Tony, 2026-10-28): its project chat
-/// (its Product Manager and everyone) is the screen, under the project's name
-/// and who is in it, with nothing under the header; and at the header's end a
-/// ⋮ menu (Tony, 2026-10-29) with Buddy chat and the team's status in words
-/// ([SwarmProjectStatus]), which opens the project's work and team in a sheet
-/// ([showSwarmProjectSheet]).
+/// One project, as Tony's prototype B2 draws it (2026-10-29): a header with
+/// back, the project's name over its team in coloured dots, and its team at
+/// the end ([showSwarmProjectSheet]); under it four tabs
+/// ([SwarmProjectTab]) — its chat with everyone, the person's Buddy chat,
+/// its tasks ([SwarmProjectTasks]) and its leaderboard. Only the tab shown
+/// is built: a chat out of sight reads nothing and marks nothing read.
 class SwarmProjectPage extends StatefulWidget {
   const SwarmProjectPage({
     super.key,
     required this.swarmId,
     required this.projectId,
+    this.tab = SwarmProjectTab.chat,
     this.mention,
   });
 
   final String swarmId, projectId;
+
+  /// The tab it opens on.
+  final SwarmProjectTab tab;
 
   /// An agent to @mention in the chat's draft as it opens
   /// ([SwarmConversationPage.mention]).
@@ -100,14 +105,7 @@ class SwarmProjectPage extends StatefulWidget {
 
 class _SwarmProjectPageState extends State<SwarmProjectPage> {
   SwarmSession? _session;
-
-  /// The person's Buddy chat: being opened, and why the last one did not
-  /// open. The menu's button and the line under the header listen; the chat
-  /// is not built again for them.
-  final _buddy = ValueNotifier<({bool opening, String? error})>((
-    opening: false,
-    error: null,
-  ));
+  late SwarmProjectTab _tab = widget.tab;
 
   /// What the page shows of the inbox ([_inboxChanged]): its Swarm's
   /// reader, whether there are several Swarms, why the list was not read.
@@ -119,9 +117,14 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   /// Until then, a project the Swarm did not have may be one just made.
   bool _read = false;
 
-  /// The project chat as last built, with what it was built from: a read
-  /// that moved none of it builds none of it again ([_chatOf]).
-  ({Object inputs, Widget chat})? _chat;
+  /// What the person does to their Buddy here, for the Buddy tab and the
+  /// header's Remove Buddy; one for each read of the Swarm.
+  SwarmBuddyActions? _buddy;
+
+  /// The tab shown as last built, with what it was built from: a read that
+  /// moved none of it builds none of it again ([_bodyOf]). Each tab follows
+  /// what it shows itself.
+  ({Object inputs, Widget body})? _body;
 
   @override
   void didChangeDependencies() {
@@ -140,7 +143,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   void dispose() {
     _session?.inbox.removeListener(_inboxChanged);
     _session?.leave();
-    _buddy.dispose();
+    _buddy?.dispose();
     super.dispose();
   }
 
@@ -164,6 +167,15 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
     _reader = inbox?.reader(widget.swarmId);
     _several = (inbox?.swarms.length ?? 0) > 1;
     _listError = inbox?.error;
+    // Another read of the Swarm, or none: nothing done to the last one's
+    // Buddy stays.
+    if (_buddy?.reader != _reader) {
+      _buddy?.dispose();
+      _buddy = switch (_reader) {
+        final reader? => SwarmBuddyActions(reader, widget.projectId),
+        null => null,
+      };
+    }
   }
 
   /// Reads the Swarm as the page opens: what Home read may be 15 seconds
@@ -185,103 +197,118 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   Future<void> _pull() =>
       _reader?.refresh() ?? _session?.inbox.refresh() ?? Future.value();
 
-  Future<void> _openBuddy() async {
-    final reader = _reader;
-    if (reader == null || _buddy.value.opening) return;
-    _buddy.value = (opening: true, error: null);
-    final error = await openSwarmBuddy(
-      context,
-      reader,
-      widget.swarmId,
-      widget.projectId,
-    );
-    if (!mounted) return;
-    _buddy.value = (opening: false, error: error);
-  }
-
-  void _openSheet() => unawaited(
+  void _openTeam() => unawaited(
     showSwarmProjectSheet(
       context,
       swarmId: widget.swarmId,
       projectId: widget.projectId,
+      team: true,
     ),
   );
 
-  /// The header's menu ([showSwarmProjectMenu]), then what was picked in it.
-  /// A viewer with no Buddy chat here has none to open, and starts none.
-  Future<void> _openMenu() async {
-    final reader = _reader;
-    if (reader == null || _buddy.value.opening) return;
-    final picked = await showSwarmProjectMenu(
-      context,
-      swarmId: widget.swarmId,
-      projectId: widget.projectId,
-      buddyChat:
-          swarmBuddyChat(reader, widget.projectId) != null ||
-          swarmCanWrite(reader),
+  void _open(String conversationId) =>
+      openSwarmConversation(context, widget.swarmId, conversationId);
+
+  /// The header: back, [project]'s name over its team — "Updating…" while
+  /// counted from the Home kept, and with several Swarms which one — and the
+  /// team at its end, after Remove Buddy on the Buddy tab.
+  Widget _header(
+    SwarmSession session,
+    SwarmReader reader,
+    SuperTabSnapshot snapshot,
+    SuperTabProject project,
+    Widget back,
+  ) {
+    final kept = swarmHomeKept(reader);
+    return SwarmTopBar(
+      leading: back,
+      title: project.name,
+      line: KeyedSubtree(
+        key: const ValueKey('swarm-project-team-line'),
+        child: kept
+            ? Text(
+                'Updating…',
+                maxLines: 1,
+                style: AppType.caption(
+                  color: AppPalette.textSecondary,
+                  height: 1.35,
+                ),
+              )
+            : SwarmTeamDots(
+                swarmTeamGlance(snapshot, projectId: project.id),
+                lead: _several ? snapshot.name : null,
+              ),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_tab == SwarmProjectTab.buddy && _buddy != null)
+            SwarmBuddyMenuButton(actions: _buddy!),
+          SwarmIconButton(
+            key: const ValueKey('swarm-project-team'),
+            icon: LucideIcons.users300,
+            label: 'Team',
+            onPressed: _openTeam,
+          ),
+        ],
+      ),
     );
-    if (!mounted) return;
-    switch (picked) {
-      case SwarmProjectMenuItem.buddyChat:
-        await _openBuddy();
-      case SwarmProjectMenuItem.status:
-        _openSheet();
-      case null:
-        break;
-    }
   }
 
-  /// [project]'s chat as the screen: its name over who is in it — and, with
-  /// several Swarms, which one — and its menu at the header's end.
-  Widget _chatOf(SuperTabSnapshot snapshot, SuperTabProject project) {
-    final who = switch (swarmPmName(snapshot, project)) {
-      final name? => '$name and everyone',
-      null => 'Everyone in the project',
-    };
+  /// The tab shown, alone, built again only when what it is built from
+  /// moved.
+  Widget _bodyOf(
+    SwarmSession session,
+    SwarmReader reader,
+    SuperTabProject project,
+  ) {
     final inputs = (
+      _tab,
+      session,
+      reader,
+      project.id,
       project.leadConversationId,
-      project.name,
-      _several ? '$who · ${snapshot.name}' : who,
+      _buddy,
     );
-    if (_chat case final kept? when kept.inputs == inputs) return kept.chat;
-    final chat = SwarmConversationPage(
+    if (_body case final kept? when kept.inputs == inputs) return kept.body;
+    final body = KeyedSubtree(
+      key: ValueKey('swarm-project-body-${_tab.name}'),
+      child: _tabOf(session, reader, project),
+    );
+    _body = (inputs: inputs, body: body);
+    return body;
+  }
+
+  Widget _tabOf(
+    SwarmSession session,
+    SwarmReader reader,
+    SuperTabProject project,
+  ) => switch (_tab) {
+    SwarmProjectTab.chat => SwarmConversationPage(
       key: ValueKey('swarm-project-chat-${project.leadConversationId}'),
       swarmId: widget.swarmId,
       conversationId: project.leadConversationId,
-      title: inputs.$2,
-      subtitle: inputs.$3,
+      header: false,
       mention: widget.mention,
-      action: ValueListenableBuilder(
-        valueListenable: _buddy,
-        builder: (context, buddy, _) => _MenuButton(
-          opening: buddy.opening,
-          onPressed: () => unawaited(_openMenu()),
-        ),
-      ),
-      // Nothing else under the header (Tony, 2026-10-29): the team's status
-      // is in the menu.
-      below: ValueListenableBuilder(
-        valueListenable: _buddy,
-        builder: (context, buddy, _) => switch (buddy.error) {
-          final error? => Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.screenInset,
-              vertical: AppSpace.s,
-            ),
-            child: SwarmRow.line(
-              error,
-              key: const ValueKey('swarm-buddy-error'),
-              lines: 3,
-              color: AppColors.danger,
-            ),
-          ),
-          null => const SizedBox.shrink(),
-        },
-      ),
-    );
-    _chat = (inputs: inputs, chat: chat);
-    return chat;
-  }
+    ),
+    SwarmProjectTab.buddy => SwarmProjectBuddy(
+      reader: reader,
+      swarmId: widget.swarmId,
+      projectId: project.id,
+      actions: _buddy!,
+    ),
+    SwarmProjectTab.tasks => SwarmProjectTasks(
+      session: session,
+      reader: reader,
+      projectId: project.id,
+      onOpen: _open,
+    ),
+    SwarmProjectTab.leaderboard => SwarmLeaderboardPage(
+      swarmId: widget.swarmId,
+      projectId: project.id,
+      header: false,
+    ),
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -304,8 +331,30 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
         final project = snapshot?.projects
             .where((p) => p.id == widget.projectId)
             .firstOrNull;
-        if (snapshot != null && project != null) {
-          return _chatOf(snapshot, project);
+        if (reader != null && snapshot != null && project != null) {
+          final chat = snapshot.conversation(project.leadConversationId);
+          final asks = session.inbox.asks(widget.swarmId);
+          return _Frame(
+            top: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _header(session, reader, snapshot, project, back),
+                // The chat's news moves with the Lead's tags too: they build
+                // the tabs alone.
+                ListenableBuilder(
+                  listenable: asks ?? Listenable.merge(const []),
+                  builder: (context, _) => SwarmProjectTabBar(
+                    selected: _tab,
+                    chatNews: chat == null || _tab == SwarmProjectTab.chat
+                        ? swarmNoNews
+                        : swarmChatNews(reader, asks, chat),
+                    onSelect: (tab) => setState(() => _tab = tab),
+                  ),
+                ),
+              ],
+            ),
+            body: _bodyOf(session, reader, project),
+          );
         }
         // Why there is no project to show: still reading, or a read that
         // failed or finished without it.
@@ -345,7 +394,8 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
   static const _gone = 'This project is no longer in the Swarm.';
 }
 
-/// The page before its project chat is: its [top] bar, and [body] under it.
+/// The page: its [top] — the header, and the tabs once there is a project —
+/// and [body] under it.
 class _Frame extends StatelessWidget {
   const _Frame({required this.top, this.body});
 
@@ -371,355 +421,6 @@ class _Frame extends StatelessWidget {
   }
 }
 
-/// The header's ⋮: 44 points square, its glyph's end on the screen's side
-/// margin, as the header's words are. While Buddy chat opens ([opening]), a
-/// spinner in its place, and taps do nothing.
-class _MenuButton extends StatelessWidget {
-  const _MenuButton({required this.opening, required this.onPressed});
-
-  final bool opening;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final ink = AppPalette.textPrimary;
-    return Semantics(
-      key: const ValueKey('swarm-project-menu'),
-      button: true,
-      enabled: !opening,
-      label: opening ? 'Opening Buddy chat…' : 'Project menu',
-      excludeSemantics: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: opening
-            ? null
-            : () {
-                HapticFeedback.selectionClick();
-                onPressed();
-              },
-        child: SizedBox.square(
-          dimension: minTouchTarget,
-          child: Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: opening
-                ? SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: ink,
-                      backgroundColor: ink.withValues(alpha: .35),
-                    ),
-                  )
-                : Icon(LucideIcons.ellipsisVertical300, size: 22, color: ink),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// What the project's menu ([showSwarmProjectMenu]) was closed with.
-enum SwarmProjectMenuItem { buddyChat, status }
-
-/// The project's ⋮ menu, as Tony asked for it (2026-10-29): Buddy chat, where
-/// Chat with PM was (#2090) — none for a viewer without one ([buddyChat]) —
-/// then the team's status in words
-/// ([SwarmProjectStatus]), which opens the project's work and team. Its rows
-/// are a thumb's height at least, on the sheet the composer's + opens.
-/// Answers the row picked, or null when the person closes it.
-Future<SwarmProjectMenuItem?> showSwarmProjectMenu(
-  BuildContext context, {
-  required String swarmId,
-  required String projectId,
-  required bool buddyChat,
-}) => showModalBottomSheet<SwarmProjectMenuItem>(
-  context: context,
-  backgroundColor: AppGlass.rowFill,
-  shape: AppControl.sheetShape,
-  builder: (_) => _ProjectMenu(
-    swarmId: swarmId,
-    projectId: projectId,
-    buddyChat: buddyChat,
-  ),
-);
-
-class _ProjectMenu extends StatelessWidget {
-  const _ProjectMenu({
-    required this.swarmId,
-    required this.projectId,
-    required this.buddyChat,
-  });
-
-  final String swarmId, projectId;
-  final bool buddyChat;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    void pick(SwarmProjectMenuItem item) => Navigator.of(context).pop(item);
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpace.l,
-          AppSpace.s,
-          AppSpace.l,
-          AppSpace.l,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // The grabber: a capsule as wide as the two largest steps.
-            Center(
-              child: Container(
-                width: AppSpace.xl + AppSpace.m,
-                height: AppSpace.xs,
-                margin: const EdgeInsets.only(bottom: AppSpace.s),
-                decoration: ShapeDecoration(
-                  color: AppGlass.hair,
-                  shape: const StadiumBorder(),
-                ),
-              ),
-            ),
-            if (buddyChat)
-              _MenuRow(
-                key: const ValueKey('swarm-project-menu-buddy-chat'),
-                onTap: () => pick(SwarmProjectMenuItem.buddyChat),
-                child: Text(
-                  'Buddy chat',
-                  style: AppType.body(color: AppPalette.textPrimary),
-                ),
-              ),
-            SwarmProjectStatus(
-              swarmId: swarmId,
-              projectId: projectId,
-              onTap: () => pick(SwarmProjectMenuItem.status),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// One row of the project's menu: its words, then maybe a mark at its end,
-/// at least [minTouchTarget] tall.
-class _MenuRow extends StatelessWidget {
-  const _MenuRow({
-    super.key,
-    required this.onTap,
-    required this.child,
-    this.trailing,
-  });
-
-  final VoidCallback onTap;
-  final Widget child;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    return Semantics(
-      button: true,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppControl.radius),
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: minTouchTarget),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.m,
-              vertical: AppSpace.s,
-            ),
-            child: Row(
-              children: [
-                Expanded(child: child),
-                if (trailing case final trailing?) ...[
-                  const SizedBox(width: AppSpace.s),
-                  trailing,
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The team of a project in its menu: its status in words
-/// ([SwarmStatusText]) and a chevron, opening the project's work and team
-/// ([onTap]). Counted from the Home kept, it reads "Updating…" until its
-/// Swarm is read again ([swarmHomeKept]), and nothing waits yet.
-///
-/// It follows its Swarm and the inbox itself while the menu is open, and is
-/// built again only when what it shows moved.
-class SwarmProjectStatus extends StatefulWidget {
-  const SwarmProjectStatus({
-    super.key,
-    required this.swarmId,
-    required this.projectId,
-    required this.onTap,
-  });
-
-  final String swarmId, projectId;
-  final VoidCallback onTap;
-
-  @override
-  State<SwarmProjectStatus> createState() => _SwarmProjectStatusState();
-}
-
-/// What [SwarmProjectStatus] shows: its team, how much work waits on the
-/// person, and whether it is counted from the Home kept.
-typedef _Status = ({SwarmTeamGlance glance, int waiting, bool kept});
-
-class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
-  SwarmSession? _session;
-  SwarmReader? _reader;
-  _Status? _status;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final session = SwarmScope.of(context);
-    if (session == _session) return;
-    _session?.inbox.removeListener(_changed);
-    _session = session?..inbox.addListener(_changed);
-    _follow();
-    _status = _see();
-  }
-
-  @override
-  void dispose() {
-    _session?.inbox.removeListener(_changed);
-    _reader?.removeListener(_changed);
-    super.dispose();
-  }
-
-  /// Listens to the Swarm's reader the inbox has now.
-  void _follow() {
-    final reader = _session?.inbox.reader(widget.swarmId);
-    if (reader == _reader) return;
-    _reader?.removeListener(_changed);
-    _reader = reader?..addListener(_changed);
-  }
-
-  void _changed() {
-    _follow();
-    final status = _see();
-    if (status != _status) setState(() => _status = status);
-  }
-
-  _Status? _see() {
-    final session = _session, reader = _reader;
-    final snapshot = reader?.snapshot;
-    final project = snapshot?.projects
-        .where((p) => p.id == widget.projectId)
-        .firstOrNull;
-    if (session == null || snapshot == null || project == null) return null;
-    final kept = swarmHomeKept(reader);
-    final waits = swarmWaitingOnYou(session.inbox, widget.swarmId);
-    final work = swarmProjectWork(snapshot, project, buddies: reader!.buddies);
-    return (
-      glance: swarmTeamGlance(snapshot, projectId: project.id),
-      // What was kept is not now, what waits on the person least of all.
-      waiting: kept ? 0 : work.active.where((g) => waits.contains(g.id)).length,
-      kept: kept,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final status = _status;
-    return _MenuRow(
-      key: const ValueKey('swarm-project-menu-status'),
-      onTap: widget.onTap,
-      trailing: Icon(
-        LucideIcons.chevronRight300,
-        size: AppIconSize.besideText,
-        color: AppPalette.textFaint,
-      ),
-      child: status == null
-          ? Text(
-              'Updating…',
-              style: AppType.body(color: AppPalette.textSecondary),
-            )
-          : SwarmStatusText(
-              status.glance,
-              waiting: status.waiting,
-              kept: status.kept,
-            ),
-    );
-  }
-}
-
-/// A project's team in words, as its menu says it (Tony, 2026-10-29): "17
-/// working · 3 down", no faces — or, while work waits on the person
-/// ([waiting]), how much does, in the warning colour, with only who is down
-/// of the team. Who is down is red. Counted from the Home kept ([kept]), it
-/// reads "Updating…".
-class SwarmStatusText extends StatelessWidget {
-  const SwarmStatusText(
-    this.glance, {
-    super.key,
-    this.waiting = 0,
-    this.kept = false,
-  });
-
-  final SwarmTeamGlance glance;
-  final int waiting;
-  final bool kept;
-
-  @override
-  Widget build(BuildContext context) {
-    AppTheme.watch(context);
-    final down = swarmStateColor(SwarmAgentState.down);
-    final List<({String text, Color? color})> parts = kept
-        ? const []
-        : waiting > 0
-        ? [
-            (text: '$waiting waiting on you', color: AppColors.warning),
-            if (glance.down > 0) (text: '${glance.down} down', color: down),
-          ]
-        : [
-            for (final part in glance.parts)
-              (
-                text: part.text,
-                color: part.state == SwarmAgentState.down ? down : null,
-              ),
-          ];
-    if (parts.isEmpty) {
-      return Text(
-        kept ? 'Updating…' : glance.line,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: AppType.body(
-          color: kept ? AppPalette.textSecondary : AppPalette.textPrimary,
-        ),
-      );
-    }
-    return Text.rich(
-      TextSpan(
-        children: [
-          for (final (i, part) in parts.indexed) ...[
-            if (i > 0) const TextSpan(text: ' · '),
-            TextSpan(
-              text: part.text,
-              style: part.color == null ? null : TextStyle(color: part.color),
-            ),
-          ],
-        ],
-      ),
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-      style: AppType.body(color: AppPalette.textPrimary),
-    );
-  }
-}
-
 /// The project's work and team in a sheet over its chat: its work — what
 /// waits on the person, then what the team is working on, by latest activity,
 /// and older work folded under "Older", read from the Swarm's closed work
@@ -731,6 +432,7 @@ Future<void> showSwarmProjectSheet(
   BuildContext context, {
   required String swarmId,
   required String projectId,
+  bool team = false,
 }) => showModalBottomSheet<void>(
   context: context,
   isScrollControlled: true,
@@ -738,7 +440,8 @@ Future<void> showSwarmProjectSheet(
   shape: AppControl.sheetShape,
   // On the page's own navigator, under the shell's [SwarmScope]: a chat
   // opened from it goes over it, and back comes back to it.
-  builder: (_) => SwarmProjectSheet(swarmId: swarmId, projectId: projectId),
+  builder: (_) =>
+      SwarmProjectSheet(swarmId: swarmId, projectId: projectId, team: team),
 );
 
 /// What [showSwarmProjectSheet] shows.
@@ -747,9 +450,13 @@ class SwarmProjectSheet extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.projectId,
+    this.team = false,
   });
 
   final String swarmId, projectId;
+
+  /// It opens on the team, not the work: the project header's team button.
+  final bool team;
 
   @override
   State<SwarmProjectSheet> createState() => _SwarmProjectSheetState();
@@ -757,7 +464,7 @@ class SwarmProjectSheet extends StatefulWidget {
 
 class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
   /// The team shows, not the work.
-  bool _team = false;
+  late bool _team = widget.team;
   bool _older = false;
   String? _olderError;
 
@@ -942,33 +649,14 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
     final older = _older ? work.older : const <SuperTabConversation>[];
     final earlier = _older && reader.hasEarlierDormant(projectId);
     final personName = swarmTaskPersonName(snapshot);
-    SwarmRow row(SuperTabConversation g) {
-      final agentId = g.assignment?['agentId'] as String?;
-      final agent = agentId == null ? null : snapshot.agentName(agentId);
-      return SwarmRow(
-        key: ValueKey('swarm-conversation-${g.id}'),
-        // Nobody holds it: its number still lines up with the others'.
-        leading: agentId == null
-            ? const SizedBox(width: 24)
-            : SwarmAvatar(
-                id: agentId,
-                name: snapshot.agentName(agentId),
-                size: 24,
-                picture: snapshot.agent(agentId)?.avatar,
-              ),
-        number: g.number == null ? null : '#${g.number}',
-        title: g.title,
-        // Its agent, then its task's line as the drawer's (#2125); work the
-        // server gave no state keeps its words.
-        detail: swarmTaskStatus(g, clock.now()) != null
-            ? SwarmTaskLine(g, personName: personName, lead: agent)
-            : switch (_statusOf(snapshot, g)) {
-                final status? => SwarmRow.line(status),
-                null => null,
-              },
-        onTap: () => openSwarmConversation(context, widget.swarmId, g.id),
-      );
-    }
+    Widget row(SuperTabConversation g) => SwarmWorkRow(
+      key: ValueKey('swarm-conversation-${g.id}'),
+      snapshot: snapshot,
+      group: g,
+      personName: personName,
+      avatarSize: 24,
+      onTap: () => openSwarmConversation(context, widget.swarmId, g.id),
+    );
 
     Widget box(Widget child) => SliverToBoxAdapter(child: child);
     // A card whose rows are built only as they come into view.
@@ -1077,19 +765,6 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
             : 'Dev',
       ),
     );
-  }
-
-  /// "Nova · Needs you"-like, from the work it holds; null when nobody holds
-  /// it.
-  static String? _statusOf(SuperTabSnapshot snapshot, SuperTabConversation g) {
-    final assignment = g.assignment;
-    final status = assignment?['status'];
-    if (assignment == null || status is! String) return null;
-    final agent = snapshot.agentName(assignment['agentId'] as String? ?? '');
-    final label = superTabWorkStatusLabel(status);
-    return label.isEmpty
-        ? agent
-        : '$agent · ${label[0].toUpperCase()}${label.substring(1)}';
   }
 }
 

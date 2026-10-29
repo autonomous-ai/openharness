@@ -48,6 +48,14 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(json.loads((self.output / "receipt.json").read_text()), result)
         return result
 
+    def test_reused_results_without_the_reviewed_checkout_are_refused(self):
+        # Merge-group candidates never reuse; only a PR run's receipt, checked against the reviewed checkout, can.
+        record = dict(origin_sha="e" * 40, origin_tree="f" * 40, run_id=99, run_attempt=1,
+                      run_url="https://github.com/owner/repo/actions/runs/99", reason="x")
+        self.client.receipt_patch = dict(suites=["mobile"], reused={"mobile": record})
+        with self.assertRaisesRegex(ValueError, "reviewed checkout"):
+            queue.gate_evidence(self.client, self.client.runs[123], self.output / "gate")
+
     def test_preview_collects_automatic_evidence_without_writes(self):
         self.assertEqual(self.finish(False)["status"], "ready_for_queue")
         self.assertEqual(self.client.writes, [])
