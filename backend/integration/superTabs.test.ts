@@ -2520,6 +2520,13 @@ describe('Super Tab chat attachments', () => {
       expect([(await row(stuck.id))?.id, stored(stuck.url), (await row(stuckPicture.id))?.id, pictures.objects.has(stuckPicture.key)])
         .toEqual([stuck.id, true, stuckPicture.id, true])
       await expect(send(tab, [stuck.id])).rejects.toMatchObject({ code: 'ATTACHMENT_EXPIRED', status: 410 })
+      // Nobody else learns it existed: another member, or its owner from another Swarm, is refused as for an id that never was.
+      await invite(tab)
+      const never = await send(tab, ['0'.repeat(24)], peer).catch((error: unknown) => error as { code: string; message: string; status: number })
+      expect(never.code).toBe('ATTACHMENT_UNAVAILABLE')
+      const unknown = { code: never.code, message: never.message, status: never.status }
+      await expect(send(tab, [stuck.id], peer)).rejects.toMatchObject(unknown)
+      await expect(send((await fixture()).tab, [stuck.id])).rejects.toMatchObject(unknown)
       await expect(useAvatar(tab, stuckPicture.id)).rejects.toMatchObject({ code: 'AVATAR_UNAVAILABLE' })
 
       await sweep()
