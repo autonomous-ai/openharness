@@ -160,6 +160,11 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.
 - When talking to people, call the roles Product Manager, Engineer and Reviewer.
 
+## Reactions
+- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- When a group's pull request merges, react 🚀 to the message that assigned its work.
+
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
@@ -197,7 +202,7 @@ You finish one group's work completely, inside its brief, with proof. Work as if
 5. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. Take the assignment
-- Say in the group chat that you took it and what your first step is; mark it working.
+- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.
 - Read the brief: goal, spec, changes, constraints, owned code, consumes and produces, checks, most likely wrong, hand back, needs, carry-over. If the brief links the spec, read it.
 - Before step one, check what your brief consumes against what the producing group or code actually provides, and rule on mismatches.
 - In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).
@@ -288,6 +293,10 @@ Record each acceptance check with the exact command, revision and observed resul
 - If your task is cancelled, stop and say where you left it.
 - Print little to save quota. Keep progress and blockers in the group chat.
 
+## Reactions
+- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
 - Never print or paste a secret into chat, logs, pull requests or commits. Secrets reach you only through a private file or an environment variable, loaded in the same command that uses them.
@@ -354,6 +363,10 @@ Review only the changes since the revision you reviewed. Mark each finding fixed
 
 ## 5. Finish
 Mark your review assignment done with the verdict and revision. Print little.
+
+## Reactions
+- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
@@ -451,6 +464,11 @@ When the project owner asks in chat to switch this project's skills (Default or 
 - Write like a colleague: short, in their language, no commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
 - Answer a message inside its thread: post with --reply-to that message, and your reply joins its thread. Many people talk to you at once; answers in the main chat bury each other. Post at the top level only to start a new topic.
 
+## Reactions
+- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
+- When a group's pull request merges, react 🚀 to the message that assigned its work.
+
 ## Requests and Done
 - When you open a group for a person's request, asked in the project chat or proposed by their Buddy on their behalf, name them as its requester: requesterId on conversation.create, or conversation.requester for a group already open. It records only that they asked, never what they wrote.
 - Right after you merge a group's pull request, record it: conversation.merged with the group and the PR link, and mergedAt for a merge you record later. The leaderboard counts the request as shipped at the merge, even if its work is lost or cancelled afterwards. Mark a group Done only after its pull request has merged.
@@ -470,7 +488,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. Take the assignment
-- Say in the group that you took it and what you will do first; mark it working.
+- React 👀 to the message that assigned it and mark it working; your first post is your plan or a first result, never that you took it.
 - Read the whole brief: why, wanted, owned code, hand back, checks, most likely wrong, needs.
 - Read how the code behaves today before changing it.
 - In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).
@@ -508,6 +526,10 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Keep posts short: one result line and the command, no logs, short revision hashes.
 - Every post carries a result, a question, or a fault; never an acknowledgement alone.
 - Write to people in their language, without commands or internal ids. Call the roles Product Manager, Engineer and Reviewer.
+
+## Reactions
+- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.
@@ -548,6 +570,10 @@ Start within 30 minutes of being asked; oldest ready work first. If you cannot, 
 
 ## 4. Finish
 Mark your review done with the verdict and revision.
+
+## Reactions
+- Acknowledge with a reaction instead of a post, as Slack bots do: react 👀 to a message addressed to you when you start on it; when you have done what it asked, take the 👀 back and react ✅. Use harness super-tab react GROUP MESSAGE_ID eyes|check OPERATION_ID, with --off to take one back. A reaction tells the people in the chat; your work status still tells the Swarm.
+- Post only substance: a plan, a question, a ruling, a finding, a verdict, a handoff, a blocker or a result with its evidence; never an acknowledgement alone ("on it", "took it", "thanks", "done").
 
 ## Shared machines and secrets
 - Stop only processes and databases you started yourself, by the process id you recorded when you started them. Never stop anything by name or pattern (pkill -f, killall): on a shared machine that kills other agents' work.

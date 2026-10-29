@@ -633,6 +633,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** Any other row the system writes in the actor's name. Without a source, a notice written as the owner read as the owner
    * asking, and a Lead could quote it to change rules (review of #1594). Only `message.send` and an initial message stay plain. */
   const SYSTEM_ROW = { kind: 'system' }
+  /** Agent bookkeeping, a routing line or an agent joined or ready: no one's in the project chat or the Leads chat, which
+   *  carry only what people read or decide on (the Lead's ruling, 2026-10-29); a task's chat keeps it as its record. */
+  const bookkeeping = (conversationId: string, source: Record<string, unknown>) =>
+    conversationId === state.leadsConversationId || projectsOf(state).some(p => p.leadConversationId === conversationId) ? forRecipients(source) : source
   const who = sender.kind === 'person' ? sender.name.split('@')[0]! : sender.name
   /** A hard rule refuses an agent, unless it carries out what a person chose by hand. A person is not blocked: the
    * command goes through and the group is told. */
@@ -679,8 +683,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   const steppedUp = (group: Conversation, reason: string, startId?: string) => {
     const stepped = stepUp(state, group, reason, context.now, startId)
     if (!stepped) return
+    // Each its recipient's alone (Ken, 2026-10-29): people read the step on the task's status line. With no Lead here to
+    // hear it, the people do (review of #2177).
     const row = (key: string, text: string, recipients: string[]) => effects.messages.push({ id: stableId(operationId, 'step-up', key),
-      conversationId: group.id, author: sender, text, replyTo: null, recipients, source: SYSTEM_ROW })
+      conversationId: group.id, author: sender, text, replyTo: null, recipients, source: recipients.length ? forRecipients(SYSTEM_ROW) : SYSTEM_ROW })
     if (stepped.stopped) row('worker', `The Swarm stepped this task up to a stronger model: ${reason.replace(/^./, c => c.toLowerCase()).replace(/\.$/, '')}. Stop working on it.`, [stepped.stopped])
     const lead = group.leadId && group.agentIds.includes(group.leadId) ? group.leadId : null
     row('lead', stepped.notice, lead ? [lead] : [])
@@ -974,7 +980,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const group = state.conversations.find(c => !c.archived && !isLeads(c) && c.agentIds.includes(target.id)) ?? conversation(state, project.leadConversationId)
         effects.messages.push({ id: stableId(operationId, 'role-gone', target.id), conversationId: group.id, author: sender, recipients: [target.id], replyTo: null,
           text: `Custom has no ${agentKind(state, target) === 'reviewer' ? 'Reviewer' : 'Engineer'} role for ${target.displayName ?? target.name}. `
-            + 'Finish your current work; you take no new work.', source: SYSTEM_ROW })
+            + 'Finish your current work; you take no new work.', source: forRecipients(SYSTEM_ROW) })
       }
       break
     }
@@ -1459,7 +1465,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
           () => ({ kind: 'new', startId: operationId, machineId: r.machineId, engine: r.engine, model, effort,
             ...(r.gridModel && r.gridName ? { gridModel: r.gridModel, gridName: r.gridName } : {}) }), command.overrideReason)
         if (override) message(r.conversationId, `Lead started ${r.name} instead of ${expected.title}. Reason: ${override.reason}`, [], null,
-          { kind: 'route-override', decisionId: decision.id, by: 'lead' })
+          bookkeeping(r.conversationId, { kind: 'route-override', decisionId: decision.id, by: 'lead' }))
         personChose = !override && decision.override?.by === 'person'
       }
       ruled(startTarget(request), request.conversationId, `${who} started ${request.name}`, personChose)
@@ -1597,9 +1603,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (command.type === 'agent.startSettled') {
         if (!start.poolGeneration || !start.harnessId || start.error) fail('START_PENDING', 'This contributed start is not ready to settle.')
         // A Product Manager is never assigned work: its conversation already said where it started.
+        // A warning is the people's to read (a start that went wrong); being ready is bookkeeping.
         if (!start.poolSettled && !start.request.leadFor) message(start.request.conversationId, command.warning
           ? `${start.request.name}: ${command.warning}`
-          : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null, SYSTEM_ROW)
+          : start.request.buddyOf ? buddyReady(start.request.name) : `${start.request.name} is ready for an assignment.`, [], null,
+          command.warning ? SYSTEM_ROW : bookkeeping(start.request.conversationId, SYSTEM_ROW))
         start.poolSettled = true
         break
       }
@@ -1651,12 +1659,13 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (start.request.leadFor) {
         // Taking over from a Lead that left, as agent.add does.
         if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
+        // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
         message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       else if (!start.request.buddyOf) message(group.id, start.poolGeneration
         ? `${start.request.name} joined. Preparing its model.`
-        : `${start.request.name} joined. Ready for an assignment.`, [], null, SYSTEM_ROW)
+        : `${start.request.name} joined. Ready for an assignment.`, [], null, bookkeeping(group.id, SYSTEM_ROW))
       break
     }
     case 'agent.configuration': {
@@ -1977,12 +1986,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.routeDecisionId = operationId
       // The row quotes the Lead's reason for the task; the verdict's own text stays in the decision record.
       const reason = decision.assessment.why
-      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, {
+      message(command.conversationId, `Routed to ${chosen.title} — ${via} · "${reason}"`, [], null, bookkeeping(command.conversationId, {
         kind: 'route', decisionId: operationId, via: decision.via, p: decision.p, belowFloor: decision.belowFloor, why: reason,
         ...(decision.via === 'order' && decision.fallback ? { fallback: decision.fallback } : {}),
         pick: { id: chosen.id, title: chosen.title },
         alternatives: decision.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })),
-      })
+      }))
       leadActed(command.conversationId, 'route')
       break
     }
@@ -2093,7 +2102,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const news = assignedNotice(state, group, sender, operationId)
       if (news) effects.messages.push(news)
       if (routeNote) effects.messages.push({ id: stableId(operationId, 'route-override'), conversationId: group.id, author: sender,
-        text: routeNote.text, replyTo: null, recipients: [], source: { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' } })
+        text: routeNote.text, replyTo: null, recipients: [], source: bookkeeping(group.id, { kind: 'route-override', decisionId: routeNote.decisionId, by: 'lead' }) })
       break
     }
     case 'work.status': {
