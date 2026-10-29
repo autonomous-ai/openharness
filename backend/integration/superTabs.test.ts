@@ -916,6 +916,39 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await runs()).toEqual([['moonshotai/kimi-k3', true], ['moonshotai/kimi-k3', true]])
   })
 
+  it('rates a Reviewer launched on its engine\'s default by the default row after it reports its model, its start finished', async () => {
+    // Live bug 10-29: a command does not load a finished start, so a Codex Reviewer that reported gpt-6.1-sol was rated 1.
+    const tab = (await store.create(owner, randomUUID(), 'Default pool')).id
+    const invitation = await run(tab, { type: 'invite.create', email: host.email, role: 'collaborator', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, host)
+    await db.machine.create({ data: { machineId: 'default-host', userId: host.sub, apiKey: 'fixture-default-host', managerId: 'fixture', autonomousEnv: 'prod', authMode: 'remote' } })
+    const team = await teamMachine('default-host')
+    await run(tab, { type: 'machine.contribute', machineId: 'default-host', name: 'Default laptop', cwd: '/project', engines: ['codex'], maxAgents: 2 }, host)
+    const generation = (await poolRows(store, team.session, 'default-host'))[0]!.machine.generation
+    await store.observeMachine(team.session, tab, 'default-host', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture CPU', os: 'macOS', gpuPercent: null },
+      quotas: [], tools: { git: true }, runningHarnessIds: [], stoppedHarnessIds: [], privacy: team.privacy })
+    const group = String((await run(tab, { type: 'conversation.create', title: 'Fix', brief: 'Fix it.',
+      checks: [{ description: 'Independent review', independent: true }] })).result.conversationId)
+    const review = async () => String((await run(tab, { type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group,
+      checks: [{ description: 'Verdict', independent: false }] })).result.conversationId)
+    const first = await review()
+    const startId = String((await run(tab, { type: 'agent.start', request: { conversationId: first, role: 'reviewer', machineId: 'default-host', engine: 'codex',
+      name: 'Reviewer', cwd: '/project', worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } })).result.startId)
+    const hostRun = (command: Command) => store.execute(team.session, tab, { operationId: randomUUID(), command }, undefined, 'default-host')
+    await hostRun({ type: 'agent.startDispatch', startId })
+    const agentId = String((await hostRun({ type: 'agent.started', startId, harnessId: 'default-reviewer',
+      configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null } })).result.agentId)
+    await hostRun({ type: 'agent.startSettled', startId, warning: null })
+    const assign = async (conversationId: string) => (await run(tab, { type: 'work.assign', conversationId, agentId })).result.warnings
+    expect(await assign(first)).toBeUndefined()
+    const previousVersion = (await storedState(tab)).agents.find(a => a.id === agentId)!.configurationVersion!
+    await run(tab, { type: 'agent.configuration', previousVersion, configuration: { engine: 'codex', model: 'gpt-6.1-sol', effort: null, contextWindow: null, engineVersion: null } }, team.session, agentId)
+    const firstWork = (await store.read(owner, tab)).state.conversations.find(c => c.id === first)!.assignment!.id
+    await run(tab, { type: 'work.cancel', conversationId: first, assignmentId: firstWork, reason: 'Again.' })
+    expect(await assign(await review())).toBeUndefined()
+  })
+
   it('tells a contributed machine its start\'s project skills, which its host cannot read from the Swarm', async () => {
     // Prod logs 2026-10-28: the host asked for a Swarm status read it may not make (a 400 at every start), then launched
     // every agent on Harness orchestration, whatever its project ran.

@@ -57,6 +57,9 @@ export interface Agent {
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
    *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
   gridModel?: string
+  /** Its start named no model, so it runs its engine's own: rated by the policy's `default` row for life (rules.ts
+   *  agentTarget). Kept here for the same reason as [gridModel]: a command never sees the finished start (live bug 10-29). */
+  launchedDefault?: true
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
