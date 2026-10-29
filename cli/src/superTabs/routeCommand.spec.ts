@@ -3,7 +3,7 @@ import type { openDaemon } from '../agentClient/daemon.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { heldLocalModels, localProbes, offlineModels, routeTask } from './routeCommand.js'
+import { heldLocalModels, localProbes, NO_SWARM_AGENTS_ON, offlineModels, routeTask } from './routeCommand.js'
 import type { describeScmProject } from '../scm/scmProjects.js'
 import { admission, quotaOf } from './capacity.js'
 import type { Assessment, Policy, Probe } from './route.js'
@@ -41,6 +41,12 @@ function daemon(machineId: string, options: { agents?: string[]; frames?: Record
   }
 }
 type Answer = Record<string, unknown>
+/** Runs [body] with [os] on the list of systems Swarm agents are not started on, as a future entry would put it. */
+async function withBlocked(os: string, body: () => Promise<void>) {
+  const blocked = NO_SWARM_AGENTS_ON as string[]
+  blocked.push(os)
+  try { await body() } finally { blocked.splice(blocked.indexOf(os), 1) }
+}
 function scoped(answers: { record?: Answer; tab?: unknown; context?: Answer; history?: Answer; historyHangs?: boolean; recordThrows?: boolean } = {}) {
   return vi.fn(async (payload: Record<string, any>): Promise<Record<string, unknown>> => {
     if (payload.action === 'routeContext') return answers.context ?? { ok: true, value: { agentId: 'lead', tab: answers.tab ?? tab(), policy: { policy, warnings: ['w'] }, machines: [{ machineId: 'm1', name: 'remote-1' }, { machineId: 'm2', name: 'mac' }] } }
@@ -357,6 +363,15 @@ describe('routeTask', () => {
     await routeTask({ ...input, assessment: { ...input.assessment, difficulty: 'high' } }, s, where as never, open, () => 'op')
     expect(open.mock.calls.map(c => c[1])).toEqual(['m1'])
     expect(recorded(s).command.decision.candidates.some((c: { title: string }) => c.title.startsWith('New agent') && c.title.includes('m1'))).toBe(true)
+  })
+  it('starts no new agent on an account machine whose system is on the list, and keeps a member already there', async () => {
+    // The list is empty now (#1969); it stays for a system Swarm agents cannot run on yet.
+    const os = 'Plan 9'
+    const plan9 = opener(id => daemon(id, { agents: id === 'm1' ? ['h1'] : [], capacity: { resources: { memoryTotalBytes: 8e9, memoryUsedBytes: 1e9, cpuPercent: 10, projectDiskFreeBytes: 1e11, os }, tools: { git: true }, devices: {} } }))
+    const s = scoped()
+    await withBlocked(os, async () => expect(await routeTask(input, s, where, plan9)).toMatchObject({ ok: true, pick: { kind: 'member' } }))
+    expect(recorded(s).command.decision.excluded).toEqual(expect.arrayContaining([expect.objectContaining({ title: expect.stringContaining('New agent'),
+      reason: expect.stringContaining('Swarm agents do not run on Plan 9 yet.') })]))
   })
   it('offers new agents on an account machine that runs Windows, as on any other, and starts nothing where the last two starts started nothing', async () => {
     // Swarm agents were kept off Windows while grid's CLI did not run there (2026-10-26). It does since grid 0.3.61 and CLI
@@ -943,6 +958,16 @@ describe('routing contributed capacity', () => {
       return pool
     }
     const checkout = (extra: Record<string, unknown> = {}) => ({ folder: 'p2', repository: 'github.com/example/two', git: true, push: true, ...extra })
+
+    it('never starts a Swarm agent on a contributed machine whose system is on the list, and keeps a member already there', async () => {
+      const plan9 = healthy(); Object.assign(plan9.observation.resources, { os: 'Plan 9' })
+      await withBlocked('Plan 9', async () => {
+        const { answer } = await runPool(plan9)
+        expect(answer).toMatchObject({ error: 'NO_CANDIDATE' })
+        expect(reasons(answer)[0]!.reason).toContain('Swarm agents do not run on Plan 9 yet')
+        expect((await runPool(plan9, true)).answer).toMatchObject({ ok: true, pick: { kind: 'member' } })
+      })
+    })
 
     it('routes on Windows exactly as on any other machine, with or without members there', async () => {
       const windows = healthy(); Object.assign(windows.observation.resources, { os: 'Windows' })
