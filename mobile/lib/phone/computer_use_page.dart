@@ -12,12 +12,12 @@ import 'settings_row.dart';
 import 'tty.dart';
 import 'tty_controls.dart';
 
-/// Computers ▸ a Harness OS computer ▸ Test tools: on or off (off as installed). On, every agent Harness starts
-/// there gets Playwright's browser tools and the desktop's (CLI osDevice.ts `test_tools`, agentClient/testTools.ts),
+/// Computers ▸ a Harness OS computer ▸ Computer use: on or off (off as installed). On, every agent Harness starts
+/// there gets Playwright's browser tools and the desktop's (CLI osDevice.ts `computer_use`, agentClient/computerUse.ts),
 /// to try what it builds as a person would. An agent reads its tools when it starts, so the harnesses running there
 /// are listed to restart, as Connections does for a new connection.
-class ComputerTestToolsPage extends StatefulWidget {
-  const ComputerTestToolsPage({
+class ComputerUsePage extends StatefulWidget {
+  const ComputerUsePage({
     super.key,
     required this.notifier,
     required this.machineId,
@@ -27,10 +27,10 @@ class ComputerTestToolsPage extends StatefulWidget {
   final String machineId;
 
   @override
-  State<ComputerTestToolsPage> createState() => _ComputerTestToolsPageState();
+  State<ComputerUsePage> createState() => _ComputerUsePageState();
 }
 
-class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
+class _ComputerUsePageState extends State<ComputerUsePage> {
   bool? _on;
   bool _busy = true;
   String _error = '';
@@ -38,7 +38,7 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
   /// Turned on or off from here: the harnesses running there are offered a restart.
   bool _changed = false;
 
-  /// The engines that get them (CLI agentClient/testTools.ts): Claude Code and Codex at launch, OpenCode
+  /// The engines that get them (CLI agentClient/computerUse.ts): Claude Code and Codex at launch, OpenCode
   /// through its own config.
   static const _engines = {'claude', 'codex', 'opencode'};
 
@@ -72,7 +72,7 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
       _error = '';
     });
     final reply = await _app.osDevice(_id, {
-      'action': 'test_tools',
+      'action': 'computer_use',
       'state': ?state,
     });
     if (!mounted) return;
@@ -156,7 +156,7 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
                   ),
                   children: [
                     const TtyText(
-                      'Test tools',
+                      'Computer use',
                       size: TtySize.display,
                       weight: FontWeight.w600,
                     ),
@@ -176,8 +176,8 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
                       SettingsGroup(
                         children: [
                           SettingsRow(
-                            key: const Key('test-tools-state'),
-                            title: 'Test tools',
+                            key: const Key('computer-use-state'),
+                            title: 'Computer use',
                             value: on ? 'On' : 'Off',
                           ),
                           const SettingsRow(
@@ -198,10 +198,10 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
                       ),
                       const SizedBox(height: 20),
                       TtyPrimaryButton(
-                        key: const Key('test-tools-toggle'),
+                        key: const Key('computer-use-toggle'),
                         label: on
-                            ? 'Turn test tools off'
-                            : 'Turn test tools on',
+                            ? 'Turn computer use off'
+                            : 'Turn computer use on',
                         busy: _busy,
                         busyLabel: on ? 'Turning off…' : 'Turning on…',
                         onPressed: () => unawaited(_ask(on ? 'off' : 'on')),
@@ -223,7 +223,7 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
                               for (final agent in running)
                                 SettingsRow(
                                   key: ValueKey(
-                                    'test-tools-restart-${agent.id}',
+                                    'computer-use-restart-${agent.id}',
                                   ),
                                   leading: const Icon(
                                     LucideIcons.refreshCw300,
@@ -231,8 +231,8 @@ class _ComputerTestToolsPageState extends State<ComputerTestToolsPage> {
                                   ),
                                   title: 'Restart "${agent.displayName}"',
                                   detail: on
-                                      ? 'Restart to use the test tools.'
-                                      : 'Restart without the test tools.',
+                                      ? 'Restart to use computer use.'
+                                      : 'Restart without computer use.',
                                   onTap: () => _restart(agent),
                                 ),
                             ],

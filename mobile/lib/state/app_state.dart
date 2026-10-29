@@ -6161,7 +6161,7 @@ class AppNotifier extends ChangeNotifier {
 
   /// What a Harness OS computer's daemon does for a phone beyond its update and Wi-Fi, as its status
   /// says (CLI osDevice.ts `features`): `sign_out`, `password`, `ssh`, `github`, `check_update`, and
-  /// `test_tools` on one that carries them. An older one says none.
+  /// `computer_use` on one that carries them. An older one says none.
   bool osFeature(String machineId, String feature) {
     final features = osStatus[machineId]?['features'];
     return features is List && features.contains(feature);

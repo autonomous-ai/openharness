@@ -9,9 +9,9 @@ import 'package:harness_mobile/widgets/rename_agent_dialog.dart'
 
 import 'change_wifi_page.dart';
 import 'computer_github_page.dart';
-import 'computer_test_tools_page.dart';
 import 'computer_password_page.dart';
 import 'computer_ssh_page.dart';
+import 'computer_use_page.dart';
 import 'computer_version_page.dart';
 import 'link_page.dart';
 import 'phone_navigation.dart';
@@ -251,17 +251,15 @@ PhoneSheetRows? _machineRows(
                 ),
               ),
             ),
-          if (notifier.osFeature(machineId, 'test_tools'))
+          if (notifier.osFeature(machineId, 'computer_use'))
             PhoneSheetAction(
               icon: LucideIcons.flaskConical300,
-              label: 'Test tools',
+              label: 'Computer use',
               chevron: true,
               onTap: () => Navigator.of(context).push(
                 phoneRoute(
-                  (_) => ComputerTestToolsPage(
-                    notifier: notifier,
-                    machineId: machineId,
-                  ),
+                  (_) =>
+                      ComputerUsePage(notifier: notifier, machineId: machineId),
                 ),
               ),
             ),
