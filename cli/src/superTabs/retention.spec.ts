@@ -153,3 +153,11 @@ it('leaves every Buddy to Stop Harness: none reads as a Lead', () => {
   expect([mayBeBuddy(dir, 'own-buddy'), mayBeBuddy(dir, 'their-buddy')]).toEqual([true, true])
   expect([mayBeLead(dir, 'own-buddy'), mayBeLead(dir, 'their-buddy'), mayBeLead(dir, 'lead')]).toEqual([false, false, true])
 })
+
+// Unlike a Lead, a Buddy lapses with the roster: a machine signed out or unlinked for a week keeps no Buddy from a close.
+it('lets a Buddy lapse with a roster nobody confirms for a week', () => {
+  const dir = root(), now = Date.now()
+  retainContributions(dir, 'machine', [{ tabId: 'tab', agent: { harnessId: 'buddy', machineId: 'machine', buddyOf: { personId: 'diego' } } }], now)
+  expect(mayBeBuddy(dir, 'buddy', now + RETENTION_LAPSE_MS - 1000)).toBe(true)
+  expect(mayBeBuddy(dir, 'buddy', now + RETENTION_LAPSE_MS + 1000)).toBe(false)
+})

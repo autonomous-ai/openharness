@@ -57,10 +57,11 @@ export function mayBeLead(dataDir: string, agentId: string): boolean {
 }
 
 /** Whether a close may reach a Buddy, for the core's close guard. Like `mayBeLead`, a file that cannot be read may name
- *  anyone until the host's next roster rewrites it; with no file, or one from before Buddies were kept, none is. */
-export function mayBeBuddy(dataDir: string, agentId: string): boolean {
+ *  anyone until the host's next roster rewrites it; with no file, or one from before Buddies were kept, none is. Unlike a
+ *  Lead, a Buddy lapses with a roster nobody confirms for a week, as every other member does. */
+export function mayBeBuddy(dataDir: string, agentId: string, now = Date.now()): boolean {
   const file = retentionFile(dataDir)
-  if (!existsSync(file)) return false
+  if (!existsSync(file) || now - statSync(file).mtimeMs > RETENTION_LAPSE_MS) return false
   try { return (read(file).buddies ?? []).includes(agentId) } catch { return true }
 }
 
