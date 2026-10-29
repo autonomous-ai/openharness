@@ -218,6 +218,9 @@ export interface Conversation {
   reactionSeq?: number
   /** A Buddy chat's owner messages its Buddy already proposed for (buddies.ts): each asks once. */
   proposals?: string[]
+  /** The name a Buddy chat's owner chose for their Buddy (buddies.ts renameBuddy): kept here, which outlives the Buddy, so
+   *  one added again takes it. Absent: the default, "<person>'s Buddy". */
+  buddyName?: string
   /** The person who asked for this work: whoever opened it, or the person its Lead named (leaderboard/record.ts). */
   requesterId?: string
   /** What the leaderboard counts here (leaderboard/record.ts); bookkeeping readers never get whole. */

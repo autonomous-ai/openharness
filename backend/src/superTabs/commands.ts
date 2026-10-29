@@ -26,7 +26,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, defaultBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -132,6 +132,8 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
   // A person's own Buddy chat in a project, opened before any Buddy is (buddies.ts openBuddyChat).
   z.object({ type: z.literal('buddy.chat'), projectId: id }).strict(),
+  // A person names their own Buddy from its chat, or clears the name with null (buddies.ts renameBuddy).
+  z.object({ type: z.literal('buddy.rename'), conversationId: id, name: z.string().max(200).nullable() }).strict(),
   // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
   z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
@@ -1353,6 +1355,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       result.conversationId = openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
       break
     }
+    case 'buddy.rename':
+      renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name)
+      break
     case 'person.tell': {
       const project = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
       if (!project) fail('TELL_FORBIDDEN', 'Only a project\'s Lead sends a person a private line, in its own project.', 403)
@@ -1383,10 +1388,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
       }
       const contributor = person(state, grant.contributorId)
-      openBuddyChat(state, project.id, me)
+      const chat = openBuddyChat(state, project.id, me)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
+        ...(command.model ? { model: command.model } : {}), name: chat.buddyName ?? defaultBuddyName(me), cwd: projectFolder(pool, project), worktree: true,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []

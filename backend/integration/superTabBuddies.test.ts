@@ -150,3 +150,48 @@ describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (
     expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
   })
 })
+
+describe('naming a Buddy through the store (Diego, 10-29)', () => {
+  const rename = (f: Awaited<ReturnType<typeof swarm>>, chat: string, name: string | null, user = peer, asAgentId?: string) =>
+    f.execute({ type: 'buddy.rename', conversationId: chat, name }, user, asAgentId)
+  const shown = async (f: Awaited<ReturnType<typeof swarm>>, user: AuthUser, agentId: string) =>
+    (await f.store.read(user, f.tab)).state.agents.find(a => a.id === agentId)?.displayName
+
+  it('is its owner\'s, and everyone in the Swarm reads the new name, on its roster row and as its messages\' sender', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    await rename(f, chat, 'Sparky')
+    expect(await shown(f, owner, agentId)).toBe('Sparky')
+    expect(await shown(f, peer, agentId)).toBe('Sparky')
+    expect((await f.store.read(peer, f.tab)).state.conversations.find(c => c.id === chat)).toMatchObject({ title: 'Sparky', buddyName: 'Sparky' })
+    const said = await f.execute({ type: 'message.send', conversationId: chat, text: 'Hi', replyTo: null, recipientIds: [] }, peer, agentId)
+    const row = await db.superTabMessage.findFirstOrThrow({ where: { tabId: f.tab, id: String(said.result.messageId) } })
+    expect(row.author).toMatchObject({ id: agentId, displayName: 'Sparky' })
+  })
+
+  it('is refused for the Swarm owner, the PM and the Buddy itself', async () => {
+    const f = await swarm()
+    const { chat, agentId } = await buddy(f)
+    await expect(rename(f, chat, 'Mine now', owner)).rejects.toThrow('unavailable')
+    await expect(rename(f, chat, 'Mine now', owner, f.lead)).rejects.toThrow()
+    await expect(rename(f, chat, 'Mine now', peer, agentId)).rejects.toThrow('A Buddy only talks with its owner')
+    expect(await shown(f, owner, agentId)).toBe('peer\'s Buddy')
+  })
+
+  it('goes back to the default when cleared, and is kept when the Buddy is removed and added again', async () => {
+    const f = await swarm()
+    const first = await buddy(f)
+    await rename(f, first.chat, 'Sparky')
+    await rename(f, first.chat, null)
+    expect(await shown(f, owner, first.agentId)).toBe('peer\'s Buddy')
+    await rename(f, first.chat, 'Sparky')
+    await f.execute({ type: 'buddy.remove', projectId: 'lead' }, peer)
+    // Another store reads it back from the database: the name lives on the chat, not in a cache.
+    const store = new SuperTabStore(db, () => Date.now())
+    const again = await buddy({ ...f, store, execute: (command, user = owner, asAgentId, hostMachineId) =>
+      store.execute(user, f.tab, { operationId: randomUUID(), command }, asAgentId, hostMachineId) })
+    expect(again.chat).toBe(first.chat)
+    expect(await shown(f, owner, again.agentId)).toBe('Sparky')
+    expect((await f.store.messages(peer, f.tab, again.chat, {})).messages.map(m => m.text)).toContain('Sparky is ready. Tell it what you have in mind.')
+  })
+})
