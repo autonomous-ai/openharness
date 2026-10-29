@@ -134,6 +134,10 @@ describe('which machines take a teammate\'s project', () => {
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'standard-user' })), NOW)?.reason).toContain('(standard-user: the team account is an administrator)')
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'unchecked' })), NOW)?.reason).toContain('(unchecked: the check did not run)')
     expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'icloud' })), NOW)?.reason).toContain('(icloud)')
+    // The items a Linux and a Windows team account check that a Mac's does not (cli/src/team/privacy.ts, windowsTeam.ts).
+    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'firefox' })), NOW)?.reason).toContain('(firefox: it could list its owner\'s Firefox profile)')
+    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'edge' })), NOW)?.reason).toContain('(edge: it could list its owner\'s Edge profile)')
+    expect(teamWorkRefusal(pool(reading('team', { ...FAILED, item: 'credentials' })), NOW)?.reason).toContain('(credentials: it could list its owner\'s Windows Credential Manager folder)')
   })
 
   it('not on a machine with no Harness Team account', () => {
