@@ -432,5 +432,95 @@ void main() {
         expect(activity.items(SwarmActivityFilter.threads), isEmpty);
       },
     );
+
+    test('reads only project chats: never a Buddy chat, a private chat or a '
+        'task chat, however they moved', () async {
+      final fake = backend(
+        page: page,
+        groups: [
+          buddyChatData('buddy-me', lastMessageSequence: 4),
+          buddyChatData(
+            'buddy-theirs',
+            owner: 'person-other',
+            lastMessageSequence: 4,
+          ),
+          groupData('g-private', audience: [me], lastMessageSequence: 3),
+          groupData('g-task', title: 'Task', lastMessageSequence: 9),
+        ],
+      );
+      final session = await start(fake);
+      session.activity.watch();
+      await settle();
+
+      expect(
+        [
+          for (final path in fake.paths)
+            if (path.contains('/messages')) path,
+        ],
+        [chatPath],
+      );
+    });
+
+    test('access lost while a project chat is being read: its answer is '
+        'dropped, and nothing of the Swarm is left', () async {
+      final fake = backend();
+      final gate = Completer<void>();
+      fake.routes[chatPath] = (_) async {
+        await gate.future;
+        return page();
+      };
+      final session = await start(fake);
+      final activity = session.activity..watch();
+      await settle();
+      expect(activity.reading, isTrue);
+
+      session.inbox.reader(tab)!.revoke();
+      gate.complete();
+      await settle();
+
+      for (final filter in SwarmActivityFilter.values) {
+        expect(activity.items(filter), isEmpty, reason: filter.label);
+      }
+      expect(activity.reading, isFalse);
+      expect(activity.unreadChats, isFalse);
+      expect(session.peeks.held, 0);
+    });
+
+    test('the same chat and agent ids in two Swarms: each read on its own, '
+        'its rows under its own Swarm', () async {
+      final fake = backend(page: page);
+      activitySecondSwarm(fake, page: page);
+      final session = await start(fake);
+      final activity = session.activity..watch();
+      await settle();
+
+      expect(
+        [
+          for (final path in fake.paths)
+            if (path.contains('/messages')) path,
+        ]..sort(),
+        [chatPath, '/api/super-tabs/tab-2/conversations/$leadChat/messages'],
+      );
+      expect(keys(activity, SwarmActivityFilter.threads)..sort(), [
+        'thread:$tab:root-1',
+        'thread:$tab:root-old',
+        'thread:tab-2:root-1',
+        'thread:tab-2:root-old',
+      ]);
+      activity.replied(
+        activity
+            .items(SwarmActivityFilter.threads)
+            .firstWhere((item) => item.key == 'thread:tab-2:root-1'),
+      );
+      expect(
+        activity.handled(
+          activity
+              .items(SwarmActivityFilter.threads)
+              .firstWhere((item) => item.key == 'thread:$tab:root-1'),
+        ),
+        isNull,
+        reason: "a thread opened in one Swarm is not the other's",
+      );
+    });
   });
 }

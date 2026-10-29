@@ -52,6 +52,7 @@ FakeSwarm activityBackend({
   int readMark = 10,
   int chatSequence = 12,
   bool decision = true,
+  List<Map<String, dynamic>> groups = const [],
 }) {
   final fake = FakeSwarm();
   fake.routes['/api/super-tabs/list'] = (_) => {
@@ -77,6 +78,7 @@ FakeSwarm activityBackend({
           status: 'needs_human',
           workerId: 'agent-builder',
         ),
+        ...groups,
       ],
     );
     // The project chat holds [chatSequence] rows.
@@ -168,3 +170,48 @@ Map<String, dynamic> activityPage() => {
   ],
   'next': null,
 };
+
+/// Adds a second Swarm, [swarmId], to [fake]'s list, after the first: the
+/// same project, chat and agent ids, its Lead Cleo and its builder Pip, and
+/// a project chat whose newest page [page] answers.
+void activitySecondSwarm(
+  FakeSwarm fake, {
+  String swarmId = 'tab-2',
+  Map<String, dynamic> Function()? page,
+}) {
+  fake.routes['/api/super-tabs/list'] = (_) => {
+    'tabs': [
+      {'id': tab, 'name': 'Phone Swarm', 'ownerId': me, 'lastChangedAt': 2},
+      {'id': swarmId, 'name': 'Other Swarm', 'ownerId': me, 'lastChangedAt': 1},
+    ],
+    'next': null,
+  };
+  final derived = {
+    'readMarks': {leadChat: 10},
+  };
+  fake.routes['/api/super-tabs/$swarmId/parts'] = (_) {
+    final load = firstLoad(
+      tabId: swarmId,
+      head: headData(id: swarmId, name: 'Other Swarm'),
+      derived: derived,
+      agents: [
+        agent('agent-lead', name: 'Lead', displayName: 'Cleo'),
+        agent('agent-builder', displayName: 'Pip'),
+      ],
+    );
+    final lead = (load['groups'] as List).first as Map<String, dynamic>;
+    (lead['data'] as Map<String, dynamic>)['lastMessageSequence'] = 12;
+    return load;
+  };
+  fake.routes['/api/super-tabs/$swarmId/changes'] = (_) =>
+      changes(cursor: 'c2', derived: derived);
+  fake.routes['/api/super-tabs/$swarmId/decisions?state=open'] = (_) => {
+    'decisions': <Object>[],
+  };
+  fake.routes['/api/super-tabs/$swarmId/mentions?state=waiting'] = (_) => {
+    'mentions': <Object>[],
+  };
+  fake.routes['/api/super-tabs/$swarmId/conversations/$leadChat/messages'] = (
+    _,
+  ) => page?.call() ?? {'messages': <Object>[], 'next': null};
+}

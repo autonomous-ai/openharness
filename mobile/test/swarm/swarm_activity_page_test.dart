@@ -282,6 +282,24 @@ void main() {
     expect(key('swarm-activity-row-reaction:$tab:own-only'), findsNothing);
   });
 
+  testWidgets('the same agent id in two Swarms: each row is named in its '
+      'own Swarm', (tester) async {
+    final fake = activityBackend(page: activityPage);
+    activitySecondSwarm(fake, page: activityPage);
+    await pump(tester, fake);
+    await filter(tester, 'threads');
+
+    Finder caption(String row, String text) => find.descendant(
+      of: key('swarm-activity-row-$row'),
+      matching: find.textContaining(text),
+    );
+    await tester.ensureVisible(key('swarm-activity-row-thread:tab-2:root-1'));
+    expect(caption('thread:$tab:root-1', 'Nova'), findsOneWidget);
+    expect(caption('thread:$tab:root-1', 'Pip'), findsNothing);
+    expect(caption('thread:tab-2:root-1', 'Pip'), findsOneWidget);
+    expect(caption('thread:tab-2:root-1', 'Nova'), findsNothing);
+  });
+
   testWidgets('a filter with nothing in it says so', (tester) async {
     await pump(tester, activityBackend());
     await filter(tester, 'reactions');
