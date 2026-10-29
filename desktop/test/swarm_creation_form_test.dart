@@ -823,6 +823,53 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('Moving the PM drops the old machine’s branch at once', (
+    tester,
+  ) async {
+    final reads = <(String, String)>[];
+    final (box, _) = await mount(
+      tester,
+      setup: (f) {
+        addLaptop(f);
+        agentIn(f);
+        f.app.gitProjectReaderForTest = (machine, folder) async {
+          reads.add((machine, folder));
+          return {
+            'isGit': true,
+            'branch': 'main',
+            'branches': [
+              {'ref': 'refs/heads/main', 'name': 'main'},
+              {'ref': 'refs/heads/$machine-only', 'name': '$machine-only'},
+            ],
+          };
+        };
+      },
+      leadMachines: [
+        studio,
+        const LeadMachine(
+          id: 'laptop',
+          name: 'Ken MacBook',
+          online: true,
+          freeAgents: 2,
+          folders: {
+            'github.com/autonomous-ai/lamp-os': '/Users/ken/swarm/lamp-os',
+          },
+        ),
+      ],
+    );
+    await tester.pumpAndSettle();
+    box.focusField(NewHarnessField.branch);
+    box.accept(box.options.firstWhere((o) => o.id == 'refs/heads/m-only'));
+    final before = reads.length;
+    // No frame and no refresh in between: the move itself re-reads Git.
+    box.chooseLeadMachine('laptop');
+    expect(box.branchRef, isNot('refs/heads/m-only'));
+    expect(box.checkingGit, isTrue);
+    await tester.pumpAndSettle();
+    expect(reads.skip(before).first, ('laptop', '/Users/ken/swarm/lamp-os'));
+    await unmount(tester);
+  });
+
   testWidgets('Moving the PM drops a branch of the old machine, repo unknown', (
     tester,
   ) async {

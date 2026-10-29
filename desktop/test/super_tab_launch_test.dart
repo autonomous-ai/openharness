@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/first_task.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/project_folder.dart';
 import 'package:harness/core/launch_setup.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/new_harness.dart';
@@ -377,6 +378,7 @@ class SuperTabLaunchFixture {
     bool local = false,
     SuperTabFixtureConnection Function(MemoryStore)? connectionFactory,
     LocalCliDiscovery? discovery,
+    Future<String> Function(ProjectFolderRequest request)? prepareFolder,
   }) {
     connection =
         connectionFactory?.call(store) ??
@@ -386,6 +388,7 @@ class SuperTabLaunchFixture {
       connectionForTest: (_) => connection,
       connected: true,
       localCliDiscovery: discovery,
+      prepareFolder: prepareFolder,
     );
     app.machineStates['m']!
       ..localOnly = true
@@ -1220,6 +1223,36 @@ void main() {
       expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
     },
   );
+
+  test('a PM’s forced worktree is not saved as the person’s setting', () async {
+    final prepared = <ProjectFolderRequest>[];
+    final f = SuperTabLaunchFixture(
+      prepareFolder: (request) async {
+        prepared.add(request);
+        return '/work/project-pm';
+      },
+    );
+    f.app.gitProjectReaderForTest = (_, _) async => {
+      'isGit': true,
+      'refreshed': true,
+      'branch': 'main',
+      'branches': [
+        {'ref': 'refs/heads/main', 'name': 'main'},
+      ],
+    };
+    f.app.agentPreference.successfulWorktree = false;
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    // What the form does when it opens: Desktop choices read Git there.
+    box.useDesktopChoices(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(box.isGitProject, isTrue);
+    expect(box.worktree, isTrue);
+    expect(await box.create(), NewHarnessOutcome.created, reason: box.error);
+    expect(prepared.single.createsWorktree, isTrue);
+    // Their next New Harness keeps their own setting.
+    expect(f.app.agentPreference.successfulWorktree, isFalse);
+  });
 
   test('a new Swarm keeps choosing among the person’s own machines', () async {
     final f = SuperTabLaunchFixture();
