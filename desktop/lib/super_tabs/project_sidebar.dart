@@ -24,9 +24,15 @@ import 'project_github.dart';
 /// The Swarm's Product Managers' conversation, listed as a channel among the projects.
 const kProductManagersChannel = 'product-managers';
 
-/// A project's Product Manager by name, as its Chat with PM is listed.
-String pmChatName(SuperTabSnapshot snapshot, SuperTabProject project) {
-  final pmId = snapshot.conversation(project.leadConversationId)?.leadId;
+/// A project's Product Manager by name, as its Chat with PM is listed;
+/// [lead] is the project's Lead conversation when the caller holds it.
+String pmChatName(
+  SuperTabSnapshot snapshot,
+  SuperTabProject project, {
+  SuperTabConversation? lead,
+}) {
+  final pmId =
+      (lead ?? snapshot.conversation(project.leadConversationId))?.leadId;
   return pmId == null
       ? 'Product Manager'
       : snapshot.agentName(pmId, fallback: 'Product Manager');
@@ -162,27 +168,62 @@ class ProjectSidebar extends StatelessWidget {
   /// right end shows or hides its conversations (Dee, 2026-10-28).
   Widget _row(
     SuperTabConversation group, {
-    SuperTabProject? project,
+    _ProjectReading? reading,
     String? label,
     String? key,
   }) {
+    final project = reading?.project;
     final selected =
         !devicesSelected &&
         !notificationsSelected &&
         controller.selectedId == group.id;
-    final groups = project == null
-        ? [group]
-        : controller.snapshot!.conversations.where(
-            (g) => g.projectId == project.id && !g.closed,
-          );
-    final waiting = groups.any((g) => needsHuman(g) > 0);
+    final waiting = reading == null
+        ? needsHuman(group) > 0
+        : reading.waiting.isNotEmpty;
     // A project's PM chat shows its own count rather than a bold name.
-    final pmChat = project == null ? null : controller.pmChat(project.id);
-    final projectPmUnread = pmChat == null ? 0 : controller.unreadCount(pmChat);
-    final unread = groups.any(
-      (g) =>
-          controller.unread(g) && (projectPmUnread == 0 || g.id != pmChat?.id),
+    final pmChat = reading?.pmChat;
+    final projectPmUnread = reading?.pmUnread ?? 0;
+    final unread = reading == null
+        ? controller.unread(group)
+        : reading.unread.any((id) => projectPmUnread == 0 || id != pmChat?.id);
+    return _drawRow(
+      group,
+      project: project,
+      label: label,
+      key: key,
+      selected: selected,
+      waiting: waiting,
+      unread: unread,
+      pmChat: pmChat,
+      projectPmUnread: projectPmUnread,
+      selectedProjectId: reading?.sidebar.selectedProjectId,
     );
+  }
+
+  /// A workgroup's row from what its project's reading already asked.
+  Widget _workgroupRow(SuperTabConversation group, _ProjectReading reading) =>
+      _drawRow(
+        group,
+        selected:
+            !devicesSelected &&
+            !notificationsSelected &&
+            controller.selectedId == group.id,
+        waiting: reading.waiting.contains(group.id),
+        unread: reading.unread.contains(group.id),
+      );
+
+  Widget _drawRow(
+    SuperTabConversation group, {
+    SuperTabProject? project,
+    String? label,
+    String? key,
+    required bool selected,
+    required bool waiting,
+    required bool unread,
+    SuperTabConversation? pmChat,
+    int projectPmUnread = 0,
+    String? selectedProjectId,
+  }) {
     final expanded =
         project != null && controller.expandedProjects.contains(project.id);
     // A collapsed project shows as selected while one of its conversations it
@@ -193,7 +234,7 @@ class ProjectSidebar extends StatelessWidget {
             !expanded &&
             !devicesSelected &&
             !notificationsSelected &&
-            controller.selected?.projectId == project.id &&
+            selectedProjectId == project.id &&
             controller.selectedId != pmChat?.id);
     // Unread is the name in bold and nothing else, no dot (Dee, 2026-10-29).
     final style = DesktopChrome.control(
@@ -402,13 +443,14 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A project's "Closed (N)" row and, when it is open, the closed groups under it: archived ones and finished
   /// ones that left the active set, as read for the project so far.
-  List<Widget> _closed(SuperTabProject project) {
-    final groups = controller.snapshot!.conversations
+  List<Widget> _closed(_ProjectReading reading) {
+    final project = reading.project;
+    final pmChat = reading.pmChat?.id;
+    final groups = reading.conversations
         .where(
           (g) =>
-              g.projectId == project.id &&
               g.id != project.leadConversationId &&
-              g.id != controller.pmChat(project.id)?.id &&
+              g.id != pmChat &&
               !g.isBuddyChat &&
               !controller.hiddenByBuddies(g) &&
               g.closed,
@@ -488,20 +530,24 @@ class ProjectSidebar extends StatelessWidget {
   /// The signed-in person's private chat with each project's Product
   /// Manager, as direct messages below the projects so a collapsed project
   /// never hides them; the first click opens one.
-  List<Widget> _pmChats(List<SuperTabProject> projects) => [
+  List<Widget> _pmChats(
+    List<SuperTabProject> projects,
+    _SidebarReading reading,
+  ) => [
     for (final project in projects)
-      ?_pmChat(project, named: projects.length > 1),
+      ?_pmChat(reading.of(project), named: projects.length > 1),
   ];
 
-  Widget? _pmChat(SuperTabProject project, {required bool named}) {
+  Widget? _pmChat(_ProjectReading reading, {required bool named}) {
     final snapshot = controller.snapshot!;
-    final pmId = snapshot.conversation(project.leadConversationId)?.leadId;
-    final chat = controller.pmChat(project.id);
+    final project = reading.project;
+    final lead = reading.lead;
+    final chat = reading.pmChat;
     if (chat == null && !controller.canWrite) return null;
     return SuperTabPmChatRow(
       key: ValueKey('super-pm-chat-${project.id}'),
-      agentId: pmId,
-      name: pmChatName(snapshot, project),
+      agentId: lead?.leadId,
+      name: pmChatName(snapshot, project, lead: lead),
       project: named ? project.name : null,
       selected:
           chat != null &&
@@ -509,7 +555,7 @@ class ProjectSidebar extends StatelessWidget {
           !notificationsSelected &&
           controller.selectedId == chat.id,
       unread: chat != null && controller.unread(chat),
-      unreadCount: chat == null ? 0 : controller.unreadCount(chat),
+      unreadCount: reading.pmUnread,
       onTap: chat != null
           ? () => onSelect(chat.id)
           : controller.saving || controller.hasPendingAction
@@ -568,12 +614,12 @@ class ProjectSidebar extends StatelessWidget {
 
   /// A project's open conversations, newest first: the most recently created
   /// has the highest number, and one without a number predates numbering.
-  List<SuperTabConversation> _newestFirst(SuperTabProject project) {
-    final pmChat = controller.pmChat(project.id)?.id;
-    final groups = controller.snapshot!.conversations
+  List<SuperTabConversation> _newestFirst(_ProjectReading reading) {
+    final project = reading.project;
+    final pmChat = reading.pmChat?.id;
+    final groups = reading.conversations
         .where(
           (g) =>
-              g.projectId == project.id &&
               g.id != project.leadConversationId &&
               g.id != pmChat &&
               !g.isBuddyChat &&
@@ -632,8 +678,9 @@ class ProjectSidebar extends StatelessWidget {
         ),
       );
 
-  List<Widget> _workgroups(SuperTabProject project) {
-    final groups = _newestFirst(project);
+  List<Widget> _workgroups(_ProjectReading reading) {
+    final project = reading.project;
+    final groups = _newestFirst(reading);
     return groups.isEmpty
         ? [
             Padding(
@@ -655,14 +702,18 @@ class ProjectSidebar extends StatelessWidget {
         : [
             _NewestConversations(
               key: ValueKey('super-project-list-${project.id}'),
-              rows: [for (final group in groups) (group.id, _row(group))],
+              rows: [
+                for (final group in groups)
+                  (group.id, () => _workgroupRow(group, reading)),
+              ],
               // Never behind "… N more": the open one, and those with
               // something to read or answer.
               kept: {
                 if (!devicesSelected && !notificationsSelected)
                   controller.selectedId,
                 for (final group in groups)
-                  if (controller.unread(group) || needsHuman(group) > 0)
+                  if (reading.unread.contains(group.id) ||
+                      reading.waiting.contains(group.id))
                     group.id,
               },
               more: (hidden, onTap) => _moreRow(project, hidden, onTap),
@@ -672,22 +723,25 @@ class ProjectSidebar extends StatelessWidget {
 
   /// Every project with its workgroups, and the Product Managers'
   /// conversation, which every person in the Swarm reads, by name from A to Z.
-  List<(String, Widget)> _channels(SuperTabSnapshot? snapshot) => [
+  List<(String, Widget)> _channels(
+    SuperTabSnapshot? snapshot,
+    _SidebarReading reading,
+  ) => [
     if (snapshot?.conversation(snapshot.leadsConversationId ?? '')
         case final leads?)
       (kProductManagersChannel, _row(leads, label: kProductManagersChannel)),
     for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-      if (snapshot?.conversation(project.leadConversationId) case final lead?)
+      if (reading.of(project) case final read when read.lead != null)
         (
           project.name,
           Column(
             key: ValueKey('super-project-${project.id}'),
             mainAxisSize: MainAxisSize.min,
             children: [
-              _row(lead, project: project),
+              _row(read.lead!, reading: read),
               if (controller.expandedProjects.contains(project.id)) ...[
-                ..._workgroups(project),
-                ..._closed(project),
+                ..._workgroups(read),
+                ..._closed(read),
               ],
             ],
           ),
@@ -699,7 +753,8 @@ class ProjectSidebar extends StatelessWidget {
     final snapshot = controller.snapshot;
     final projects = snapshot?.projects ?? const <SuperTabProject>[];
     final buddiesOn = controller.buddiesOn;
-    final pmChats = buddiesOn ? const <Widget>[] : _pmChats(projects);
+    final reading = _SidebarReading(controller, needsHuman);
+    final pmChats = buddiesOn ? const <Widget>[] : _pmChats(projects, reading);
     return Material(
       color: DesktopChrome.surface,
       child: ListView(
@@ -756,7 +811,7 @@ class ProjectSidebar extends StatelessWidget {
             onToggleCollapsed: controller.toggleProjectsGroup,
           ),
           if (controller.projectsGroupOpen)
-            for (final (_, channel) in _channels(snapshot)) channel,
+            for (final (_, channel) in _channels(snapshot, reading)) channel,
           const SizedBox(height: 16),
           if (pmChats.isNotEmpty) ...[
             SuperTabSectionHeading(
@@ -831,8 +886,9 @@ class _NewestConversations extends StatefulWidget {
 
   static const shown = 8;
 
-  /// Each conversation's id and row, newest first.
-  final List<(String, Widget)> rows;
+  /// Each conversation's id and how its row is built, newest first: only the
+  /// rows shown are built.
+  final List<(String, Widget Function())> rows;
 
   /// Listed even when older than the newest.
   final Set<String> kept;
@@ -859,7 +915,7 @@ class _NewestConversationsState extends State<_NewestConversations> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (final (_, row) in visible) row,
+        for (final (_, row) in visible) row(),
         if (visible.length < rows.length)
           widget.more(
             rows.length - visible.length,
@@ -868,4 +924,55 @@ class _NewestConversationsState extends State<_NewestConversations> {
       ],
     );
   }
+}
+
+/// What one build of the sidebar reads, each piece once: per row, a Swarm's
+/// thousands of conversations were scanned again on every rebuild (Diego,
+/// 10-29).
+class _SidebarReading {
+  _SidebarReading(this.controller, this.needsHuman);
+  final SuperTabController controller;
+  final int Function(SuperTabConversation group) needsHuman;
+  final _projects = <String, _ProjectReading>{};
+
+  _ProjectReading of(SuperTabProject project) =>
+      _projects.putIfAbsent(project.id, () => _ProjectReading(this, project));
+
+  /// The project of the open conversation.
+  late final selectedProjectId = controller.selected?.projectId;
+}
+
+/// One build's reading of a project, each part asked once and only when a
+/// row needs it.
+class _ProjectReading {
+  _ProjectReading(this.sidebar, this.project);
+  final _SidebarReading sidebar;
+  final SuperTabProject project;
+
+  late final conversations = sidebar.controller.projectConversations(
+    project.id,
+  );
+  late final SuperTabConversation? lead =
+      conversations
+          .where((g) => g.id == project.leadConversationId)
+          .firstOrNull ??
+      sidebar.controller.snapshot?.conversation(project.leadConversationId);
+  late final pmChat = sidebar.controller.pmChat(project.id);
+  late final pmUnread = switch (pmChat) {
+    final chat? => sidebar.controller.unreadCount(chat),
+    null => 0,
+  };
+
+  /// The open conversations that need a human, and those with unread messages.
+  Set<String> get waiting => _open.waiting;
+  Set<String> get unread => _open.unread;
+  late final _open = () {
+    final waiting = <String>{}, unread = <String>{};
+    for (final g in conversations) {
+      if (g.closed) continue;
+      if (sidebar.needsHuman(g) > 0) waiting.add(g.id);
+      if (sidebar.controller.unread(g)) unread.add(g.id);
+    }
+    return (waiting: waiting, unread: unread);
+  }();
 }
