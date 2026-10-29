@@ -73,10 +73,13 @@ describe('the hourly sweeps', () => {
   it('compacts only tombstones past their purge time, each collection by its purge index', async () => {
     expect(result.tombstonesCompacted).toBe(6)
     for (const collection of ['SwarmMember', 'SwarmAgent', 'SwarmMachine']) {
-      const rows = reads(entries, collection, ['purgeAt']).filter(e => e.op === 'update')
-      expect(rows, `${collection}: ${JSON.stringify(plan(rows))}`).toHaveLength(1)
-      expect(rows[0]!.docsExamined, `${collection}: ${JSON.stringify(plan(rows))}`).toBeLessThanOrEqual(2)
-      expect(rows[0]!.planSummary, collection).toMatch(/IXSCAN \{ purgeAt: 1 \}/)
+      // The due tombstones are found by the purge index, then compacted by id.
+      const found = reads(entries, collection, ['purgeAt']).filter(e => e.op !== 'update')
+      expect(found, `${collection}: ${JSON.stringify(plan(found))}`).toHaveLength(1)
+      expect(found[0]!.docsExamined, `${collection}: ${JSON.stringify(plan(found))}`).toBeLessThanOrEqual(2)
+      expect(found[0]!.planSummary, collection).toMatch(/IXSCAN \{ purgeAt: 1 \}/)
+      const written = reads(entries, collection, ['purgeAt']).filter(e => e.op === 'update')
+      expect(written.map(e => e.docsExamined), `${collection}: ${JSON.stringify(plan(written))}`).toEqual([2])
     }
     const kept = await db.swarmMember.findUniqueOrThrow({ where: { id: `${tabs[0]}:swarmMember:later` } })
     expect(kept.data).toEqual({ id: 'swarmMember:later' })
