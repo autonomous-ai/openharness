@@ -171,3 +171,13 @@ describe('decisions', () => {
     }
   })
 })
+
+describe('costs', () => {
+  it('reads the cost summary of the period as that agent, and lists it in help', async () => {
+    const summary = { days: 30, rows: [], totals: { attempts: 0 }, prices: [] }
+    const s = swarm((_method, path) => path.startsWith(`/api/super-tabs/${T}/costs?`) ? ok(summary) : undefined)
+    expect(await s.ask({ action: 'costs', tabId: T, agentId: FIXTURE.leadId, days: 30 }, owner)).toEqual({ ok: true, value: summary })
+    expect(s.call).toHaveBeenCalledWith('GET', `/api/super-tabs/${T}/costs?days=30&asAgentId=${FIXTURE.leadId}`, undefined)
+    expect(((await s.ask({ action: 'help', tabId: T, agentId: FIXTURE.leadId }, owner)) as { help: { costs?: string } }).help.costs).toMatch(/^costs \[--days N\]/)
+  })
+})

@@ -46,6 +46,7 @@ import { agentDisplayName } from './agentNames.js'
 import { endedHolds, HOLDING, startedHolds, type WorkHold } from '../github/holds.js'
 import { accrueLent } from './leaderboard/lent.js'
 import { mayDrive, TERMINAL_ANSWER_MS, TERMINAL_EXPIRY_MS, TERMINAL_PICKUP_MS, TERMINAL_RECHECK_MS, type TerminalEffect } from './terminal.js'
+import { costRows, summarizeCosts } from './costs/read.js'
 import { closeAssignment, closeUnassignedStart, readDecision, recentDecisions, recordAttempts, timedDecisionOf, writeRouteEffects } from './routeDecisions.js'
 import { listMentions, markDone, mentionsWaiting, openTags, readMention, resolveByReply, writeMentions } from './mentions.js'
 import { answerable, fullFor, listDecisions, type DecisionList, readAskedDecision, recordAnswer, repeatOf, waitingIn, waitingInProject, writeDecisions } from './decisions.js'
@@ -1830,6 +1831,20 @@ export class SuperTabStore {
       // Dormant conversations count too: their decisions stay readable (the list loads every group for this).
       const groups = state.conversations.filter(c => canReadGroup(state, actor, c)).map(c => c.id)
       return (await recentDecisions(tx, tabId, groups)).map(timedDecisionOf)
+    })
+  }
+
+  /** What the attempts routed in the last `days` cost and how they went (costs/read.ts), over the groups the reader may read.
+   *  The decisions are read first, by index, so only the groups they name are loaded. */
+  async costSummary(user: AuthUser, tabId: string, days: number, asAgentId?: string) {
+    return transaction(this.db, async tx => {
+      const until = this.now(), since = until - days * 24 * 60 * 60_000
+      const { rows, truncated } = await costRows(tx, tabId, since)
+      const { state } = await this.load(tx, user, tabId, { groupIds: [...new Set(rows.map(r => r.conversationId))] })
+      const actor = await this.actor(tx, user, state, asAgentId)
+      author(state, actor)
+      const readable = state.conversations.filter(c => canReadGroup(state, actor, c)), ids = new Set(readable.map(c => c.id))
+      return { since, until, days, truncated, ...summarizeCosts(rows.filter(r => ids.has(r.conversationId)), readable) }
     })
   }
 

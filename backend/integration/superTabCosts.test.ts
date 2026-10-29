@@ -136,3 +136,28 @@ describe('an attempt’s record on its route decision', () => {
     expect((stored.data as { contribution: { observation: { harnessTokens?: unknown } } }).contribution.observation.harnessTokens).toEqual({ [f.harness.worker]: opus(10, 1) })
   })
 })
+
+describe('the cost summary', () => {
+  it('shows a finished attempt by engine, model, effort and kind with its tokens, API-equivalent cost and spend', async () => {
+    const f = await swarm()
+    await f.beat(opus(1_000_000, 100_000))
+    const assignmentId = await f.assign(await f.route('parser'))
+    // Twelve minutes of work, its machine reporting every minute as it does every 15 seconds.
+    for (let minute = 0; minute < 12; minute++) {
+      f.clock.now += MINUTE
+      await f.beat(opus(3_000_000, 600_000))
+    }
+    await f.finish(assignmentId)
+    const summary = await f.store.costSummary(owner, f.tab, 7)
+    // 2M input at $4 and 0.5M output at $20 per million: $18, on a plan, so nothing spent per token.
+    expect(summary.rows).toEqual([expect.objectContaining({ engine: 'claude', model: 'opus', effort: 'high', kind: 'parser', attempts: 1, shipped: 1,
+      outcomes: { done: 1 }, billing: { subscription: 1 }, medianMinutesToShip: 12, tokensKnown: 1,
+      tokens: { input: 2_000_000, output: 500_000, cacheRead: 0, cacheWrite: 0 }, apiCost: 18, spend: 0, costKnown: 1, costPerShipped: 18 })])
+    expect(summary).toMatchObject({ days: 7, truncated: false, prices: [{ model: 'claude-opus-5-5' }] })
+    // The Lead reads it too, as its own agent.
+    expect((await f.store.costSummary(host, f.tab, 7, f.lead)).totals).toMatchObject({ attempts: 1, apiCost: 18 })
+    // Past the period, nothing.
+    f.clock.now += 8 * 24 * 60 * MINUTE
+    expect((await f.store.costSummary(owner, f.tab, 7)).rows).toEqual([])
+  })
+})
