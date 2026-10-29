@@ -205,6 +205,7 @@ class SwarmMessageRow extends StatelessWidget {
     this.reactions,
     this.thread,
     this.below,
+    this.card,
     this.onLongPress,
   });
 
@@ -233,6 +234,10 @@ class SwarmMessageRow extends StatelessWidget {
 
   /// Who wrote it, in a sheet; null where nothing opens.
   final VoidCallback? onAuthor;
+
+  /// Under its text and files: the live card this message is
+  /// (swarm_live_card.dart); null for a plain message.
+  final Widget? card;
 
   /// Drawn under its text and files: its reaction counts.
   final Widget? reactions;
@@ -323,6 +328,7 @@ class SwarmMessageRow extends StatelessWidget {
               link: swarmAttachmentLink(file.url),
             ),
           ),
+        ?card,
         ?reactions,
         ?thread,
         ?below,

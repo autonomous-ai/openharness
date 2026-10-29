@@ -401,6 +401,51 @@ describe('reactions', () => {
     const side = (await run(tab, { type: 'message.send', conversationId: group, text: 'here', replyTo: null, recipientIds: [] })).result.messageId as string
     await expect(react(tab, side, true)).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
+
+  // Agents acknowledge with reactions, as Slack bots do (the swarm skills): 👀 started, ✅ done, 🚀 merged.
+  const config = { engine: 'claude', model: 'opus', effort: 'high', contextWindow: null, engineVersion: null }
+  const agentIn = async (tab: string, conversationId: string, name: string, lead = false) =>
+    (await run(tab, { type: 'agent.add', conversationId, machineId: 'host', harnessId: randomUUID(), name, configuration: config, lead })).result.agentId as string
+  const agentReact = (tab: string, conversationId: string, messageId: string, agentId: string, emoji: 'eyes' | 'check' | 'rocket', on = true) =>
+    run(tab, { type: 'message.react', conversationId, messageId, emoji, on }, owner, agentId)
+
+  it('shows an agent\'s 👀 and then ✅ on the message it took, to every reader of the conversation', async () => {
+    const tab = await swarm()
+    const builder = await agentIn(tab, 'lead', 'Kai')
+    const messageId = await post(tab, 'Kai, please add avatars.')
+    await agentReact(tab, 'lead', messageId, builder, 'eyes')
+    expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'eyes', count: 1, by: [{ kind: 'agent', id: builder }] }])
+    await agentReact(tab, 'lead', messageId, builder, 'eyes', false)
+    await agentReact(tab, 'lead', messageId, builder, 'check')
+    expect(await countsOf(tab, messageId, peer)).toEqual([{ emoji: 'check', count: 1, by: [{ kind: 'agent', id: builder }] }])
+  })
+
+  it('privacy: an agent reacts only where it takes part, never on another agent\'s private notice, and a reader outside a private project sees none of it', async () => {
+    const tab = await swarm()
+    const { projectId, conversationId } = (await run(tab, { type: 'project.create', name: 'Secret', visibility: 'private', brief: '' })).result as
+      { projectId: string; conversationId: string }
+    await run(tab, { type: 'project.sharing', projectId, visibility: 'private', memberIds: [owner.sub] })
+    const pm = await agentIn(tab, conversationId, 'Secret PM', true)
+    const secret = (await run(tab, { type: 'message.send', conversationId, text: 'Ship the secret.', replyTo: null, recipientIds: [] })).result.messageId as string
+    await agentReact(tab, conversationId, secret, pm, 'rocket')
+    // The project's own reader sees it; a member outside the project reads neither the conversation nor its counter.
+    expect((await read(tab, owner, `conversations/${conversationId}/messages`)).body.data.messages
+      .find((m: { id: string }) => m.id === secret).reactions).toEqual([{ emoji: 'rocket', count: 1, by: [{ kind: 'agent', id: pm }] }])
+    const outside = await read(tab, peer, `conversations/${conversationId}/messages`)
+    expect(outside.status).toBe(404)
+    expect(outside.text).not.toContain(secret)
+    const parts = await read(tab, peer)
+    expect(parts.text).not.toContain(conversationId)
+    // An agent outside the private project is not even told it exists, and another agent's private notice is not there for it to mark.
+    const builder = await agentIn(tab, 'lead', 'Kai')
+    await expect(agentReact(tab, conversationId, secret, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 })
+    const lead = await agentIn(tab, 'lead', 'River', true)
+    const notice = (await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Your skill changed.', replyTo: null, recipientIds: [lead],
+      agentOnly: true }, owner, lead)).result.messageId as string
+    await expect(agentReact(tab, 'lead', notice, builder, 'eyes')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await agentReact(tab, 'lead', notice, lead, 'eyes')
+    expect((await page(tab, peer)).map(m => m.id)).not.toContain(notice)
+  })
 })
 
 describe('the ship moment', () => {

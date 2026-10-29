@@ -11,6 +11,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { stableId } from '../src/superTabs/model.js'
 
 // Security review 1 of #2115: its two-person probes, kept as regressions. The three that showed a leak at db0379898
 // (routing history, archived tasks awaiting a report, sequence-only paging) now assert the fix; the rest are as written.
@@ -204,4 +205,138 @@ it('reads a machine leaving the Swarm without its name, in the project chat and 
   expect(seen.find(m => m.id === left.id)!.text).toBe('A machine left the Swarm: its host confirmed its cleanup.')
   expect(seen.find(m => m.id === removed.id)!.text).toMatch(/^owner removed a machine from the Swarm, and \S+ with it\.$/)
   expect(JSON.stringify(seen)).not.toContain('OWNER-STUDIO-HOST')
+})
+
+// Threads (Batch X) through a Buddy's reads, the security reviewer's three cases on the merge of #2115 (Lead, 10-29).
+describe('a Buddy and threads', () => {
+  const send = (f: Awaited<ReturnType<typeof swarm>>, conversationId: string, text: string, replyTo: string | null = null, user = owner, as?: string) =>
+    f.execute({ type: 'message.send', conversationId, text, replyTo, recipientIds: [] }, user, as).then(r => String(r.result.messageId))
+
+  it('reads no thread of a private chat, its root or its replies, though its person still has them on record', async () => {
+    // Closed as a Chat with PM before anyone reads the Swarm: the fixture edits the stored row, which no cached read sees.
+    const f = await swarm()
+    const chat = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Private thread', brief: '', checks: [] })).result.conversationId)
+    const root = await send(f, chat, 'PRIVATE ROOT SENTINEL')
+    await send(f, chat, 'PRIVATE REPLY SENTINEL', root)
+    await closedPmChat(f, chat, [owner.sub, peer.sub])
+    const { agentId } = await buddy(f)
+    for (const cursor of [{}, { thread: root }, { messageId: root }]) {
+      await expect(f.store.messages(peer, f.tab, chat, cursor, agentId)).rejects.toThrow('unavailable')
+    }
+    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    expect(JSON.stringify(read)).not.toMatch(/PRIVATE (ROOT|REPLY) SENTINEL/)
+    expect(read.groups.map(g => g.key)).not.toContain(chat)
+  })
+
+  it('reads no thread in another person\'s Buddy chat', async () => {
+    const f = await swarm(), { agentId } = await buddy(f)
+    // The owner's own Buddy, on their own Swarm machine, opens their Buddy chat.
+    await f.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Owner Mac', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 })
+    const gen = (await poolRows(f.store, owner, 'owner-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await f.store.observeMachine(owner, f.tab, 'owner-mac', { generation: gen, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
+    const ownersChat = String((await f.execute({ type: 'buddy.create', projectId: 'lead', machineId: 'owner-mac', engine: 'claude' })).result.conversationId)
+    const root = await send(f, ownersChat, 'OWNER BUDDY ROOT')
+    await send(f, ownersChat, 'OWNER BUDDY REPLY', root)
+    for (const cursor of [{}, { thread: root }, { messageId: root }]) {
+      await expect(f.store.messages(peer, f.tab, ownersChat, cursor, agentId)).rejects.toThrow('unavailable')
+    }
+    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    expect(read.groups.map(g => g.key)).not.toContain(ownersChat)
+    expect(JSON.stringify(read)).not.toMatch(/OWNER BUDDY (ROOT|REPLY)/)
+  })
+
+  it('reads the replies to a route row as people wrote them, never the route row, its id or its thread line', async () => {
+    const f = await swarm(), { agentId } = await buddy(f)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Routed task', brief: '', checks: [] })).result.conversationId)
+    const decision: any = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task' },
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'owner-mac', engine: 'claude', model: 'fixture-model', effort: 'high', quality: 2, cost: 2,
+        title: 'Engineer · Claude fixture-model high · OWNER-PRIVATE-HOST', label: 'Candidate on OWNER-PRIVATE-HOST' }],
+      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate' }
+    await f.execute({ type: 'route.record', conversationId: group, decision }, owner, f.lead)
+    const route = (await f.store.messages(owner, f.tab, group, {}, f.lead)).messages.find(m => (m.source as { kind?: string } | null)?.kind === 'route')!
+    const reply = await send(f, group, 'Agreed, go ahead.', route.id)
+    // A reply from before threads names what it answered and nothing else.
+    const legacy = `legacy-${randomUUID()}`
+    await db.superTabMessage.create({ data: { id: legacy, tabId: f.tab, conversationId: group, sequence: 900,
+      author: { kind: 'person', id: owner.sub, name: owner.email }, text: 'Old reply to the route.', replyTo: route.id, recipientIds: [] } })
+    // The PM sees the route row as a thread root with its reply.
+    const pm = await f.store.messages(owner, f.tab, group, {}, f.lead)
+    expect(pm.threads.map(t => t.id)).toContain(route.id)
+
+    const seen = await f.store.messages(peer, f.tab, group, {}, agentId)
+    expect(seen.messages.map(m => m.id)).toContain(reply)
+    expect(seen.messages.map(m => m.id)).not.toContain(route.id)
+    expect(seen.threads.map(t => t.id)).not.toContain(route.id)
+    // The reply reads as a message of its own: no pointer to the row the Buddy may not read.
+    expect(seen.messages.find(m => m.id === reply)!.thread ?? null).toBeNull()
+    // Its thread reads like a message it may not read and like a thread that is not there: an empty page (review 2 of #2168).
+    const empty = { messages: [], next: null, threads: [] }
+    expect(await f.store.messages(peer, f.tab, group, { thread: route.id }, agentId)).toMatchObject(empty)
+    expect(await f.store.messages(peer, f.tab, group, { thread: 'invented-root' }, agentId)).toMatchObject(empty)
+    expect((await f.store.messages(owner, f.tab, group, { thread: route.id }, f.lead)).messages.map(m => m.id)).toEqual([route.id, reply])
+    expect(seen.messages.find(m => m.id === legacy)!.replyTo).toBeNull()
+    // Nothing names the route row: not a reply's thread or reply-to, not a reply line (review 1 of #2168).
+    expect(JSON.stringify(seen)).not.toContain(route.id)
+    expect(JSON.stringify(seen)).not.toContain('OWNER-PRIVATE-HOST')
+  })
+})
+
+// Every reader (review 1 of #2168): a reply to a row the reader may not see, an agent-only note here, names nothing of it.
+// Merged with #2177 (main): a new reply to a notice only its recipients read is saved in the chat, not the notice's thread,
+// for every reader (commands.ts). The read-side rule still covers a reply saved in such a thread earlier.
+it('gives no reader a pointer to, or reply line for, an agent-only note it may not see; its recipient keeps them', async () => {
+  const f = await swarm(), { agentId } = await buddy(f)
+  // The Lead's note to itself in the project chat, then its own reply to that note.
+  const note = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'AGENT ONLY NOTE', replyTo: null,
+    recipientIds: [f.lead], agentOnly: true }, owner, f.lead)).result.messageId)
+  const reply = String((await f.execute({ type: 'message.send', conversationId: 'lead', text: 'Following up on my note.', replyTo: note,
+    recipientIds: [] }, owner, f.lead)).result.messageId)
+  // A reply saved in the note's thread before #2177 kept such replies in the chat.
+  const sent = (await db.superTabMessage.findUnique({ where: { id: reply } }))!
+  const earlier = randomUUID().replaceAll('-', '').slice(0, 24)
+  await db.superTabMessage.create({ data: { id: earlier, tabId: f.tab, conversationId: 'lead', sequence: sent.sequence + 1,
+    author: sent.author as object, text: 'An earlier follow-up.', replyTo: note, thread: note, recipientIds: [], mentions: [] } })
+
+  const lead = await f.store.messages(owner, f.tab, 'lead', {}, f.lead)
+  const leadReply = lead.messages.find(m => m.id === reply)!
+  expect(leadReply.thread ?? leadReply.id).toBe(reply)
+  expect(leadReply.replyTo).toBe(note)
+  expect(lead.messages.find(m => m.id === earlier)).toMatchObject({ thread: note, replyTo: note })
+  expect(lead.threads.map(t => t.id)).toContain(note)
+  expect((await f.store.messages(owner, f.tab, 'lead', { thread: note }, f.lead)).messages.map(m => m.id)).toEqual([note, earlier])
+  for (const [user, as] of [[owner, undefined], [peer, agentId]] as const) {
+    const read = await f.store.messages(user, f.tab, 'lead', {}, as)
+    const shown = read.messages.find(m => m.id === reply)!
+    expect(shown.thread ?? shown.id).toBe(reply)
+    expect(shown.replyTo).toBeNull()
+    expect(read.messages.find(m => m.id === earlier)).toMatchObject({ thread: null, replyTo: null })
+    expect(JSON.stringify(read)).not.toContain(note)
+    expect(await f.store.messages(user, f.tab, 'lead', { thread: note }, as)).toMatchObject({ messages: [], next: null, threads: [] })
+  }
+})
+
+// Delta check of the #2168 merge: a task chat's copy of a lost-task notice stored before #2177 marked such copies, whose
+// Lead copy reached the PM, is read by no one (pageReads.ts deliveredCopies). Its thread reads as an invented root's for
+// every reader, so a page never shows the hidden notice's earlier replies, nor that its thread exists.
+it('reads the thread of a hidden task chat copy of a Lead notice as an invented root, for people, the PM and a Buddy', async () => {
+  const f = await swarm(), { agentId } = await buddy(f)
+  const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Copy probe', brief: '', checks: [] })).result.conversationId)
+  const last = await db.superTabMessage.findFirst({ where: { tabId: f.tab }, orderBy: { sequence: 'desc' } })
+  const sequence = (last?.sequence ?? 0) + 1, author = { kind: 'agent', id: f.lead, name: 'PM' }
+  const copy = randomUUID().replaceAll('-', '').slice(0, 24), earlier = randomUUID().replaceAll('-', '').slice(0, 24)
+  await db.superTabMessage.createMany({ data: [
+    { id: copy, tabId: f.tab, conversationId: group, sequence, author, text: 'COPY OF A LOST TASK NOTICE', replyTo: null, thread: copy,
+      recipientIds: [], mentions: [], source: { kind: 'work-lost' } },
+    { id: stableId(copy, 'lead'), tabId: f.tab, conversationId: 'lead', sequence, author, text: 'COPY OF A LOST TASK NOTICE', replyTo: null,
+      thread: stableId(copy, 'lead'), recipientIds: [f.lead], mentions: [], source: { kind: 'work-lost' } },
+    { id: earlier, tabId: f.tab, conversationId: group, sequence: sequence + 1, author: { kind: 'person', id: owner.sub, name: owner.email },
+      text: 'EARLIER REPLY UNDER THE COPY', replyTo: copy, thread: copy, recipientIds: [], mentions: [] }] })
+
+  for (const [user, as] of [[owner, undefined], [owner, f.lead], [peer, agentId]] as const) {
+    const invented = await f.store.messages(user, f.tab, group, { thread: 'a'.repeat(24) }, as)
+    expect(invented).toMatchObject({ messages: [], next: null, threads: [] })
+    expect(await f.store.messages(user, f.tab, group, { thread: copy }, as)).toEqual(invented)
+  }
 })

@@ -19,6 +19,15 @@ it('keeps an explicit stable receipt for agent messages and arbitrary work comma
     expect(() => parseSuperTabArgs(argv, where)).toThrow('harness super-tab')
   }
 })
+it('reacts to a message as people do, and --off takes the reaction back', () => {
+  expect(parseSuperTabArgs([...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op-1'], where).payload).toEqual({ action: 'command', tabId: 'tab', agentId: 'agent',
+    operationId: 'op-1', command: { type: 'message.react', conversationId: 'lead', messageId: 'msg-1', emoji: 'eyes', on: true } })
+  expect(parseSuperTabArgs([...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op-2', '--off'], where).payload.command).toMatchObject({ emoji: 'eyes', on: false })
+  for (const argv of [[...prefix, 'react', 'lead', 'msg-1', 'eyes'], [...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op', '--on'],
+    [...prefix, 'react', '../x', 'msg-1', 'eyes', 'op'], [...prefix, 'react', 'lead', 'msg-1', '../eyes', 'op'], [...prefix, 'react', 'lead', 'msg-1', 'eyes', 'op', '--off', 'x']]) {
+    expect(() => parseSuperTabArgs(argv, where), argv.join(' ')).toThrow('harness super-tab')
+  }
+})
 it('finds the native caller without requiring an ID in the initial launch prompt', async () => {
   const request = vi.fn(async (type: string) => type === 'agents_list'
     ? { agents: [{ id: 'native', engine: 'codex', tmuxPane: '%42', status: 'active' }] }

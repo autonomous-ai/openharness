@@ -164,7 +164,8 @@ Future<List<SuperTabReactionEmoji>> showRow(
           receipts: const [],
           onReturnToComposer: () {},
           readerId: 'owner',
-          reactorName: (kind, id) => {'owner': 'dee', 'peer': 'ivy'}[id] ?? id,
+          reactorName: (kind, id) =>
+              {'owner': 'dee', 'peer': 'ivy', 'agent-kai': 'Kai'}[id] ?? id,
           onReact: canReact ? picked.add : null,
         ),
       ),
@@ -232,6 +233,53 @@ void reactionWidgetTests() {
     await tester.tap(find.text('👀'));
     await tester.pumpAndSettle();
     expect(picked, [SuperTabReactionEmoji.eyes]);
+  });
+
+  testWidgets('an agent’s 👀 ✅ 🚀 show in that order, named by the agent', (
+    tester,
+  ) async {
+    Map<String, dynamic> byKai(String emoji) => {
+      'emoji': emoji,
+      'count': 1,
+      'by': [
+        {'kind': 'agent', 'id': 'agent-kai'},
+      ],
+    };
+    // A newer server's emoji this build does not know is skipped, not shown.
+    await showRow(
+      tester,
+      reacted(
+        reactions: [
+          byKai('eyes'),
+          byKai('check'),
+          byKai('rocket'),
+          byKai('skull'),
+        ],
+      ),
+    );
+    final chips = find.byWidgetPredicate(
+      (w) =>
+          w.key is ValueKey<String> &&
+          (w.key! as ValueKey<String>).value.startsWith('super-reaction-m1-'),
+    );
+    expect(
+      tester.widgetList(chips).map((w) => (w.key! as ValueKey<String>).value),
+      [
+        'super-reaction-m1-eyes',
+        'super-reaction-m1-check',
+        'super-reaction-m1-rocket',
+      ],
+    );
+    expect(find.bySemanticsLabel('✅ 1, Kai'), findsOneWidget);
+  });
+
+  testWidgets('✅ is offered beside 👀 and 🚀', (tester) async {
+    final picked = await showRow(tester, reacted());
+    await tester.tap(find.byTooltip('Add reaction'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('✅'));
+    await tester.pumpAndSettle();
+    expect(picked, [SuperTabReactionEmoji.check]);
   });
 
   testWidgets('a reader who cannot write sees counts and cannot react', (
