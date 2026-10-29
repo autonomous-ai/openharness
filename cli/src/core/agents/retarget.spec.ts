@@ -15,6 +15,9 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 import type { NativeLaunch } from '../../engines/nativeLaunch.js'
 import { GUEST_HARNESS_REFUSAL } from '../guestPolicy.js'
+import { createSwarmSkillAdoption } from '../../superTabs/inCore/adoption.js'
+import { createLaunchAuthority } from './launchAuthority.js'
+import type { SwarmSkillGrant } from '../../lib/swarmSkills.js'
 
 vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
@@ -334,6 +337,53 @@ describe('retargeting an agent', () => {
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'removed' })
       expect(run.release).toHaveBeenCalled()
       expect(run.deps.agentReconciler.holdRoute).not.toHaveBeenCalled()
+    })
+  })
+
+  // Security review 1 of #2255: a model switch relaunched an old Buddy with no saved role without asking the Swarm, so it
+  // came back without its guard.
+  describe('an old Swarm session with no saved role', () => {
+    const switchWith = (grant: SwarmSkillGrant | null | undefined) => {
+      const row = agent({ startedBy: 'agent' })
+      const adoptSwarmSkill = createSwarmSkillAdoption({ role: async () => grant, candidate: () => false,
+        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }),
+        save: (_id, skill) => { row.swarmSkill = skill; return true } })
+      return { row, ...setup(row, { adoptSwarmSkill }) }
+    }
+    it('switches its model with its Buddy role, saved on its row', async () => {
+      const run = switchWith({ role: 'buddy' })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.objectContaining({ swarmSkill: { role: 'buddy', key: 'a1' } }),
+        expect.anything(), expect.any(Function), undefined)
+      expect(run.row.swarmSkill).toEqual({ role: 'buddy', key: 'a1' })
+      expect(restartAgent).toHaveBeenCalledOnce()
+    })
+    it('does not switch a session that changed while its role was read', async () => {
+      const row = agent({ startedBy: 'agent' })
+      const adoptSwarmSkill = createSwarmSkillAdoption({ candidate: () => false, save: vi.fn(),
+        role: async () => { row.cwd = '/replacement'; return { role: 'buddy' as const } },
+        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) })
+      const run = setup(row, { adoptSwarmSkill })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+    it('switches the person\'s own session as before, with no role and no Swarm read', async () => {
+      const role = vi.fn(async () => ({ role: 'buddy' as const }))
+      const row = agent()
+      const run = setup(row, { adoptSwarmSkill: createSwarmSkillAdoption({ role, candidate: () => false, save: vi.fn(),
+        authority: createLaunchAuthority({ byAgent: () => row, revision: () => 0, cancelled: () => false }) }) })
+      expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: true })
+      expect(role).not.toHaveBeenCalled()
+      expect(run.deps.relaunchOverrides).toHaveBeenCalledWith(expect.not.objectContaining({ swarmSkill: expect.anything() }),
+        expect.anything(), expect.any(Function), undefined)
+    })
+    it('refuses the switch, saying why, and leaves the running engine alone while its role cannot be read', async () => {
+      const run = switchWith(undefined)
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'SWARM_ROLE_UNAVAILABLE',
+        detail: 'This agent\'s Swarm role could not be confirmed, so its model was not switched. Try again once the Swarm can be reached.' })
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(run.deps.acquireTerminalControl).not.toHaveBeenCalled()
+      expect(restartAgent).not.toHaveBeenCalled()
     })
   })
 
