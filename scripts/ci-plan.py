@@ -48,6 +48,11 @@ COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", 
 ALSO = {"cli/src/lib/ptyHost/": "pty", "cli/src/lib/ptyHostBackend": "pty",
         "cli/src/lib/terminalBackend.contract.ts": "pty", "tui/vendor/": "pty", "term/": "tui",
         "cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json": "desktop"}
+# Each Swarm UI style allowlist is checked by its own component's job (check-ui-style.py --only), so
+# it is that component's input: a PR or main commit that changes it runs (never reuses) that suite.
+# Any other file in scripts/ui-style-allowlist/ stays a shared input.
+STYLE_ALLOWLISTS = {"scripts/ui-style-allowlist/desktop.json": "desktop", "scripts/ui-style-allowlist/mobile.json": "mobile"}
+ALSO.update(STYLE_ALLOWLISTS)
 # Narrower directories that add a suite on top of their component's (the ESP32-P4 build and golden screens).
 SUBCOMPONENTS = {"devices/harness-pro/": "pro"}
 
@@ -81,8 +86,6 @@ NOT_READ = {"backend": ("backend/integration/",), "cli": ("cli/e2e/",)}
 # Inputs every suite shares: a change here reruns everything, and a PR that changes them
 # never reuses (PR CI runs the PR's own planner and workflow; the merge helper is in scripts/).
 SHARED_PREFIXES = (".github/", "scripts/")
-# Data only the always-running process checks read (scripts/check-ui-style.py): neither shared nor a suite input.
-PROCESS_ONLY = ("scripts/ui-style-allowlist/",)
 SHARED_FILES = {"Makefile", ".gitattributes", ".gitignore", ".gitmodules"}
 LOCKS_AND_TOOLCHAINS = {
     "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "pnpm-workspace.yaml", "bun.lockb",
@@ -127,19 +130,15 @@ def inert(path):
             or ("/" not in path and path.endswith(".md")))
 
 
-def process_only(path):
-    return path.startswith(PROCESS_ONLY) and path.endswith(".json") and path.count("/") == 2
-
-
 def shared_input(path):
     """Why a changed path invalidates every suite, or None."""
-    if process_only(path):
+    if path in STYLE_ALLOWLISTS:
         return None
     if path.startswith(SHARED_PREFIXES) or path in SHARED_FILES:
         return "workflow, CI script, merge tool or repository setting"
     if PurePosixPath(path).name in LOCKS_AND_TOOLCHAINS:
         return "lockfile or toolchain pin"
-    if not select([path])[0] and not inert(path) and not process_only(path):
+    if not select([path])[0] and not inert(path):
         return "outside every component"
     return None
 
@@ -174,7 +173,7 @@ def own_shared_change(root, head, base):
     """A shared input this PR itself changes (its own CI runs its own planner), or None."""
     own = changed_paths(root, git(root, "merge-base", base, head), head)
     return next((path for path in own if (path.startswith(SHARED_PREFIXES) or path in SHARED_FILES)
-                 and not process_only(path)), None)
+                 and path not in STYLE_ALLOWLISTS), None)
 
 
 def reuse_blocker(root, suite, origin, head):

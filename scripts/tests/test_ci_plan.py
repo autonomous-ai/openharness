@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -57,6 +58,30 @@ class SelectionTests(unittest.TestCase):
         # desktop/test/windows_pipe_auth_test.dart reads them from cli/: a new vector runs both halves.
         self.assertEqual(planner.select(["cli/src/lib/windows/__fixtures__/pipe-auth-vectors.json"])[0], {"cli", "desktop"})
         self.assertEqual(planner.select(["cli/src/lib/windows/pipeAuth.ts"])[0], {"cli"})
+
+    def test_a_style_allowlist_selects_the_suite_whose_job_checks_it(self):
+        # mobile-checks and desktop-tests run scripts/check-ui-style.py --only against their area's list.
+        self.assertEqual(planner.select(["scripts/ui-style-allowlist/mobile.json"])[0], {"mobile"})
+        self.assertEqual(planner.select(["scripts/ui-style-allowlist/desktop.json"])[0], {"desktop"})
+        self.assertEqual(planner.select(["scripts/ui-style-allowlist/website.json"])[0], set())
+
+    def test_the_style_allowlist_map_matches_the_style_check_and_the_workflow(self):
+        scripts = Path(__file__).resolve().parents[1]
+        style_spec = importlib.util.spec_from_file_location("check_ui_style", scripts / "check-ui-style.py")
+        style = importlib.util.module_from_spec(style_spec)
+        style_spec.loader.exec_module(style)
+        expected = {f"{style.ALLOWLISTS}/{area}.json": planner.select([folder + "/x.dart"])[0]
+                    for folder, area in style.ROOTS.items()}
+        self.assertEqual({path: {suite} for path, suite in planner.STYLE_ALLOWLISTS.items()}, expected)
+        # Each area's check runs inside a job of the suite the list selects.
+        workflow = (scripts.parent / ".github/workflows/ci.yml").read_text()
+        jobs = dict(re.findall(r"(?m)^  ([\w-]+):\n((?:(?:    .*)?\n)+)", workflow))
+        for folder, area in style.ROOTS.items():
+            with self.subTest(area=area):
+                suite = planner.STYLE_ALLOWLISTS[f"{style.ALLOWLISTS}/{area}.json"]
+                checking = {name for name, body in jobs.items() if f"check-ui-style.py --only {folder}" in body}
+                self.assertTrue(checking)
+                self.assertLessEqual(checking, planner.JOBS[suite])
 
     def test_the_shared_terminal_crate_selects_both_the_pty_host_and_the_tui(self):
         # term/ is a dependency of the PTY host and of the shipped TUI (`hn`): both suites run.
@@ -317,11 +342,29 @@ class ReuseTests(ReuseFixture):
         self.assertEqual(list(plan["reused"]), ["backend", "cli"])
         self.assertEqual(planner.select(["backend/integration/teams.test.ts"])[0], {"backend"})
 
-    def test_style_allowlists_only_the_process_checks_read_do_not_block_reuse(self):
+    def test_a_style_allowlist_main_changed_reruns_the_suite_that_checks_it(self):
+        # mobile-checks runs the mobile style check: a list main shrank can fail with this PR's code.
+        for area, suite, other in (("mobile", "mobile", "backend"), ("desktop", "desktop", "mobile")):
+            with self.subTest(area=area):
+                pr_paths = {"mobile": ["mobile/lib/app.dart", "backend/src/app.ts"],
+                            "desktop": ["desktop/lib/a.dart", "mobile/lib/app.dart"]}[area]
+                _, main, head = self.scenario(pr_paths, [f"scripts/ui-style-allowlist/{area}.json"])
+                plan = self.plan(head, main)
+                self.assertEqual(list(plan["reused"]), [other])
+                self.assertIn(f"scripts/ui-style-allowlist/{area}.json", plan["reuse"]["rerun"][suite])
+                self.assertEqual(plan["required_jobs"], sorted({"process-checks"} | planner.JOBS[suite]))
+
+    def test_a_style_allowlist_the_pr_changes_is_its_components_input_not_a_shared_one(self):
         # The mobile batch that waited behind a backend batch also shrank its style allowlist (#2154).
         _, main, head = self.scenario(["mobile/lib/app.dart", "scripts/ui-style-allowlist/mobile.json"],
-                                      ["backend/src/app.ts", "scripts/ui-style-allowlist/desktop.json"], passed_suites={"mobile"})
-        self.assertEqual(list(self.plan(head, main)["reused"]), ["mobile"])
+                                      ["backend/src/app.ts", "scripts/ui-style-allowlist/desktop.json"])
+        plan = self.plan(head, main)
+        self.assertEqual(plan["suites"], ["mobile"])
+        self.assertEqual(list(plan["reused"]), ["mobile"])
+
+    def test_an_unknown_style_allowlist_on_main_reruns_every_component(self):
+        _, main, head = self.scenario(["mobile/lib/app.dart"], ["scripts/ui-style-allowlist/website.json"])
+        self.assertRerunsAll(self.plan(head, main), "scripts/ui-style-allowlist/website.json")
 
     def test_a_file_another_component_reads_reruns_the_reader(self):
         # mobile's measurement tests read the backend's product usage types.
@@ -510,6 +553,16 @@ class VerifyReuseTests(ReuseFixture):
                       reused={"mobile": dict(origin_sha=passed, origin_tree=tree, run_id=11, run_attempt=1,
                                              run_url="https://github.com/o/r/actions/runs/11", reason="trust me")})
         with self.assertRaisesRegex(ValueError, "productUsage"):
+            planner.verify_reuse(self.root, forged, main, self.evidence)
+
+    def test_a_claimed_reuse_past_a_shrunk_style_allowlist_is_refused(self):
+        passed, main, head = self.scenario(["mobile/lib/app.dart"], ["scripts/ui-style-allowlist/mobile.json"])
+        tree = self.git("rev-parse", f"{passed}^{{tree}}")
+        forged = dict(source_sha=head, suites=["mobile"], event="pull_request",
+                      reuse=dict(passed_head=passed, main_parent=main),
+                      reused={"mobile": dict(origin_sha=passed, origin_tree=tree, run_id=11, run_attempt=1,
+                                             run_url="https://github.com/o/r/actions/runs/11", reason="trust me")})
+        with self.assertRaisesRegex(ValueError, "ui-style-allowlist/mobile.json"):
             planner.verify_reuse(self.root, forged, main, self.evidence)
 
     def test_a_pr_that_edits_the_planner_cannot_have_reuse_accepted(self):
