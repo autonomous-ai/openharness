@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
+import { addressOf, agentOrigin, AGENTS_START_AGENTS_OFF, closeCommand, DEPTH_REFUSAL, EXIT, parseDuration, psCommand, refusalNext, replyCommand, routeCommand, showCommand, spawnCheck, spawnCount, spawnRefusal, SPAWN_LIMITS, step, tellCommand, waitCommand, watchCommand, whoamiCommand, type ClientDeps } from './commands.js'
 import { RefusedError, type Rpc } from '../messages/rpc.js'
 import { AgentClientError, type Daemon, type Where } from './daemon.js'
 import { Ledger, ledgerPath } from './ledger.js'
@@ -2208,5 +2208,116 @@ describe('harness reply to a harness in a pane (a program acting for the person)
     const shown = program(d)
     expect(await showCommand(['kid', '--json'], shown.deps)).toBe(EXIT.ok)
     expect(JSON.parse(shown.out.join('\n'))).toMatchObject({ answer: 'Fixed: name added.' })
+  })
+})
+
+describe('harness route (a program acting for the person picks the harness)', () => {
+  const replied = () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const record: Rpc = async (target, payload) => { calls.push([target.machineId, payload]); return { id: 'm0000001', state: 'queued' } }
+    return { calls, record }
+  }
+  // The lamp's lamp-tasks, asking about the office computer's harnesses.
+  const program = (d: FakeDaemon, office: FakeDaemon, over: Partial<ClientDeps> = {}) => {
+    const h = harness(d, { pane: undefined, others: { m2: office }, ...over })
+    h.deps.machines = async () => [{ machineId: 'm', label: 'studio', current: true }, { machineId: 'm2', label: 'office', current: false }] as never
+    return h
+  }
+  const decides = (d: FakeDaemon, answer: Record<string, unknown>) => {
+    const asked: Array<Record<string, unknown>> = []
+    d.extra.route_decide = (payload) => { asked.push(payload); return answer }
+    return asked
+  }
+
+  beforeEach(() => { setAgentSettingsForTest(dir, { programsReply: true }) })
+
+  it('shows this machine\'s router that machine\'s harnesses in a pane, and types the words into the one it picks', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week', { engine: 'devin' }), frame('skills', { engine: 'claude' }), frame('fo', { location: 'cloud' } as never), frame('old', { status: 'stopped' })]
+    const asked = decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9234, trace: '2 sessions · jev: "week" 92%' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'how is the week log going?'], h.deps)).toBe(EXIT.ok)
+    expect(asked).toEqual([{ text: 'how is the week log going?', projects: [], agents: [], sessions: [
+      { id: 'week', name: 'week', asks: ['ask of week'], about: 'week recap' },
+      { id: 'skills', name: 'skills', asks: ['ask of skills'], about: 'skills recap' },
+    ] }])
+    // Decided by THIS machine's router, never the office's.
+    expect(office.requests.some((q) => q.type === 'route_decide')).toBe(false)
+    expect(r.calls).toEqual([['m2', { action: 'reply_local', machine: 'studio', agentId: 'week', text: 'how is the week log going?' }]])
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ decided: 'session', id: 'week', name: 'week', machine: 'office', confidence: 0.923,
+      reason: '2 sessions · jev: "week" 92%', sent: { state: 'queued' }, next: [{ run: 'harness wait --machine office week' }] })
+  })
+
+  it('says new work and sends nothing, so the caller starts it', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    decides(d, { decided: 'new', via: 'jev', reason: 'Jev: new work' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'write a haiku'], h.deps)).toBe(EXIT.ok)
+    expect(JSON.parse(h.out.join('\n'))).toEqual({ decided: 'new', reason: 'Jev: new work' })
+    expect(r.calls).toEqual([])
+  })
+
+  it('tells the router where this computer\'s last words for that machine went, within ten minutes only', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week'), frame('skills')]
+    const asked = decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.95, trace: 't' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--', 'read the week log'], h.deps)).toBe(EXIT.ok)
+    expect(asked[0].last).toBeUndefined()
+    h.advance(60_000)
+    expect(await routeCommand(['--machine', 'office', '--', 'and the other one?'], h.deps)).toBe(EXIT.ok)
+    expect(asked[1].last).toEqual({ id: 'week', agoMs: 60_000 })
+    // Another computer's words for the office (its line in this ledger cannot be: each computer keeps its own) and
+    // words for another machine never steer this one.
+    h.ledger.append({ at: NOW + 60_000, by: { machineId: 'm', agentId: 'person' }, told: { machineId: 'm3', agentId: 'skills' }, probe: 'x' })
+    expect(await routeCommand(['--machine', 'office', '--', 'and the other one?'], h.deps)).toBe(EXIT.ok)
+    expect(asked[2].last).toEqual({ id: 'week', agoMs: 60_000 })
+    h.advance(10 * 60_000)
+    expect(await routeCommand(['--machine', 'office', '--', 'and the other one?'], h.deps)).toBe(EXIT.ok)
+    expect(asked[3].last).toBeUndefined()
+  })
+
+  it('never sends to a harness still working: says NOT_IDLE, and to wait, not to start new work', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week', { activity: { state: 'working' } })]
+    decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9, trace: 't' })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'how is it going?'], h.deps)).toBe(EXIT.ok)
+    const said = JSON.parse(h.out.join('\n'))
+    expect(said).toMatchObject({ decided: 'session', id: 'week', sent: { error: 'NOT_IDLE' }, next: [{ run: 'harness wait --machine office week' }] })
+    expect(said.next[0].when).toMatch(/Never start new work/)
+    expect(r.calls).toEqual([])
+    expect(h.ledger.lastToldBy({ machineId: 'm', agentId: 'person' }, 'm2')).toBeNull()
+  })
+
+  it('is refused while the switch is off and for an agent, and asks the router nothing', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    const asked = decides(d, { decided: 'session', id: 'week', via: 'jev', p: 0.9, trace: 't' })
+    setAgentSettingsForTest(dir, { programsReply: false })
+    let h = program(d, office)
+    expect(await routeCommand(['--machine', 'office', '--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(h.err.join('\n')).toContain('harness settings programs-reply on')
+    setAgentSettingsForTest(dir, { programsReply: true })
+    d.frames = [frame('lead', { engine: 'claude' })]
+    h = harness(d)
+    expect(await routeCommand(['--', 'x'], h.deps)).toBe(EXIT.refused)
+    expect(asked).toEqual([])
+  })
+
+  it('decides nothing when the router cannot: the caller acts on nothing', async () => {
+    const d = new FakeDaemon(), office = new FakeDaemon('m2')
+    office.frames = [frame('week')]
+    decides(d, { error: 'JEV_UNAVAILABLE', detail: "Harness's server did not answer in time" })
+    const r = replied()
+    const h = program(d, office, { record: r.record })
+    expect(await routeCommand(['--machine', 'office', '--send', '--json', '--', 'x'], h.deps)).toBe(EXIT.failed)
+    expect(JSON.parse(h.out.join('\n'))).toMatchObject({ error: 'ROUTER_UNAVAILABLE' })
+    expect(r.calls).toEqual([])
   })
 })
