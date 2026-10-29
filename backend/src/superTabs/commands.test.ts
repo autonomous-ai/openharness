@@ -245,7 +245,8 @@ describe('Super Tab collaboration policy', () => {
     const worker = f.add('worker')
     const posted = f.run({ type: 'message.send', conversationId: 'lead', text: 'Which behavior?', replyTo: null, recipientIds: [] },
       { kind: 'agent', agentId: worker, machineOwnerId: 'host-owner' }).messages[0]!
-    expect(posted.recipients).toEqual([])
+    // Any agent in a group reaches its Lead (review of #2243).
+    expect(posted.recipients).toEqual([lead])
     const reply = f.run({ type: 'message.send', conversationId: 'lead', text: 'Keep the local copy.', replyTo: posted.id, recipientIds: [] }, owner,
       { reply: { id: posted.id, conversationId: 'lead', author: posted.author, createdAt: 0 } })
     expect(reply.messages[0]!.recipients).toEqual([worker])
@@ -276,21 +277,46 @@ describe('Super Tab collaboration policy', () => {
     expect(inline.alsoInChat).toBeUndefined()
   })
 
-  it('delivers an assigned worker\'s own post to its Lead, and nobody else\'s', () => {
+  it('delivers an assigned worker\'s own post to its Lead, or to the agents it names instead', () => {
     const f = fixture()
     const lead = f.add('lead', 'owner', 'lead', true)
     const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
     const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
     const post = (actor: Actor, recipientIds: string[] = []) => f.run({ type: 'message.send', conversationId: group, text: 'PR is green.',
       replyTo: null, recipientIds }, actor).messages[0]!.recipients
-    expect(post(as(worker))).toEqual([])
     f.run({ type: 'work.assign', conversationId: group, agentId: worker })
     expect(post(as(worker))).toEqual([lead])
     expect(post(as(worker), [other])).toEqual([other])
-    expect(post(as(other))).toEqual([])
     expect(post(as(lead))).toEqual([worker])
     f.run({ type: 'work.status', conversationId: group, assignmentId: f.state.conversations[1]!.assignment!.id, status: 'blocked', result: 'Stuck.' }, as(worker))
     expect(post(as(worker))).toEqual([lead])
+  })
+
+  // 10-29: a moved agent's alarm and answers reached no one, and the backend worker stayed down 4 h 50 min.
+  it('delivers any other agent\'s post in the group to its Lead, beside the agents it names, whether or not it held the task', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'owner', 'lead', true)
+    const group = f.group(), worker = f.add('worker', 'owner', group), other = f.add('other', 'owner', group)
+    const as = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: 'host-owner' })
+    const post = (actor: Actor, recipientIds: string[] = [], agentOnly?: boolean) => f.run({ type: 'message.send', conversationId: group,
+      text: 'Severe: the worker is down.', replyTo: null, recipientIds, ...(agentOnly ? { agentOnly } : {}) }, actor).messages[0]!.recipients
+    const assignment = () => f.state.conversations.find(c => c.id === group)!.assignment!
+    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(lead))).toEqual([])
+    f.run({ type: 'work.assign', conversationId: group, agentId: worker })
+    expect(post(as(other))).toEqual([lead])
+    expect(post(as(other), [worker])).toEqual([worker, lead])
+    f.run({ type: 'work.cancel', conversationId: group, assignmentId: assignment().id, reason: 'Duplicate of another task' })
+    expect(post(as(worker))).toEqual([lead])
+    expect(post(as(worker), [other])).toEqual([other, lead])
+    expect(post(as(worker), [lead])).toEqual([lead])
+    // A note to itself stays its own.
+    expect(post(as(worker), [worker], true)).toEqual([worker])
+    expect(post(as(lead))).toEqual([])
+    f.run({ type: 'work.assign', conversationId: group, agentId: other })
+    f.run({ type: 'work.status', conversationId: group, assignmentId: assignment().id, status: 'stopped', result: null }, owner, { confirmedStopped: true })
+    expect(post(as(other))).toEqual([lead])
+    expect(() => post(as(other), ['not-an-agent'])).toThrow()
   })
 
   describe('a Lead\'s message to the assigned worker (#1549)', () => {
@@ -337,12 +363,12 @@ describe('Super Tab collaboration policy', () => {
       expect(post(lead, [], report.id).recipients).toEqual([worker])
     })
 
-    it('lets explicit recipients win and leaves other members, replies to others and person routing alone', () => {
+    it('lets explicit recipients win and leaves replies to others and person routing alone', () => {
       const { f, lead, group, worker, other, as, post, history } = setup()
       f.run({ type: 'work.assign', conversationId: group, agentId: worker })
       expect(post(lead, [other]).recipients).toEqual([other])
       const aside = post(other)
-      expect(aside.recipients).toEqual([])
+      expect(aside.recipients).toEqual([lead])
       expect(post(lead, [], aside.id).recipients).toEqual([])
       const personMessage = f.run({ type: 'message.send', conversationId: group, text: 'Status?', replyTo: null, recipientIds: [] }).messages[0]!
       history.push({ author: { kind: 'person', id: 'owner' }, recipients: personMessage.recipients, id: personMessage.id })

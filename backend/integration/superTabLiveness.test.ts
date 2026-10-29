@@ -539,6 +539,85 @@ describe('work that loses its owner', () => {
   })
 })
 
+// 10-29: after its task moved, a prod-watch agent's "the backend worker is down" alarm and its answers to the Lead's questions
+// were stored with no delivery at all, and the worker stayed down 4 h 50 min. Its status stays refused; its messages arrive.
+describe('messages from an agent whose task moved', () => {
+  /** Every agent the message has a delivery for, from the stored rows. */
+  const deliveredTo = async (messageId: string) => (await db.superTabDelivery.findMany({ where: { messageId } })).map(d => d.agentId).sort()
+  const post = async (f: Awaited<ReturnType<typeof swarm>>, agentId: string, text: string, extra: { replyTo?: string; recipientIds?: string[] } = {}) =>
+    String((await f.execute({ type: 'message.send', conversationId: f.group, text, replyTo: extra.replyTo ?? null, recipientIds: extra.recipientIds ?? [] },
+      host, agentId)).result.messageId)
+
+  it('reach the Lead once the task is lost, its alarm and its reply to the Lead\'s question alike, while its status stays refused', async () => {
+    const f = await swarm()
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect((await f.assignment()).status).toBe('lost')
+    const alarm = await post(f, f.worker, 'Severe, prod: the backend worker has been down for 44 minutes.')
+    const question = await post(f, f.lead, 'Is it still down?', { recipientIds: [f.worker] })
+    const answer = await post(f, f.worker, 'Still down at 22:50.', { replyTo: question })
+    expect(await deliveredTo(alarm)).toEqual([f.lead])
+    expect(await deliveredTo(answer)).toEqual([f.lead])
+    expect((await f.leadInbox()).map(m => m.id)).toEqual(expect.arrayContaining([alarm, answer]))
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Still watching' }, host, f.worker))
+      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
+  })
+
+  it('reach the Lead and the agents they name after the task moved to another agent, and nobody outside the group', async () => {
+    const f = await swarm()
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
+    const elsewhere = String((await f.execute({ type: 'conversation.create', title: 'Ship the lexer', brief: 'Implement it',
+      checks: [{ description: 'Verified', independent: false }] })).result.conversationId)
+    const outsider = await f.add(elsewhere, 'test-host', randomUUID(), 'Outsider')
+    expect(await deliveredTo(await post(f, f.worker, 'The worker is down.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, f.worker, 'Over to you.', { recipientIds: [other] }))).toEqual([f.lead, other].sort())
+    const stored = await db.superTabMessage.count({ where: { tabId: f.tab } })
+    await expect(post(f, f.worker, 'Psst.', { recipientIds: [outsider] })).rejects.toMatchObject({ code: 'INVALID_RECIPIENT' })
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab } })).toBe(stored)
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, agentId: outsider } })).toBe(0)
+    // The new worker and the Lead talk as before; the Lead's plain post reaches the new worker, not the old one.
+    expect(await deliveredTo(await post(f, other, 'Taking over.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, f.lead, 'Go ahead.'))).toEqual([other])
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
+      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: 'Taking over' }, host, other)
+  })
+
+  it('reach the Lead after the Lead cancelled the lost task', async () => {
+    const f = await swarm()
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Not needed any more' }, host, f.lead)
+    expect(await deliveredTo(await post(f, f.worker, 'Stopping; the last check was clean.'))).toEqual([f.lead])
+  })
+
+  // Review of #2243: only the current assignment and the latest lost attempt were recognized.
+  it('reach the Lead after the task was cancelled and assigned to another agent', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'work.cancel', conversationId: f.group, assignmentId: f.assignmentId, reason: 'Moving it' }, host, f.lead)
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })
+    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
+      .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
+  })
+
+  it('reach the Lead from the first agent after the next agent lost the task too', async () => {
+    const f = await swarm()
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    const other = await f.add(f.group, 'test-host', f.harness.other, 'Other')
+    const next = String((await f.execute({ type: 'work.assign', conversationId: f.group, agentId: other })).result.assignmentId)
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker, f.harness.other] })
+    expect(await f.assignment()).toMatchObject({ id: next, status: 'lost' })
+    expect(await deliveredTo(await post(f, f.worker, 'Severe: the worker is down.'))).toEqual([f.lead])
+    expect(await deliveredTo(await post(f, other, 'Lost my session.'))).toEqual([f.lead])
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: null }, host, f.worker))
+      .rejects.toMatchObject({ code: 'STALE_ASSIGNMENT' })
+    await expect(f.execute({ type: 'work.status', conversationId: f.group, assignmentId: next, status: 'working', result: null }, host, other))
+      .rejects.toMatchObject({ code: 'ASSIGNMENT_LOST' })
+  })
+})
+
 /** A client that records the key of every SwarmGroup row a read returns. */
 function recordingGroups() {
   const keys: string[] = []
