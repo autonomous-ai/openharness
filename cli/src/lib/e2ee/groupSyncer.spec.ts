@@ -28,6 +28,10 @@ class MemPeers {
   }
   unlink(id: string): boolean { return this.pins.delete(id) }
   list(): Array<Pin & { fingerprint: string }> { return [...this.pins.values()].map((p) => ({ ...p, fingerprint: 'fp' })) }
+  goneIds = new Set<string>()
+  gone(): Set<string> { return new Set(this.goneIds) }
+  markGone(id: string): void { this.pins.delete(id); this.goneIds.add(id) }
+  restore(listed: Iterable<string>): boolean { let any = false; for (const id of listed) any = this.goneIds.delete(id) || any; return any }
 }
 
 interface Node {
@@ -48,6 +52,8 @@ interface Node {
   teamFree: boolean
   /** How often the list was read again. */
   reads: number
+  /** The machines this one sent a request to. */
+  asked: string[]
 }
 
 /** A small fleet whose "relay" is a direct call: a request reaches the target only if the caller pinned
@@ -78,6 +84,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
       kindOf: 'computer',
       teamFree: false,
       reads: 0,
+      asked: [],
     } as unknown as Node
     node.syncer = new S.GroupSyncer({
       store: memStore,
@@ -93,6 +100,7 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
         teamFree: () => node.teamFree,
       },
       request: async (machineId, frame: Frame) => {
+        node.asked.push(machineId)
         const target = nodes.find((n) => n.machineId === machineId)
         if (!target?.online) return null
         const pin = node.peers.get(machineId)
@@ -123,6 +131,33 @@ function fleet(): { add: (name: string, machine?: boolean) => Node; link: (joine
 }
 
 describe('GroupSyncer', () => {
+  // Roadmap Phase 1.1: a machine deleted from the account stayed in the roster, so every round pinned it again and the relay
+  // dialled it again, for good. Once the relay marks it gone (the backend said it was deleted), nothing here pins or dials it,
+  // until the account's machine list shows it again.
+  it('never pins or dials a machine marked gone, until it is listed again', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, x, b] = [f.add('a'), f.add('c'), f.add('b')]
+    f.link(x, a); f.link(b, a)
+    await a.syncer.syncAll()
+    expect(a.peers.get(x.machineId!)).not.toBeNull()
+
+    a.peers.markGone(x.machineId!)
+    a.asked.length = 0
+    await a.syncer.syncAll()
+    // B still tells A about X; that must not put X back either.
+    await b.syncer.syncAll()
+    a.syncer.resume()
+    expect(a.peers.get(x.machineId!)).toBeNull()
+    expect(a.asked).not.toContain(x.machineId)
+    expect(a.asked).toContain(b.machineId)
+
+    a.peers.restore([x.machineId!])
+    await a.syncer.syncAll()
+    expect(a.peers.get(x.machineId!)?.pub).toBe(x.pub)
+    expect(a.asked).toContain(x.machineId)
+  })
+
   it('never makes a machine shared across accounts part of the group, either way', async () => {
     vi.useFakeTimers()
     const f = fleet()

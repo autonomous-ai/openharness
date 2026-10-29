@@ -266,6 +266,7 @@ export class GroupSyncer {
     for (const m of this.deps.store.read().members) if (m.kind === 'machine' && m.machineId && !suspended.has(m.pub)) targets.add(m.machineId)
     for (const p of this.deps.peers.list()) if (!suspended.has(p.pub) && !p.shared) targets.add(p.machineId)
     if (self) targets.delete(self)
+    for (const machineId of this.deps.peers.gone()) targets.delete(machineId)
     // A team machine, or one the account's list cannot place, is not dialed: not a member that missed this round.
     for (const machineId of targets) if (!this.ordinary(machineId)) targets.delete(machineId)
     // All at once: one machine that never answers (offline, or too old to know the frame) must not
@@ -400,10 +401,13 @@ export class GroupSyncer {
     const selfMachine = this.deps.self().machineId
     const blocked = this.deps.store.blocked()
     const suspended = this.deps.suspended?.() ?? new Set<string>()
+    // A machine the backend said was deleted (remoteRelay.ts) stays in other members' rosters; pinning it again is what made
+    // the relay dial it for good. It is trusted as before: a deleted machine's identity is spent (gateway/start.ts).
+    const gone = this.deps.peers.gone()
     for (const m of result.upserted) {
       if (blocked.has(m.pub) || suspended.has(m.pub)) continue
       try {
-        if (m.kind === 'machine' && m.machineId && m.machineId !== selfMachine) {
+        if (m.kind === 'machine' && m.machineId && m.machineId !== selfMachine && !gone.has(m.machineId)) {
           const pin = this.deps.peers.get(m.machineId)
           if (!pin || pin.pub !== m.pub) this.deps.peers.pin(m.machineId, m.pub, m.label, m.at)
         }

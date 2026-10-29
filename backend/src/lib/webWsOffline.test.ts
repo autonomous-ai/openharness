@@ -29,6 +29,8 @@ vi.mock('./webAccountPushes.js', () => ({ relayWebDocumentPushes: vi.fn(async ()
 vi.mock('./hub.js', () => ({ attachHubClient: m.attach, trackSocketLiveness: () => () => {} }))
 
 import { handleWebUpgrade, OFFLINE_RETRY_AFTER_MS } from './webWs.js'
+import { SsoAuthError } from './ssoAuth.js'
+import { env } from '../config/env.js'
 
 const owner = { sub: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' }
 const mac = { machineId: 'owner-mac', userId: 'owner', autonomousEnv: 'prod', billingStatus: 'not_required', authMode: 'remote', deletedAt: null }
@@ -100,8 +102,56 @@ describe('a refused machine select', () => {
     if (failure) m.shared.mockRejectedValue(failure)
     else m.shared.mockResolvedValue(null)
     const ws = await selects({}, '&client=web')
-    expect(ws.sent()).toContainEqual({ type: 'machine_select_error', payload: { machineId: 'owner-mac', error: 'NOT_YOUR_MACHINE' } })
+    const payload = { machineId: 'owner-mac', error: 'NOT_YOUR_MACHINE', ...(reason === 'deleted' ? { reason } : {}) }
+    expect(ws.sent()).toContainEqual({ type: 'machine_select_error', payload })
     expect(m.warn).toHaveBeenCalledWith('machine_select rejected', { userId: 'owner', machineId: 'owner-mac', reason })
+  })
+
+  // Phase 1 (roadmap 2026-10-28): a daemon kept dialling a machine deleted on 2026-09-03 every few seconds, because a deleted
+  // machine, an unshared one and a share check that failed for a moment were all the same refusal. Only the person's own
+  // deleted machine says so; anyone else's says nothing more than before, so the answer tells no one that it existed.
+  it('says deleted only of the person\'s own machine', async () => {
+    m.machineFindUnique.mockResolvedValue({ ...mac, userId: 'someone-else', deletedAt: new Date('2026-10-01T00:00:00Z') })
+    const ws = await selects({}, '&client=relay')
+    expect(ws.sent()).toContainEqual({ type: 'machine_select_error', payload: { machineId: 'owner-mac', error: 'NOT_YOUR_MACHINE' } })
+  })
+})
+
+// Roadmap Phase 1.3: a bad token used to finish the upgrade and then close 4401. A socket that says it reads an HTTP refusal
+// (`auth=http`, the daemon's relay from this release) is refused before the upgrade when WEB_WS_AUTH_HTTP_401 is on. A
+// browser cannot read the status of a failed upgrade (it sees 1006), so the web build and the phone keep their 4401.
+describe('a bad token', () => {
+  const upgradeWith = async (query: string) => {
+    const ws = new Socket()
+    const socket = raw()
+    m.upgrade.mockImplementation((_r, _s, _h, done) => done(ws))
+    m.auth.mockRejectedValue(new SsoAuthError('expired', 'INVALID_TOKEN'))
+    handleWebUpgrade({ url: `/api/web-ws?autonomousEnv=prod${query}`, headers: { 'sec-websocket-protocol': 'access-token' } } as never, socket as never, Buffer.alloc(0))
+    await flush()
+    return { ws, socket }
+  }
+  const switchedOn = (on: boolean) => { (env as { WEB_WS_AUTH_HTTP_401: boolean }).WEB_WS_AUTH_HTTP_401 = on }
+
+  it('is refused with HTTP 401 before the upgrade, when switched on, for a socket that reads it', async () => {
+    switchedOn(true)
+    try {
+      const { socket } = await upgradeWith('&client=relay&v=1.3.64&auth=http')
+      expect(m.upgrade).not.toHaveBeenCalled()
+      expect(socket.write).toHaveBeenCalledWith(expect.stringMatching(/^HTTP\/1\.1 401 /))
+      expect(socket.destroy).toHaveBeenCalled()
+    } finally { switchedOn(false) }
+  })
+
+  it.each([
+    ['switched off', false, '&client=relay&auth=http'],
+    ['a socket that does not say it reads it', true, '&client=web'],
+  ])('closes 4401 after the upgrade when %s', async (_why, on, query) => {
+    switchedOn(on)
+    try {
+      const { ws, socket } = await upgradeWith(query)
+      expect(socket.write).not.toHaveBeenCalled()
+      expect(ws.close).toHaveBeenCalledWith(4401, 'auth expired')
+    } finally { switchedOn(false) }
   })
 })
 
