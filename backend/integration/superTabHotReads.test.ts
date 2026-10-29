@@ -322,3 +322,27 @@ describe('the owner\'s grid poll', () => {
     expect((await store.hostGrids(owner)).find(g => g.tabId === s.tabId)!.members).toEqual([peer.email])
   })
 })
+
+// Roadmap Phase 3.1: the host poll's Swarm lookup, once a second per host. Prisma sent `machineIds has` OR `cleanupMachineIds has`
+// as $expr, sorted by updatedAt, which no index held: the slow log showed 17 Swarms examined per one returned.
+describe('the host poll\'s Swarm lookup', () => {
+  it('reads only the Swarms that list this machine, newest first, by the machine indexes', async () => {
+    // Swarms of other machines: a lookup the machine does not bound examines these too.
+    for (let i = 0; i < 6; i++) await scene()
+    const s = await scene(), also = await scene({ sharedMachine: s.machineId })
+    // A Swarm that removed this machine still lists it for cleanup until its host has cleaned up.
+    const cleanup = await scene()
+    await db.superTab.update({ where: { id: cleanup.tabId }, data: { machineIds: { set: [cleanup.machineId] }, cleanupMachineIds: { set: [s.machineId] } } })
+    await db.superTab.update({ where: { id: also.tabId }, data: { updatedAt: new Date(Date.now() + 60_000) } })
+    const hosts = new HostReads(store, { now: () => Date.now() })
+    let tabs: string[] = []
+    const entries = await profiled(async () => { tabs = (await hosts.changes(owner, s.machineId, { full: true })).tabs.map(t => t.tabId) })
+    expect(new Set(tabs)).toEqual(new Set([also.tabId, s.tabId, cleanup.tabId]))
+    const lookups = entries.filter(e => e.ns.endsWith('.SuperTab')).filter(e => /machineIds|cleanupMachineIds/.test(JSON.stringify(e.command?.pipeline ?? e.command?.filter ?? {})))
+    expect(lookups.length, JSON.stringify(plan(lookups))).toBe(2)
+    for (const lookup of lookups) {
+      expect(lookup.docsExamined, JSON.stringify(plan(lookups))).toBeLessThanOrEqual(lookup.nreturned!)
+      expect(lookup.command?.hint, `the lookup names its index: ${JSON.stringify(plan(lookups))}`).toBeTruthy()
+    }
+  })
+})

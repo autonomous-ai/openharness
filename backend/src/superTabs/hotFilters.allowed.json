@@ -8,7 +8,6 @@
   "src/superTabs/migration/workspaces.ts swarmHead.findMany": 1,
   "src/superTabs/migration/workspaces.ts swarmMember.findMany": 1,
   "src/superTabs/native.ts superTabDelivery.updateMany": 2,
-  "src/superTabs/read/host.ts superTab.findMany": 3,
   "src/superTabs/read/host.ts swarmGroup.findMany": 1,
   "src/superTabs/read/host.ts swarmMachine.findMany": 2,
   "src/superTabs/read/service.ts superTab.findMany": 1,

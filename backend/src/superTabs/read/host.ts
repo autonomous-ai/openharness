@@ -22,6 +22,7 @@ import { READ_FORMAT, type HostChanges, type HostChangesRequest } from './contra
 import { cursorFor, readCursor } from './cursor.js'
 import { hostTab, type HostLookups } from './hostRows.js'
 import { confidentialSessions } from '../confidential.js'
+import { machineSwarms, swarmsIn } from '../swarmRows.js'
 
 type Transaction = Prisma.TransactionClient
 /** The row hash's length at the front of an etag (read/hostEtag.ts); the input signature follows it. */
@@ -56,9 +57,7 @@ export class HostReads {
     // Every agent's grant check of this read shares one read of each machine, share, contributor and Workspace membership.
     const grants = new GrantReads(owned)
     // Swarms still in one row are migrated when first opened; the job migrates every one before the new release serves.
-    const ids = (await tx.superTab.findMany({ where: { autonomousEnv: user.autonomousEnv, format: 2,
-      OR: [{ machineIds: { has: machineId } }, { cleanupMachineIds: { has: machineId } }] },
-      orderBy: { updatedAt: 'desc' }, take: FULL_TABS, select: { id: true } })).map(r => r.id)
+    const ids = await machineSwarms(tx, user.autonomousEnv, machineId, FULL_TABS)
     const teams = isTeamSession(user) || this.options.teamAccountsIdle ? [] : await tx.machine.findMany({ where: { userId: user.sub,
       hostMachineId: machineId, sessionKind: 'team', autonomousEnv: user.autonomousEnv, ...machineAlive }, select: { machineId: true } })
     const full = 'reload' in from
@@ -176,6 +175,6 @@ export class HostReads {
     const rows = await tx.swarmMachine.findMany({ where: { machineId, hostChangedAt: { gt: new Date(since) } }, select: { tabId: true } })
     const gone = [...new Set(rows.map(r => r.tabId))].filter(id => !listed.has(id))
     if (!gone.length) return []
-    return (await tx.superTab.findMany({ where: { id: { in: gone }, autonomousEnv }, select: { id: true } })).map(r => r.id)
+    return swarmsIn(tx, autonomousEnv, gone)
   }
 }
