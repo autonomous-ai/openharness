@@ -40,6 +40,10 @@ class SuperTabUnreadLines {
   /// Conversations reading back to the mark before their line is placed, and those that did this visit.
   final _loading = <String>{}, _loaded = <String>{};
 
+  /// Reads back that failed this visit, by conversation: tried again up to [_tries] times.
+  final _failed = <String, int>{};
+  static const _tries = 3;
+
   /// The line on screen, to tell whether it is scrolled out of view.
   final key = GlobalKey(debugLabel: 'New messages line');
 
@@ -60,8 +64,11 @@ class SuperTabUnreadLines {
     return (_at[id] = superTabFirstUnread(shown, mark, own: own)) != null;
   }
 
-  /// Whether [id]'s line waits for older messages to load: nothing is followed or marked read meanwhile.
-  bool waitsForHistory(String id) => _loading.contains(id);
+  /// Whether [id]'s line waits for older messages: loading, or a read back that failed and is not yet done. Nothing is
+  /// followed or marked read meanwhile, and no line is placed short of the first unread.
+  bool waitsForHistory(String id) =>
+      _loading.contains(id) ||
+      (_failed.containsKey(id) && !_loaded.contains(id));
 
   /// Whether [id] must first read back to the [mark] the held messages do not reach ([heldBack] false) for its line,
   /// once per visit; when true, the caller loads and then calls [historyLoaded].
@@ -71,7 +78,10 @@ class SuperTabUnreadLines {
     int mark, {
     required bool heldBack,
   }) {
-    if (_at.containsKey(id) || _loading.contains(id) || _loaded.contains(id)) {
+    if (_at.containsKey(id) ||
+        _loading.contains(id) ||
+        _loaded.contains(id) ||
+        (_failed[id] ?? 0) >= _tries) {
       return false;
     }
     if (heldBack || mark <= 0 || shown.isEmpty || shown.last.sequence <= mark) {
@@ -81,15 +91,29 @@ class SuperTabUnreadLines {
     return true;
   }
 
-  void historyLoaded(String id) {
-    if (_loading.remove(id)) _loaded.add(id);
+  /// The read back of [id] ended: [reached] the mark, or failed and may be tried again ([mayRetry]).
+  void historyLoaded(String id, {required bool reached}) {
+    if (!_loading.remove(id)) return;
+    if (reached) {
+      _loaded.add(id);
+    } else {
+      _failed[id] = (_failed[id] ?? 0) + 1;
+    }
   }
+
+  /// Whether a read back of [id] failed this visit: a try again reads no more older pages.
+  bool retrying(String id) => _failed.containsKey(id);
+
+  /// Whether [id]'s failed read back has tries left.
+  bool mayRetry(String id) =>
+      !_loaded.contains(id) && (_failed[id] ?? 0) < _tries;
 
   /// [id] was left: the next visit decides again.
   void forget(String? id) {
     _at.remove(id);
     _loading.remove(id);
     _loaded.remove(id);
+    _failed.remove(id);
     away = false;
   }
 
@@ -103,6 +127,7 @@ class SuperTabUnreadLines {
     _at.clear();
     _loading.clear();
     _loaded.clear();
+    _failed.clear();
     away = false;
   }
 }

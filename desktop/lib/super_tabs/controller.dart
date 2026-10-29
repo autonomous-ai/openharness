@@ -796,19 +796,27 @@ class SuperTabController extends ChangeNotifier {
   /// Holds [id]'s messages back to the reader's [mark], so its first unread
   /// is among them: older pages while the mark is at most [_pagesToMark]
   /// pages back, else the page just after it alone, with the newer ones
-  /// waiting for [showLatest] as under a reader scrolled up.
-  Future<void> loadBackTo(String id, int mark) async {
-    for (var page = 0; page < _pagesToMark; page++) {
-      if (_disposed || heldBackTo(id, mark)) return;
+  /// waiting for [showLatest] as under a reader scrolled up. Whether they
+  /// reach it now; a read that failed throws, and nothing counts as read.
+  /// A try again after one failed passes [olderPages] 0: the pages read the
+  /// first time stay, and it goes straight to the page after the mark.
+  Future<bool> loadBackTo(String id, int mark, {int? olderPages}) async {
+    for (var page = 0; page < (olderPages ?? _pagesToMark); page++) {
+      if (_disposed || heldBackTo(id, mark)) return heldBackTo(id, mark);
       await _readMessages(id, older: true);
     }
-    if (_disposed || heldBackTo(id, mark)) return;
-    await _readAfterMark(id, mark);
+    if (_disposed || heldBackTo(id, mark)) return heldBackTo(id, mark);
+    return _readAfterMark(id, mark);
   }
 
-  /// Replaces what [id] holds with the page just after [mark]. A read of
-  /// newer messages under way finishes first, so it cannot land on top.
-  Future<void> _readAfterMark(String id, int mark) async {
+  /// Moves when a read back replaces what a conversation holds: a read of
+  /// newer messages that set out before then would join across the gap.
+  final _heldGeneration = <String, int>{};
+
+  /// Replaces what [id] holds with the page just after [mark]; whether it
+  /// did. A read of newer messages under way finishes first, and one that
+  /// sets out meanwhile is dropped when it lands ([_heldGeneration]).
+  Future<bool> _readAfterMark(String id, int mark) async {
     for (
       var under = _reading[(id, false)];
       under != null;
@@ -817,20 +825,22 @@ class SuperTabController extends ChangeNotifier {
       await under;
     }
     if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
-      return;
+      return false;
     }
     final answer = await request('GET', '${_messagesPath(id)}?after=$mark');
     if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
-      return;
+      return false;
     }
     final rows = answer['messages'] as List;
     final page = [
       for (final row in rows) SuperTabMessage.fromJson(superTabMap(row)),
     ]..sort(superTabMessageOrder);
-    if (page.isEmpty) return;
+    // Nothing after the mark: everything held is read.
+    if (page.isEmpty) return true;
     if (page.any((m) => m.conversationId != id)) {
       throw const FormatException('A different conversation was returned.');
     }
+    _heldGeneration[id] = (_heldGeneration[id] ?? 0) + 1;
     _rows.remove(id);
     _keepRows(id, rows);
     _messages[id] = page;
@@ -842,6 +852,7 @@ class SuperTabController extends ChangeNotifier {
     }
     _viewVersion++;
     _changed();
+    return true;
   }
 
   /// Each conversation's reaction counter as its last page said it.
@@ -2107,6 +2118,9 @@ class SuperTabController extends ChangeNotifier {
     if (older && !hasOlder(id)) return;
     // A light check asks only for new messages, which wait while holding.
     if (light && _holding(id)) return;
+    final generation = _heldGeneration[id];
+    // What [id] held was replaced while newer messages were on their way.
+    bool replaced() => !older && _heldGeneration[id] != generation;
     try {
       final known = _messages[id];
       final tail = known != null && known.isNotEmpty
@@ -2177,7 +2191,10 @@ class SuperTabController extends ChangeNotifier {
           ],
         };
       }
-      if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+      if (_disposed ||
+          accessRevoked ||
+          snapshot?.conversation(id) == null ||
+          replaced()) {
         return;
       }
       // A read replacing the saved page moved where earlier continues while
@@ -2231,7 +2248,10 @@ class SuperTabController extends ChangeNotifier {
           'GET',
           '$_path/conversations/${Uri.encodeComponent(id)}/messages?messageId=${Uri.encodeComponent(own.id)}',
         );
-        if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+        if (_disposed ||
+            accessRevoked ||
+            snapshot?.conversation(id) == null ||
+            replaced()) {
           return;
         }
         final rows = (receipt['messages'] as List)

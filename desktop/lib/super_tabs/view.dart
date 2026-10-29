@@ -425,12 +425,24 @@ class _SuperTabViewState extends State<SuperTabView>
   /// controller), then places its line.
   void _loadBackToMark(String id, int mark) {
     unawaited(
-      c.loadBackTo(id, mark).catchError((Object _) {}).whenComplete(() {
-        _unread.historyLoaded(id);
-        if (mounted) _changed();
-      }),
+      c
+          .loadBackTo(id, mark, olderPages: _unread.retrying(id) ? 0 : null)
+          .then((reached) => reached, onError: (_) => false)
+          .then((reached) {
+            _unread.historyLoaded(id, reached: reached);
+            if (!mounted) return;
+            if (reached) return _changed();
+            // Failed: the line waits, and the read back is tried again shortly.
+            if (_unread.mayRetry(id)) {
+              _historyRetry?.cancel();
+              _historyRetry = Timer(_historyRetryAfter, _changed);
+            }
+          }),
     );
   }
+
+  Timer? _historyRetry;
+  static const _historyRetryAfter = Duration(seconds: 5);
 
   /// Brings [id]'s New messages line into view near the top, and stops
   /// following the end there: what came since the reader's mark is below.
@@ -510,6 +522,7 @@ class _SuperTabViewState extends State<SuperTabView>
     _unregisterDial?.call();
     _dial.cancel();
     _litTimer?.cancel();
+    _historyRetry?.cancel();
     _composer.dispose();
     _mentionIndex.dispose();
     _dismissedMention.dispose();
