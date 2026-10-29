@@ -3,10 +3,10 @@
  *  that Mac's Harness Team account, never as the Mac's owner, whatever the Swarm's switch (machines.ts teamAccountRequired)
  *  says for workers: a Product Manager reads people's private chats. With no machine named, it waits for the first free
  *  one. Desktop's own-machine flow (project.create, a local start, agent.add) is unchanged. */
-import { admitMachineStart, failTeamWork, machineContribution, projectFolder, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
+import { admitMachineStart, failTeamWork, machineContribution, machineSlots, projectFolder, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
   type ContributedMachine } from './machines.js'
-import { actorKey, fail, person, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
-import { projectsOf, type SwarmProject } from './projects.js'
+import { actorKey, fail, person, stableId, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
+import { mutableProjects, projectsOf, type SwarmProject } from './projects.js'
 
 /** What a host reports it can launch: a Product Manager. A host from before it is never given one. */
 export const LEAD_CAPABILITY = 'leadStart'
@@ -79,8 +79,7 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
     harnessId: null, dispatched: false, error: null, requestedAt: context.now }
   state.starts.push(recorded)
   project.repository ??= { machineId: pool.machineId, cwd: start.cwd, repositoryUrl: request.repositoryUrl ?? null }
-  const { reason: _reason, ...placement } = project.lead ?? { requestedAt: context.now, requestedBy: { personId: by.id, generation: by.generation },
-    request, chosen: machineId }
+  const { reason: _reason, ...placement } = project.lead!
   project.lead = { ...placement, status: 'starting', machineId: pool.machineId, machineName: pool.name, startId }
   return recorded
 }
@@ -115,4 +114,52 @@ export function leadStartFailed(state: SuperTabState, start: AgentStart, reason:
     delete placement.machineId
     delete placement.machineName
   }
+}
+
+export const WAITING_TEXT = `Waiting for a machine to start the ${LEAD_NAME}.`
+
+/** lead.start: [project]'s Product Manager on [machineId], refused with the reason when it cannot run there now; or, with
+ *  none named, on the first free machine, else waiting for one (placeWaitingLeads). A request already waiting is replaced. */
+export function requestLead(state: SuperTabState, project: SwarmProject, by: Person, machineId: string | null, request: LeadRequest,
+  operationId: string, context: LeadContext): { startId: string; machineId: string } | { waiting: true } {
+  project.lead = { status: 'waiting', requestedAt: context.now, requestedBy: { personId: by.id, generation: by.generation }, request, chosen: machineId }
+  const start = machineId ? placeLead(state, project, by, machineId, request, operationId, context) : placeOnFree(state, project, by, operationId, context)
+  return start ? { startId: start.id, machineId: start.request.machineId } : { waiting: true }
+}
+
+/** The machines a waiting Product Manager is tried on, in order: the project owner's own, then the most free agent slots, and
+ *  last those a start from the queue already failed on. A Mac's Harness Team account is reached through its Mac. */
+function candidates(state: SuperTabState, project: SwarmProject): string[] {
+  const skipped = project.lead?.skipped ?? []
+  const rank = (m: ContributedMachine) => [skipped.includes(m.machineId) ? 1 : 0, m.contributorId === project.ownerId ? 0 : 1, machineSlots(state, m) - m.maxAgents] as const
+  return (state.machines ?? []).filter(m => !m.hostMachineId).map(m => ({ m, r: rank(m) }))
+    .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.r[2] - b.r[2]).map(({ m }) => m.machineId)
+}
+
+function placeOnFree(state: SuperTabState, project: SwarmProject, by: Person, startId: string, context: LeadContext): AgentStart | null {
+  for (const machineId of candidates(state, project)) {
+    try { return placeLead(state, project, by, machineId, project.lead!.request, startId, context) } catch (error) {
+      // Each refusal comes before anything is written (placeLead), so the next machine sees the state unchanged.
+      if (!(error instanceof SuperTabError)) throw error
+    }
+  }
+  return null
+}
+
+/** On a machine's reading: each project whose Product Manager waits starts on the first free machine. The ids of those
+ *  placed. Nothing is read or written for a Swarm with none waiting. */
+export function placeWaitingLeads(state: SuperTabState, context: LeadContext): string[] {
+  const waiting = projectsOf(state).filter(p => p.lead?.status === 'waiting')
+  if (!waiting.length || state.paused) return []
+  const placed: string[] = []
+  for (const { id } of waiting) {
+    const project = mutableProjects(state).find(p => p.id === id)!, lead = project.lead!
+    const by = state.people.find(p => p.id === lead.requestedBy.personId && p.generation === lead.requestedBy.generation)
+    if (!by) {
+      Object.assign(lead, { status: 'failed', reason: 'The person who asked for it left the Swarm.' })
+      continue
+    }
+    if (placeOnFree(state, project, by, stableId('lead-start', project.id, String(lead.requestedAt), String(context.now)), context)) placed.push(project.id)
+  }
+  return placed
 }

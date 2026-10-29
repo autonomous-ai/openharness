@@ -27,7 +27,7 @@ import { openReview, openReviewOf, projectPullRequest, verdictPending } from './
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
-import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, placeLead } from './leadStart.js'
+import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, requestLead, WAITING_TEXT } from './leadStart.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -857,9 +857,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (leadStarting(state, project.id)) fail('LEAD_STARTING', `This project's ${LEAD_NAME} is already starting.`)
       if (!project.repository?.repositoryUrl && !command.repositoryUrl) fail('REPOSITORY_REQUIRED', 'Choose the repository this project works in.', 400)
       const { type: _type, projectId: _projectId, machineId, ...request } = command
-      const start = placeLead(state, project, person(state, actor.userId), machineId!, request, operationId, context)
-      result.startId = start.id
-      result.machineId = start.request.machineId
+      const placed = requestLead(state, project, person(state, actor.userId), machineId, request, operationId, context)
+      Object.assign(result, placed)
+      if ('waiting' in placed) message(home.id, WAITING_TEXT, [], null, SYSTEM_ROW)
       break
     }
     case 'project.skills': {

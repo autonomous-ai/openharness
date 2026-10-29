@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
+import { placeWaitingLeads } from './leadStart.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -1987,7 +1988,14 @@ export class SuperTabStore {
       }
       // Its own agents lose their tasks at once (a stopped session); every 30 seconds it runs the Swarm's time checks too, so
       // they keep running when the Lead's own machine is the one that died.
-      return saved([...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []])
+      const checked = [...loseTasks(state, now, worker => worker.machineId === machineId), ...sweep ? sweepLiveness(state, now) : []]
+      // A Product Manager waiting for a machine starts on the first free one (leadStart.ts). The Team machines are read only
+      // while one waits.
+      if (projectsOf(state).some(p => p.lead?.status === 'waiting')) {
+        placeWaitingLeads(state, { now, teamMachines: await this.teamMachines(tx, state), otherWorkspaceMachines: await this.otherWorkspaceMachines(tx, state),
+          ...(this.hooks.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
+      }
+      return saved(checked)
     })
   }
 

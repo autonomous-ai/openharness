@@ -689,3 +689,45 @@ describe('one machine: a Mac and its Harness Team account', () => {
     expect(await pending()).toEqual({ cleanups: ['kept-pc'], indexed: ['kept-pc'] })
   })
 })
+
+// A project's Product Manager on another person's Team machine (leadStart.ts, Dee 10-29): placed by the store when a
+// machine reports, launched from a list older hosts do not read, and the project's Lead once it runs.
+describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
+  const capable = (generation: string) => ({ ...reading(generation), capabilities: ['leadStart'] }) as Parameters<SuperTabStore['observeMachine']>[3]
+
+  it('waits for a machine that can run it, starts on the Team machine once it reports, and leads the project', async () => {
+    const f = await fixture()
+    const created = (await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: 'Build it.' })).result
+    const projectId = String(created.projectId), home = String(created.conversationId)
+    // The team daemon has not said it starts Product Managers yet: nothing is free, so it waits.
+    const asked = await run(f.tab, { type: 'lead.start', projectId, machineId: null, engine: 'codex', repositoryUrl: 'https://github.com/example/app' })
+    expect(asked.result).toMatchObject({ waiting: true })
+    expect((await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.leadStarts).toBeUndefined()
+    // Contributed for every project, as a Mac added to a Swarm with projects is; the fixture's serves only the first.
+    await run(f.tab, { type: 'machine.contribute', machineId: 'team-mac', name: 'MacBook Pro · Team', cwd: '/team', scope: 'swarm', engines: ['codex'], maxAgents: 4 }, person)
+    const generation = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(team, f.tab, 'team-mac', capable(generation))
+    const row = (await poolRows(store, team, 'team-mac')).find(p => p.tabId === f.tab)!
+    expect(row.leadStarts).toEqual([expect.objectContaining({ request: expect.objectContaining({ machineId: 'team-mac', cwd: `/team/${projectId}`,
+      leadFor: expect.objectContaining({ projectId, personId: owner.sub }) }) })])
+    expect(row.starts.some(s => s.request.leadFor)).toBe(false)
+    const startId = row.leadStarts![0]!.id
+    await hostRun(f.tab, { type: 'agent.startDispatch', startId })
+    const agentId = String((await hostRun(f.tab, { type: 'agent.started', startId, harnessId: `team-pm-${randomUUID()}`, configuration: config })).result.agentId)
+    const read = await store.read(owner, f.tab)
+    expect(read.state.conversations.find(c => c.id === home)).toMatchObject({ leadId: agentId })
+    expect(read.state.projects!.find(p => p.id === projectId)!.lead).toMatchObject({ status: 'started', machineId: 'team-mac' })
+    expect((await store.messages(owner, f.tab, home, {})).messages.map(m => m.text))
+      .toEqual(expect.arrayContaining(['Waiting for a machine to start the Product Manager.', 'Product Manager started on MacBook Pro · Team.']))
+  })
+
+  it('is refused on the teammate\'s personal Mac even while the Swarm does not yet require Team accounts', async () => {
+    const f = await fixture()
+    const projectId = String((await run(f.tab, { type: 'project.create', name: 'App', visibility: 'private', brief: '' })).result.projectId)
+    await run(f.tab, { type: 'machine.contribute', machineId: 'personal-mac', name: 'MacBook Pro', cwd: '/work', scope: 'swarm', engines: ['codex'], maxAgents: 2 }, person)
+    const generation = (await poolRows(store, person, 'personal-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await store.observeMachine(person, f.tab, 'personal-mac', capable(generation))
+    await expect(run(f.tab, { type: 'lead.start', projectId, machineId: 'personal-mac', engine: 'codex', repositoryUrl: 'https://github.com/example/app' }))
+      .rejects.toMatchObject({ code: 'TEAM_ACCOUNT_REQUIRED', status: 403 })
+  })
+})

@@ -229,6 +229,8 @@ export interface HostPool {
   starts: AgentStart[]
   /** Buddies' starts (buddies.ts), apart from `starts`: a host from before Buddies would launch one as a Builder. */
   buddyStarts?: AgentStart[]
+  /** Product Managers' starts (leadStart.ts), apart from `starts` for the same reason. */
+  leadStarts?: AgentStart[]
   projects?: Array<{ id: string; leadConversationId: string; repository?: unknown; conversationIds: string[] }>
   localGrid?: string
   reservations: Array<{ harnessId: string; generation: string }>

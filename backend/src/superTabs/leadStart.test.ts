@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, type Command, type CommandContext } from './commands.js'
 import type { ContributedMachine, MachinePrivacy } from './machines.js'
+import type { LeadContext } from './leadStart.js'
 import { createSuperTab, SuperTabError, type Actor, type AgentConfiguration, type SuperTabState } from './model.js'
 
 // A project's Product Manager started by the Swarm on one of its machines (Dee, 10-29, option B): on another person's Mac it
@@ -176,5 +177,76 @@ describe('a Product Manager\'s start, once its host reports it', () => {
     f.machine('mate-team').observation = { ...f.machine('mate-team').observation!, receivedAt: NOW + BUDDY_PICKUP_MS + MINUTE }
     sweepLiveness(f.state, NOW + BUDDY_PICKUP_MS + MINUTE)
     expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'MacBook Pro did not start this Product Manager. Update Harness on it, then start it again.' })
+  })
+})
+
+describe('a Product Manager waiting for a machine', () => {
+  const full = (f: ReturnType<typeof swarm>, machineId: string) => { f.machine(machineId).maxAgents = 0 }
+  const place = async (f: ReturnType<typeof swarm>, context: Partial<LeadContext> = {}) => {
+    const { placeWaitingLeads } = await import('./leadStart.js')
+    const teamMachines = f.state.machines!.filter(m => m.observation?.sessionKind === 'team').map(m => m.machineId)
+    return placeWaitingLeads(f.state, { now: NOW, teamMachines, ...context })
+  }
+
+  it('starts at once on a free machine, the project owner\'s own first', () => {
+    const f = swarm()
+    const asked = f.lead(null)
+    expect(asked.result).toMatchObject({ machineId: 'owner-mac' })
+    expect(f.project().lead).toMatchObject({ status: 'starting', chosen: null, machineId: 'owner-mac' })
+  })
+
+  it('then the free Team machine', () => {
+    const f = swarm()
+    full(f, 'owner-mac')
+    expect(f.lead(null).result).toMatchObject({ machineId: 'mate-team' })
+  })
+
+  it('with none free, waits and says so, then starts on the first one that frees up', async () => {
+    const f = swarm()
+    full(f, 'owner-mac')
+    f.machine('mate-team').observation = reading('team', FAILED)
+    const asked = f.lead(null)
+    expect(asked.result).toMatchObject({ waiting: true })
+    expect(asked.result).not.toHaveProperty('startId')
+    expect(f.state.starts ?? []).toEqual([])
+    expect(f.project().lead).toMatchObject({ status: 'waiting', chosen: null })
+    expect(asked.messages.map(m => m.text)).toEqual(['Waiting for a machine to start the Product Manager.'])
+    // Nothing free yet: nothing changes.
+    expect(await place(f)).toEqual([])
+    expect(f.project().lead?.status).toBe('waiting')
+    f.machine('owner-mac').maxAgents = 4
+    expect(await place(f)).toEqual([f.app.projectId])
+    expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'owner-mac', machineName: 'Owner Mac' })
+    expect(f.state.starts).toEqual([expect.objectContaining({ actorKey: 'person:owner', request: expect.objectContaining({ machineId: 'owner-mac' }) })])
+  })
+
+  it('placed from the queue and failed there, waits for another machine and tries that one last', async () => {
+    const f = swarm()
+    const startId = f.lead(null).result.startId as string
+    f.run({ type: 'agent.startFailed', startId, error: 'Out of disk.' }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
+    expect(f.project().lead).toMatchObject({ status: 'waiting', reason: 'Out of disk.', skipped: ['owner-mac'] })
+    expect(await place(f)).toEqual([f.app.projectId])
+    expect(f.project().lead).toMatchObject({ status: 'starting', machineId: 'mate-team' })
+  })
+
+  it('is dropped when the person who asked left the Swarm, and waits while the Swarm is paused', async () => {
+    const f = swarm()
+    full(f, 'owner-mac'); full(f, 'mate-team')
+    f.lead(null)
+    f.machine('owner-mac').maxAgents = 4
+    f.state.paused = true
+    expect(await place(f)).toEqual([])
+    f.state.paused = false
+    f.state.people.find(p => p.id === 'owner')!.generation = 'rejoined'
+    expect(await place(f)).toEqual([])
+    expect(f.project().lead).toMatchObject({ status: 'failed', reason: 'The person who asked for it left the Swarm.' })
+  })
+
+  it('asked for again while waiting, takes the new request', () => {
+    const f = swarm()
+    full(f, 'owner-mac'); full(f, 'mate-team')
+    f.lead(null, { model: 'sonnet' })
+    f.lead(null, { model: 'opus' })
+    expect(f.project().lead).toMatchObject({ status: 'waiting', request: expect.objectContaining({ model: 'opus' }) })
   })
 })
