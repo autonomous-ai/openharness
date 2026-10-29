@@ -199,6 +199,9 @@ export interface Conversation {
   checks: Check[]
   assignment: Assignment | null
   lastMessageSequence: number
+  /** The sequence of its newest message in the main stream: a reply only in its thread leaves it (threads.ts). Absent until
+   *  this conversation's first message after threads; readers fall back to lastMessageSequence. */
+  lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */

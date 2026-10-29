@@ -9,6 +9,7 @@ import '../widgets/engine_identity.dart';
 import '../widgets/finger_target.dart';
 import 'attachment_chips.dart';
 import 'identity.dart';
+import 'machine_status.dart' show superTabAgo;
 import 'message_text.dart';
 import 'model.dart';
 import 'pull_requests.dart';
@@ -39,9 +40,20 @@ class SuperTabMessageRow extends StatefulWidget {
     this.reactorName,
     this.onReact,
     this.proposalOwner,
+    this.thread,
+    this.threadUnread = false,
+    this.onOpenThread,
   });
 
   final SuperTabMessage message;
+
+  /// The thread [message] is the root of, once it has a reply.
+  final SuperTabThread? thread;
+  final bool threadUnread;
+
+  /// Opens [message]'s thread: from its reply line, or from an also-sent
+  /// reply's mark.
+  final VoidCallback? onOpenThread;
 
   /// The person a Buddy's proposal speaks for, by name, from the server's tag
   /// on it ([SuperTabMessage.proposalOwnerId]); null for any other message.
@@ -325,7 +337,27 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 ),
                                 const SizedBox(height: 4),
                               ],
-                              if (message.replyTo != null)
+                              if (message.threadReply &&
+                                  widget.onOpenThread != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    bottom: grid.AppDesktop.menuInset,
+                                  ),
+                                  child: SuperTabLink(
+                                    key: ValueKey(
+                                      'super-thread-also-${message.id}',
+                                    ),
+                                    onTap: widget.onOpenThread!,
+                                    child: Text(
+                                      'Replied in thread',
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ),
+                              // A thread reply sits under its root, so it
+                              // quotes nothing; an older reply keeps its quote.
+                              if (message.replyTo != null &&
+                                  !message.threadReply)
                                 Padding(
                                   padding: const EdgeInsets.only(bottom: 8),
                                   child: SuperTabReplyPreview(
@@ -403,6 +435,18 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                 nameOf: widget.reactorName ?? (_, id) => id,
                                 onReact: widget.onReact,
                               ),
+                              if ((widget.thread, widget.onOpenThread) case (
+                                final thread?,
+                                final open?,
+                              ))
+                                SuperTabThreadLine(
+                                  key: ValueKey(
+                                    'super-thread-line-${message.id}',
+                                  ),
+                                  thread: thread,
+                                  unread: widget.threadUnread,
+                                  onOpen: open,
+                                ),
                               ...widget.receipts,
                             ],
                           ),
@@ -527,6 +571,89 @@ class SuperTabMessageHighlight extends StatelessWidget {
       duration: const Duration(milliseconds: 400),
       color: on ? DesktopChrome.selection : Colors.transparent,
       child: child,
+    );
+  }
+}
+
+/// A quiet text link: a hand cursor and the whole label as its target.
+class SuperTabLink extends StatelessWidget {
+  const SuperTabLink({super.key, required this.onTap, required this.child});
+
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    cursor: SystemMouseCursors.click,
+    child: GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: child,
+    ),
+  );
+}
+
+/// The line under a thread's root: who replied, how many replies, and when
+/// the last came. Bold while the thread has a reply the reader has not seen.
+class SuperTabThreadLine extends StatelessWidget {
+  const SuperTabThreadLine({
+    super.key,
+    required this.thread,
+    required this.unread,
+    required this.onOpen,
+  });
+
+  final SuperTabThread thread;
+  final bool unread;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final count = thread.replies == 1 ? '1 reply' : '${thread.replies} replies';
+    final last = thread.lastAt;
+    return Padding(
+      padding: const EdgeInsets.only(top: grid.AppDesktop.menuInset),
+      child: Semantics(
+        button: true,
+        label: unread ? '$count, unread' : count,
+        excludeSemantics: true,
+        child: SuperTabLink(
+          onTap: onOpen,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final author in thread.authors) ...[
+                SuperTabAvatar(
+                  identity: '${author['kind']}:${author['id']}',
+                  name: author['kind'] == 'agent'
+                      ? (author['displayName'] ?? author['name'] ?? 'Agent')
+                            as String
+                      : superTabPersonName(author['name'] as String? ?? ''),
+                  size: grid.AppDesktop.iconSize,
+                  pattern: author['kind'] == 'agent',
+                ),
+                const SizedBox(width: grid.AppDesktop.menuInset),
+              ],
+              Text(
+                count,
+                key: ValueKey('super-thread-count-${thread.id}'),
+                style: DesktopChrome.control(color: DesktopChrome.accent)
+                    .copyWith(
+                      fontWeight: unread ? FontWeight.w700 : FontWeight.w500,
+                    ),
+              ),
+              if (last != null) ...[
+                const SizedBox(width: grid.AppDesktop.controlGap),
+                Text(
+                  'Last reply ${superTabAgo(DateTime.now().difference(last))}',
+                  style: DesktopChrome.metadata(),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

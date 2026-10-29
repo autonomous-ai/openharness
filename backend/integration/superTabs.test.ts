@@ -1171,8 +1171,14 @@ describe('Super Tabs on a real Mongo replica set', () => {
       ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [], ...extra }) as Command
     const root = String((await run(tab, message('Should we do thread replies?'))).result.messageId)
     const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [owner.sub] }), host, lead)).result.messageId)
+    // A reply only in its thread leaves the chat's newest main-stream message where it was; an also-sent one moves it.
+    const lead1 = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const afterFirst = await lead1()
+    expect(afterFirst.lastMainSequence).toBe(afterFirst.lastMessageSequence - 1)
     const second = String((await run(tab, reply('Agreed.', first, { alsoSend: true }), peer)).result.messageId)
     const after = String((await run(tab, message('Next topic.'))).result.messageId)
+    const afterAll = await lead1()
+    expect(afterAll.lastMainSequence).toBe(afterAll.lastMessageSequence)
 
     // Agents read one feed: every reply, each with its thread root.
     const feed = (await store.messages(host, tab, 'lead', {}, lead)).messages
