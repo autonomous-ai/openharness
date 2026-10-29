@@ -24,7 +24,7 @@ import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
-import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
+import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
@@ -2255,7 +2255,7 @@ export class SuperTabStore {
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
-      const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
+      const written = ledProject(state, agentId) ? sweepForLead(state, this.now()) : []
       // The Lead's poll stops its project's idle workers too (tidy.ts): it is where what waits for each agent is known.
       // Of their asleep groups, it reads only those that can still keep one, and only what the stop reads (tidy.ts asleepMatch),
       // judged at the same time as the stop.

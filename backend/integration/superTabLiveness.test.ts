@@ -776,6 +776,125 @@ describe('a start that never runs', () => {
   })
 })
 
+describe('a task that stalls', () => {
+  type Swarm = Awaited<ReturnType<typeof swarm>>
+  /** The rows that woke the Lead for stalled tasks, each with the tasks it listed. */
+  const stalledRows = async (f: Swarm) => (await db.superTabMessage.findMany({ where: { tabId: f.tab }, orderBy: { sequence: 'asc' } }))
+    .filter(m => (m.source as { kind?: string } | null)?.kind === 'work-stalled')
+  const liveness = async (f: Swarm, group = f.group) => (await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === group)!.liveness
+  /** Both machines report, the worker's first with its screen changing (a clock jump spans many beats), then the Lead polls:
+   *  its time checks run there. */
+  const tick = async (f: Swarm, at: number) => {
+    f.clock.now = at
+    await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: at } })
+    await f.observe('lead-host', [f.harness.lead])
+    return f.leadInbox()
+  }
+  /** A second task, with nobody on it yet, that the Lead routes and starts "Builder" for on Worker Mac. */
+  const started = async (f: Swarm) => {
+    const group = String((await f.execute({ type: 'conversation.create', title: 'Write the docs', brief: 'Document it',
+      checks: [{ description: 'Read', independent: false }] })).result.conversationId)
+    const decision = { assessment: { difficulty: 'low', risk: 'low', why: 'Small task.' },
+      candidates: [{ id: 'c0', kind: 'new', machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high',
+        quality: 2, cost: 2, title: 'New agent', label: 'New agent' }],
+      excluded: [], floor: 1, notes: false, pick: 'c0', via: 'only', p: null, belowFloor: false, why: 'Only candidate.' }
+    const routeDecisionId = String((await f.execute({ type: 'route.record', conversationId: group, decision } as Command, host, f.lead)).result.routeDecisionId)
+    const request = { conversationId: group, machineId: 'test-host', engine: 'codex', model: 'fixture-model', effort: 'high', name: 'Builder',
+      cwd: '/repo', worktree: false, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const startId = String((await f.execute({ type: 'agent.start', request, routeDecisionId } as Command, host, f.lead)).result.startId)
+    return { group, startId }
+  }
+
+  it('turns quiet when its agent reports nothing for 30 minutes while its screen still changes, and wakes the Lead once', async () => {
+    const f = await swarm()
+    const posted = f.clock.now
+    await f.beat(posted)
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
+    for (const minutes of [5, 10, 15, 20, 25, 29]) await tick(f, posted + minutes * MINUTE)
+    expect(await liveness(f)).toBeUndefined()
+    expect(await stalledRows(f)).toEqual([])
+    // The first time checks past 30 minutes find it quiet: the Lead hears in that same poll.
+    const inbox = await tick(f, posted + 30 * MINUTE)
+    expect(await liveness(f)).toEqual({ state: 'quiet', why: 'silent', since: posted })
+    const [row] = await stalledRows(f)
+    expect(inbox.map(m => m.id)).toContain(row!.id)
+    expect(row!.text).toBe(`A task needs you:\n- #${(await f.timed.read(owner, f.tab)).state.conversations.find(c => c.id === f.group)!.number} "Ship the parser": `
+      + `quiet, ${await f.name(f.worker)} has reported nothing for 30 minutes.\nAct on it now: nudge its agent, reassign it, or post in its chat why it waits.`)
+    for (const minutes of [31, 40, 90]) await tick(f, posted + minutes * MINUTE)
+    expect(await stalledRows(f)).toHaveLength(1)
+    expect((await f.assignment()).status).toBe('working')
+  })
+
+  it('is orphaned when its agent is removed, and the Lead is woken once by the next time checks', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    await f.execute({ type: 'agent.remove', agentId: f.worker } as Command)
+    await tick(f, f.clock.now + SWEEP_EVERY_MS)
+    expect(await liveness(f)).toMatchObject({ state: 'orphaned', why: 'removed' })
+    expect((await stalledRows(f)).map(r => r.text)).toEqual([expect.stringContaining('"Ship the parser": orphaned, its agent was removed from the Swarm.')])
+    await tick(f, f.clock.now + 5 * MINUTE)
+    expect(await stalledRows(f)).toHaveLength(1)
+  })
+
+  it('is orphaned when its agent\'s session stops, the Lead woken once by the lost-work notice', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    f.clock.now += MINUTE
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    // The machine's report loses the task; the Lead's next poll records it orphaned.
+    await f.leadInbox()
+    expect(await liveness(f)).toMatchObject({ state: 'orphaned', why: 'lost' })
+    f.clock.now += 5 * MINUTE
+    await f.observe('lead-host', [f.harness.lead])
+    await f.leadInbox()
+    expect((await f.lostRows()).filter(r => r.text.includes('lost its task'))).toHaveLength(1)
+    expect(await stalledRows(f)).toEqual([])
+  })
+
+  it('is orphaned when its start fails, the Lead woken once by the failure notice, and stays so once the start is no longer loaded', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { group, startId } = await started(f)
+    // Its own machine reports the failure.
+    await f.timed.execute(host, f.tab, { operationId: randomUUID(), command: { type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' } as Command }, undefined, 'test-host')
+    for (const minutes of [1, 15]) await tick(f, f.clock.now + minutes * MINUTE)
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    const told = (await db.superTabMessage.findMany({ where: { tabId: f.tab, conversationId: group } })).filter(m => m.text.startsWith('Could not start Builder'))
+    expect(told).toHaveLength(1)
+    expect(await stalledRows(f)).toEqual([])
+  })
+
+  it('is orphaned when a machine\'s report times its launched start out, and stays so once the start has ended', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { group, startId } = await started(f)
+    await f.timed.execute(host, f.tab, { operationId: randomUUID(), command: { type: 'agent.startDispatch', startId } as Command }, undefined, 'test-host')
+    // Only the worker's machine reports: its time checks fail the start.
+    f.clock.now += 3 * MINUTE + 1_000
+    await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })
+    expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).not.toBeNull()
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    await tick(f, f.clock.now + 5 * MINUTE)
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    expect(await stalledRows(f)).toEqual([])
+  })
+
+  it('waits queued while its start is not launched, and is orphaned 10 minutes after it was asked for, waking the Lead once', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const asked = f.clock.now
+    const { group } = await started(f)
+    await tick(f, asked + 9 * MINUTE)
+    expect(await liveness(f, group)).toEqual({ state: 'waiting', why: 'queued', since: asked })
+    expect(await stalledRows(f)).toEqual([])
+    await tick(f, asked + 10 * MINUTE)
+    expect(await liveness(f, group)).toEqual({ state: 'orphaned', why: 'unstarted', since: asked })
+    expect((await stalledRows(f)).map(r => r.text)).toEqual([expect.stringContaining('"Write the docs": orphaned, its agent has not started for 10 minutes.')])
+    await tick(f, asked + 20 * MINUTE)
+    expect(await stalledRows(f)).toHaveLength(1)
+  })
+})
+
 /** Counts every Prisma operation a store makes through this client, as "Model.operation". */
 function counting() {
   const ops: string[] = []

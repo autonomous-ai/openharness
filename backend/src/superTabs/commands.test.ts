@@ -619,6 +619,63 @@ function routed() {
     leadActor: agentActor(lead), workerActor: agentActor(worker) }
 }
 
+describe('the Lead\'s last action on a task', () => {
+  it('is recorded with its time by the Lead\'s route, start, assignment and post there, and by nobody else\'s', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    f.run({ type: 'message.send', conversationId: group, text: 'A person posts.', replyTo: null, recipientIds: [] })
+    expect(task().leadAction).toBeUndefined()
+    f.run({ type: 'route.record', conversationId: group, decision: record() } as Command, f.leadActor, { now: 2000 })
+    expect(task().leadAction).toEqual({ kind: 'route', at: 2000 })
+    const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group), now: 3000 })
+    expect(task().leadAction).toEqual({ kind: 'start', at: 3000 })
+    // Its start keeps when it was asked for: a task whose start is never launched is orphaned 10 minutes on (liveness.ts).
+    expect(f.state.starts!.at(-1)!.requestedAt).toBe(3000)
+    f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 4000 })
+    expect(task().leadAction).toEqual({ kind: 'assign', at: 4000 })
+    f.run({ type: 'message.send', conversationId: group, text: 'Progress.', replyTo: null, recipientIds: [] }, f.workerActor, { now: 5000 })
+    expect(task().leadAction).toEqual({ kind: 'assign', at: 4000 })
+    f.run({ type: 'message.send', conversationId: group, text: 'Why it waits.', replyTo: null, recipientIds: [] }, f.leadActor, { now: 6000 })
+    expect(task().leadAction).toEqual({ kind: 'post', at: 6000 })
+  })
+
+  it('records a task\'s wait in the command that starts it, and clears it in the one that ends it, so no sweep rewrites it', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 2000 }).result.assignmentId as string
+    expect(task().liveness).toBeUndefined()
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'review', result: 'Ready' }, f.workerActor, { now: 3000 })
+    expect(task().liveness).toEqual({ state: 'waiting', why: 'review', since: 3000 })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Fixing' }, f.workerActor, { now: 4000 })
+    expect(task().liveness).toBeUndefined()
+  })
+
+  it('keeps whom its agent asked on the task while it waits, in the status write, and forgets it once it moves on', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    f.invite()
+    const assignmentId = f.run({ type: 'work.assign', conversationId: group, agentId: f.worker, ...via }, f.leadActor, { ...decisionIn(group), now: 2000 }).result.assignmentId as string
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Flag or not?',
+      ask: { personId: 'peer', options: ['Flag', 'Ship'], recommended: 0, unblocks: 'The release' } }, f.workerActor, { now: 3000 })
+    expect(task().assignment!.askedOf).toBe('peer')
+    expect(task().liveness).toMatchObject({ state: 'waiting', why: 'person', personId: 'peer' })
+    f.run({ type: 'work.status', conversationId: group, assignmentId, status: 'working', result: 'Flag it' }, f.workerActor, { now: 4000 })
+    expect(task().assignment!.askedOf).toBeUndefined()
+  })
+
+  it('leaves a task whose start failed orphaned, so it stays so once the failed start is no longer loaded', () => {
+    const f = routed(), group = f.group(), task = () => f.state.conversations.find(c => c.id === group)!
+    f.define(group)
+    const request = { conversationId: group, machineId: 'machine', engine: 'claude', name: 'Builder', cwd: '/repo', worktree: true,
+      requirements: { memoryBytes: 100, diskBytes: 200, maxCpuPercent: 80, tools: ['git'], devices: [], quotaRequired: false } }
+    const startId = f.run({ type: 'agent.start', request, ...via }, f.leadActor, { contribution: f.contribution, ...decisionIn(group) }).result.startId as string
+    f.run({ type: 'agent.startFailed', startId, error: 'Could not prepare the worktree' }, f.leadActor, { contribution: f.contribution, now: 7000 })
+    expect(task().liveness).toEqual({ state: 'orphaned', why: 'start-failed', since: 7000 })
+  })
+})
+
 describe('route.record and route.override', () => {
   it('records a lead decision as a route message with its id', () => {
     const f = routed()
