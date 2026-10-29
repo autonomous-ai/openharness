@@ -26,6 +26,7 @@ import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, on
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { isBuddy, isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
 import { lostReasonWithoutMachine } from './lostReason.js'
+import { LEAD_NAME } from './leadStart.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
@@ -378,20 +379,26 @@ const readsRow = (actor: Actor, buddy: boolean) => (m: Pick<SuperTabMessage, 'so
   (!agentOnly(m.source, m.recipientIds) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))) && !(buddy && routingRow(m.source))
 
 /** A row as a Buddy reads it, without the machine it names (security reviews of #2115): a lost task's reason, in its text and
- *  its source (liveness.ts loseTask), and a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine). */
+ *  its source (liveness.ts loseTask), a machine leaving the Swarm (machines.ts removalEnded, commands.ts removeMachine), and
+ *  the machine a Product Manager started on (leadStart.ts leadJoined; Diego, 10-30). */
 function withoutMachineNames(m: SuperTabMessage): SuperTabMessage {
   const source = m.source as { kind?: unknown; reason?: unknown; machine?: unknown } | null
   if (source?.kind === 'work-lost' && typeof source.reason === 'string') {
     const reason = lostReasonWithoutMachine(source.reason)
     return reason === source.reason ? m : { ...m, text: m.text.split(source.reason).join(reason), source: { ...source, reason } as SuperTabMessage['source'] }
   }
-  if ((source?.kind === 'machine-left' || source?.kind === 'machine-removed') && typeof source.machine === 'string' && source.machine) {
+  if ((source?.kind === 'machine-left' || source?.kind === 'machine-removed' || source?.kind === 'system') && typeof source.machine === 'string' && source.machine) {
     const { machine, ...rest } = source
     const text = m.text.startsWith(machine) ? `A machine${m.text.slice(machine.length)}` : m.text
     return { ...m, text: text.split(machine).join('a machine'), source: rest as SuperTabMessage['source'] }
   }
+  // A joined row stored before its source named the machine: the whole line is the server's own (leadJoined).
+  if (source?.kind === 'system' && source.machine === undefined && m.text.startsWith(LEAD_STARTED) && m.text.endsWith('.') && !m.text.includes('\n')) {
+    return { ...m, text: `${LEAD_STARTED}a machine.` }
+  }
   return m
 }
+const LEAD_STARTED = `${LEAD_NAME} started on `
 
 export class SuperTabStore {
   readonly native: SuperTabNativeStore

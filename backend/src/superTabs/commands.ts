@@ -1693,7 +1693,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         // Taking over from a Lead that left, as agent.add does.
         if (group.leadId && !group.agentIds.includes(group.leadId)) keepLead(group, agentId)
         // The people's to read: it answers the start a person asked for, whose "Waiting for a machine" line they read.
-        message(group.id, leadJoined(state, start, group, agentId), [], null, SYSTEM_ROW)
+        const joined = leadJoined(state, start, group, agentId)
+        message(group.id, joined.text, [], null, joined.source)
       }
       // A Buddy always starts on a Swarm machine: its chat hears once it settles, as the Lead does for a worker.
       else if (!start.request.buddyOf) message(group.id, start.poolGeneration

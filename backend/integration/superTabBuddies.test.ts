@@ -87,8 +87,8 @@ async function swarm() {
 }
 
 /** peer's Buddy, added and started by peer-mac's host as a running host does. */
-async function buddy(f: Awaited<ReturnType<typeof swarm>>) {
-  const added = await f.execute({ type: 'buddy.create', projectId: 'lead', machineId: 'peer-mac', engine: 'claude' }, peer)
+async function buddy(f: Awaited<ReturnType<typeof swarm>>, projectId = 'lead') {
+  const added = await f.execute({ type: 'buddy.create', projectId, machineId: 'peer-mac', engine: 'claude' }, peer)
   const startId = String(added.result.startId), chat = String(added.result.conversationId)
   const pool = (await poolRows(f.store, peer, 'peer-mac')).find(p => p.tabId === f.tab)!
   const host = (command: Command) => f.execute(command, peer, undefined, 'peer-mac')
@@ -378,6 +378,59 @@ describe('a Buddy through the store', () => {
     expect('reload' in seen && seen.reload).toBe(false)
     expect((seen as { machines: unknown[] }).machines).toEqual([])
     expect(JSON.stringify(seen)).not.toMatch(/owner-studio|Owner Studio/)
+  })
+
+  it('reads the Product Manager\'s start without its machine: not on the project, its first load, its change feed or the joined row (Diego, 10-30)', async () => {
+    const f = await swarm()
+    // A project with no Product Manager yet: its person starts one on the machine they name (leadStart.ts).
+    const app = (await f.execute({ type: 'project.create', name: 'App', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const { agentId } = await buddy(f, app.projectId)
+    await f.execute({ type: 'machine.contribute', machineId: 'owner-mac', name: 'Kens-Mac-Studio.local', cwd: '/swarm', scope: 'swarm', engines: ['claude'], maxAgents: 2 })
+    const generation = (await poolRows(f.store, owner, 'owner-mac')).find(p => p.tabId === f.tab)!.machine.generation
+    await f.store.observeMachine(owner, f.tab, 'owner-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
+      diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Desktop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
+    quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [], capabilities: ['leadStart'] } as Parameters<SuperTabStore['observeMachine']>[3])
+    const reads = new SwarmReads(f.store)
+    const [buddyFirst, pmFirst] = [await reads.firstLoad(peer, f.tab, agentId), await reads.firstLoad(owner, f.tab)]
+    const startId = String((await f.execute({ type: 'lead.start', projectId: app.projectId, machineId: 'owner-mac', engine: 'claude',
+      repositoryUrl: 'https://github.com/example/app' })).result.startId)
+    const leadIn = (read: { head: { data: { projects?: Array<{ id: string; lead?: unknown }> } } | null }) => read.head?.data.projects?.find(p => p.id === app.projectId)?.lead
+    const leak = new RegExp(`owner-mac|Kens-Mac-Studio|${startId}`)
+
+    // Starting: a person's change feed says on which machine; the Buddy's says only that it is starting.
+    const pmChanges = await reads.changes(owner, f.tab, pmFirst.cursor)
+    expect('reload' in pmChanges && pmChanges.reload).toBe(false)
+    expect(leadIn(pmChanges as never)).toEqual({ status: 'starting', machineId: 'owner-mac', machineName: 'Kens-Mac-Studio.local', startId })
+    const seen = await reads.changes(peer, f.tab, buddyFirst.cursor, agentId)
+    expect('reload' in seen && seen.reload).toBe(false)
+    expect(leadIn(seen as never)).toEqual({ status: 'starting' })
+    expect(JSON.stringify(seen)).not.toMatch(leak)
+
+    // Started (its joining the Leads conversation reloads every reader): the same in each first load.
+    const host = (command: Command) => f.execute(command, owner, undefined, 'owner-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })
+    expect(leadIn(await reads.firstLoad(owner, f.tab))).toEqual({ status: 'started', machineId: 'owner-mac', machineName: 'Kens-Mac-Studio.local', startId })
+    const first = await reads.firstLoad(peer, f.tab, agentId)
+    expect(leadIn(first)).toEqual({ status: 'started' })
+    expect(JSON.stringify(first)).not.toMatch(leak)
+
+    // The joined row: its machine for people, "a machine" for the Buddy, in its page and when it reads that row alone.
+    const joined = (await f.store.messages(owner, f.tab, app.conversationId, {})).messages.find(m => m.text.startsWith('Product Manager started on'))!
+    expect(joined.text).toBe('Product Manager started on Kens-Mac-Studio.local.')
+    expect((await f.store.messages(peer, f.tab, app.conversationId, {})).messages.map(m => m.text)).toContain('Product Manager started on Kens-Mac-Studio.local.')
+    const page = (await f.store.messages(peer, f.tab, app.conversationId, {}, agentId)).messages
+    const alone = (await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id }, agentId)).messages
+    expect([page.find(m => m.id === joined.id)?.text, alone.map(m => m.text)]).toEqual(['Product Manager started on a machine.', ['Product Manager started on a machine.']])
+    expect(JSON.stringify([page, alone])).not.toMatch(leak)
+
+    // A joined row stored before its source named the machine (a plain system row) reads the same: stored rows stay as written.
+    await db.superTabMessage.update({ where: { id: joined.id }, data: { source: { kind: 'system' } } })
+    const older = (await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id }, agentId)).messages
+    expect(older.map(m => m.text)).toEqual(['Product Manager started on a machine.'])
+    expect(JSON.stringify(older)).not.toMatch(leak)
+    expect((await f.store.messages(peer, f.tab, app.conversationId, { messageId: joined.id })).messages.map(m => m.text))
+      .toEqual(['Product Manager started on Kens-Mac-Studio.local.'])
   })
 })
 

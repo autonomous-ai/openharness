@@ -713,6 +713,12 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
     // A project's repository names the machine and folder it was made from; the address is all a Buddy needs (security
     // review 2 of #2115).
     for (const project of visible.projects ?? []) if (project.repository) project.repository = { repositoryUrl: project.repository.repositoryUrl } as typeof project.repository
+    // Where its Product Manager runs names the machine and its start: a Buddy reads how it stands, and why it failed, which
+    // names no machine (leadStart.ts leadStartFailed; Diego, 10-30).
+    for (const project of visible.projects ?? []) {
+      const lead = project.lead
+      if (lead) project.lead = { status: lead.status, ...(lead.reason !== undefined ? { reason: lead.reason } : {}) } as typeof lead
+    }
     if (visible.project) visible.project = { repositoryUrl: visible.project.repositoryUrl } as typeof visible.project
     delete visible.rules
     delete visible.routingPolicy

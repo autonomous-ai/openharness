@@ -163,6 +163,23 @@ describe('what a Buddy reads', () => {
     expect(visibleState(f.state, agentActor(f.pm)).machines).toHaveLength(1)
   })
 
+  it('shows where the project\'s Product Manager stands, never the machine it runs on or its start (Diego, 10-30)', () => {
+    const f = setup()
+    const project = f.state.projects!.find(p => p.id === f.app.projectId)!
+    const leadOf = (reader: Actor) => visibleState(f.state, reader).projects!.find(p => p.id === f.app.projectId)!.lead
+    project.lead = { status: 'starting', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', startId: 'pm-start' }
+    expect(leadOf(agentActor('buddy'))).toEqual({ status: 'starting' })
+    expect(JSON.stringify(visibleState(f.state, agentActor('buddy')))).not.toMatch(/owner-studio|Kens-Mac-Studio|pm-start/)
+    // A failed start keeps the reason every project reader reads, which names no machine (leadStart.ts leadStartFailed).
+    project.lead = { status: 'failed', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' }
+    expect(leadOf(agentActor('buddy'))).toEqual({ status: 'failed', reason: 'Its machine did not start it within 3 minutes.' })
+    // People and the PM read it as before.
+    for (const reader of [owner, peer, agentActor(f.pm)]) expect(leadOf(reader)).toEqual({ status: 'failed', machineId: 'owner-studio',
+      machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' })
+    // The Buddy's own read leaves the stored placement as it was.
+    expect(project.lead).toEqual({ status: 'failed', machineId: 'owner-studio', machineName: 'Kens-Mac-Studio.local', reason: 'Its machine did not start it within 3 minutes.' })
+  })
+
   it('is no other person\'s Buddy chat in the same project', () => {
     const f = setup()
     f.state.conversations.push({ ...group(f, f.chat), id: 'owner-buddy', agentIds: ['other-buddy'], audience: { people: [{ id: 'owner', generation: f.state.people[0]!.generation }] } })
