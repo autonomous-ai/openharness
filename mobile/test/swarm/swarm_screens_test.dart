@@ -442,7 +442,7 @@ void main() {
     testWidgets('a tag opens the conversation from its text too', (
       tester,
     ) async {
-      await pump(tester, backend(), const SwarmPage());
+      await pump(tester, backend(), const SwarmNeedsPage());
       await tester.tap(key('swarm-need-row-mention:m1'));
       await tester.pumpAndSettle();
 

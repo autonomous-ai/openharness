@@ -325,8 +325,10 @@ class _SuperTabViewState extends State<SuperTabView>
       _unread.forget(_selected);
       _scrollRequest++;
       _jumpingToEnd = false;
-      // A search or a way back belongs to the conversation it started in.
-      _jumpRequest++;
+      // A search or a way back belongs to the conversation it started in. The
+      // first conversation shown ends nothing: a tag opened as the view
+      // appears is still being found while it is adopted.
+      if (_selected != null) _jumpRequest++;
       _finding = null;
       _back = null;
       if (_anchors.remove(id) case final anchor?) {
