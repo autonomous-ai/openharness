@@ -510,6 +510,189 @@ void main() {
     expect(fake.paths.where((p) => p == path), hasLength(2));
   });
 
+  group('what the person may no longer read never stays', () {
+    int boardReads(FakeSwarm fake) =>
+        fake.paths.where((p) => p.contains('/leaderboard')).length;
+
+    testWidgets('the Swarm taken away while open: its rows go at once, and '
+        'none are read again', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      final reads = boardReads(fake);
+
+      // Removed from the Swarm: the list no longer has it.
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      await tester.pump();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(find.text('Mobile'), findsNothing, reason: "the project's name");
+      expect(
+        tester.widget<Text>(key('swarm-leaderboard-gone')).data,
+        'This Swarm is no longer available.',
+      );
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+
+      await tester.pump(const Duration(minutes: 11));
+      expect(boardReads(fake), reads, reason: 'nothing read once it is gone');
+    });
+
+    testWidgets('an answer on its way when the Swarm is taken away is '
+        'dropped', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await tester.pumpAndSettle();
+      final gate = Completer<void>();
+      fake.routes[path] = (_) async {
+        await gate.future;
+        return board();
+      };
+      await tester.fling(
+        key('swarm-leaderboard-person-diego'),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pump(const Duration(seconds: 1));
+
+      fake.routes['/api/super-tabs/list'] = (_) => {
+        'tabs': <Object>[],
+        'next': null,
+      };
+      await host.session!.inbox.refresh();
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(key('swarm-leaderboard-gone'), findsOneWidget);
+    });
+
+    testWidgets('the project taken away while open: its rows go at once, '
+        'and its board is read no more', (tester) async {
+      final fake = backend();
+      final host = await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      final reads = boardReads(fake);
+
+      // The project went private, or was deleted: the Swarm no longer
+      // shows it.
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => {
+        ...changes(cursor: 'c3'),
+        'head': part('head', 2, headData(projects: [])),
+      };
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pump();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(find.text('Mobile'), findsNothing, reason: "the project's name");
+      expect(
+        tester.widget<Text>(key('swarm-leaderboard-gone')).data,
+        'This project is no longer in the Swarm.',
+      );
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+
+      await tester.pump(const Duration(minutes: 11));
+      expect(boardReads(fake), reads, reason: 'nothing read once it is gone');
+    });
+
+    testWidgets("a project the Swarm doesn't show reads as gone, even if a "
+        'board answers for it', (tester) async {
+      final fake = backend();
+      // Another Swarm's project, or a private one: the snapshot has
+      // neither, whatever the board read says.
+      const elsewhere = 'project-elsewhere';
+      final other = '/api/super-tabs/$tab/leaderboard?projectId=$elsewhere';
+      fake.routes[other] = (_) => board();
+      final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
+        ..value = {PhoneExperiment.swarm};
+      final account = ValueNotifier<String?>(me);
+      final host = SwarmHost(
+        accountId: () => account.value,
+        account: account,
+        request: fake.request,
+        notices: SilentSystemNotices(),
+        features: features,
+      )..foreground = false;
+      addTearDown(host.dispose);
+      await host.session!.inbox.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) =>
+              SwarmScope(notifier: host, child: child!),
+          home: SwarmLeaderboardPage(
+            swarmId: tab,
+            projectId: elsewhere,
+            now: () => now,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(
+        tester.widget<Text>(key('swarm-leaderboard-gone')).data,
+        'This project is no longer in the Swarm.',
+      );
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(fake.paths.where((p) => p.startsWith(other)), isEmpty);
+    });
+
+    testWidgets('a refusal while open clears the rows and offers Try '
+        'again', (tester) async {
+      final fake = backend();
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+
+      fake.routes[path] = (_) => throw const SuperTabFailure(
+        'FORBIDDEN',
+        'You no longer have access to this Super Tab.',
+        statusCode: 403,
+      );
+      await tester.fling(
+        key('swarm-leaderboard-person-diego'),
+        const Offset(0, 400),
+        1000,
+      );
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-person-diego'), findsNothing);
+      expect(
+        find.text('You no longer have access to this Super Tab.'),
+        findsOneWidget,
+      );
+      expect(find.text('Try again'), findsOneWidget);
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+    });
+
+    testWidgets('a list of Swarms that cannot be read never loads forever', (
+      tester,
+    ) async {
+      final fake = backend();
+      final list = fake.routes['/api/super-tabs/list']!;
+      var fail = true;
+      fake.routes['/api/super-tabs/list'] = (body) => fail
+          ? throw const SuperTabFailure('OFFLINE', 'No computer answered.')
+          : list(body);
+      await pump(tester, fake);
+      await tester.pumpAndSettle();
+
+      expect(key('swarm-leaderboard-loading'), findsNothing);
+      expect(find.text('No computer answered.'), findsOneWidget);
+
+      fail = false;
+      await tester.tap(find.text('Try again'));
+      await tester.pumpAndSettle();
+      expect(key('swarm-leaderboard-person-diego'), findsOneWidget);
+      expect(find.text('No computer answered.'), findsNothing);
+    });
+  });
+
   group("another account's board never stays", () {
     /// The backend as each account reads it: the old account's board has
     /// diego first; the next account's has only ken.

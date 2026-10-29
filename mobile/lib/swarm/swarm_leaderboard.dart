@@ -87,15 +87,35 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     if (_swarm == null) unawaited(session?.inbox.refresh());
   }
 
-  /// Follows the Swarm's reader once the inbox has one, and reads the board
-  /// through it.
+  /// Follows the Swarm's reader while the inbox has one, and reads the board
+  /// through it. Off the list (the person left the Swarm or was removed),
+  /// the board and any answer on its way are dropped.
   void _attach() {
-    final session = _session;
-    final swarm = session?.inbox.reader(widget.swarmId);
-    if (session == null || swarm == null || identical(swarm, _swarm)) return;
+    final swarm = _session?.inbox.reader(widget.swarmId);
+    if (identical(swarm, _swarm)) return;
     _swarm?.removeListener(_changed);
-    _swarm = swarm..addListener(_changed);
     _board?.dispose();
+    _board = null;
+    _swarm = swarm?..addListener(_changed);
+    _changed();
+  }
+
+  void _changed() {
+    _follow();
+    if (mounted) setState(() {});
+  }
+
+  /// Reads the board while the Swarm may show the project: until its first
+  /// read, and while it lists it. Taken away, the board read so far and any
+  /// answer on its way go with the reader, and nothing is read again.
+  void _follow() {
+    final session = _session, swarm = _swarm;
+    if (session == null || swarm == null || _gone(swarm) != null) {
+      _board?.dispose();
+      _board = null;
+      return;
+    }
+    if (_board != null) return;
     _board = SwarmLeaderboardReader(
       tabId: swarm.tabId,
       projectId: widget.projectId,
@@ -103,12 +123,22 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
       inFront: () => session.inbox.shown,
     )..addListener(_changed);
     _board!.start();
-    _changed();
   }
 
-  void _changed() {
-    if (mounted) setState(() {});
+  /// Why [swarm] shows no board of the project: the person may no longer
+  /// read the Swarm, or it does not show the project (gone, private, or
+  /// never one of its own). Null while it may.
+  String? _gone(SwarmReader swarm) {
+    if (swarm.accessRevoked) return _swarmGone;
+    final snapshot = swarm.snapshot;
+    if (snapshot == null) return null;
+    return snapshot.projects.any((p) => p.id == widget.projectId)
+        ? null
+        : _projectGone;
   }
+
+  static const _swarmGone = 'This Swarm is no longer available.';
+  static const _projectGone = 'This project is no longer in the Swarm.';
 
   void _forget() {
     _swarm?.removeListener(_changed);
@@ -175,7 +205,24 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     final board = reader?.board;
     final current = swarmWeekOf(widget.now());
     // Signed out, or Swarm turned off: no account's board to show.
-    if (_session == null) return const [];
+    final inbox = _session?.inbox;
+    if (inbox == null) return const [];
+    final swarm = _swarm;
+    // Off the list once it has been read, or taken away: nothing of it
+    // stays, and nothing waits for it.
+    final gone = swarm == null
+        ? (inbox.loaded && inbox.error == null ? _swarmGone : null)
+        : _gone(swarm);
+    if (gone != null) {
+      return [
+        const SizedBox(height: AppSpace.m),
+        SwarmRow.line(
+          gone,
+          key: const ValueKey('swarm-leaderboard-gone'),
+          lines: 2,
+        ),
+      ];
+    }
     if (reader != null && reader.unavailable) {
       return [
         const SizedBox(height: AppSpace.m),
@@ -187,7 +234,10 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
       ];
     }
     // The members name the people; until the Swarm is read, the rows wait.
-    final error = reader?.error ?? (snapshot == null ? _swarm?.error : null);
+    final error =
+        reader?.error ??
+        (snapshot == null ? swarm?.error : null) ??
+        (swarm == null ? inbox.error : null);
     final people = snapshot?.people ?? const <SuperTabPerson>[];
     SuperTabPerson? personOf(String id) =>
         people.where((p) => p.id == id).firstOrNull;
@@ -239,7 +289,8 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
               onPressed: () => unawaited(
                 Future.wait([
                   ?reader?.refresh(),
-                  if (snapshot == null) ?_swarm?.refresh(),
+                  if (snapshot == null) ?swarm?.refresh(),
+                  if (swarm == null) inbox.refresh(),
                 ]),
               ),
             ),
