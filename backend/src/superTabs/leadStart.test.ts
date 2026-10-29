@@ -94,6 +94,21 @@ describe('starting a project\'s Product Manager on a Swarm machine', () => {
     expect(paused.lead('mate-mac').result).toMatchObject({ machineId: 'mate-mac' })
   })
 
+  it('on a teammate\'s Mac added as they joined, runs only in its Team account', () => {
+    const f = swarm()
+    f.machine('mate-mac').teamAccountOnly = true
+    expect(f.lead('mate-mac').result).toMatchObject({ machineId: 'mate-team' })
+    const failing = swarm()
+    failing.machine('mate-mac').teamAccountOnly = true
+    failing.machine('mate-team').observation = reading('team', FAILED)
+    expect(refusal(() => failing.lead('mate-mac'))?.code).toBe('PRIVACY_CHECK_FAILED')
+    const none = swarm()
+    none.machine('mate-mac').teamAccountOnly = true
+    none.state.machines = none.state.machines!.filter(m => m.machineId !== 'mate-team')
+    expect(refusal(() => none.lead('mate-mac'))?.code).toBe('TEAM_ACCOUNT_REQUIRED')
+    expect(none.state.starts ?? []).toEqual([])
+  })
+
   it('on a teammate\'s Mac with no Team account, runs on the Mac itself, whatever the Swarm\'s switch says for workers', () => {
     process.env.SWARM_TEAM_ACCOUNT_REQUIRED = '1'
     const f = swarm()

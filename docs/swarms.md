@@ -67,7 +67,8 @@ available, a person adds it to the Swarm under Machines; the host then clones
 the project there.
 
 A new project's Product Manager starts on any machine of the Swarm (Ken, 2026-10-29). On another person's Mac it runs in
-that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account.
+that Mac's Harness Team account when the account can take it now, and otherwise on the Mac itself, in its owner's account,
+unless the Mac was added to the Swarm as its person joined: such a Mac takes it only in its Team account.
 
 A Builder starts in a new worktree of the project's checkout on that machine.
 The host clones a project once and reuses the checkout, so it is not kept up to

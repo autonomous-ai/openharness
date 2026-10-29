@@ -908,6 +908,25 @@ void main() {
       'The Harness Team account on Diego MacBook is not private (sharing), so it runs only its owner’s projects.',
     ),
     (
+      'was added as its person joined and has no Team account',
+      [
+        {
+          ...machineRow(
+            'rig',
+            '2x 4090 Rig',
+            lead: true,
+            teamWork: {
+              'allowed': false,
+              'code': 'TEAM_ACCOUNT_REQUIRED',
+              'reason': '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+            },
+          ),
+          'teamAccountOnly': true,
+        },
+      ],
+      '2x 4090 Rig has no Harness Team account yet, so it runs only its owner’s projects.',
+    ),
+    (
       'is paused',
       [
         {...machineRow('rig', '2x 4090 Rig', lead: true), 'paused': true},

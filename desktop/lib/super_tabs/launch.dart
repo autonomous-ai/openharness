@@ -339,7 +339,10 @@ class SuperTabLaunch {
           fresh(observation) &&
           reading['paused'] != true;
       final mac = part(pool['observation']);
+      // A Mac added as its person joined takes teammates' work only in its
+      // Team account (backend machines.ts teamAccountOnly).
       final macTakes =
+          pool['teamAccountOnly'] != true &&
           pool['hostMachineId'] == null &&
           mac['sessionKind'] != 'team' &&
           (mac['capabilities'] as List?)?.contains('leadStart') == true;
@@ -410,7 +413,11 @@ class SuperTabLaunch {
             : team || macTakes
             ? null
             : teamRefusal ??
-                  'Update Harness on $name to run a Product Manager there.',
+                  switch (pool['teamWork']) {
+                    {'allowed': false, 'reason': final String reason} => reason,
+                    _ =>
+                      'Update Harness on $name to run a Product Manager there.',
+                  },
       );
     }
 

@@ -35,8 +35,8 @@ export interface LeadContext {
 }
 
 /** The contribution [project]'s Product Manager runs in when placed on [machineId]: the machine itself for its own owner;
- *  on another person's Mac, its Harness Team account when that takes it now, else the Mac itself, as its owner. A Team
- *  account named itself keeps its rules and is refused with its reason. */
+ *  on another person's Mac, its Harness Team account when that takes it now, else the Mac itself, as its owner, unless the
+ *  Mac was added as its person joined. A Team account named itself keeps its rules and is refused with its reason. */
 function leadPool(state: SuperTabState, project: SwarmProject, machineId: string, context: LeadContext): ContributedMachine {
   const named = machineContribution(state, machineId) ?? fail('MACHINE_NOT_LISTED', 'Add this machine to the Swarm first.', 403)
   if (named.contributorId === project.ownerId) return named
@@ -53,6 +53,13 @@ function leadPool(state: SuperTabState, project: SwarmProject, machineId: string
     return named
   }
   const team = teamsWork ? teamPoolOf(state, named, teamMachines) : undefined
+  // A Mac added as its person joined, not lent, takes teammates' work only in its Team account (machines.ts teamAccountOnly).
+  if (named.teamAccountOnly) {
+    const pool = team ?? named
+    const why = refusal(pool)
+    if (why) failTeamWork(why)
+    return pool
+  }
   return team && !refusal(team) && takesLead(state, project, team) ? team : named
 }
 
