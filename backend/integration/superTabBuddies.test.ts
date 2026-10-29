@@ -10,6 +10,7 @@ import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
+import { SwarmReads } from '../src/superTabs/read/service.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
 // talk to it alone, and it sends their proposal to the PM. A fresh loopback replica set, created here.
@@ -106,5 +107,55 @@ describe('a Buddy through the store', () => {
     await expect(propose()).rejects.toThrow('already sent')
     await expect(f.execute({ type: 'message.send', conversationId: 'lead', text: 'Hi PM', replyTo: null, recipientIds: [] }, peer, agentId))
       .rejects.toThrow('A Buddy posts only in its own chat')
+  })
+  it('reads its project\'s work as its person: which task owns it, its pull request, its state and what blocks it', async () => {
+    const f = await swarm()
+    // Opened before Buddies were on: the owner's private chat with the PM, which their Buddy may never read either.
+    await f.execute({ type: 'tab.buddies', enabled: false })
+    const owners = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'owner', brief: '', checks: [],
+      audience: { personIds: [owner.sub] } })).result.conversationId)
+    await f.execute({ type: 'tab.buddies', enabled: true })
+    const { agentId } = await buddy(f)
+    const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
+      checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
+    const builder = String((await f.execute({ type: 'agent.add', conversationId: group, machineId: 'owner-mac', harnessId: randomUUID(), name: 'Builder',
+      configuration: config, lead: false })).result.agentId)
+    const assignmentId = String((await f.execute({ type: 'work.assign', conversationId: group, agentId: builder })).result.assignmentId)
+    await f.execute({ type: 'message.send', conversationId: group, text: 'Opened https://github.com/acme/app/pull/12', replyTo: null, recipientIds: [] }, owner, builder)
+    await f.execute({ type: 'work.status', conversationId: group, assignmentId, status: 'needs_human', result: 'Ship it behind a flag?' }, owner, builder)
+    await f.execute({ type: 'decision.ask', conversationId: group, personId: peer.sub, questions: [{ question: 'Ship it behind a flag?',
+      options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }] }, owner, f.lead)
+    await f.execute({ type: 'decision.ask', conversationId: group, personId: owner.sub, questions: [{ question: 'Which week?',
+      options: ['This week', 'Next week'], recommended: 0, unblocks: 'The plan' }] }, owner, f.lead)
+
+    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    const task = read.groups.find(g => g.key === group)!.data
+    expect(task).toMatchObject({ title: 'Offline sync', pullRequestUrls: ['https://github.com/acme/app/pull/12'],
+      assignment: { agentId: builder, status: 'needs_human', result: 'Ship it behind a flag?' }, checks: [{ description: 'Edits survive a restart' }] })
+    expect(read.agents.map(a => a.data.name)).toContain('Builder')
+    expect(read.groups.map(g => g.key)).not.toContain(owners)
+    expect([read.machines, read.starts]).toEqual([[], []])
+    const messages = await f.store.messages(peer, f.tab, group, {}, agentId)
+    expect(messages.messages.map(m => m.text)).toContain('Opened https://github.com/acme/app/pull/12')
+    const decisions = await f.store.decisions(peer, f.tab, 'open', agentId)
+    expect(decisions.decisions.map(d => [d.conversationId, d.question])).toEqual([[group, 'Ship it behind a flag?']])
+  })
+
+  it('is refused another person\'s private chat, the Leads conversation and another project', async () => {
+    const f = await swarm()
+    await f.execute({ type: 'tab.buddies', enabled: false })
+    const owners = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'owner', brief: '', checks: [],
+      audience: { personIds: [owner.sub] } })).result.conversationId)
+    await f.execute({ type: 'tab.buddies', enabled: true })
+    const web = (await f.execute({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
+    const landing = String((await f.execute({ type: 'conversation.create', projectId: web.projectId, title: 'Landing', brief: '', checks: [] })).result.conversationId)
+    const { agentId } = await buddy(f)
+    const leads = (await f.store.read(owner, f.tab)).state.leadsConversationId
+    expect(leads).toBeTruthy()
+    for (const conversationId of [owners, web.conversationId, landing, leads!]) {
+      await expect(f.store.messages(peer, f.tab, conversationId, {}, agentId)).rejects.toThrow('unavailable')
+    }
+    const read = await new SwarmReads(f.store).firstLoad(peer, f.tab, agentId)
+    for (const id of [owners, web.conversationId, landing, leads]) expect(read.groups.map(g => g.key)).not.toContain(id)
   })
 })
