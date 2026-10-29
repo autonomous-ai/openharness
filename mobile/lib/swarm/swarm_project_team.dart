@@ -163,9 +163,9 @@ typedef SwarmTeamHuman = ({
 
 /// [project]'s people ([swarmProjectPeople]) as its Team lists them: by this
 /// week's points on [board], most first, then by name, letter case aside —
-/// all by name while there is no board. The points only order them: no row
-/// shows one, and there are no ranks (Dee, 2026-10-29: bare points mean
-/// nothing to people). Matched by id, never by name.
+/// all by name while there is no board. No ranks (Dee, 2026-10-29); each row
+/// shows its points beside a line of what earned them, as Desktop's member
+/// list does (#2230). Matched by id, never by name.
 List<SwarmTeamHuman> swarmProjectHumans(
   SuperTabSnapshot snapshot,
   SuperTabProject project,
@@ -368,8 +368,18 @@ class _SwarmProjectTeamState extends State<SwarmProjectTeam> {
                         picture: h.person.avatar,
                       ),
                       name: h.name,
-                      tag: h.own ? 'you' : null,
-                      detail: h.now,
+                      // As Desktop's member list (#2230): what they are on
+                      // after the name, what they did this week beneath it,
+                      // and the week's points at the right.
+                      tag: switch ([if (h.own) 'you', ?h.now]) {
+                        final words when words.isNotEmpty => words.join(' · '),
+                        _ => null,
+                      },
+                      detail: switch (h.score) {
+                        final score? => swarmNumbers(score).join(' · '),
+                        null => null,
+                      },
+                      points: h.score?.points,
                       onTap: switch (h.score) {
                         final score? => () => unawaited(
                           showSwarmPersonWeek(
@@ -457,9 +467,9 @@ class _BoardError extends StatelessWidget {
 
 /// One person or agent on a project's Team, in the one shape both share
 /// (Dee, 2026-10-29): the face in one column — an agent's with its state's
-/// [dot] — the name, and a quiet [detail] line beneath: what they are on.
-/// The same height with or without the line; a tap does [onTap], when there
-/// is one.
+/// [dot] — the name, a quiet [detail] line beneath, and a person's week's
+/// [points] at the right. The same height with or without the line; a tap
+/// does [onTap], when there is one.
 class SwarmMemberRow extends StatelessWidget {
   const SwarmMemberRow({
     super.key,
@@ -468,11 +478,15 @@ class SwarmMemberRow extends StatelessWidget {
     this.dot,
     this.tag,
     this.detail,
+    this.points,
     this.onTap,
   });
 
   final Widget face;
   final String name;
+
+  /// A person's points this week, once the board has answered.
+  final int? points;
 
   /// The state's colour on the face's corner: an agent's.
   final Color? dot;
@@ -488,6 +502,7 @@ class SwarmMemberRow extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     final dot = this.dot, tag = this.tag, detail = this.detail;
+    final points = this.points;
     return Semantics(
       // Its own node, a tap or not: one row, said as one.
       container: true,
@@ -496,6 +511,7 @@ class SwarmMemberRow extends StatelessWidget {
         name,
         ?tag,
         if (detail != null && detail.isNotEmpty) detail,
+        if (points != null) '$points points',
       ].join(', '),
       excludeSemantics: true,
       child: InkWell(
@@ -576,6 +592,10 @@ class SwarmMemberRow extends StatelessWidget {
                     ],
                   ),
                 ),
+                if (points != null) ...[
+                  const SizedBox(width: AppSpace.s),
+                  Text('$points', maxLines: 1, style: swarmPointsStyle()),
+                ],
               ],
             ),
           ),

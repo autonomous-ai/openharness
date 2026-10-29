@@ -107,8 +107,8 @@ void main() {
     };
     fake.routes[board] = (_) => leaderboardData(
       people: [
-        scoreData(me, points: 1320, rank: 1),
-        scoreData('diego', points: 1050, rank: 2),
+        scoreData(me, points: 1320, rank: 1, shipped: 6, unblocked: 3),
+        scoreData('diego', points: 1050, rank: 2, lentMs: 10 * 3600000),
         scoreData('ken', points: 640, rank: 3),
       ],
     );
@@ -377,15 +377,14 @@ void main() {
   });
 
   group('Team, its humans', () {
-    testWidgets("ordered by this week's points, most first, though no row "
-        'shows a number: the name and what they are on now', (tester) async {
+    testWidgets("ordered by this week's points, most first, as Desktop's "
+        'member list draws them (#2230): the name and what they are on now, '
+        'a line of what they did this week, and the points at the right', (
+      tester,
+    ) async {
       await team(tester, backend());
 
-      expect(
-        said(tester, 'swarm-team-humans-caption'),
-        'Humans',
-        reason: 'no points column to name (Dee: bare points mean nothing)',
-      );
+      expect(said(tester, 'swarm-team-humans-caption'), 'Humans');
       expect(
         rowsAfter(
           tester,
@@ -398,21 +397,44 @@ void main() {
           'swarm-member-person-ken',
         ],
       );
-      expect(heard(tester, 'swarm-member-person-person-me'), 'person-me, you');
+      expect(
+        heard(tester, 'swarm-member-person-person-me'),
+        'person-me, you, 6 shipped · 3 unblocked, 1320 points',
+      );
       expect(
         heard(tester, 'swarm-member-person-diego'),
-        'diego, 🎯 Reviewing PRs',
+        'diego, 🎯 Reviewing PRs, 10 hours lent, 1050 points',
       );
       expect(
         heard(tester, 'swarm-member-person-ken'),
-        'ken',
-        reason: 'a status whose time has passed is not shown',
+        'ken, 640 points',
+        reason: 'a status whose time has passed is not shown, nor zeros',
       );
-      for (final id in ['person-me', 'diego', 'ken']) {
-        expect(figures('swarm-member-person-$id'), findsNothing, reason: id);
-      }
-      expect(find.text('1,320'), findsNothing);
-      expect(find.text('1320'), findsNothing);
+      expect(
+        said(tester, 'swarm-member-person-diego'),
+        'D | diego  🎯 Reviewing PRs | 10 hours lent | 1050',
+        reason: 'the status after the name, as on Desktop',
+      );
+      final name = tester.getTopRight(
+        find.descendant(
+          of: key('swarm-member-person-diego'),
+          matching: find.textContaining('diego', findRichText: true),
+        ),
+      );
+      Finder points(String id, String value) => find.descendant(
+        of: key('swarm-member-person-$id'),
+        matching: find.text(value),
+      );
+      expect(
+        tester.getTopLeft(points('diego', '1050')).dx,
+        greaterThan(name.dx),
+        reason: 'at the right',
+      );
+      expect(
+        tester.getTopRight(points('diego', '1050')).dx,
+        tester.getTopRight(points('ken', '640')).dx,
+        reason: 'the points line up',
+      );
     });
 
     testWidgets('in the one row shape the agents share', (tester) async {
@@ -504,6 +526,13 @@ void main() {
         'swarm-member-person-person-me',
       ]);
       expect(find.textContaining('Loading'), findsNothing);
+      for (final id in ['person-me', 'diego', 'ken']) {
+        expect(
+          figures('swarm-member-person-$id'),
+          findsNothing,
+          reason: 'no points nor numbers before the board answers: $id',
+        );
+      }
 
       gate.complete();
       await tester.pumpAndSettle();

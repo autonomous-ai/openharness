@@ -328,7 +328,7 @@ TextStyle _rankStyle() => AppType.label(
   color: AppPalette.textSecondary,
   fontFeatures: _figures,
 );
-TextStyle _pointsStyle() => AppType.label(
+TextStyle swarmPointsStyle() => AppType.label(
   fontWeight: FontWeight.w600,
   color: AppPalette.textPrimary,
   fontFeatures: _figures,
@@ -413,7 +413,7 @@ class _Columns {
       rank: width(widest(scores.map((score) => score.rank)), _rankStyle()),
       points: width(
         widest(scores.map((score) => score.points)),
-        _pointsStyle(),
+        swarmPointsStyle(),
       ),
       trend: changes.isEmpty
           ? null
@@ -537,7 +537,11 @@ class _PersonRow extends StatelessWidget {
                   column(
                     'points',
                     columns.points,
-                    Text('${score.points}', maxLines: 1, style: _pointsStyle()),
+                    Text(
+                      '${score.points}',
+                      maxLines: 1,
+                      style: swarmPointsStyle(),
+                    ),
                   ),
                 ],
               ),
