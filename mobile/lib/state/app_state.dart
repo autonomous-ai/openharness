@@ -6579,6 +6579,49 @@ class AppNotifier extends ChangeNotifier {
     return answer['value'];
   }
 
+  /// Asks the account's own computer [machineId] a Swarm question of its own
+  /// (`super_tabs`), such as preparing a Buddy's folder there
+  /// (`prepareContribution`, as the desktop's `prepareBuddyMachine` asks it).
+  /// A refusal throws; so does an account change while it was asked.
+  Future<Map<String, dynamic>> swarmAskComputer(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async {
+    final machine = machineStates[machineId];
+    if (machine == null || machine.needsLink) {
+      throw const SuperTabFailure(
+        'MACHINE_UNAVAILABLE',
+        'This computer is not connected. Open Harness on it, then try again.',
+      );
+    }
+    final revision = _authRevision;
+    void stillThisAccount() {
+      if (!_authWorkCurrent(revision)) {
+        throw const SuperTabFailure(
+          'ACCOUNT_CHANGED',
+          'The account changed. Open Swarm again.',
+        );
+      }
+    }
+
+    final Map<String, dynamic> answer;
+    try {
+      answer = await _conn(machineId).request(
+        'super_tabs',
+        payload: payload,
+        timeout: const Duration(seconds: 30),
+      );
+    } on WsRequestFailure catch (failure) {
+      stillThisAccount();
+      throw SuperTabFailure(
+        failure.code,
+        failure.detail ?? 'Could not reach this computer.',
+      );
+    }
+    stillThisAccount();
+    return answer;
+  }
+
   Future<Map<String, dynamic>> connectors(
     String machineId,
     Map<String, dynamic> payload, {

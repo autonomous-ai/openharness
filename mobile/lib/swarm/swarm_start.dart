@@ -16,6 +16,10 @@ import 'swarm_session.dart';
 /// and whether it is away for real (`phoneMachineAway`).
 typedef SwarmComputer = ({String name, bool away});
 
+/// One of the person's own computers a Buddy may run on: never one shared
+/// with them, nor a Harness Team account. [away] ones are listed, not picked.
+typedef SwarmOwnComputer = ({String id, String name, bool away});
+
 /// What Swarm shows before there is a Swarm to show — one screen each, with
 /// one button. Swarm turned off is not one of them: the app is as it was, and
 /// Settings offers Swarm.
@@ -67,6 +71,17 @@ abstract interface class SwarmComputers implements Listenable {
 
   /// Opens the steps to connect a computer.
   void add(BuildContext context);
+
+  /// The person's own computers ([SwarmOwnComputer]); empty until the list
+  /// has answered.
+  List<SwarmOwnComputer> get own;
+
+  /// Asks the person's own computer [machineId] one Swarm question of its
+  /// own, such as preparing a Buddy's folder (`prepareContribution`).
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  );
 }
 
 /// The start screen Swarm Home shows in place of its body, or null when it

@@ -18,6 +18,8 @@ import 'swarm_conversation_page.dart';
 import 'swarm_reader.dart';
 import 'swarm_request.dart';
 import 'swarm_row.dart';
+import 'swarm_session.dart' show SwarmScope;
+import 'swarm_start.dart' show SwarmOwnComputer;
 import 'swarm_style.dart';
 
 /// Opens the person's Buddy chat in [projectId] over [context]'s page, on the
@@ -66,7 +68,11 @@ class SwarmBuddyBar extends StatelessWidget {
         final error = actions.error;
         final body = switch (swarmBuddy(reader, actions.projectId)) {
           final agent? => _running(reader, agent, canWrite),
-          null => _starting(reader, canWrite),
+          null => _starting(
+            reader,
+            canWrite,
+            SwarmScope.computersOf(context)?.own ?? const [],
+          ),
         };
         if (body == null && error == null) return const SizedBox.shrink();
         return DecoratedBox(
@@ -147,7 +153,11 @@ class SwarmBuddyBar extends StatelessWidget {
 
   /// A start under way, or one that failed with Start again; with none,
   /// Start your Buddy. Null for a viewer, who starts none.
-  Widget? _starting(SwarmReader reader, bool canWrite) {
+  Widget? _starting(
+    SwarmReader reader,
+    bool canWrite,
+    List<SwarmOwnComputer> own,
+  ) {
     final start = swarmBuddyStart(reader, actions.projectId);
     final error = start?['error'];
     if (start == null || (error is! String && start['harnessId'] != null)) {
@@ -174,7 +184,7 @@ class SwarmBuddyBar extends StatelessWidget {
     }
     return SwarmRow.line(
       'Starting ${swarmBuddyEngineName(engine)} on '
-      '${swarmBuddyMachineName(reader, machineId)}…',
+      '${swarmBuddyMachineName(reader, machineId, computers: own)}…',
       key: const ValueKey('swarm-buddy-starting'),
       lines: 2,
     );
@@ -233,29 +243,42 @@ class _BuddyStartState extends State<_BuddyStart> {
   String? _machine;
   String _engine = 'claude';
 
-  Future<void> _pickMachine(List<SwarmBuddyMachine> machines, String chosen) =>
+  /// The machines under their one heading, each by its name; an offline one
+  /// says so and cannot be picked (Dee, 10-29: no notes).
+  Future<void> _pickMachine(List<SwarmBuddyMachine> machines, String? chosen) =>
       showPhoneSheet(
         context,
         title: 'Machine',
-        actions: [
-          for (final m in machines)
-            PhoneSheetAction(
-              icon: m.id == chosen ? LucideIcons.check : LucideIcons.laptop,
-              label: m.name,
-              onTap: () {
-                if (mounted) setState(() => _machine = m.id);
-              },
-            ),
+        sections: [
+          PhoneSheetSection(
+            caption: swarmBuddyOwnMachines,
+            actions: [
+              for (final m in machines)
+                PhoneSheetAction(
+                  icon: m.id == chosen ? LucideIcons.check : LucideIcons.laptop,
+                  label: m.name,
+                  value: m.away ? swarmBuddyMachineOffline : null,
+                  enabled: !m.away,
+                  onTap: () {
+                    if (mounted) setState(() => _machine = m.id);
+                  },
+                ),
+            ],
+          ),
         ],
       );
 
   @override
   Widget build(BuildContext context) {
     final actions = widget.actions;
-    final machines = swarmBuddyMachines(actions.reader);
+    final computers = SwarmScope.computersOf(context);
+    final machines = swarmBuddyMachines(
+      actions.reader,
+      computers: computers?.own ?? const [],
+    );
     final machine =
-        machines.where((m) => m.id == _machine).firstOrNull ??
-        machines.firstOrNull;
+        machines.where((m) => m.id == _machine && !m.away).firstOrNull ??
+        machines.where((m) => !m.away).firstOrNull;
     final busy = actions.busy;
     return Column(
       key: const ValueKey('swarm-buddy-start'),
@@ -273,13 +296,24 @@ class _BuddyStartState extends State<_BuddyStart> {
           Padding(
             padding: const EdgeInsets.only(top: AppSpace.xs),
             child: SwarmRow.line(
-              'A Buddy runs on one of your own machines. Add one of yours to '
-              'this Swarm first.',
+              machines.isEmpty ? swarmBuddyNoMachine : swarmBuddyAllOffline,
               key: const ValueKey('swarm-buddy-no-machine'),
               lines: 3,
             ),
-          )
-        else ...[
+          ),
+        if (machine == null && machines.isNotEmpty)
+          _Field(
+            label: 'Machine',
+            child: TextButton(
+              key: const ValueKey('swarm-buddy-machine'),
+              onPressed: () => unawaited(_pickMachine(machines, null)),
+              child: const Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Choose a machine'),
+              ),
+            ),
+          ),
+        if (machine != null) ...[
           _Field(
             label: 'Machine',
             child: Semantics(
@@ -355,7 +389,12 @@ class _BuddyStartState extends State<_BuddyStart> {
             busy: busy,
             busyLabel: 'Starting…',
             onPressed: () => unawaited(
-              actions.start(machineId: machine.id, engine: _engine),
+              actions.start(
+                machineId: machine.id,
+                engine: _engine,
+                machine: machine,
+                computers: computers,
+              ),
             ),
           ),
         ],
