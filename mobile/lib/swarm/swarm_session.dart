@@ -8,6 +8,7 @@ import '../notify/system_notices.dart';
 import '../phone/voice_input_controller.dart';
 import '../settings/experimental_features.dart';
 import 'swarm_activity.dart';
+import 'swarm_buddy_list.dart';
 import 'swarm_chat_peeks.dart';
 import 'swarm_choices.dart';
 import 'swarm_dictation.dart';
@@ -65,6 +66,11 @@ class SwarmSession extends ChangeNotifier {
   /// Made when a screen first asks for it.
   SwarmActivity get activity => _activity ??= SwarmActivity(this);
   SwarmActivity? _activity;
+
+  /// Buddies: the person's own Buddy in each project, with its chat's last
+  /// message. Made when a screen first asks for it.
+  SwarmBuddyList get buddyList => _buddyList ??= SwarmBuddyList(this);
+  SwarmBuddyList? _buddyList;
 
   /// What the person chose for Home on this phone: the projects pinned and
   /// the one Swarm shown. A Swarm the account no longer has takes its own.
@@ -192,6 +198,7 @@ class SwarmSession extends ChangeNotifier {
     }
     _held.clear();
     _activity?.dispose();
+    _buddyList?.dispose();
     peeks.dispose();
     inbox.removeListener(_needsChanged);
     _announcer.clear();
