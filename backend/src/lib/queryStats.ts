@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { hostname } from 'node:os'
 import { performance } from 'node:perf_hooks'
 import type { PrismaClient } from '@prisma/client'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { logger } from '../utils/logger.js'
 
 /**
@@ -29,6 +30,14 @@ export function runWork<T>(kind: string, fn: () => T): T {
  *  undefined clears it. */
 export function enterWork(kind: string | undefined): void {
   work.enterWith(kind as string)
+}
+
+const httpKind = (request: FastifyRequest) => `http ${request.method} ${request.routeOptions.url ?? 'unrouted'}`
+
+/** Names every request by its route pattern, for the hooks and handler that follow. Register it before any hook that
+ *  reads the database (rate limit, sign-in). */
+export function registerWorkContext(app: FastifyInstance): void {
+  app.addHook('onRequest', (request, _reply, done) => runWork(httpKind(request), done))
 }
 
 /* ---------- filter shapes ---------- */

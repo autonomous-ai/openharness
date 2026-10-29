@@ -1,5 +1,6 @@
+import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createQueryStats, enterWork, filterShape, runWork, workKind, type QueryStatsOptions } from './queryStats.js'
+import { createQueryStats, enterWork, filterShape, registerWorkContext, runWork, workKind, type QueryStatsOptions } from './queryStats.js'
 
 type Logged = { message: string; context: Record<string, unknown> }
 
@@ -167,5 +168,29 @@ describe('work context', () => {
       enterWork('manager-ws up')
       void Promise.resolve().then(() => { expect(workKind()).toBe('manager-ws up'); resolve() })
     }))
+  })
+})
+
+describe('HTTP work context', () => {
+  it('names a request by its route pattern in later hooks and in the handler, a JSON body included', async () => {
+    const app = Fastify()
+    registerWorkContext(app)
+    const seen: string[] = []
+    // Like the rate limit and sign-in: hooks added after it, which read the database too.
+    app.addHook('onRequest', async () => { await new Promise(resolve => setTimeout(resolve, 1)); seen.push(`hook ${workKind()}`) })
+    app.get('/api/items/:id', async () => { await new Promise(resolve => setImmediate(resolve)); seen.push(workKind()); return {} })
+    app.post('/api/items', async request => { await Promise.resolve(); seen.push(`${workKind()} ${(request.body as { n: number }).n}`); return {} })
+    await app.inject({ method: 'GET', url: '/api/items/alice-1' })
+    // A body big enough to arrive in more than one chunk.
+    await app.inject({ method: 'POST', url: '/api/items', payload: { n: 2, pad: 'x'.repeat(256 * 1024) } })
+    expect(seen).toEqual(['hook http GET /api/items/:id', 'http GET /api/items/:id', 'hook http POST /api/items', 'http POST /api/items 2'])
+    // A real socket, where the body's chunks arrive on the connection's own callbacks after the hooks ran.
+    seen.length = 0
+    const url = await app.listen({ port: 0, host: '127.0.0.1' })
+    const sent = await fetch(`${url}/api/items`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ n: 3, pad: 'x'.repeat(256 * 1024) }) })
+    expect(sent.status).toBe(200)
+    expect(seen).toEqual(['hook http POST /api/items', 'http POST /api/items 3'])
+    expect(workKind()).toBe('background')
+    await app.close()
   })
 })

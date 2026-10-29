@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { afterEach, expect, it } from 'vitest'
 import { frameKind, markCpuKind, selfProfileFromEnv, startSelfProfile, topSelfTime } from './selfProfile.js'
+import { enterWork, workKind } from './queryStats.js'
 
 let stop = () => {}
 afterEach(() => stop())
@@ -74,4 +75,13 @@ it('names HTTP requests when CPU_SELF_PROFILE=1, and adds no request hook when i
   const off = await served({}, '/api/off')
   expect(off.started).toBe(false)
   expect(off.kinds).not.toContain('http GET /api/off')
+})
+
+it('names the work for the query stats too, with the profile off', async () => {
+  const seen = await new Promise<string>(resolve => setImmediate(() => {
+    markCpuKind('web-ws swarm_changes')
+    void Promise.resolve().then(() => resolve(workKind()))
+  }))
+  expect(seen).toBe('web-ws swarm_changes')
+  enterWork(undefined)
 })
