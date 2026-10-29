@@ -80,16 +80,26 @@ function unwrap(node: ts.Expression): ts.Expression {
 
 type Binding = ts.VariableDeclaration | ts.BindingElement | ts.ParameterDeclaration
 
-/** The nearest declaration of `name` (a `const`/`let`, a destructured name or a parameter) before `at` in a scope that holds `at`. */
+/** A node that scopes the `const`/`let`/parameters declared directly in it. */
+const scopes = (node: ts.Node): boolean => ts.isSourceFile(node) || ts.isBlock(node) || ts.isModuleBlock(node) || ts.isCaseBlock(node)
+  || ts.isCatchClause(node) || ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node) || ts.isFunctionLike(node)
+  || ts.isClassLike(node)
+
+/**
+ * The nearest declaration of `name` (a `const`/`let`, a destructured name or a parameter) before `at` whose scope encloses
+ * `at`: the scopes holding `at` are searched from the innermost out, each for its own declarations only, so a declaration
+ * in a sibling block or a nested function never shadows the one in force at `at`.
+ */
 function declaration(name: string, at: ts.Node): Binding | undefined {
   for (let scope: ts.Node | undefined = at.parent; scope; scope = scope.parent) {
+    if (!scopes(scope)) continue
     let found: Binding | undefined
     const visit = (node: ts.Node) => {
       if (node.pos > at.pos) return
       if ((ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isParameter(node)) && ts.isIdentifier(node.name) && node.name.text === name
         && node.end <= at.pos) found = node
-      // A nested function's own declarations are not in scope here.
-      if (node !== scope && (ts.isFunctionLike(node) || ts.isClassLike(node))) return
+      // An inner scope's declarations are not in force here (an inner scope holding `at` was searched already).
+      if (scopes(node)) return
       ts.forEachChild(node, visit)
     }
     ts.forEachChild(scope, visit)
@@ -220,6 +230,27 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
       ['swarmGroup.findMany', 'in'], ['swarmGroup.count', 'has'], ['superTabDelivery.updateMany', 'in'], ['swarmMember.findMany', 'in'],
       ['superTabRun.findMany', 'in'], ['part.deleteMany', 'in'], ['superTabConfiguration.findMany', 'in'], ['superTabRoleText.findMany', 'in'],
       ['swarmAgent.findFirst', 'in']])
+  })
+
+  it('resolves a name to the declaration in force at the call, not one in a sibling block or nested function', () => {
+    const found = hotFilters('fixture.ts', `
+      const groups = db.swarmGroup
+      if (flag) { const groups = db.machine }
+      await groups.findMany({ where: { key: { in: ids } } })
+      const ids2 = { in: ids }
+      for (const x of xs) { const ids2 = {} }
+      const run = () => { const groups = db.machine; return groups }
+      await groups.count({ where: { key: ids2 } })
+      if (flag) {
+        const groups = db.machine
+        await groups.findMany({ where: { machineId: { in: ids } } })
+      }
+      function inner(groups: Prisma.MachineDelegate) { return groups.findMany({ where: { machineId: { in: ids } } }) }
+      const outer = db.machine
+      { const outer = db.superTabMessage; await outer.findMany({ where: { id: { in: ids } } }) }
+      await outer.findMany({ where: { id: { in: ids } } })
+    `)
+    expect(found.map(f => [f.call, f.operator])).toEqual([['swarmGroup.findMany', 'in'], ['swarmGroup.count', 'in'], ['superTabMessage.findMany', 'in']])
   })
 
   it('covers every SuperTab and Swarm model in the schema', () => {
