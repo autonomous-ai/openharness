@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import type { PrismaClient } from '@prisma/client'
 import type { AuthUser } from '../src/lib/ssoAuth.js'
 import { SuperTabStore } from '../src/superTabs/store.js'
-import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
+import { listGroupIndexes, NAMED_INDEX, retryStaleIndex } from '../src/superTabs/parts/indexed.js'
+import { logger } from '../src/utils/logger.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { SwarmWorkspaces } from '../src/superTabs/workspaceStore.js'
 import { agentOpenDeliveries } from '../src/superTabs/pageReads.js'
@@ -245,5 +246,93 @@ describe('a conversation\'s page of messages', () => {
     const page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` })
     const prisma = await db.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: page.messages.map(m => m.id) } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }] })
     expect(page.messages.map(({ reactions: _r, deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
+  })
+})
+
+describe('who a named read answers', () => {
+  it('a Swarm list leaves out a Swarm the person was removed from, and one of another environment', async () => {
+    const me = await signedIn('removed')
+    const kept = (await store.create(me, randomUUID(), 'Kept')).id, left = (await store.create(me, randomUUID(), 'Left')).id
+    // Their removal as parts/commit.ts writes it: memberIds no longer holds them.
+    await db.superTab.update({ where: { id: left }, data: { memberIds: { set: [owner.sub] } } })
+    await swarmRow(owner.sub, { memberIds: [me.sub], autonomousEnv: 'dev' })
+    expect((await new SwarmReads(store, { now: () => NOW }).list(me)).tabs.map(t => t.id)).toEqual([kept])
+    expect((await store.list(me)).tabs.map(t => t.id)).toEqual([kept])
+  })
+
+  it('an agent id reused in another Swarm reads only this Swarm\'s deliveries', async () => {
+    const [here, there] = [`tab-${randomUUID()}`, `tab-${randomUUID()}`]
+    const row = (tabId: string) => ({ id: `${tabId}-d`, tabId, conversationId: 'c', messageId: `${tabId}-m`, agentId: 'same-agent', machineId: 'm',
+      membershipGeneration: 'g', authorKind: 'person', authorId: owner.sub, authorGeneration: 'g', status: 'queued' })
+    await db.superTabDelivery.createMany({ data: [row(here), row(there)] })
+    expect((await agentOpenDeliveries(db, here, 'same-agent')).map(d => d.id)).toEqual([`${here}-d`])
+  })
+
+  it('a message id of another conversation or Swarm reads nothing', async () => {
+    const me = await signedIn('asker')
+    const tabId = (await store.create(me, randomUUID(), 'Asks')).id
+    const conversationId = (await db.swarmGroup.findFirstOrThrow({ where: { tabId, deleted: false } })).key
+    const author = { kind: 'person', id: me.sub, name: me.email, membershipGeneration: tabId }
+    await db.superTabMessage.createMany({ data: [
+      { id: `${tabId}-mine`, tabId, conversationId, sequence: 1, text: 'mine', author, recipientIds: [], mentions: [] },
+      { id: `${tabId}-other`, tabId, conversationId: 'another-conversation', sequence: 1, text: 'other', author, recipientIds: [], mentions: [] },
+      { id: 'elsewhere', tabId: 'another-swarm', conversationId, sequence: 1, text: 'elsewhere', author, recipientIds: [], mentions: [] },
+    ] })
+    expect((await store.messages(me, tabId, conversationId, { messageId: `${tabId}-mine` })).messages.map(m => m.text)).toEqual(['mine'])
+    for (const messageId of [`${tabId}-other`, 'elsewhere']) {
+      expect((await store.messages(me, tabId, conversationId, { messageId })).messages).toEqual([])
+    }
+  })
+})
+
+describe('a named read whose index the database lacks', () => {
+  /** Drops `key` from `collection` around `run`, then builds it again under its old name. */
+  async function without<T>(collection: string, key: Record<string, number>, run: () => Promise<T>): Promise<T> {
+    const listed = await db.$runCommandRaw({ listIndexes: collection }) as unknown as { cursor: { firstBatch: Array<{ name: string; key: Record<string, number> }> } }
+    const name = listed.cursor.firstBatch.find(index => JSON.stringify(Object.keys(index.key)) === JSON.stringify(Object.keys(key)))!.name
+    await db.$runCommandRaw({ dropIndexes: collection, index: name })
+    try {
+      return await run()
+    } finally {
+      await db.$runCommandRaw({ createIndexes: collection, indexes: [{ key, name }] })
+      await listGroupIndexes(db)
+    }
+  }
+
+  it('reads without it once listed as missing, and says so', async () => {
+    const me = await signedIn('unindexed')
+    const tabId = (await store.create(me, randomUUID(), 'Unindexed')).id
+    const said = vi.spyOn(logger, 'error')
+    try {
+      await without('SuperTab', NAMED_INDEX.SuperTab.members, async () => {
+        await listGroupIndexes(db)
+        expect(said).toHaveBeenCalledWith(expect.stringContaining('SuperTab lacks indexes'), { missing: [NAMED_INDEX.SuperTab.members] })
+        expect((await store.list(me)).tabs.map(t => t.id)).toEqual([tabId])
+      })
+    } finally {
+      said.mockRestore()
+    }
+  })
+
+  it('removed after the last listing, a read outside a transaction and one inside both still answer', async () => {
+    const me = await signedIn('dropped')
+    const tabId = (await store.create(me, randomUUID(), 'Dropped')).id
+    await db.superTabDelivery.create({ data: { id: `${tabId}-d`, tabId, conversationId: 'c', messageId: `${tabId}-m`, agentId: 'a', machineId: 'm',
+      membershipGeneration: 'g', authorKind: 'person', authorId: me.sub, authorGeneration: 'g', status: 'queued' } })
+    await listGroupIndexes(db)
+    const said = vi.spyOn(logger, 'error')
+    try {
+      await without('SuperTab', NAMED_INDEX.SuperTab.members, async () => {
+        expect((await store.list(me)).tabs.map(t => t.id)).toEqual([tabId])
+      })
+      await listGroupIndexes(db)
+      await without('SuperTabDelivery', NAMED_INDEX.SuperTabDelivery.agentOpen, async () => {
+        // In a transaction the failed hint aborts it; its runner runs it again without hints.
+        expect((await retryStaleIndex(() => db.$transaction(tx => agentOpenDeliveries(tx, tabId, 'a')))).map(d => d.id)).toEqual([`${tabId}-d`])
+      })
+      expect(said).toHaveBeenCalledWith(expect.stringContaining('lacks an index'), expect.objectContaining({ collection: 'SuperTabDelivery' }))
+    } finally {
+      said.mockRestore()
+    }
   })
 })
