@@ -277,10 +277,12 @@ export class SwarmCards {
     const wanted = include.filter(cardId).slice(0, MAX_CARDS)
     const moved = wanted.join(',') !== this.include.join(',')
     this.include = wanted
-    const next = focus && cardId(focus.tabId) && cardId(focus.conversationId) ? { tabId: focus.tabId, conversationId: focus.conversationId } : null
+    const next = focus && cardId(focus.tabId) && cardId(focus.conversationId)
+      ? { tabId: focus.tabId, conversationId: focus.conversationId, ...(focus.fromDevice === true ? { fromDevice: true as const } : {}) } : null
     const refocused = `${next?.tabId}/${next?.conversationId}` !== `${this.focus?.tabId}/${this.focus?.conversationId}`
     this.focus = next
-    if (refocused) this.sides.clear()
+    // The desktop's own move clears the dial's side; the move a dial's pick caused is the dial's, and keeps it.
+    if (refocused && !next?.fromDevice) this.sides.clear()
     if (this.timer) {
       if (refocused && this.live) { this.emit(); void this.pushOpen() }
       if (moved) void this.tick()

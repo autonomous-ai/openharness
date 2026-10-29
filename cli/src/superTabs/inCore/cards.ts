@@ -129,7 +129,7 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
   let last: SwarmCard[] | null = null
   /** Whether any capable device wants cards, the Swarms to read first, and the conversation the window has open in a Swarm tab. */
   let wanted = false, include: string[] = []
-  let focus: { tabId: string; conversationId: string } | null = null
+  let focus: { tabId: string; conversationId: string; fromDevice?: true } | null = null
   const route = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     try {
       const answer = await request?.(payload)
@@ -143,8 +143,10 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
     want(on: boolean, swarms: unknown, open?: unknown): void {
       const next = on && Array.isArray(swarms) ? [...new Set(swarms.filter(id))].slice(0, MAX_CARDS) : []
       const asked = object(open)
-      const nextFocus = on && id(asked.tabId) && id(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
-      if (on === wanted && next.join(',') === include.join(',') && `${nextFocus?.tabId}/${nextFocus?.conversationId}` === `${focus?.tabId}/${focus?.conversationId}`) return
+      const nextFocus = on && id(asked.tabId) && id(asked.conversationId)
+        ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
+      const key = (f: typeof focus) => `${f?.tabId}/${f?.conversationId}/${f?.fromDevice === true}`
+      if (on === wanted && next.join(',') === include.join(',') && key(nextFocus) === key(focus)) return
       wanted = on
       include = next
       focus = nextFocus

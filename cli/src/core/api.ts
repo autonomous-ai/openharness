@@ -1262,7 +1262,9 @@ export type CardChat = boolean | 'buddy'
  *  refused by the backend with its code and message, which must never become a terminal turn instead. */
 export type SaidOnCard = { said: true } | { said: false; refused?: { code: string; message: string } }
 /** The conversation the window has open in a Swarm tab. */
-export interface CardFocus { tabId: string; conversationId: string }
+/** `fromDevice`: the window moved there because a device picked it (a dial's swipe to the next project), so the move is
+ *  that device's own and keeps the side it keeps (spec 2026-10-29-round-dial-pm-buddy, newest wins). */
+export interface CardFocus { tabId: string; conversationId: string; fromDevice?: true }
 
 /** The Super Tab service's door into the core (superTabs/inCore/attention.ts): the waits of its members here. */
 export interface SuperTabsCore {

@@ -239,6 +239,11 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
       cards.want(true, ['t1'], bad)
       expect(request.mock.calls).toEqual([[{ action: 'cardsWanted', on: true, include: ['t1'] }]])
     }
+    // A focus the device's own pick caused says so, as a change of its own; anything but true is not that.
+    cards.want(true, ['t1'], { ...focus, fromDevice: true })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus: { ...focus, fromDevice: true } })
+    cards.want(true, ['t1'], { ...focus, fromDevice: 1 })
+    expect(request).toHaveBeenLastCalledWith({ action: 'cardsWanted', on: true, include: ['t1'], focus })
     // The devices gone take the focus with them.
     cards.want(true, ['t1'], focus)
     cards.devicesGone()

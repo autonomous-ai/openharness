@@ -414,7 +414,8 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           if (payload.action === 'cardsWanted') {
             const include = Array.isArray(payload.include) ? payload.include.filter(cardId) : []
             const asked = payload.focus && typeof payload.focus === 'object' ? payload.focus as Record<string, unknown> : {}
-            const focus = cardId(asked.tabId) && cardId(asked.conversationId) ? { tabId: asked.tabId, conversationId: asked.conversationId } : null
+            const focus = cardId(asked.tabId) && cardId(asked.conversationId)
+              ? { tabId: asked.tabId, conversationId: asked.conversationId, ...(asked.fromDevice === true ? { fromDevice: true as const } : {}) } : null
             cards().want(payload.on === true, include, focus)
             return { ok: true }
           }
