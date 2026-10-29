@@ -258,11 +258,11 @@ describe('route decision list', () => {
     expect(rows.find(row => row.id === 'A-d1800')).toEqual({ id: 'A-d1800', tabId: 'A', conversationId: 'g000',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 1800' },
       final: { kind: 'new', startId: 's1800' }, override: { by: 'lead', candidateId: 'c1' }, assignmentId: 'as1800', outcome: 'done',
-      outcomeAt: new Date(T0 + 1_800_500), run: null, createdAt: new Date(T0 + 1_800_000) })
+      outcomeAt: new Date(T0 + 1_800_500), run: null, evidence: null, createdAt: new Date(T0 + 1_800_000) })
     // Written as an older record: none of the optional fields exist.
     expect(rows.find(row => row.id === 'A-d0721')).toEqual({ id: 'A-d0721', tabId: 'A', conversationId: 'g001',
       record: { difficulty: 'medium', candidates: [{ id: 'c0', p: 0.42, slots: 3, title: 'Claude opus high' }, { id: 'c1', p: null, slots: 0 }], why: 'route 721' },
-      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, createdAt: new Date(T0 + 721_000) })
+      final: null, override: null, assignmentId: null, outcome: null, outcomeAt: null, run: null, evidence: null, createdAt: new Date(T0 + 721_000) })
     expect(await recentDecisions(db, 'A', GROUPS)).toEqual(await prismaRead('A', GROUPS))
     expect(await recentDecisions(db, 'A', ['g007', 'g300'])).toEqual(await prismaRead('A', ['g007', 'g300']))
     expect(await recentDecisions(db, 'B', [])).toEqual([])
