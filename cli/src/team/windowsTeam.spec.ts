@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   WINDOWS_GH_BUILDS, parseWindowsAccountExists, parseWindowsJobState, runWindowsPrivacyCheck, windowsAccountExistsScript, windowsGroupSids,
-  windowsJobStateScript, windowsOwnerSidScript, windowsPrivacyProbes, windowsRelayAclCommand, windowsUnzipScript, windowsUserSid, type WindowsPrivacyDeps,
+  takeWindowsHandoffFile, windowsJobStateScript, windowsOwnerSidScript, windowsPrivacyProbes, windowsRelayAclCommand, windowsStartTaskScript,
+  windowsUnzipScript, windowsUserSid, writeWindowsHandoff, type WindowsPrivacyDeps,
 } from './windowsTeam.js'
 
 const config = { ownerHome: 'C:\\Users\\DELL', sentinel: 'C:\\Users\\DELL\\.harness-team-privacy' }
@@ -59,6 +60,54 @@ describe('runWindowsPrivacyCheck', () => {
 
   it('fails for an administrator, deny-only or not', () => {
     expect(runWindowsPrivacyCheck(config, deps({ groupSids: () => ['S-1-5-32-544'] }))).toMatchObject({ passed: false, item: 'standard-user' })
+  })
+})
+
+describe('the sign-in hand-over on Windows', () => {
+  const CODE = `hnh_${'c'.repeat(43)}`
+  const FILE = 'C:\\ProgramData\\Harness\\Team\\handoff\\team-handoff'
+  const entry = (kind: 'file' | 'dir' | 'link', size = 10) => ({
+    isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link', size,
+  })
+  const missing = () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  function memoryFs(files: Record<string, ReturnType<typeof entry>>, text: Record<string, string> = {}) {
+    const written: Record<string, string> = {}
+    const unlinked: string[] = []
+    return {
+      written, unlinked,
+      fs: {
+        lstat: (path: string) => files[path] ?? missing(),
+        write: (path: string, value: string) => { written[path] = value },
+        read: (path: string) => text[path] ?? '',
+        unlink: (path: string) => { unlinked.push(path) },
+      },
+    }
+  }
+
+  it('the owner writes the code into the handover folder, never through a link', () => {
+    const ok = memoryFs({ 'C:\\ProgramData\\Harness\\Team\\handoff': entry('dir') })
+    writeWindowsHandoff(CODE, FILE, ok.fs)
+    expect(ok.written).toEqual({ [FILE]: `${CODE}\n` })
+    expect(() => writeWindowsHandoff(CODE, FILE, memoryFs({ 'C:\\ProgramData\\Harness\\Team\\handoff': entry('link') }).fs)).toThrow(/not a plain folder/)
+    expect(() => writeWindowsHandoff(CODE, FILE, memoryFs({ 'C:\\ProgramData\\Harness\\Team\\handoff': entry('dir'), [FILE]: entry('link') }).fs)).toThrow(/not a plain file/)
+    expect(() => writeWindowsHandoff('not a code!', FILE, ok.fs)).toThrow()
+  })
+
+  it('the team account reads it once and deletes it, and refuses anything but a plain file holding a code', () => {
+    const ok = memoryFs({ [FILE]: entry('file') }, { [FILE]: `${CODE}\r\n` })
+    expect(takeWindowsHandoffFile(FILE, ok.fs)).toBe(CODE)
+    expect(ok.unlinked).toEqual([FILE])
+    expect(takeWindowsHandoffFile(FILE, memoryFs({}).fs)).toBeNull()
+    const link = memoryFs({ [FILE]: entry('link') }, { [FILE]: CODE })
+    expect(() => takeWindowsHandoffFile(FILE, link.fs)).toThrow(/not a plain file/)
+    expect(link.unlinked).toEqual([FILE])
+    expect(() => takeWindowsHandoffFile(FILE, memoryFs({ [FILE]: entry('file', 9999) }).fs)).toThrow(/not a plain file/)
+    expect(() => takeWindowsHandoffFile(FILE, memoryFs({ [FILE]: entry('file') }, { [FILE]: 'x' }).fs)).toThrow(/did not hold a sign-in code/)
+  })
+
+  it('starts the task by its path and name, given as inputs', () => {
+    expect(windowsStartTaskScript()).toEqual({ script: 'Start-ScheduledTask -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME',
+      inputs: { HARNESS_TASK_PATH: '\\Harness\\', HARNESS_TASK_NAME: 'Harness Team' } })
   })
 })
 

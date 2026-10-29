@@ -5,16 +5,16 @@
  */
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import type { RemoveScriptInput, SetupScriptInput, TeamPlistInput } from './script.js'
+import type { RemoveScriptInput, TeamPlistInput } from './script.js'
 import {
   WINDOWS_REMOVE_REFUSED, WINDOWS_STAGED, buildWindowsRemoveScript, buildWindowsSetupScript, ps, teamTaskXml, windowsTeamCopyScript,
-  windowsTeamEnginesScript,
+  windowsTeamEnginesScript, type WindowsSetupScriptInput,
 } from './windowsScript.js'
 
 const OWNER_HOME = 'C:\\Users\\owner-placeholder'
 const OWNER_SID = 'S-1-5-21-1111111111-2222222222-3333333333-1001'
 const NODE_DIR = `${OWNER_HOME}\\.harness\\runtime\\node-v22.23.2-win32-x64`
-const input = (over: Partial<SetupScriptInput & { ownerSid: string }> = {}): SetupScriptInput & { ownerSid: string } => ({
+const input = (over: Partial<WindowsSetupScriptInput> = {}): WindowsSetupScriptInput => ({
   user: 'harnessteam', realName: 'Harness Team', home: 'C:\\Users\\harnessteam', owner: 'owner-placeholder', ownerHome: OWNER_HOME,
   ownerSid: OWNER_SID, stageDir: `${OWNER_HOME}\\AppData\\Local\\Temp\\harness-team-x1`, nodeRuntimeDir: NODE_DIR, tmuxRuntimeDir: null,
   cliDir: `${OWNER_HOME}\\.harness\\cli\\0.4.97`, ownerNode: `${NODE_DIR}\\node.exe`, ownerCli: `${OWNER_HOME}\\.harness\\cli\\0.4.97\\cli.js`,
@@ -220,6 +220,19 @@ describe('the scripts the team account runs itself', () => {
     expect(script).toContain('current-node')
     expect(script).toContain('harness.cmd')
     expect(script).toContain('if (-not (Test-Path -LiteralPath $target))')
+    expect(script).toContain("$PtyName = ''")
+  })
+
+  it('lays the owner\'s terminal host down for the account, which has no installer, keeping a version already there', () => {
+    const script = windowsTeamCopyScript({ home: 'C:\\Users\\harnessteam', nodeName: 'node-v22.23.2-win32-x64', ptyName: '0.2.4' })
+    expect(script).toContain("$PtyName = '0.2.4'")
+    expect(script).toContain('if (-not (Test-Path -LiteralPath $ptyTarget)) {')
+    expect(script).toContain("-Destination (Join-Path $ptyRoot 'current-pty') -Force")
+    const setup = buildWindowsSetupScript(input({ ptyDir: `${OWNER_HOME}\\.harness\\runtime\\pty\\0.2.4` }))
+    expect(setup).toContain(`$PTY_SRC = '${OWNER_HOME}\\.harness\\runtime\\pty\\0.2.4'`)
+    expect(setup).toContain("Copy-Plain $PTY_SRC (Join-Path $RT 'pty')")
+    expect(setup).toContain("$PtyName = '0.2.4'")
+    expect(buildWindowsSetupScript(input())).toContain("$PTY_SRC = ''")
   })
 
   it('installs Claude Code and Codex with its own npm under its own home, and never fails setup', () => {
@@ -265,6 +278,11 @@ describe('the team daemon\'s task', () => {
 
   it('lets every signed-in account read the task, so a standard owner\'s status sees it', () => {
     expect(teamTaskXml(task())).toContain('<SecurityDescriptor>D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;AU)</SecurityDescriptor>')
+    // And its owner start it, after the sign-in is handed over: without elevation even an administrator's token holds
+    // Administrators as deny-only, so the owner is named.
+    expect(teamTaskXml({ ...task(), ownerSid: 'S-1-5-21-1-2-3-1001' }))
+      .toContain('<SecurityDescriptor>D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;AU)(A;;FRFX;;;S-1-5-21-1-2-3-1001)</SecurityDescriptor>')
+    expect(() => teamTaskXml({ ...task(), ownerSid: 'S-1-5-21-1)(A;;FA;;;WD' })).toThrow()
   })
 
   it('refuses a port the owner\'s daemon uses, and a value cmd.exe would expand or split', () => {

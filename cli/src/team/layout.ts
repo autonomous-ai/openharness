@@ -9,7 +9,7 @@
  * security tools and careful engineers treat as malware, and anyone auditing the Mac should find it at a glance.
  * macOS lists an account only when it has a password, so it gets a random one that nobody knows (./script.ts).
  */
-import { isAbsolute, normalize } from 'node:path'
+import { isAbsolute, normalize, win32 } from 'node:path'
 
 export const TEAM_USER = 'harnessteam'
 export const TEAM_REAL_NAME = 'Harness Team'
@@ -165,18 +165,41 @@ export function checkPath(path: string, what = 'path'): string {
   return path
 }
 
+/** MAX_PATH less the terminating NUL: the longest path every Windows API takes without the `\\?\` prefix. */
+const MAX_PATH = 259
+
 /**
  * A Windows absolute path of plain characters (`X:\…`), for a script run elevated: no UNC share, no `\\?\` or `\\.\`
- * form, no forward slash, no quote, and no segment that is empty, `.` or `..`. A segment may not end in a dot or a space
- * either: Windows drops them, so the name would mean another one.
+ * form, no forward slash, no quote, nothing cmd.exe expands or splits on (`%`, `!`, `&`…: the team task's actions run
+ * through it), normalized, and no segment that is empty, `.` or `..`. A segment may not end in a dot or a space either:
+ * Windows drops them, so the name would mean another one.
  */
 export function checkWindowsPath(path: string, what = 'path'): string {
   const segments = path.slice(3).split('\\')
-  if (!WINDOWS_PATH.test(path) || (path.length > 3 && segments.some((s) => s === '' || s.endsWith('.') || s.endsWith(' ')))) {
+  if (!WINDOWS_PATH.test(path) || path.length > MAX_PATH || win32.normalize(path) !== path
+    || (path.length > 3 && segments.some((s) => s === '' || s === '.' || s === '..' || s.endsWith('.') || s.endsWith(' ')))) {
     throw new TeamInputError(`the ${what} must be a plain absolute Windows path: ${JSON.stringify(path)}`)
   }
   return path
 }
+
+/** A local Windows account's name as Windows takes it (20 characters at most), in plain characters, never `DOMAIN\`. */
+const WINDOWS_USER = /^[A-Za-z0-9_.-](?:[A-Za-z0-9_. -]{0,18}[A-Za-z0-9_-])?$/
+export function checkWindowsUser(user: string, what = 'account'): string {
+  if (!WINDOWS_USER.test(user)) throw new TeamInputError(`not a usable ${what} name: ${JSON.stringify(user)}`)
+  return user
+}
+
+const SID_PATTERN = /^S-1-\d+(-\d+)+$/
+/** A security identifier in its `S-1-…` string form. */
+export function checkSid(sid: string, what = 'account'): string {
+  if (!SID_PATTERN.test(sid)) throw new TeamInputError(`the ${what} is not a SID: ${JSON.stringify(sid)}`)
+  return sid
+}
+
+/** This platform's checks of a path and of an account name: Windows' on Windows, the POSIX ones elsewhere. */
+export const pathCheck = (platform: NodeJS.Platform) => platform === 'win32' ? checkWindowsPath : checkPath
+export const userCheck = (platform: NodeJS.Platform) => platform === 'win32' ? checkWindowsUser : checkUser
 
 /** One path segment (a runtime folder's name). */
 export function checkName(name: string, what = 'name'): string {

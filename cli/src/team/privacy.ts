@@ -15,9 +15,11 @@ import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, 
 import { dirname } from 'node:path'
 import type { TeamConfig } from './config.js'
 import type { TeamEngines } from './engines.js'
+import { WHOAMI_GROUPS_ARGS, runWindowsPrivacyCheck, windowsGroupSids } from './windowsTeam.js'
 
 export type PrivacyItem =
-  | 'sentinel' | 'home-listing' | 'gitconfig' | 'ssh' | 'projects' | 'keychain' | 'chrome' | 'safari' | 'firefox' | 'standard-user'
+  | 'sentinel' | 'home-listing' | 'gitconfig' | 'ssh' | 'projects' | 'keychain' | 'chrome' | 'safari' | 'firefox' | 'credentials' | 'edge'
+  | 'standard-user'
 
 export type PrivacyResult =
   | { passed: true; checkedAt: number }
@@ -67,6 +69,8 @@ export interface PrivacyDeps {
   platform?: NodeJS.Platform
   /** Linux: the ids of the groups whose members may become root (sudo, wheel, admin), which differ by distribution. */
   adminGids?(): number[]
+  /** Windows: every group SID of this process's token, a deny-only Administrators included (./windowsTeam.ts). */
+  groupSids?(): string[]
 }
 
 /** The administrator groups Linux distributions use: sudo (Debian, Ubuntu), wheel (Fedora, Arch), admin (older Ubuntu). */
@@ -86,6 +90,7 @@ export const realPrivacyDeps: PrivacyDeps = {
   platform: process.platform,
   // Through NSS, as the system itself looks groups up. getent exits 2 when one of them is missing, and prints the others.
   adminGids: () => adminGroupIds(spawnSync('getent', ['group', ...LINUX_ADMIN_GROUPS], { encoding: 'utf8', timeout: 5_000 }).stdout ?? ''),
+  groupSids: () => windowsGroupSids(spawnSync('whoami', WHOAMI_GROUPS_ARGS, { encoding: 'utf8', timeout: 5_000, windowsHide: true }).stdout ?? ''),
 }
 
 /** The group macOS administrators are in. */
@@ -97,8 +102,11 @@ const refused = (error: unknown): boolean => {
 }
 
 export function runPrivacyCheck(config: Pick<TeamConfig, 'ownerHome' | 'sentinel'>, deps: PrivacyDeps = realPrivacyDeps): PrivacyResult {
-  const checkedAt = deps.now()
   const platform = deps.platform ?? 'darwin'
+  // Windows' places and rules (./windowsTeam.ts): every account may open a path it cannot list, so a missing place is
+  // skipped there, and administrators are told by SID.
+  if (platform === 'win32') return runWindowsPrivacyCheck(config, { open: deps.open, list: deps.list, groupSids: deps.groupSids ?? (() => []), now: deps.now })
+  const checkedAt = deps.now()
   for (const probe of privacyProbes(config, platform)) {
     for (const path of probe.paths) {
       try {
@@ -144,7 +152,8 @@ export function enginesOf(value: unknown): TeamEngines | undefined {
   return result
 }
 
-const ITEMS = new Set<string>(['sentinel', 'home-listing', 'gitconfig', 'ssh', 'projects', 'keychain', 'chrome', 'safari', 'firefox', 'standard-user', 'unchecked'])
+const ITEMS = new Set<string>(['sentinel', 'home-listing', 'gitconfig', 'ssh', 'projects', 'keychain', 'chrome', 'safari', 'firefox', 'credentials', 'edge',
+  'standard-user', 'unchecked'])
 
 function privacyOf(value: unknown): PrivacyResult | undefined {
   if (!value || typeof value !== 'object') return undefined

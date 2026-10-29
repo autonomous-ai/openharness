@@ -7,8 +7,7 @@
  * setup made sits under `C:\ProgramData\Harness`: Administrators' and SYSTEM's, readable by every account, so a process
  * in the team account cannot point its own privacy check somewhere else.
  */
-import { win32 } from 'node:path'
-import { TEAM_USER, TeamInputError } from './layout.js'
+import { TEAM_USER } from './layout.js'
 
 export const WINDOWS_TEAM_HOME = `C:\\Users\\${TEAM_USER}`
 export const WINDOWS_TEAM_SHARED_DIR = 'C:\\ProgramData\\Harness'
@@ -64,39 +63,5 @@ export function windowsTeamPaths(home: string = WINDOWS_TEAM_HOME) {
   }
 }
 
-// Plain characters only. No `%` or `!` (cmd.exe expands them even inside quotes, and the task's actions run through it),
-// no quote of any kind, no `&|<>^()`: every path also goes into the task's cmd.exe line.
-const PLAIN_SEGMENT = /^[A-Za-z0-9._@+ -]+$/
-const WINDOWS_USER = /^[A-Za-z0-9_.-](?:[A-Za-z0-9_. -]{0,18}[A-Za-z0-9_-])?$/
-const SID_PATTERN = /^S-1-\d+(-\d+)+$/
-/** MAX_PATH less the terminating NUL: the longest path every Windows API takes without the `\\?\` prefix. */
-const MAX_PATH = 259
-
-/**
- * An absolute `X:\…` path of plain characters, normalized: no `..` or `.`, no UNC (`\\server\share`), no device or
- * long-path prefix (`\\?\`, `\\.\`), no `'`, and no segment ending in a dot or a space, which Windows drops, so that
- * two spellings would name one file.
- */
-export function checkWindowsPath(path: string, what = 'path'): string {
-  const bad = () => new TeamInputError(`the ${what} must be a plain absolute Windows path: ${JSON.stringify(path)}`)
-  const drive = path.charCodeAt(0) | 0x20
-  if (path.length < 3 || path.length > MAX_PATH || drive < 0x61 || drive > 0x7a || path[1] !== ':' || path[2] !== '\\') throw bad()
-  if (!win32.isAbsolute(path) || win32.normalize(path) !== path) throw bad()
-  if (path.length === 3) return path
-  for (const segment of path.slice(3).split('\\')) {
-    if (!PLAIN_SEGMENT.test(segment) || segment === '.' || segment === '..' || segment.endsWith('.') || segment.endsWith(' ')) throw bad()
-  }
-  return path
-}
-
-/** A local account's name as Windows takes it (20 characters at most), in plain characters, never a `DOMAIN\` one. */
-export function checkWindowsUser(user: string, what = 'account'): string {
-  if (!WINDOWS_USER.test(user)) throw new TeamInputError(`not a usable ${what} name: ${JSON.stringify(user)}`)
-  return user
-}
-
-/** A security identifier in its `S-1-…` string form. */
-export function checkSid(sid: string, what = 'account'): string {
-  if (!SID_PATTERN.test(sid)) throw new TeamInputError(`the ${what} is not a SID: ${JSON.stringify(sid)}`)
-  return sid
-}
+// The checks live in ./layout.ts, beside the POSIX ones: one checkWindowsPath for every caller.
+export { checkSid, checkWindowsPath, checkWindowsUser } from './layout.js'

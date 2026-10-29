@@ -172,9 +172,10 @@ const leaf = (path: string): string => path.slice(path.lastIndexOf('\\') + 1)
  * and a teammate's agent may be running its node.exe, which Windows would not let anyone replace. It runs from the stage
  * folder, whose name is made at run time: the folder it is in is the stage.
  */
-export function windowsTeamCopyScript(input: { home: string; nodeName: string }): string {
+export function windowsTeamCopyScript(input: { home: string; nodeName: string; ptyName?: string | null }): string {
   const home = checkWindowsPath(input.home, 'team home')
   const nodeName = checkName(input.nodeName, 'Node runtime folder')
+  const ptyName = input.ptyName ? checkName(input.ptyName, 'terminal host version') : ''
   return [
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
@@ -202,6 +203,23 @@ export function windowsTeamCopyScript(input: { home: string; nodeName: string })
     '    Copy-Item -LiteralPath $from -Destination (Join-Path $cli ".$f.next") -Force',
     '    Move-Item -LiteralPath (Join-Path $cli ".$f.next") -Destination (Join-Path $cli $f) -Force',
     '  }',
+    '}',
+    // The terminal host every agent runs in (lib/ptyHost/launch.ts `ptyHostBinary`: `runtime\pty\<current-pty>`). Its
+    // updater replaces only a host that is there (lib/windows/ptyPayload.ts `ptyUpdateWanted`) and the account has no
+    // installer, so the owner's is laid down for it, as tmux is on a Mac; a version already there is kept, as the Node one.
+    `$PtyName = ${ps(ptyName)}`,
+    "if ($PtyName -and (Test-Path -LiteralPath (Join-Path $Stage 'pty'))) {",
+    "  $ptyRoot = Join-Path $rt 'pty'",
+    '  [void][IO.Directory]::CreateDirectory($ptyRoot)',
+    '  $ptyTarget = Join-Path $ptyRoot $PtyName',
+    '  if (-not (Test-Path -LiteralPath $ptyTarget)) {',
+    '    if (Test-Path -LiteralPath "$ptyTarget.next") { Remove-Item -LiteralPath "$ptyTarget.next" -Recurse -Force }',
+    "    Copy-Item -LiteralPath (Join-Path $Stage 'pty') -Destination \"$ptyTarget.next\" -Recurse",
+    '    Move-Item -LiteralPath "$ptyTarget.next" -Destination $ptyTarget',
+    '  }',
+    // The pointer as install.ps1 writes it: one line, the folder's name, CRLF, no byte order mark.
+    "  [IO.File]::WriteAllText((Join-Path $ptyRoot 'current-pty.next'), \"$PtyName`r`n\")",
+    "  Move-Item -LiteralPath (Join-Path $ptyRoot 'current-pty.next') -Destination (Join-Path $ptyRoot 'current-pty') -Force",
     '}',
     // The launcher the installer writes, so `harness` works in the team account's own terminals.
     "[IO.File]::WriteAllText((Join-Path $bin 'harness.cmd.next'), \"@`\"$node`\" `\"$(Join-Path $cli 'cli.js')`\" %*`r`n\")",
@@ -248,8 +266,9 @@ function hereString(text: string): string {
 }
 
 /** What the setup script takes beyond the macOS one's input: the owner's SID, read by the owner's own process before
- *  elevation, because UAC may run the script as another administrator. */
-export type WindowsSetupScriptInput = SetupScriptInput & { ownerSid: string }
+ *  elevation, because UAC may run the script as another administrator; and the owner's terminal host payload in use
+ *  (`runtime\pty\<version>`), copied for the team account, or null without one. */
+export type WindowsSetupScriptInput = SetupScriptInput & { ownerSid: string; ptyDir?: string | null }
 
 export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string {
   const user = checkWindowsUser(input.user, 'team account')
@@ -267,9 +286,11 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
   const nodeDir = checkWindowsPath(input.nodeRuntimeDir, 'Node runtime')
   const nodeName = checkName(leaf(nodeDir), 'Node runtime folder')
   const cliDir = checkWindowsPath(input.cliDir, 'installed CLI')
+  const ptyDir = input.ptyDir ? checkWindowsPath(input.ptyDir, 'terminal host') : null
+  const ptyName = ptyDir ? checkName(leaf(ptyDir), 'terminal host version') : null
   // Not used here: the owner's own process mints the sign-in code after this script (step 8), and the terminal host is
-  // the team daemon's own pty payload, not a tmux copy. mintEnv, ownerNode, ownerCli, signIn and tmuxRuntimeDir stay in
-  // the input so both platforms' builders take the same one.
+  // the pty payload copied below, not a tmux copy. mintEnv, ownerNode, ownerCli, signIn and tmuxRuntimeDir stay in the
+  // input so every platform's builder takes the same one.
   const lines = [
     '# Harness Team account setup (cli/src/team/windowsScript.ts), run once elevated behind User Account Control.',
     '# Running it again repairs what is there; `harness team remove` undoes it.',
@@ -284,6 +305,7 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     `$NODE_SRC = ${ps(nodeDir)}`,
     `$NODE_NAME = ${ps(nodeName)}`,
     `$CLI_SRC = ${ps(cliDir)}`,
+    `$PTY_SRC = ${ps(ptyDir ?? '')}`,
     `$SHARED = ${ps(WINDOWS_TEAM_SHARED_DIR)}`,
     `$SHARED_MARK = ${ps(WINDOWS_TEAM_SHARED_MARK)}`,
     `$CONFIG = ${ps(WINDOWS_TEAM_CONFIG_FILE)}`,
@@ -479,7 +501,8 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
     "Copy-Plain $NODE_SRC (Join-Path $RT 'node')",
     "[void][IO.Directory]::CreateDirectory((Join-Path $RT 'cli'))",
     "foreach ($f in @('cli.js', 'notify.mjs', 'package.json')) { $from = Join-Path $CLI_SRC $f; if (Test-Path -LiteralPath $from) { Copy-Plain $from (Join-Path $RT \"cli\\$f\") } }",
-    `$copyScript = ${hereString(windowsTeamCopyScript({ home, nodeName }))}`,
+    "if ($PTY_SRC -and (Test-Path -LiteralPath (Join-Path $PTY_SRC 'harness-pty.exe'))) { Copy-Plain $PTY_SRC (Join-Path $RT 'pty') }",
+    `$copyScript = ${hereString(windowsTeamCopyScript({ home, nodeName, ptyName }))}`,
     "[IO.File]::WriteAllText((Join-Path $RT 'copy.ps1'), $copyScript)",
     '$asScript = { param($file) "`"$POWERSHELL`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$file`"" }',
     "$copied = As-Team 'copy' (& $asScript (Join-Path $RT 'copy.ps1')) 15",
@@ -556,7 +579,11 @@ export function buildWindowsSetupScript(input: WindowsSetupScriptInput): string 
  * daemon's action loops itself: again ten seconds after a crash, and not after a clean exit, as launchd's KeepAlive
  * (`SuccessfulExit false`, `ThrottleInterval 10`) does on a Mac.
  */
-export function teamTaskXml(input: TeamPlistInput): string {
+export function teamTaskXml(input: TeamPlistInput & { ownerSid?: string }): string {
+  // Every signed-in account may read the task (the owner's `harness team status`, standard or not), and its owner start
+  // it, once the sign-in is handed over (./command.ts): unelevated, even an administrator holds Administrators as
+  // deny-only, so the owner is named by SID.
+  const runner = input.ownerSid ? `(A;;FRFX;;;${checkSid(input.ownerSid, 'owner account')})` : ''
   const user = checkWindowsUser(input.user, 'team account')
   const home = checkWindowsPath(input.home, 'team home')
   const node = checkWindowsPath(input.node, 'team Node')
@@ -585,7 +612,7 @@ export function teamTaskXml(input: TeamPlistInput): string {
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>${xml(`${input.label ?? 'Harness Team'}: the Harness Team account's daemon, as ${user}. Its log: ${paths.log}`)}</Description>
-    <SecurityDescriptor>D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;AU)</SecurityDescriptor>
+    <SecurityDescriptor>D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;AU)${runner}</SecurityDescriptor>
   </RegistrationInfo>
   <Triggers>
     <BootTrigger>

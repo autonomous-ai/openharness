@@ -6,13 +6,17 @@
  * A query is a short script and its inputs, for lib/windows/powershell.ts `runPowershell`: the inputs travel in
  * environment variables, never in the script's text.
  */
-import { closeSync, openSync, readdirSync } from 'node:fs'
+import { closeSync, lstatSync, openSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { win32 } from 'node:path'
 import type { JobState } from './command.js'
 import type { TeamConfig } from './config.js'
 import type { GhBuild } from './gh.js'
+import { TeamSignInError } from './handoff.js'
+import { HANDOFF_CODE } from './layout.js'
 import type { PrivacyItem } from './privacy.js'
-import { SID, WINDOWS_TEAM_TASK_NAME, WINDOWS_TEAM_TASK_PATH, checkSid, checkWindowsPath, checkWindowsUser } from './windowsLayout.js'
+import {
+  SID, WINDOWS_TEAM_HANDOFF_FILE, WINDOWS_TEAM_TASK_NAME, WINDOWS_TEAM_TASK_PATH, checkSid, checkWindowsPath, checkWindowsUser,
+} from './windowsLayout.js'
 
 export interface PowershellQuery { script: string; inputs: Record<string, string> }
 /** What lib/windows/powershell.ts `runPowershell` answers. */
@@ -20,7 +24,8 @@ export interface QueryResult { status: number | null; stdout: string; stderr: st
 
 // ── The privacy check ─────────────────────────────────────────────────────────────────────────
 
-export type WindowsPrivacyItem = PrivacyItem | 'credentials' | 'edge'
+/** The items a Windows check reports: ./privacy.ts lists credentials and edge with the others. */
+export type WindowsPrivacyItem = PrivacyItem
 
 export interface WindowsProbe {
   item: WindowsPrivacyItem
@@ -189,6 +194,69 @@ export function windowsUnzipScript(archive: string, into: string): PowershellQue
   return {
     script: 'Expand-Archive -LiteralPath $env:HARNESS_ARCHIVE -DestinationPath $env:HARNESS_INTO -Force',
     inputs: { HARNESS_ARCHIVE: checkWindowsPath(archive, 'gh archive'), HARNESS_INTO: checkWindowsPath(into, 'gh folder') },
+  }
+}
+
+// ── The sign-in hand-over ─────────────────────────────────────────────────────────────────────
+
+export interface WindowsHandoffFs {
+  lstat(path: string): { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean; size: number }
+  write(path: string, text: string): void
+  read(path: string): string
+  unlink(path: string): void
+}
+
+const realHandoffFs: WindowsHandoffFs = {
+  lstat: (path) => lstatSync(path),
+  // A new file, or the one the owner left before: the folder lets nobody else add one (./windowsScript.ts step 8).
+  write: (path, text) => writeFileSync(path, text),
+  read: (path) => readFileSync(path, 'utf8'),
+  unlink: (path) => unlinkSync(path),
+}
+
+/**
+ * The owner's side: the single-use code, into the handover folder setup made. Never through a link: the folder must be
+ * a plain one (Node reads a junction as a symbolic link), and the code a plain file in it.
+ */
+export function writeWindowsHandoff(code: string, file: string = WINDOWS_TEAM_HANDOFF_FILE, fs: WindowsHandoffFs = realHandoffFs): void {
+  if (!HANDOFF_CODE.test(code)) throw new Error('not a sign-in code')
+  const folder = fs.lstat(file.slice(0, file.lastIndexOf('\\')))
+  if (!folder.isDirectory() || folder.isSymbolicLink()) throw new Error('the sign-in handover folder is not a plain folder: run harness team setup again')
+  try {
+    const old = fs.lstat(file)
+    if (!old.isFile() || old.isSymbolicLink()) throw new Error('the sign-in handover file is not a plain file: run harness team setup again')
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  fs.write(file, `${code}\n`)
+}
+
+/**
+ * The team account's side (`team __start`): the code the owner left, read once and deleted, or null when there is none.
+ * Only the owner and administrators may add a file to the folder; one that is not a plain small file holding a code is
+ * deleted unread and refused, as ./handoff.ts `takeHandoffFile` refuses one on a Mac.
+ */
+export function takeWindowsHandoffFile(file: string, fs: WindowsHandoffFs = realHandoffFs): string | null {
+  let info: ReturnType<WindowsHandoffFs['lstat']>
+  try { info = fs.lstat(file) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw new TeamSignInError(`The team sign-in file could not be opened safely (${(error as NodeJS.ErrnoException).code ?? 'error'}).`, 'UNSAFE_FILE')
+  }
+  let text = ''
+  const safe = info.isFile() && !info.isSymbolicLink() && info.size <= 4096
+  try {
+    if (safe) text = fs.read(file).trim()
+  } finally {
+    try { fs.unlink(file) } catch { /* already gone */ }
+  }
+  if (!safe) throw new TeamSignInError('The team sign-in file was not a plain file; it was deleted unread.', 'UNSAFE_FILE')
+  if (!HANDOFF_CODE.test(text)) throw new TeamSignInError('The team sign-in file did not hold a sign-in code; it was deleted.', 'UNSAFE_FILE')
+  return text
+}
+
+/** Asks Task Scheduler to start the team daemon's task; prints nothing. Setup's task lets its owner start it. */
+export function windowsStartTaskScript(): PowershellQuery {
+  return {
+    script: 'Start-ScheduledTask -TaskPath $env:HARNESS_TASK_PATH -TaskName $env:HARNESS_TASK_NAME',
+    inputs: { HARNESS_TASK_PATH: WINDOWS_TEAM_TASK_PATH, HARNESS_TASK_NAME: WINDOWS_TEAM_TASK_NAME },
   }
 }
 

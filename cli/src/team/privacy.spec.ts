@@ -178,6 +178,38 @@ describe('team config', () => {
     expect(readTeamConfig('/x', () => JSON.stringify({ ...teamConfig, user: '' }))).toBeNull()
     expect(readTeamConfig('/x', () => JSON.stringify({ ...teamConfig, env: { BACKEND_WS_URL: 'javascript:x' } }))).toBeNull()
   })
+
+  it('on Windows, reads Windows names and paths and the owner\'s SID, which it requires', () => {
+    const windows: TeamConfig = {
+      ...teamConfig, home: 'C:\\Users\\harnessteam', owner: 'DELL', ownerSid: 'S-1-5-21-1-2-3-1001', ownerHome: 'C:\\Users\\DELL',
+      sentinel: 'C:\\Users\\DELL\\.harness-team-privacy', label: '\\Harness\\Harness Team', plist: 'C:\\Windows\\System32\\Tasks\\Harness\\Harness Team',
+      statusFile: 'C:\\ProgramData\\Harness\\Team\\status.json', node: 'C:\\Users\\harnessteam\\.harness\\runtime\\node-v1\\node.exe',
+      cli: 'C:\\Users\\harnessteam\\.harness\\cli\\cli.js',
+    }
+    expect(readTeamConfig('x', () => teamConfigJson(windows), 'win32')).toEqual(windows)
+    expect(readTeamConfig('x', () => teamConfigJson({ ...windows, ownerSid: undefined }), 'win32')).toBeNull()
+    expect(readTeamConfig('x', () => teamConfigJson({ ...windows, ownerHome: 'C:\\Users\\..\\Windows' }), 'win32')).toBeNull()
+    // A Mac's config never reads as a Windows one, nor the other way round.
+    expect(readTeamConfig('x', () => teamConfigJson(teamConfig), 'win32')).toBeNull()
+    expect(readTeamConfig('x', () => teamConfigJson(windows), 'darwin')).toBeNull()
+  })
+})
+
+describe('privacy check on Windows', () => {
+  it('tries the Windows places, skips one that is not there, and tells an administrator by SID', () => {
+    const tried: string[] = []
+    const winConfig = { ownerHome: 'C:\\Users\\DELL', sentinel: 'C:\\Users\\DELL\\.harness-team-privacy' }
+    const deps: PrivacyDeps = {
+      platform: 'win32', groups: () => [], now: () => 7, groupSids: () => ['S-1-5-32-545'],
+      open: (path) => { tried.push(path); throw errno(path.endsWith('.gitconfig') ? 'ENOENT' : 'EPERM') },
+      list: (path) => { tried.push(path); throw errno('EPERM') },
+    }
+    expect(runPrivacyCheck(winConfig, deps)).toEqual({ passed: true, checkedAt: 7 })
+    expect(tried).toContain('C:\\Users\\DELL\\AppData\\Local\\Microsoft\\Edge\\User Data')
+    expect(runPrivacyCheck(winConfig, { ...deps, groupSids: () => ['S-1-5-32-544'] })).toMatchObject({ passed: false, item: 'standard-user' })
+    expect(readTeamStatus('x', () => JSON.stringify({ version: 1, privacy: { passed: false, item: 'edge', detail: 'd', checkedAt: 1 } }))?.privacy)
+      .toMatchObject({ item: 'edge' })
+  })
 })
 
 describe('privacy observer', () => {
