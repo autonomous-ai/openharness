@@ -3,7 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_ink.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
+import 'package:harness_mobile/shared/theme/app_type.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
@@ -16,9 +20,6 @@ import 'team_glance.dart';
 /// captions in sentence case, cards of rows, round avatars, a project's
 /// initial in a tile, filled counts, and buttons a thumb can find. Every
 /// colour is one of the app's own tokens.
-
-/// Ink on a dark warning fill: a count waiting on the person.
-const _onWarn = Color(0xFF1A1200);
 
 /// The colour of an agent's state: working green, waiting yellow, down red.
 Color swarmStateColor(SwarmAgentState state) => switch (state) {
@@ -65,7 +66,12 @@ class SwarmTopBar extends StatelessWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 52),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(4, 2, 8, 2),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.xs,
+          AppSpace.xs,
+          AppSpace.s,
+          AppSpace.xs,
+        ),
         child: Row(
           children: [
             leading,
@@ -89,10 +95,7 @@ class SwarmTopBar extends StatelessWidget {
                       subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: AppPalette.textSecondary,
-                        fontSize: 13,
-                      ),
+                      style: AppType.caption(color: AppPalette.textSecondary),
                     ),
                 ],
               ),
@@ -121,7 +124,12 @@ class SwarmCaption extends StatelessWidget {
     AppTheme.watch(context);
     final tty = Tty.of(context);
     return Padding(
-      padding: EdgeInsets.fromLTRB(4, first ? 6 : 24, 4, 8),
+      padding: EdgeInsets.fromLTRB(
+        AppSpace.xs,
+        first ? AppSpace.s : AppSpace.xl,
+        AppSpace.xs,
+        AppSpace.s,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
@@ -129,13 +137,12 @@ class SwarmCaption extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: TextStyle(
+              style: AppType.caption(
                 color: Color.lerp(
                   AppPalette.textFaint,
                   AppPalette.textSecondary,
                   .5,
                 ),
-                fontSize: 13,
               ),
             ),
           ),
@@ -163,7 +170,7 @@ class SwarmGroup extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(AppCard.radius),
       child: ColoredBox(
         color: AppGlass.rowFill,
         child: Column(
@@ -197,16 +204,15 @@ class SwarmSkeletonRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // The real rows' metrics.
-    const title = TextStyle(
-      fontSize: 16,
-      fontWeight: FontWeight.w500,
-      height: 1.3,
-    );
-    const line = TextStyle(fontSize: 13.5, height: 1.35);
+    final title = AppType.label(height: 1.3);
+    final line = AppType.caption(height: 1.35);
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 56),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.l,
+          vertical: AppSpace.m,
+        ),
         child: Row(
           children: [
             Skeleton(
@@ -307,7 +313,7 @@ class SwarmAvatar extends StatelessWidget {
         child: Text(
           _initial(name),
           style: TextStyle(
-            color: Colors.white,
+            color: AppInk.onFill,
             fontSize: size >= 32 ? 13.5 : 11,
             fontWeight: FontWeight.w600,
             height: 1,
@@ -352,7 +358,7 @@ class SwarmProjectTile extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: AppPalette.swarmSearchSurface,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppCard.insetRadius),
       ),
       child: Text(
         _initial(name).toLowerCase(),
@@ -378,18 +384,17 @@ class SwarmBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     constraints: const BoxConstraints(minWidth: 22, minHeight: 22),
-    padding: const EdgeInsets.symmetric(horizontal: 7),
+    padding: const EdgeInsets.symmetric(horizontal: AppSpace.s),
     alignment: Alignment.center,
-    decoration: BoxDecoration(
+    decoration: ShapeDecoration(
       color: warn ? AppColors.warning : AppPalette.accent,
-      borderRadius: BorderRadius.circular(11),
+      shape: const StadiumBorder(),
     ),
     child: Text(
       '$count',
-      style: TextStyle(
-        color: warn ? _onWarn : Colors.white,
-        fontSize: 12.5,
-        fontWeight: FontWeight.w600,
+      style: AppType.caption(
+        color: warn ? SwarmInk.onWarning : AppInk.onFill,
+        fontWeight: AppFont.semibold,
         height: 1,
       ),
     ),
@@ -442,7 +447,7 @@ class SwarmButton extends StatelessWidget {
         AppPalette.textPrimary,
         AppGlass.hair,
       ),
-      SwarmButtonStyle.fill => (AppPalette.accent, Colors.white, null),
+      SwarmButtonStyle.fill => (AppPalette.accent, AppInk.onFill, null),
       SwarmButtonStyle.link => (null, AppPalette.swarmAccent, null),
     };
     final enabled = onPressed != null && !busy;
@@ -460,7 +465,7 @@ class SwarmButton extends StatelessWidget {
       child: Material(
         color: fill ?? Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppControl.radius),
           side: rim == null ? BorderSide.none : BorderSide(color: rim),
         ),
         clipBehavior: Clip.antiAlias,
@@ -475,8 +480,10 @@ class SwarmButton extends StatelessWidget {
             constraints: BoxConstraints(minHeight: wide ? 52 : 44),
             child: Padding(
               padding: EdgeInsets.symmetric(
-                horizontal: style == SwarmButtonStyle.link ? 10 : 18,
-                vertical: 8,
+                horizontal: style == SwarmButtonStyle.link
+                    ? AppSpace.m
+                    : AppSpace.l,
+                vertical: AppSpace.s,
               ),
               child: Row(
                 mainAxisSize: wide ? MainAxisSize.max : MainAxisSize.min,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:harness_mobile/phone/out_of_sight.dart';
 import 'package:harness_mobile/phone/tty.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
@@ -94,9 +95,9 @@ class SwarmModelsPage extends StatelessWidget {
                         child: ListView(
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: EdgeInsets.fromLTRB(
-                            12,
+                            AppSpace.m,
                             0,
-                            12,
+                            AppSpace.m,
                             MediaQuery.paddingOf(context).bottom + 28,
                           ),
                           children: _body(session.inbox),
@@ -228,6 +229,6 @@ class SwarmModelsPage extends StatelessWidget {
 /// as Home's empty states are.
 Widget _line(String id, String text) => Padding(
   key: ValueKey(id),
-  padding: const EdgeInsets.symmetric(horizontal: 4),
+  padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
   child: SwarmRow.line(text, lines: 2),
 );

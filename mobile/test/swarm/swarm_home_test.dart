@@ -706,6 +706,40 @@ void main() {
       },
     );
 
+    testWidgets('a need card is set on the type roles: 17-point words, '
+        '16 points in, its glyph level with the first line', (tester) async {
+      await pump(tester, backend());
+
+      const card = 'swarm-need-decision:d1';
+      final title = find.descendant(
+        of: key(card),
+        matching: find.text('River asks you · Mobile', findRichText: true),
+      );
+      expect(
+        tester.renderObject<RenderParagraph>(title).text.style?.fontSize,
+        17,
+        reason: 'the label role',
+      );
+      expect(
+        tester
+            .widget<Text>(inside(card, find.text('Ship it behind a flag?')))
+            .style
+            ?.fontSize,
+        17,
+        reason: 'the body role',
+      );
+      final glyph = inside(
+        card,
+        find.byIcon(LucideIcons.circleQuestionMark300),
+      );
+      expect(tester.getTopLeft(glyph).dx - tester.getTopLeft(key(card)).dx, 16);
+      expect(
+        tester.getCenter(glyph).dy,
+        closeTo(tester.getTopLeft(title).dy + 17 * 1.3 / 2, .1),
+        reason: "centred on the title's first line (17 points at 1.3)",
+      );
+    });
+
     testWidgets('an open tag has Done, filled, and Open chat; open work has '
         'Open chat', (tester) async {
       await pump(tester, backend());

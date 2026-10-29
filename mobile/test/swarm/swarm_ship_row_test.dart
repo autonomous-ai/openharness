@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
+import 'package:harness_mobile/shared/theme/swarm_tokens_set_b.dart';
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/swarm_message_row.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -153,6 +154,7 @@ void main() {
       SuperTabMessage message, {
       FakeSwarm? fake,
       bool still = false,
+      TextScaler? scale,
     }) async {
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
@@ -169,7 +171,8 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           builder: (context, child) => MediaQuery(
-            data: MediaQuery.of(context).copyWith(disableAnimations: still),
+            data: MediaQuery.of(context)
+                .copyWith(disableAnimations: still, textScaler: scale),
             child: SwarmScope(notifier: host, child: child!),
           ),
           home: Scaffold(
@@ -298,6 +301,112 @@ void main() {
       expect(key('swarm-ship-ship-1'), findsNothing);
       expect(find.text('River'), findsOneWidget);
       expect(find.textContaining('requested by person-me'), findsOneWidget);
+    });
+
+    group('drawn on the design tokens', () {
+      // The card itself, inside the margin that is part of its Container.
+      Finder card() => find
+          .descendant(
+            of: key('swarm-ship-ship-1'),
+            matching: find.byType(DecoratedBox),
+          )
+          .first;
+
+      // Half size, so that a label fits one line in the test's square font.
+      Future<void> shown(WidgetTester tester) async {
+        await pump(
+          tester,
+          shipMessage(at: DateTime(2020)),
+          scale: const TextScaler.linear(.5),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      testWidgets('the card sits 8 in from the edge, rounded at 12', (
+        tester,
+      ) async {
+        await shown(tester);
+
+        expect(tester.getTopLeft(card()).dx, 8);
+        expect(
+          (tester.widget<DecoratedBox>(card()).decoration as BoxDecoration)
+              .borderRadius,
+          BorderRadius.circular(12),
+        );
+      });
+
+      testWidgets('its words start 16 inside the 1-point rim, the 🎉 at 20', (
+        tester,
+      ) async {
+        await shown(tester);
+
+        expect(
+          tester.getTopLeft(find.text('🎉')).dx - tester.getTopLeft(card()).dx,
+          1 + 16,
+        );
+        expect(tester.widget<Text>(find.text('🎉')).style?.fontSize, 20);
+      });
+
+      testWidgets("each credit's label is centred on its first name", (
+        tester,
+      ) async {
+        await shown(tester);
+
+        for (final (label, name) in [
+          ('Requested by', 'person-me'),
+          ('Built by', 'Nova'),
+          ('Reviewed by', 'Rex'),
+        ]) {
+          expect(
+            tester.getCenter(find.text(label)).dy,
+            closeTo(tester.getCenter(find.text(name)).dy, .01),
+            reason: label,
+          );
+        }
+      });
+
+      testWidgets('each credit has 4 above and below its line', (tester) async {
+        await shown(tester);
+
+        const avatar = 22.0;
+        expect(
+          tester.getCenter(find.text('Reviewed by')).dy -
+              tester.getCenter(find.text('Built by')).dy,
+          avatar + 2 * 4,
+          reason: 'one avatar tall, 4 points above and below',
+        );
+      });
+
+      testWidgets('a pull request is a button rounded at 10, 44 tall', (
+        tester,
+      ) async {
+        await shown(tester);
+
+        final button = find.byKey(const ValueKey('swarm-ship-pr-ship-1-0'));
+        final shape =
+            tester
+                    .widget<Material>(
+                      find.descendant(
+                        of: button,
+                        matching: find.byType(Material),
+                      ),
+                    )
+                    .shape!
+                as RoundedRectangleBorder;
+        expect(shape.borderRadius, BorderRadius.circular(10));
+        expect(tester.getSize(button).height, 44);
+      });
+    });
+
+    test('the confetti keeps its six colours', () {
+      expect(SwarmConfetti.colors, const [
+        Color(0xffff6b6b),
+        Color(0xffffc145),
+        Color(0xff4ecdc4),
+        Color(0xff5b8def),
+        Color(0xffb084f5),
+        Color(0xff6ad08a),
+      ]);
     });
   });
 }
