@@ -227,9 +227,20 @@ describe('safety checks', () => {
     expect(() => assertReadOnly(status(['find', 'listCollections', 'collStats', 'dbStats', 'listIndexes', 'killCursors']), 'cluster.x.mongodb.net')).not.toThrow()
   })
 
-  it('refuses a user that can write, naming what it could do', () => {
+  it('accepts the read-only role a monitoring user also has', () => {
+    expect(() => assertReadOnly(status(['find', 'listDatabases', 'changeStream', 'dbHash', 'planCacheRead', 'listSearchIndexes', 'serverStatus',
+      'replSetGetStatus', 'getLog', 'top', 'indexStats', 'connPoolStats', 'hostInfo', 'inprog']), 'cluster.x.mongodb.net')).not.toThrow()
+  })
+
+  it('refuses a user that can do more than read, naming what it could do', () => {
     expect(() => assertReadOnly(status(['find', 'insert', 'update', 'dropCollection']), 'cluster.x.mongodb.net'))
-      .toThrow('Refused: this user can write (dropCollection, insert, update). Use the read-only user.')
+      .toThrow('Refused: this user can do more than read (dropCollection, insert, update). Use the read-only user.')
+  })
+
+  it('refuses a root user, emptycapped, and any permission it does not know as read-only', () => {
+    expect(() => assertReadOnly(status(['anyAction']), 'cluster.x.mongodb.net')).toThrow('(anyAction)')
+    expect(() => assertReadOnly(status(['find', 'emptycapped']), 'cluster.x.mongodb.net')).toThrow('(emptycapped)')
+    expect(() => assertReadOnly(status(['find', 'someFutureAction']), 'cluster.x.mongodb.net')).toThrow('(someFutureAction)')
   })
 
   it('refuses a remote database without sign-in, and allows one only on this computer', () => {

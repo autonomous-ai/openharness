@@ -1,6 +1,6 @@
 import Fastify from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createQueryStats, enterWork, filterShape, registerWorkContext, runWork, workKind, type QueryStatsOptions } from './queryStats.js'
+import { createQueryStats, enterWork, estimateBytes, filterShape, registerWorkContext, runWork, workKind, type QueryStatsOptions } from './queryStats.js'
 
 type Logged = { message: string; context: Record<string, unknown> }
 
@@ -192,5 +192,46 @@ describe('HTTP work context', () => {
     expect(seen).toEqual(['hook http POST /api/items', 'http POST /api/items 3'])
     expect(workKind()).toBe('background')
     await app.close()
+  })
+})
+
+describe('estimateBytes', () => {
+  it('is the JSON length of an ordinary result', () => {
+    const result = [{ id: 'a', n: 1.5, ok: true, no: false, at: new Date(0), none: null, skipped: undefined, tags: ['x', 'y'], nested: { deep: { v: -3 } } }, null]
+    expect(estimateBytes(result)).toEqual({ bytes: JSON.stringify(result).length, capped: false })
+    expect(estimateBytes(null)).toEqual({ bytes: 4, capped: false })
+    expect(estimateBytes(undefined)).toEqual({ bytes: 0, capped: false })
+  })
+
+  it('counts a big page up to its budget only, and scales up from the documents it counted', () => {
+    const doc = (i: number) => ({ id: `doc-${String(i).padStart(5, '0')}`, body: 'x'.repeat(1000) })
+    const page = Array.from({ length: 10_000 }, (_, i) => doc(i))
+    const real = JSON.stringify(page).length
+    // Past the first 1,000 documents (~1 MB), reading a document throws: the estimate must stop before them.
+    let touched = 0
+    for (let i = 1000; i < page.length; i++) Object.defineProperty(page, i, { get: () => { touched++; throw new Error('read past the budget') } })
+    const estimate = estimateBytes(page, 256 * 1024)
+    expect(touched).toBe(0)
+    expect(estimate.capped).toBe(true)
+    expect(Math.abs(estimate.bytes - real) / real).toBeLessThan(0.01)
+  })
+
+  it('stops inside one huge document and gives at least the budget', () => {
+    const huge: Record<string, unknown> = {}
+    for (let i = 0; i < 5_000; i++) huge[`k${i}`] = 'x'.repeat(1000)
+    let touched = 0
+    for (let i = 1000; i < 5_000; i++) Object.defineProperty(huge, `k${i}`, { enumerable: true, get: () => { touched++; return 'x'.repeat(1000) } })
+    const estimate = estimateBytes(huge, 256 * 1024)
+    expect(touched).toBe(0)
+    expect(estimate).toMatchObject({ capped: true })
+    expect(estimate.bytes).toBeGreaterThanOrEqual(256 * 1024)
+  })
+
+  it('reports how many results a window estimated past the budget', () => {
+    const { s, infos } = stats({ sampleEvery: 1, byteBudget: 1024 })
+    s.record('SwarmGroup', 'findMany', {}, 1, Array.from({ length: 100 }, () => ({ body: 'x'.repeat(100) })))
+    s.record('SwarmGroup', 'findMany', {}, 1, [])
+    s.flush()
+    expect(infos[0]!.context).toMatchObject({ bytesCapped: 1 })
   })
 })

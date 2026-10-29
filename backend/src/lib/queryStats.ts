@@ -135,13 +135,62 @@ function docsOf(result: unknown): number {
   return 0
 }
 
-/** Characters of a result as JSON: close to what it cost to send and unpack. 0 when it cannot be serialized. */
-function bytesOf(result: unknown): number {
-  try {
-    return JSON.stringify(result)?.length ?? 0
-  } catch {
-    return 0
+/** How much of a result one measurement reads at most. */
+const BYTE_BUDGET = 256 * 1024
+
+/**
+ * A result's size as JSON characters, close to what it cost to send and unpack, without serializing it: the exact JSON
+ * length for ordinary results (strings count without escapes). It reads at most `budget` characters' worth: a list
+ * past it is scaled up from the documents counted so far, and one document past it gives the budget (`capped`), so a
+ * multi-MB page never stalls the process.
+ */
+export function estimateBytes(result: unknown, budget = BYTE_BUDGET): { bytes: number; capped: boolean } {
+  let used = 0, over = false
+  const add = (n: number) => { used += n; if (used > budget) over = true }
+  const walk = (value: unknown, inList: boolean): void => {
+    if (over) return
+    if (value === null) return add(4)
+    switch (typeof value) {
+      case 'string': return add(value.length + 2)
+      case 'number': return add(Number.isFinite(value) ? String(value).length : 4)
+      case 'boolean': return add(value ? 4 : 5)
+      case 'bigint': return add(String(value).length)
+      case 'object': break
+      default: return inList ? add(4) : undefined
+    }
+    if (ArrayBuffer.isView(value)) return add(value.byteLength * 4)
+    const toJSON = (value as { toJSON?: unknown }).toJSON
+    if (typeof toJSON === 'function') return walk(toJSON.call(value), inList)
+    if (Array.isArray(value)) {
+      add(2 + Math.max(0, value.length - 1))
+      for (let i = 0; i < value.length && !over; i++) walk(value[i], true)
+      return
+    }
+    add(2)
+    let first = true
+    for (const key of Object.keys(value)) {
+      const item = (value as Record<string, unknown>)[key]
+      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') continue
+      add(key.length + 3 + (first ? 0 : 1))
+      first = false
+      walk(item, false)
+      if (over) return
+    }
   }
+  if (!Array.isArray(result) || !result.length) {
+    walk(result, false)
+    return { bytes: used, capped: over }
+  }
+  const brackets = 2 + result.length - 1
+  add(brackets)
+  let counted = 0, countedBytes = 0
+  for (; counted < result.length; counted++) {
+    walk(result[counted], true)
+    if (over) break
+    countedBytes = used - brackets
+  }
+  if (!over) return { bytes: used, capped: false }
+  return { bytes: counted ? Math.round(brackets + countedBytes / counted * result.length) : used, capped: true }
 }
 
 /* ---------- per-minute totals ---------- */
@@ -157,8 +206,10 @@ export type QueryStatsOptions = {
   slowPerWindow?: number
   /** Keys one window keeps, the overflow key included; queries past it count under `other`. */
   maxKeys?: number
-  /** Serializes every Nth result of a key to count its bytes, and scales up. */
+  /** Measures every Nth result of a key to count its bytes, and scales up. */
   sampleEvery?: number
+  /** Characters one measurement reads at most (estimateBytes). */
+  byteBudget?: number
   /** How many keys of each ranking a window's line lists. */
   top?: { bytes: number; count: number; ms: number }
   log?: (message: string, context: Record<string, unknown>) => void
@@ -173,10 +224,10 @@ export type QueryStats = {
 
 const OTHER = 'other'
 
-export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs = 200, slowPerWindow = 20, maxKeys = 1000, sampleEvery = 8,
+export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs = 200, slowPerWindow = 20, maxKeys = 1000, sampleEvery = 8, byteBudget = BYTE_BUDGET,
   top = { bytes: 20, count: 10, ms: 10 }, log = (m, c) => logger.info(m, c), warn = (m, c) => logger.warn(m, c) }: QueryStatsOptions = {}): QueryStats {
   let entries = new Map<string, Entry>()
-  let overflowQueries = 0, slowLogged = 0, slowSuppressed = 0, slowQueries = 0, slowTotalMs = 0, started = performance.now()
+  let overflowQueries = 0, slowLogged = 0, slowSuppressed = 0, slowQueries = 0, slowTotalMs = 0, bytesCapped = 0, started = performance.now()
 
   const record: QueryStats['record'] = (model, action, args, ms, result, failed = false) => {
     const op = opName(model, action, args), shape = filterShape(action, args), route = workKind()
@@ -203,7 +254,9 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
     const slow = ms >= slowMs
     let bytes: number | undefined
     if (!failed && (slow || (entry.n - 1) % sampleEvery === 0)) {
-      bytes = bytesOf(result)
+      const estimate = estimateBytes(result, byteBudget)
+      bytes = estimate.bytes
+      if (estimate.capped) bytesCapped++
       entry.sampled++
       entry.sampledBytes += bytes
     }
@@ -222,9 +275,9 @@ export function createQueryStats({ pod = `${hostname()}:${process.pid}`, slowMs 
     const picked = new Set([...ranked(r => r.bytes, top.bytes), ...ranked(r => r.n, top.count), ...ranked(r => r.ms, top.ms)])
     const sum = (by: (r: typeof rows[number]) => number) => rows.reduce((total, r) => total + by(r), 0)
     log('db by shape', { pod, windowMs: Math.round(performance.now() - started), queries: sum(r => r.n), ms: sum(r => r.ms), docs: sum(r => r.docs),
-      bytes: sum(r => r.bytes), errors: sum(r => r.errors), keys: rows.length, overflowQueries, slowQueries, slowMs: Math.round(slowTotalMs), slowSuppressed,
+      bytes: sum(r => r.bytes), errors: sum(r => r.errors), keys: rows.length, overflowQueries, bytesCapped, slowQueries, slowMs: Math.round(slowTotalMs), slowSuppressed,
       top: [...picked].sort((a, b) => b.bytes - a.bytes || b.n - a.n) })
-    entries = new Map(); overflowQueries = 0; slowLogged = 0; slowSuppressed = 0; slowQueries = 0; slowTotalMs = 0; started = performance.now()
+    entries = new Map(); overflowQueries = 0; slowLogged = 0; slowSuppressed = 0; slowQueries = 0; slowTotalMs = 0; bytesCapped = 0; started = performance.now()
   }
 
   return { record, flush }

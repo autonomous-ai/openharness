@@ -11,7 +11,7 @@
  *   npx tsx scripts/atlas-snapshot.ts --compare atlas-snapshots/before-… atlas-snapshots/after-…
  *
  * Safety: it only reads. The database URL is always switched to readPreference=secondary, and the run is refused when
- * the user can write. It never reads DATABASE_URL. Privacy: the slow log keeps each operation's namespace, plan, timings
+ * the user has any permission beyond reading. It never reads DATABASE_URL. Privacy: the slow log keeps each operation's namespace, plan, timings
  * and the keys of its filter, never the logged line, which holds the query's values. Secrets come only from the
  * environment and are never printed. A part whose settings are missing is skipped and named; a part that fails fails
  * the run (exit 1) after the other parts are saved.
@@ -78,11 +78,16 @@ export function redactUrl(text: string): string {
   return text.replace(/(mongodb(?:\+srv)?:\/\/[^:@/\s]+):[^@/\s]+@/g, '$1:***@')
 }
 
-const WRITES = /^(insert|update|remove|drop|create|rename|convertToCapped|collMod|compact|applyOps|bypassDocumentValidation|reIndex|setFeatureCompatibilityVersion|shutdown|replSetReconfig|fsync|killop|killAnyCursor|killAnySession|planCacheWrite|enableProfiler|setParameter|grantRole|revokeRole|changePassword|changeOwnPassword|changeCustomData|enableSharding|moveChunk|splitChunk|cleanupOrphaned|restore|invalidateUserCache|unlock|setDefaultRWConcern|appendOplogNote|dropConnections)/
+/** Permissions that only read: MongoDB's built-in read and readAnyDatabase roles, and the read-only monitoring ones of
+ *  clusterMonitor. Anything else (a write, a root user's anyAction, emptycapped, a permission added later) is refused. */
+const READ_ONLY = new Set(['find', 'listCollections', 'listIndexes', 'listSearchIndexes', 'listDatabases', 'collStats', 'dbStats', 'dbHash',
+  'changeStream', 'killCursors', 'planCacheRead', 'useUUID', 'serverStatus', 'replSetGetStatus', 'replSetGetConfig', 'getLog', 'top', 'indexStats',
+  'connPoolStats', 'hostInfo', 'inprog', 'netstat', 'getCmdLineOpts', 'getParameter', 'listSessions', 'getDefaultRWConcern', 'listShards',
+  'getShardMap', 'shardingState', 'operationMetrics', 'checkMetadataConsistency'])
 
 type ConnectionStatus = { authInfo?: { authenticatedUsers?: unknown[]; authenticatedUserPrivileges?: { actions?: string[] }[] } }
 
-/** Refuses a user that can write, and a remote database reached without signing in. */
+/** Refuses a user with any permission beyond reading, and a remote database reached without signing in. */
 export function assertReadOnly(status: ConnectionStatus, host: string): void {
   const users = status.authInfo?.authenticatedUsers ?? []
   if (!users.length) {
@@ -90,8 +95,8 @@ export function assertReadOnly(status: ConnectionStatus, host: string): void {
     throw new Error('Refused: a database that is not on this computer, without signing in. Use the read-only user.')
   }
   const actions = new Set((status.authInfo?.authenticatedUserPrivileges ?? []).flatMap(p => p.actions ?? []))
-  const writes = [...actions].filter(a => WRITES.test(a)).sort()
-  if (writes.length) throw new Error(`Refused: this user can write (${writes.join(', ')}). Use the read-only user.`)
+  const more = [...actions].filter(a => !READ_ONLY.has(a)).sort()
+  if (more.length) throw new Error(`Refused: this user can do more than read (${more.join(', ')}). Use the read-only user.`)
 }
 
 /* ---------- Atlas Admin API ---------- */

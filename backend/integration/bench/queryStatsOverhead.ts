@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     })
     console.log([`Rounds: ${rounds}, ${iterations} iterations × 3 queries, concurrency ${concurrency}, medians.`, '',
       '| Metric | Plain | Hook | Change |', '|---|---|---|---|', ...table, '',
-      `Bookkeeping alone (shape, totals, every 8th result serialized; 20 rows of 2 KB): ${recordCost().toFixed(2)} µs a query.`,
+      `Bookkeeping alone (shape, totals, every 8th result's size estimated; 20 rows of 2 KB): ${recordCost().toFixed(2)} µs a query.`,
       '', 'Rounds:', ...results.map(r => JSON.stringify(r))].join('\n'))
   } finally {
     await local.stop()
