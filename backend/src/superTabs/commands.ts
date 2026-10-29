@@ -628,7 +628,9 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   /** No private channel to the PM: Buddies replaced Chat with PM (Ken, 10-29). A closed one is nobody's to read or post in
    *  (projects.ts isClosedPmChat); an app from before still sends this to open one. */
   const pmChatClosed = (): never =>
-    fail('PM_CHAT_CLOSED', 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy, where the PM\'s private lines reach you.', 403)
+    fail('PM_CHAT_CLOSED', actor.kind === 'agent'
+      ? 'Chat with PM is closed: to tell one person something privately, send person.tell; it lands in their Buddy chat.'
+      : 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy, where the PM\'s private lines reach you.', 403)
   /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
    *  as rules are. */
   const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {

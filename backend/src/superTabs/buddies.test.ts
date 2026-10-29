@@ -415,7 +415,8 @@ describe('Chat with PM, replaced by Buddies (Ken, 10-29)', () => {
   it('is never opened again, by a person or the PM', () => {
     const f = setup()
     expect(() => f.run({ ...open(['owner']), projectId: f.app.projectId })).toThrow('Chat with PM is closed')
-    expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId }, agentActor(f.pm))).toThrow('Chat with PM is closed')
+    // A Lead on a skill text from before is told how it tells one person something privately now.
+    expect(() => f.run({ ...open(['peer']), projectId: f.app.projectId }, agentActor(f.pm))).toThrow('person.tell')
     expect(f.state.conversations.filter(c => c.audience && !c.kind).map(c => c.id)).toEqual([f.pmChat])
   })
 
