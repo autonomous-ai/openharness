@@ -450,7 +450,7 @@ class SwarmThread extends ChangeNotifier {
       return false;
     } catch (_) {
       if (!current()) return false;
-      error = 'Your reply is not confirmed. Send again to check it.';
+      error = 'Your reply was not sent. Retry to check it.';
       return false;
     } finally {
       sending = false;

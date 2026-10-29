@@ -20,6 +20,7 @@ import 'identity.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'swarm_code_block.dart';
+import 'swarm_post_line.dart';
 import 'swarm_attach.dart';
 import 'swarm_buddy.dart';
 import 'swarm_buddy_chat.dart';
@@ -2101,8 +2102,8 @@ class _NewPill extends StatelessWidget {
   );
 }
 
-/// The person's post on its way: "Sending…", then — its answer lost — "Not
-/// confirmed" with Send again, until it is read back.
+/// The person's post on its way, with [SwarmPostLine] under it: "Sending…",
+/// then — its answer lost — "Not sent · Retry", until it is read back.
 class _Pending extends StatelessWidget {
   const _Pending({
     super.key,
@@ -2131,7 +2132,6 @@ class _Pending extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tty = Tty.of(context);
     return Padding(
       key: const ValueKey('swarm-pending'),
       padding: SwarmMessageFrame.padding(),
@@ -2144,17 +2144,7 @@ class _Pending extends StatelessWidget {
           picture: look.picture,
           status: look.status,
         ),
-        header: SwarmMessageHeader(
-          name: name,
-          agent: false,
-          trailing: Text(
-            sending ? 'Sending…' : 'Not confirmed',
-            style: tty.style(
-              color: sending ? AppPalette.textFaint : tty.yellow,
-              size: 12.5,
-            ),
-          ),
-        ),
+        header: SwarmMessageHeader(name: name, agent: false),
         body: [
           ?quote,
           for (final part in swarmTextParts(text))
@@ -2187,16 +2177,10 @@ class _Pending extends StatelessWidget {
               }),
               link: null,
             ),
-          if (!sending)
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpace.s),
-              child: SwarmSmallButton(
-                key: const ValueKey('swarm-resend-post'),
-                icon: LucideIcons.rotateCw,
-                label: 'Send again',
-                onTap: onSendAgain,
-              ),
-            ),
+          Padding(
+            padding: const EdgeInsets.only(top: AppSpace.xs),
+            child: SwarmPostLine(sending: sending, onRetry: onSendAgain),
+          ),
         ],
       ),
     );
