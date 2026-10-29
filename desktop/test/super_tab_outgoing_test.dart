@@ -17,8 +17,10 @@ void main() {
         save: s.save,
         pollInterval: Duration.zero,
         request: (method, path, {body}) async {
-          if (method == 'POST' && (body!['command'] as Map)['text'] == 'Second')
+          if (method == 'POST' &&
+              (body!['command'] as Map)['text'] == 'Second') {
             await second.future;
+          }
           return s.request(method, path, body: body);
         },
       );
@@ -40,13 +42,17 @@ void main() {
   test('revocation drops queued text and cannot dispatch it later', () async {
     final s = ConversationServer();
     final gate = Completer<void>();
+    final dispatched = Completer<void>();
     final c = SuperTabController(
       tabId: 'tab',
       accountId: 'owner',
       save: s.save,
       pollInterval: Duration.zero,
       request: (method, path, {body}) async {
-        if (method == 'POST') await gate.future;
+        if (method == 'POST') {
+          dispatched.complete();
+          await gate.future;
+        }
         return s.request(method, path, body: body);
       },
     );
@@ -56,6 +62,7 @@ void main() {
     c.setDraft('lead', 'Second');
     final two = c.send();
     expect(c.outgoing('lead'), hasLength(2));
+    await dispatched.future;
     c.revokeAccess('Access removed.');
     gate.complete();
     await Future.wait([one, two]);

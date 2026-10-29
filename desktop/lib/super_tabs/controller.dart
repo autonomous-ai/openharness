@@ -1030,6 +1030,8 @@ class SuperTabController extends ChangeNotifier {
     _quoting.clear();
     _sent.clear();
     _sendIdentities.clear();
+    _pending = null;
+    _sendingMentions.clear();
     _refused.clear();
     _sendOrder.clear();
     for (final queued in _queuedSends) {
@@ -2339,9 +2341,9 @@ class SuperTabController extends ChangeNotifier {
     try {
       // The receipt ID reaches durable local storage before the request can reach the server.
       await _persist();
-      if (_disposed) return null;
+      if (_disposed || accessRevoked) return null;
       final answer = await request('POST', '$_path/commands', body: pending);
-      if (_disposed) return null;
+      if (_disposed || accessRevoked) return null;
       final result = superTabMap(answer['result']);
       final command = superTabMap(pending['command']);
       final notice = result['credentialNotice'];
@@ -2401,7 +2403,7 @@ class SuperTabController extends ChangeNotifier {
       await refresh();
       return result;
     } catch (failure) {
-      if (!_disposed && _isUpdateRequired(failure)) {
+      if (!_disposed && !accessRevoked && _isUpdateRequired(failure)) {
         _requireUpdate();
         operationError = updateMessage;
         operationErrorCode = 'UPDATE_REQUIRED';
@@ -2413,7 +2415,7 @@ class SuperTabController extends ChangeNotifier {
         } catch (_) {
           _pending = pending;
         }
-      } else if (!_disposed) {
+      } else if (!_disposed && !accessRevoked) {
         operationError = failure is SuperTabFailure
             ? failure.message
             : 'The action is not confirmed. Retry to check it.';
