@@ -997,7 +997,9 @@ it('records the original launch identity and retries without it only for an olde
 
 it('waits for the initial engine binding before recording a timed launch identity', async () => {
   const f = fixture({ identity: { sessionId: '', createdAt: '2026-10-22T00:00:00.000Z' } })
-  expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open)).toMatchObject({ error: 'START_PENDING' })
+  // It names the agent it launched, which its host stops should the Swarm fail this start meanwhile (machines.ts `abandoned`).
+  expect(await startAgent({ action: 'start', tabId: 'tab', operationId: 'binding-start', request: f.start.request }, f.scoped, where, f.open))
+    .toMatchObject({ error: 'START_PENDING', creationId: expect.any(String), harnessId: expect.any(String) })
   expect(f.scoped.mock.calls.map(c => c[0].command as Record<string, unknown>).some(c => c?.type === 'agent.started')).toBe(false)
 })
 
