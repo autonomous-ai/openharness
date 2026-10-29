@@ -175,10 +175,10 @@ void main() {
       final activity = session.activity;
       expect(chatReads(fake), 0);
 
-      activity.shown = true;
+      activity.watch();
       await settle();
-      activity.shown = false;
-      activity.shown = true;
+      activity.unwatch();
+      activity.watch();
       await session.inbox.refresh();
       await settle();
 
@@ -190,7 +190,7 @@ void main() {
       () async {
         final fake = backend(page: page);
         final session = await start(fake);
-        final activity = session.activity..shown = true;
+        final activity = session.activity..watch();
         await settle();
 
         // root-old's last reply is before the read mark; root-others is not theirs.
@@ -216,7 +216,7 @@ void main() {
         },
       );
       final session = await start(fake);
-      final activity = session.activity..shown = true;
+      final activity = session.activity..watch();
       await settle();
 
       expect(activity.count(SwarmActivityFilter.threads), 0);
@@ -230,7 +230,7 @@ void main() {
           ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
         final fake = backend(page: page);
         final session = await start(fake, store: store);
-        final activity = session.activity..shown = true;
+        final activity = session.activity..watch();
         await settle();
 
         final rows = activity.items(SwarmActivityFilter.reactions);
@@ -251,7 +251,7 @@ void main() {
       var next = page();
       final fake = backend(page: () => next);
       final session = await start(fake, store: store);
-      final activity = session.activity..shown = true;
+      final activity = session.activity..watch();
       await settle();
 
       activity.replied(activity.items(SwarmActivityFilter.threads).first);
@@ -262,7 +262,7 @@ void main() {
 
       // Another phone session, the same marks.
       final again = await start(fake, store: store);
-      again.activity.shown = true;
+      again.activity.watch();
       await settle();
       expect(again.activity.count(SwarmActivityFilter.threads), 0);
       expect(again.activity.count(SwarmActivityFilter.reactions), 0);
@@ -320,7 +320,7 @@ void main() {
         'seen', () async {
       final fake = backend(page: page);
       final session = await start(fake);
-      final activity = session.activity..shown = true;
+      final activity = session.activity..watch();
       await settle();
 
       expect(activity.items(SwarmActivityFilter.reactions), hasLength(1));
@@ -334,7 +334,7 @@ void main() {
           ..values['swarm_activity.$me.$tab'] = '{"marks":{}}';
         final fake = backend(page: page);
         final session = await start(fake, store: store);
-        final activity = session.activity..shown = true;
+        final activity = session.activity..watch();
         await settle();
         activity.replied(activity.items(SwarmActivityFilter.threads).first);
         await settle();
@@ -358,13 +358,31 @@ void main() {
       fake.routes[chatPath] = (_) =>
           throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
       final session = await start(fake);
-      final activity = session.activity..shown = true;
+      final activity = session.activity..watch();
       await settle();
 
       expect(activity.unreadChats, isTrue);
       expect(activity.count(SwarmActivityFilter.needsYou), 2);
       expect(activity.items(SwarmActivityFilter.threads), isEmpty);
     });
+
+    test(
+      'reads while any screen shows it: the tab, and the page over Home',
+      () async {
+        final fake = backend(page: page);
+        final session = await start(fake);
+        final activity = session.activity
+          ..watch()
+          ..watch()
+          ..unwatch();
+        await settle();
+        expect(activity.shown, isTrue);
+        expect(chatReads(fake), 1);
+
+        activity.unwatch();
+        expect(activity.shown, isFalse);
+      },
+    );
 
     test('says it is reading the project chats until they answer', () async {
       final fake = backend();
@@ -374,7 +392,7 @@ void main() {
         return {'messages': <Object>[], 'next': null};
       };
       final session = await start(fake);
-      final activity = session.activity..shown = true;
+      final activity = session.activity..watch();
       await settle();
       expect(activity.reading, isTrue);
 
@@ -388,7 +406,7 @@ void main() {
       fake.routes[chatPath] = (_) =>
           throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
       final session = await start(fake);
-      final activity = session.activity..shown = true;
+      final activity = session.activity..watch();
       await settle();
       expect(activity.unreadChats, isTrue);
 
@@ -407,7 +425,7 @@ void main() {
         fake.routes[chatPath] = (_) =>
             throw const SuperTabFailure('FORBIDDEN', 'Not yours.');
         final session = await start(fake);
-        final activity = session.activity..shown = true;
+        final activity = session.activity..watch();
         await settle();
 
         expect(activity.unreadChats, isFalse);

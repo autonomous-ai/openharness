@@ -187,7 +187,7 @@ class SwarmActivity extends ChangeNotifier {
   /// How many marks each Swarm keeps on the phone: the oldest go first.
   static const keptMarks = 500;
 
-  bool _shown = false, _disposed = false, _tracking = false;
+  bool _disposed = false, _tracking = false;
 
   /// Needs acted on here, by key, with what was done: "Opened" at once,
   /// "Approved", "Answered" or "Done" once it was sent.
@@ -204,12 +204,20 @@ class SwarmActivity extends ChangeNotifier {
 
   Map<SwarmActivityFilter, List<SwarmActivityItem>>? _built;
 
-  /// On screen: the project chats are read when their counters move.
-  bool get shown => _shown;
-  set shown(bool value) {
-    if (_shown == value) return;
-    _shown = value;
-    if (value) _want();
+  /// Screens showing Activity ([watch]): while there is one, the project
+  /// chats are read when their counters move.
+  int _views = 0;
+  bool get shown => _views > 0;
+
+  /// A screen shows Activity: its chats are read as their counters move.
+  void watch() {
+    if (_disposed || _views++ > 0) return;
+    _want();
+  }
+
+  /// That screen went, or out of sight.
+  void unwatch() {
+    if (_views > 0) _views--;
   }
 
   /// The rows of [filter]: those still to handle, newest first, then the
@@ -352,7 +360,7 @@ class SwarmActivity extends ChangeNotifier {
     _sweep();
     _seed();
     _built = null;
-    if (_shown) _want();
+    if (shown) _want();
     // What a send does is told before the send starts (SwarmSession._send):
     // what was done is looked at once it has.
     if (!_tracking) {
