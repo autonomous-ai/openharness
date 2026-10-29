@@ -11,6 +11,9 @@ class LeadMachine {
     this.maySleep = false,
     this.unavailable,
     this.inSwarm = true,
+    this.own = true,
+    this.native = true,
+    this.team = false,
   });
   final String id, name;
   final bool online;
@@ -22,6 +25,17 @@ class LeadMachine {
   /// Listed by the Swarm. A person may still start their project's Product
   /// Manager on another machine of theirs, as before.
   final bool inSwarm;
+
+  /// One of the person's own machines. Another person's runs the Product
+  /// Manager only in its Mac's Harness Team account ([team]).
+  final bool own;
+
+  /// This Desktop starts the Product Manager itself, on a machine of the
+  /// person's it is connected to; otherwise the Swarm starts it there.
+  final bool native;
+
+  /// It runs in that machine's Harness Team account.
+  final bool team;
 
   /// The repositories the Swarm already checked out there, as
   /// [leadRepositoryKey] reads them.
@@ -61,10 +75,11 @@ String? leadRepositoryKey(String? remote) {
   return value.isEmpty ? null : value;
 }
 
-/// Best first: one the Product Manager can start on now (the Swarm's machines
-/// before the person's others, always on with laptops that may sleep last,
-/// with [repository] already there, with the most room); then the ones it
-/// cannot use yet (full), then other people's, then offline ones.
+/// Best first: one the Product Manager can start on now (the person's own
+/// before a teammate's, the Swarm's machines before the person's others,
+/// always on with laptops that may sleep last, one this Desktop starts, with
+/// [repository] already there, with the most room); then the ones it cannot
+/// use yet (full), then unavailable ones, then offline ones.
 List<LeadMachine> rankLeadMachines(
   Iterable<LeadMachine> machines,
   String? repository,
@@ -80,8 +95,13 @@ List<LeadMachine> rankLeadMachines(
   return [...machines]..sort(
     (a, b) => [
       tier(a).compareTo(tier(b)),
+      // The person's own first, as the Swarm places a waiting one.
+      flag(a.own).compareTo(flag(b.own)),
       flag(a.inSwarm).compareTo(flag(b.inSwarm)),
       flag(!a.maySleep).compareTo(flag(!b.maySleep)),
+      // Started by this Desktop: its files go in directly, its result is
+      // known at once.
+      flag(a.native).compareTo(flag(b.native)),
       flag(a.has(repository)).compareTo(flag(b.has(repository))),
       (b.freeAgents ?? 0).compareTo(a.freeAgents ?? 0),
       a.name.toLowerCase().compareTo(b.name.toLowerCase()),
@@ -110,6 +130,7 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
     free <= 0
         ? 'No agents free'
         : '$free ${free == 1 ? 'agent' : 'agents'} free',
+    if (free > 0 && machine.team) 'Team account',
     if (free > 0 && machine.has(repository)) 'Has repo',
     if (free > 0 && machine.maySleep) 'May sleep',
   ].join(' · ');

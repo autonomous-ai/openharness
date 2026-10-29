@@ -253,7 +253,8 @@ describe('a review the Swarm opens by itself', () => {
     const builder = await f.add(reviewed, 'test-host', randomUUID(), 'Builder')
     const work = String((await f.execute({ type: 'work.assign', conversationId: reviewed, agentId: builder })).result.assignmentId)
     const reviewer = await f.add('lead', 'test-host', randomUUID(), 'Reviewer')
-    await f.started(reviewer, { role: 'reviewer' })
+    // On another engine than the Builder's: a review never runs on the reviewed Builder's own (rules.ts reviewRefusal).
+    await f.started(reviewer, { role: 'reviewer', configuration: { ...config, engine: config.engine === 'claude' ? 'codex' : 'claude', model: config.engine === 'claude' ? 'default' : 'opus' } })
     await f.delivered()
     await f.execute({ type: 'work.status', conversationId: reviewed, assignmentId: work, status: 'review',
       result: 'Ready: yes, revision abc..def. https://github.com/example/parser/pull/9' }, host, builder)

@@ -29,6 +29,7 @@ import { useSharedRateCounter } from './lib/rateLimit.js'
 import { createRouteRateLimit } from './middlewares/routeRateLimit.js'
 import { redisWindowCounter } from './lib/redisRateCounter.js'
 import { selfProfileFromEnv } from './lib/selfProfile.js'
+import { startRelayUsageFlush } from './lib/productUsage.js'
 import { drainAllSockets, openSocketCount, RELEASE_UPGRADE_SLOT, type SlotSocket } from './lib/wsServer.js'
 import { endpointOf, refusedUpgrade, startWsCounterLog, watchUpgrade } from './lib/wsAttribution.js'
 
@@ -186,6 +187,8 @@ async function start(): Promise<void> {
   // Internal mesh listener (Phase 2, MESH_ENABLED) — peers forward here when this instance owns the socket.
   const meshServer = startMeshProxy()
 
+  // Connect counts are kept in memory and written once a minute; shutdown writes what is left (lib/productUsageRelay.ts).
+  const stopRelayUsage = startRelayUsageFlush()
   let shuttingDown = false
   const shutdown = async (signal: string, exitCode = 0) => {
     if (shuttingDown) return
@@ -210,6 +213,8 @@ async function start(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 250))
       // Bounded wait for Fastify to finish its onClose hooks; never block shutdown on it.
       await Promise.race([fastifyClosed, new Promise((resolve) => setTimeout(resolve, 5_000))])
+      // The sockets have closed, so no connect is left to count. Bounded: a slow database must not hold the exit.
+      await Promise.race([stopRelayUsage().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 3_000))])
       // The database stays connected through the drain, for the requests still being served (lib/prisma.ts).
       await Promise.allSettled([prisma.$disconnect(), closeBus()])
       process.exit(exitCode)

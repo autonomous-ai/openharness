@@ -434,6 +434,23 @@ describe('a Team account hosting a Product Manager', () => {
     expect(web.start().result.startId).toBeTruthy()
   })
 
+  it('keeps a removed confidential session from being added back while its data is being deleted (review of #2142)', () => {
+    const f = swarm(), { web } = other(f)
+    const startId = f.lead('mate-mac').result.startId as string
+    const contribution = { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null }
+    const pm = f.run({ type: 'agent.started', startId, harnessId: 'pm', configuration: config }, owner, { contribution }).result.agentId as string
+    f.run({ type: 'agent.startSettled', startId, warning: null }, owner, { contribution })
+    f.run({ type: 'project.delete', projectId: f.app.projectId })
+    // Even into the very project it is held for: adding it back dropped the hold, its private chats still on the account.
+    f.state.closingSessions![0]!.heldFor = web.projectId
+    const add = () => f.run({ type: 'agent.add', conversationId: web.conversationId, machineId: 'mate-team', harnessId: 'pm', name: 'PM',
+      configuration: config, lead: false }, mate, { contribution })
+    expect(refusal(add)?.code).toBe('TEAM_ACCOUNT_HELD')
+    expect(f.state.closingSessions).toEqual([expect.objectContaining({ agentId: pm, harnessId: 'pm', heldFor: web.projectId })])
+    f.run({ type: 'agent.sessionClosed', agentId: pm, harnessId: 'pm' }, mate)
+    expect(refusal(add)).toBeNull()
+  })
+
   it('leaves the project owner\'s own machine as it is', () => {
     const f = swarm()
     f.lead('owner-mac')
