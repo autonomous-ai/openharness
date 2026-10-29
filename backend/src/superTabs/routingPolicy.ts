@@ -18,9 +18,10 @@ const fields = {
   floor: z.object({ low: quality, medium: quality, high: quality }).strict(),
   quotaReserve: z.number().int().min(0).max(90),
   notes: z.string().trim().max(500),
-  /** How strong a model served on the Swarm's grid counts (the Local models add-on). Optional: policies saved before it
-   * still parse, and read the default. */
-  localModels: z.object({ quality, enabled: z.boolean() }).strict().optional(),
+  /** How strong a model served on the Swarm's grid counts (the Local models add-on): `quality` for any model, `models` for
+   * those named, first match first (gridQuality). Optional: policies saved before them still parse, and read the defaults. */
+  localModels: z.object({ quality, enabled: z.boolean(),
+    models: z.array(z.object({ model: z.string().trim().min(1).max(200), quality }).strict()).max(40).optional() }).strict().optional(),
 }
 export const routingPolicySchema = z.object({ version: z.literal(1), ...fields }).strict()
 export const routingOverrideSchema = z.object(fields).partial().strict()
@@ -39,8 +40,9 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   floor: { low: 1, medium: 2, high: 3 },
   quotaReserve: 10,
   notes: '',
-  // Local models are free but weaker: low-difficulty, well-specified work unless the owner says otherwise.
-  localModels: { quality: 1, enabled: true },
+  // Local models are free but weaker: low-difficulty, well-specified work unless the owner says otherwise. Kimi K3 and
+  // DeepSeek v4.1 do Sonnet's work (Ken, 2026-10-29: they were offered only for low work and rarely ran).
+  localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 2 }] },
 }
 
 export function effectivePolicy(account: unknown, override: unknown) {
@@ -60,6 +62,17 @@ export function effectivePolicy(account: unknown, override: unknown) {
       overridden.push(...(Object.keys(parsed.data) as Array<keyof RoutingOverride>))
     }
   }
-  policy = { ...policy, localModels: policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels }
+  const local = policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels!
+  policy = { ...policy, localModels: { ...local, models: local.models ?? DEFAULT_ROUTING_POLICY.localModels!.models } }
   return { policy, warnings, overridden }
+}
+
+/** A name's words for matching: lowercase letters and digits, "4.1" read as "41" (cli superTabs/route.ts `words`). */
+const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)
+/** How strong a grid model counts: the first of the policy's named rows whose every word is in its id or label, else the
+ *  policy's local quality. The CLI's route rates the same way (cli superTabs/route.ts gridQuality). */
+export function gridQuality(policy: RoutingPolicy, model: string, label = ''): number {
+  const name = words(`${model} ${label}`).join('')
+  const local = policy.localModels ?? DEFAULT_ROUTING_POLICY.localModels!
+  return local.models?.find(row => words(row.model).every(w => name.includes(w)))?.quality ?? local.quality
 }

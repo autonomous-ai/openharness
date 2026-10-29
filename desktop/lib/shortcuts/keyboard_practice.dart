@@ -92,6 +92,7 @@ class KeyboardLesson {
       'task     \nCtrl-U removes text back to the start of this line.',
     'edit.restore' => 'task     fix the tests\nCtrl-Y restores the last text removed with Ctrl-W/U.',
     'edit.newline' => 'task     fix the tests\n         keep the patch small',
+    'edit.chat_newline' => 'message  first line\n         second line\nEnter sends; Shift-Enter or Option-Enter adds a line.',
     'edit.backspace' =>
       'task     tes\nCtrl-H removes the character before the cursor.',
     'edit.delete' =>
@@ -100,6 +101,23 @@ class KeyboardLesson {
       '$label\n${context.isPicker ? 'The focused prompt handles this key.' : 'The workspace handles this key; ordinary typing stays in the terminal.'}',
   };
 }
+
+/// The Swarm chat box writes this line itself, so it is no keymap command: no binding to move,
+/// and nothing for the workspace to take (`SuperTabView` composer key handler).
+final _chatBoxNewlineLesson = KeyboardLesson(
+  'edit.chat_newline',
+  'New line in a chat message',
+  'Swarm chat box',
+  KeymapContext.swarmChat,
+  [
+    for (final key in ['shift+enter', 'alt+enter'])
+      KeyBinding(
+        keys: [KeyStroke.parse(key)],
+        command: 'edit.chat_newline',
+        context: KeymapContext.swarmChat,
+      ),
+  ],
+);
 
 /// The catalog and live bindings are the source of truth, including aliases,
 /// user sequences, unbindings, and terminal-only overrides.
@@ -189,6 +207,7 @@ List<KeyboardLesson> keyboardLessons(AppKeymap keymap) {
       ),
     );
   }
+  result.add(_chatBoxNewlineLesson);
   return [
     for (final id in essentials)
       ...result.where((lesson) => lesson.command == id),
