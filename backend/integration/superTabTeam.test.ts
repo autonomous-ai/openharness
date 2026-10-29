@@ -460,6 +460,23 @@ describe('a teammate\'s work and the machines that take it', () => {
 // One machine (docs/plans/2026-10-24-swarm-team-account.md): the person's Mac and its Harness Team account are one
 // machine. Its team account joins where the Mac is added, through the Mac's own daemon, and takes the teammates' work
 // started on the Mac.
+// A start records the CLI version its machine ran when it was dispatched, and reads say what the machine runs now, so routing
+// lets a machine updated since its failed starts back in (cli routeCommand.ts `stalled`; Mac Auto, 2026-10-29).
+describe('a machine\'s CLI version, on its starts and in reads', () => {
+  it('stamps a start with the version its machine ran when dispatched, and reads show the version it runs now', async () => {
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: '0.5.1' } })
+    onTestFinished(async () => { await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: null } }) })
+    const f = await fixture()
+    const read = async () => new SwarmReads(store).firstLoad(owner, f.tab)
+    const first = await read()
+    const dispatched = first.starts.map(p => p.data as { id: string; dispatchedVersion?: string }).find(s => s.id === f.startId)
+    expect(dispatched?.dispatchedVersion).toBe('0.5.1')
+    expect(first.derived.machines['team-mac']).toMatchObject({ clientVersion: '0.5.1' })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { clientVersion: '0.5.6' } })
+    expect((await read()).derived.machines['team-mac']).toMatchObject({ clientVersion: '0.5.6' })
+  })
+})
+
 describe('a project\'s repository, for its GitHub access', () => {
   it('is read by those who may open the project, and by nobody else', async () => {
     const f = await fixture()
