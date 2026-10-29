@@ -10,7 +10,8 @@
  *
  * - The owner's daemon keeps a relay of its own for the team account while one exists on this Mac, and leaves its address
  *   and token in a folder it owns under /Users/Shared, readable by the team account alone through a macOS ACL. Not
- *   a guest's, not any other local user's: the token spends the owner's subscription.
+ *   a guest's, not any other local user's: the token spends the owner's subscription. On Linux the folder is one setup made
+ *   for the owner under /var/lib/harness, and the ACL is setfacl's.
  * - The team daemon reads it at each launch, only when the folder and the file belong to the owner the root-owned team
  *   config names (another local user could otherwise leave a relay of their own there and read teammates' prompts), and
  *   only for an engine the team account has not signed in itself: a sign-in of its own wins.
@@ -20,17 +21,22 @@
 import { execFile } from 'node:child_process'
 import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
+import { runPowershell } from '../lib/windows/powershell.js'
+import { windowsOwnerSidScript, windowsRelayAclCommand } from './windowsTeam.js'
 import type { AgentEngine } from '../engines/types.js'
 import { recordAcceptanceIn } from '../engines/kit/folderTrust.js'
 import { readAuthSession } from '../lib/authSession.js'
 import { engineAccount } from '../lib/engineAccount.js'
 import { claudeRelayEnv, codexRelayArgs, codexRelayEnv, isCodexRelayAuth, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
 import { readTeamConfig, type TeamConfig } from './config.js'
+import { teamLayout } from './layout.js'
 
-/** The owner's folder for the hand-off, per owner so two people's Macs never share one. */
-export const teamRelayDir = (owner: string) => `/Users/Shared/.harness-team-relay-${owner}`
-export const teamRelayFile = (owner: string) => join(teamRelayDir(owner), 'relay.json')
+/** The owner's folder for the hand-off, per owner so two people's Macs never share one (./layout.ts `relayDir`). On Linux
+ *  setup makes it for the owner, under /var/lib/harness, where nobody else can make a folder. A Mac's unless told. */
+export const teamRelayDir = (owner: string, platform: NodeJS.Platform = 'darwin') =>
+  (teamLayout(platform) ?? teamLayout('darwin')!).relayDir(owner)
+export const teamRelayFile = (owner: string, platform: NodeJS.Platform = 'darwin') => join(teamRelayDir(owner, platform), 'relay.json')
 /** The name the relay knows the team account's token by, in its logs (a fingerprint of it) and to revoke it. */
 export const TEAM_RELAY_GUEST = 'harness-team'
 
@@ -128,6 +134,24 @@ const allow = (path: string, user: string, rights: string) => new Promise<void>(
   })
 })
 
+const execFileAsync = (file: string, args: string[]) => new Promise<void>((resolve, reject) => {
+  execFile(file, args, { timeout: 10_000 }, (error) => error ? reject(error) : resolve())
+})
+
+/**
+ * Linux: the whole ACL of [path], set at once (`--set`, so each publish leaves exactly these entries): this user, and
+ * [user] reading, as the guest helper grants with setfacl. A folder is read and searched (r-x), a file read (r--).
+ */
+export const setfaclGrant = (exec: (file: string, args: string[]) => Promise<void> = execFileAsync) =>
+  async (path: string, user: string, rights: string): Promise<void> => {
+    const folder = rights.split(',').includes('search')
+    const acl = `u::${folder ? 'rwx' : 'rw-'},g::---,o::---,u:${user}:${folder ? 'r-x' : 'r--'}`
+    try { await exec('setfacl', ['--set', acl, path]) } catch { throw new Error(`could not let ${user} read ${path}`) }
+  }
+
+/** This system's way to let the team account read the relay. */
+const grantFor = (platform: NodeJS.Platform) => platform === 'linux' ? setfaclGrant() : allow
+
 /** Writes the grant where only the team account (and this user) can read it. */
 export async function publishTeamRelay(config: TeamConfig, grant: TeamRelayGrant, uid: number = process.getuid?.() ?? -1,
   grantRead: (path: string, user: string, rights: string) => Promise<void> = allow, dir: string = teamRelayDir(config.owner)): Promise<void> {
@@ -143,13 +167,82 @@ export async function publishTeamRelay(config: TeamConfig, grant: TeamRelayGrant
   renameSync(next, join(dir, 'relay.json'))
 }
 
-export function withdrawTeamRelay(owner: string): void {
-  rmSync(teamRelayFile(owner), { force: true })
+// ── Windows ───────────────────────────────────────────────────────────────────────────────────
+// Setup makes the folder for the owner in C:\ProgramData\Harness, where only administrators may make one, and gives it to
+// them (./windowsScript.ts step 7). Node's lstat names no owner on Windows, so both sides ask Windows for the owner's SID.
+
+export interface WindowsRelayFs {
+  lstat(path: string): { isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean }
+  /** The path's owner as a SID, or null when it cannot be read. */
+  ownerSid(path: string): string | null
+  /** The folder's whole ACL: the owner, SYSTEM and Administrators full, the team account read (./windowsTeam.ts). */
+  setAcl(dir: string, ownerSid: string, team: string): Promise<void>
+  write(path: string, text: string): void
+  rename(from: string, to: string): void
+  read(path: string): string
+}
+
+/** Owner SIDs a reader looked up lately: the team daemon reads the relay for every launch and machine reading, and each
+ *  answer costs a PowerShell. A minute is as stale as a folder's owner gets here. */
+const ownerSids = new Map<string, { sid: string | null; at: number }>()
+const OWNER_SID_FOR_MS = 60_000
+
+const realWindowsRelayFs: WindowsRelayFs = {
+  lstat: (path) => lstatSync(path),
+  ownerSid: (path) => {
+    const cached = ownerSids.get(path)
+    if (cached && Date.now() - cached.at < OWNER_SID_FOR_MS) return cached.sid
+    const query = windowsOwnerSidScript(path)
+    const result = runPowershell(query.script, query.inputs)
+    const sid = result.status === 0 ? result.stdout.trim() : null
+    ownerSids.set(path, { sid, at: Date.now() })
+    return sid
+  },
+  setAcl: (dir, ownerSid, team) => {
+    const { command, args } = windowsRelayAclCommand({ dir, ownerSid, team })
+    return execFileAsync(command, args).catch(() => { throw new Error(`could not let ${team} read ${dir}`) })
+  },
+  write: (path, text) => writeFileSync(path, text),
+  rename: (from, to) => renameSync(from, to),
+  read: (path) => readFileSync(path, 'utf8').slice(0, 4096),
+}
+
+const plainFolder = (fs: WindowsRelayFs, path: string) => { const s = fs.lstat(path); return s.isDirectory() && !s.isSymbolicLink() }
+const plainFile = (fs: WindowsRelayFs, path: string) => { const s = fs.lstat(path); return s.isFile() && !s.isSymbolicLink() }
+
+/** Windows: the grant, in the owner's folder setup made, readable by the team account through the folder's ACL. */
+export async function publishWindowsTeamRelay(config: TeamConfig, grant: TeamRelayGrant, fs: WindowsRelayFs = realWindowsRelayFs,
+  dir: string = teamRelayDir(config.owner, 'win32')): Promise<void> {
+  const mine = (() => { try { return plainFolder(fs, dir) && !!config.ownerSid && fs.ownerSid(dir) === config.ownerSid } catch { return false } })()
+  if (!mine) throw new Error(`${dir} is not this account's: harness team setup makes it, and the Harness Team account cannot use this computer's subscriptions until then`)
+  await fs.setAcl(dir, config.ownerSid!, config.user)
+  // Made in the folder, so it takes the folder's ACL, then renamed over the last one: a reader never sees half of it.
+  const next = win32.join(dir, `.relay.${process.pid}.next`)
+  fs.write(next, `${JSON.stringify(grant)}\n`)
+  fs.rename(next, win32.join(dir, 'relay.json'))
+}
+
+/** Windows, in the team daemon: the owner's relay, when the folder and the file are the configured owner's; else null. */
+export function readWindowsTeamRelay(config: TeamConfig, fs: WindowsRelayFs = realWindowsRelayFs, dir: string = teamRelayDir(config.owner, 'win32')): TeamRelayGrant | null {
+  try {
+    const owner = config.ownerSid
+    const file = win32.join(dir, 'relay.json')
+    if (!owner || !plainFolder(fs, dir) || fs.ownerSid(dir) !== owner || !plainFile(fs, file) || fs.ownerSid(file) !== owner) return null
+    const value = JSON.parse(fs.read(file)) as Record<string, unknown>
+    if (typeof value.url !== 'string' || !RELAY_URL.test(value.url) || typeof value.token !== 'string' || !TOKEN.test(value.token)) return null
+    return { url: value.url, token: value.token }
+  } catch {
+    return null
+  }
+}
+
+export function withdrawTeamRelay(owner: string, platform: NodeJS.Platform = 'darwin'): void {
+  rmSync(teamRelayFile(owner, platform), { force: true })
 }
 
 export const teamRelayPublished = (config: TeamConfig, exists: (path: string) => boolean = (path) => {
   try { lstatSync(path); return true } catch { return false }
-}) => exists(teamRelayFile(config.owner))
+}, platform: NodeJS.Platform = 'darwin') => exists(teamRelayFile(config.owner, platform))
 
 export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRelay>, config: () => TeamConfig | null,
   team: () => boolean, log: (line: string) => void, afterPass?: (publishedAt: number | null) => Promise<void>): TeamRelayPublisher {
@@ -160,9 +253,10 @@ export function realTeamRelayPublisher(startRelay: () => Promise<SubscriptionRel
     config: () => process.env.VITEST ? null : config(),
     team, startRelay, log,
     user: () => userInfo().username,
-    publish: (c, grant) => publishTeamRelay(c, grant),
-    published: (c) => teamRelayPublished(c),
-    withdraw: withdrawTeamRelay,
+    publish: (c, grant) => process.platform === 'win32' ? publishWindowsTeamRelay(c, grant)
+      : publishTeamRelay(c, grant, process.getuid?.() ?? -1, grantFor(process.platform), teamRelayDir(c.owner, process.platform)),
+    published: (c) => teamRelayPublished(c, undefined, process.platform),
+    withdraw: (owner) => withdrawTeamRelay(owner, process.platform),
   })
 }
 
@@ -174,9 +268,12 @@ export interface TeamRelayReadDeps {
   ownerUid(home: string): number
   /** The file's text, refusing a link. */
   read(path: string): string
+  /** Where the folder is, and how its ACL shows in the mode: a Mac's unless told. */
+  platform?: NodeJS.Platform
 }
 
 const realReadDeps: TeamRelayReadDeps = {
+  platform: process.platform,
   lstat: (path) => lstatSync(path),
   ownerUid: (home) => statSync(home).uid,
   read: (path) => {
@@ -192,13 +289,19 @@ const realReadDeps: TeamRelayReadDeps = {
 
 /** The owner's relay for this team account, when the owner's daemon left one; null otherwise. */
 export function readTeamRelay(config: TeamConfig, deps: TeamRelayReadDeps = realReadDeps): TeamRelayGrant | null {
+  // Windows has no uid or mode to check: the owners' SIDs, asked of Windows.
+  if (deps === realReadDeps && process.platform === 'win32') return readWindowsTeamRelay(config)
   try {
+    const platform = deps.platform ?? 'darwin'
     const owner = deps.ownerUid(config.ownerHome)
-    const dir = deps.lstat(teamRelayDir(config.owner))
+    const dir = deps.lstat(teamRelayDir(config.owner, platform))
     if (!dir.isDirectory() || dir.uid !== owner || (dir.mode & 0o022) !== 0) return null
-    const file = deps.lstat(teamRelayFile(config.owner))
-    if (!file.isFile() || file.uid !== owner || (file.mode & 0o077) !== 0) return null
-    const value = JSON.parse(deps.read(teamRelayFile(config.owner))) as Record<string, unknown>
+    const file = deps.lstat(teamRelayFile(config.owner, platform))
+    // On Linux the group bits of a file with an ACL are its mask, r-- once the team account may read it: the group itself
+    // gets nothing (./relay.ts setfaclGrant). Writable or anyone's, it is not the owner's alone.
+    const closed = platform === 'linux' ? 0o037 : 0o077
+    if (!file.isFile() || file.uid !== owner || (file.mode & closed) !== 0) return null
+    const value = JSON.parse(deps.read(teamRelayFile(config.owner, platform))) as Record<string, unknown>
     if (typeof value.url !== 'string' || !RELAY_URL.test(value.url) || typeof value.token !== 'string' || !TOKEN.test(value.token)) return null
     return { url: value.url, token: value.token }
   } catch {
@@ -208,33 +311,43 @@ export function readTeamRelay(config: TeamConfig, deps: TeamRelayReadDeps = real
 
 /** What a Claude Code or Codex launch adds to spend the owner's subscription through the relay. */
 export interface OwnerRelayLaunch { env: Record<string, string>; args: string[] }
+/** Why a launch in a Codex home of its own (a Swarm Product Manager's) is not made: no sign-in there, and no relay to give it
+ *  one. The launch refuses or holds with it, never starting signed out (security re-checks of #2089). */
+export interface OwnerRelayRefusal { refused: string }
+export const NO_PM_RELAY = 'The owner\'s subscription relay is not available on this machine, so a Codex Product Manager cannot sign in here.'
 
 export interface TeamRelayLaunchDeps {
   /** Whether this daemon runs team work only. */
   team(): boolean
   config(): TeamConfig | null
-  /** Whether the team account signed this engine in itself. */
-  signedIn(engine: 'claude' | 'codex'): Promise<boolean>
+  /** Whether the team account signed this engine in itself: in [home], the launch's own Codex home, when it has one. */
+  signedIn(engine: 'claude' | 'codex', home?: string): Promise<boolean>
   read(config: TeamConfig): TeamRelayGrant | null
   /** Claude Code that never ran in the team account opens on its first-run screens, which nobody is there to answer:
    *  recorded as done, in the team account's own home, before the first launch on the relay. */
   onboarded(engine: 'claude' | 'codex'): void
-  /** Codex's home made ready for the relay before each launch ([prepareCodexHome]). Never throws. */
-  codexHome(grant: TeamRelayGrant): Promise<void>
+  /** Codex's home made ready for the relay before each launch ([prepareCodexHome]): [home], the launch's own, when it has one.
+   *  Never throws. */
+  codexHome(grant: TeamRelayGrant, home?: string): Promise<void>
 }
 
-/** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. */
-export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunchDeps): Promise<OwnerRelayLaunch | null> {
+/** In the team daemon, for an engine it has not signed in itself: the owner's relay, when there is one. [codexHome]: the
+ *  launch's own Codex home (a Swarm Product Manager's, superTabs/teamDaemon.ts pmEngineHome), whose sign-in and model list
+ *  are its own, not the daemon's (security re-check of #2089: it started signed out, without the owner's models). */
+export async function teamRelayLaunch(engine: AgentEngine, deps: TeamRelayLaunchDeps, codexHome?: string): Promise<OwnerRelayLaunch | OwnerRelayRefusal | null> {
   if (engine !== 'claude' && engine !== 'codex') return null
   if (!deps.team()) return null
+  const home = engine === 'codex' ? codexHome : undefined
+  // A Codex home of its own holds no sign-in but what it was given: with no relay it is refused, not launched signed out.
+  const none = home === undefined ? null : { refused: NO_PM_RELAY }
   const config = deps.config()
-  if (!config) return null
-  if (await deps.signedIn(engine).catch(() => false)) return null
+  if (!config) return home !== undefined && !await deps.signedIn(engine, home).catch(() => false) ? none : null
+  if (await (home === undefined ? deps.signedIn(engine) : deps.signedIn(engine, home)).catch(() => false)) return null
   const grant = deps.read(config)
-  if (!grant) return null
+  if (!grant) return none
   try { deps.onboarded(engine) } catch { /* The engine asks on its screen, as it would have. */ }
   if (engine === 'claude') return { env: claudeRelayEnv(grant.url, grant.token), args: [] }
-  await deps.codexHome(grant).catch(() => {})
+  await (home === undefined ? deps.codexHome(grant) : deps.codexHome(grant, home)).catch(() => {})
   return { env: codexRelayEnv(grant.token), args: codexRelayArgs(grant.url) }
 }
 
@@ -289,16 +402,16 @@ export function installedCodexVersion(home: string): string | null {
 }
 
 /** The team daemon's own: its sign-in, the root-owned config, its engines' sign-ins in its own home. */
-export const realTeamRelayLaunch = (engine: AgentEngine) => teamRelayLaunch(engine, {
+export const realTeamRelayLaunch = (engine: AgentEngine, codexHome?: string) => teamRelayLaunch(engine, {
   team: () => readAuthSession()?.kind === 'team',
   config: () => readTeamConfig(),
   // Only presence is read, never a secret (lib/engineAccount.ts); the team daemon has no login shell to read.
-  signedIn: async (e) => (await engineAccount(e, { home: homedir(), env: process.env, lastUsed: false })).signedIn === true,
+  signedIn: async (e, home) => (await engineAccount(e, { home: homedir(), env: home ? { ...process.env, CODEX_HOME: home } : process.env, lastUsed: false })).signedIn === true,
   read: (config) => readTeamRelay(config),
   onboarded: (e) => { if (e === 'claude') recordAcceptanceIn(join(homedir(), '.claude.json'), 'hasCompletedOnboarding') },
-  codexHome: (grant) => prepareCodexHome(process.env.CODEX_HOME || join(homedir(), '.codex'), grant,
+  codexHome: (grant, home) => prepareCodexHome(home ?? (process.env.CODEX_HOME || join(homedir(), '.codex')), grant,
     { fetch, version: () => installedCodexVersion(homedir()), now: Date.now }),
-})
+}, codexHome)
 
 /** In the team daemon: whether the owner's relay is there for its engines (superTabs/machines.ts readiness). */
 export const teamRelayed = (): boolean => {

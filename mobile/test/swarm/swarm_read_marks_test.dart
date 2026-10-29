@@ -182,6 +182,37 @@ void main() {
     expect(r.marks.unread(chat(r.reader, work)), isFalse);
   });
 
+  test("the server's marks come with the Swarm's reads, as on Desktop "
+      '(#2131): a read that moves only a mark still counts', () async {
+    final r = rig();
+    r.swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+      groups: [groupData(work, title: 'Work', lastMessageSequence: 4)],
+      derived: {
+        'readMarks': {work: 4},
+      },
+    );
+    await r.reader.refresh();
+    await settle();
+    expect(r.reader.snapshot!.readMarks, {work: 4});
+
+    moveOn(r.swarm, work, 9);
+    await r.reader.refresh();
+    await settle();
+    expect(r.marks.unread(chat(r.reader, work)), isTrue);
+
+    // Read to 9 on a Desktop computer: the next read moves only that mark.
+    r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c4',
+      derived: {
+        'readMarks': {work: 9},
+      },
+    );
+    await r.reader.refresh();
+    await settle();
+    expect(r.reader.snapshot!.readMarks, {work: 9});
+    expect(r.marks.unread(chat(r.reader, work)), isFalse);
+  });
+
   test('marks outlive the app: read back from the phone, and the first-read '
       'rule does not apply again', () async {
     final first = rig();
