@@ -483,53 +483,58 @@ class SuperTabLaunch {
         );
     if (saved['taskPosted'] != true &&
         (start.task.isNotEmpty || start.files.isNotEmpty)) {
-      final upload = uploadForTest ?? app.superTabs.upload;
-      final ids = [
-        for (final file in start.files)
-          superTabMap(
-                (await upload(
-                  tabId: tabId,
-                  conversationId: conversationId,
-                  name: file.name,
-                  mime: mimeForName(file.name),
-                  bytes: file.bytes,
-                  cancel: CancelToken(),
-                  onProgress: (_) {},
-                ))['attachment'],
-              )['id']
-              as String,
-      ];
-      checkAccount();
-      saved['taskOperationId'] ??= superTabOperationId();
-      await persist();
-      await send(saved['taskOperationId'] as String, {
-        'type': 'message.send',
-        'conversationId': conversationId,
-        'text': start.task,
-        'replyTo': null,
-        'recipientIds': const <String>[],
-        if (ids.isNotEmpty) 'attachmentIds': ids,
-      });
+      // Written once, with its files' ids: a retry after a lost reply sends
+      // this very request, so nothing is uploaded again.
+      if (saved['taskRequest'] == null) {
+        final upload = uploadForTest ?? app.superTabs.upload;
+        final ids = [
+          for (final file in start.files)
+            superTabMap(
+                  (await upload(
+                    tabId: tabId,
+                    conversationId: conversationId,
+                    name: file.name,
+                    mime: mimeForName(file.name),
+                    bytes: file.bytes,
+                    cancel: CancelToken(),
+                    onProgress: (_) {},
+                  ))['attachment'],
+                )['id']
+                as String,
+        ];
+        checkAccount();
+        saved['taskRequest'] = {
+          'operationId': superTabOperationId(),
+          'command': {
+            'type': 'message.send',
+            'conversationId': conversationId,
+            'text': start.task,
+            'replyTo': null,
+            'recipientIds': const <String>[],
+            if (ids.isNotEmpty) 'attachmentIds': ids,
+          },
+        };
+        await persist();
+      }
+      await _replay('taskRequest');
       saved['taskPosted'] = true;
+      saved.remove('taskRequest');
       await persist();
     }
-    saved['leadStartId'] ??= superTabOperationId();
-    await persist();
-    try {
-      await send(saved['leadStartId'] as String, {
+    // Kept as first sent until the Swarm answers it: after an unclear failure
+    // a retry repeats it, perhaps already committed, rather than asking again.
+    saved['leadStartRequest'] ??= {
+      'operationId': superTabOperationId(),
+      'command': {
         'type': 'lead.start',
         'projectId': saved['projectId'],
         'machineId': start.machineId,
         'engine': start.engine,
         'repositoryUrl': ?start.repositoryUrl,
-      });
-    } on SuperTabFailure {
-      // A refusal writes nothing (leadStart.ts): the next request, perhaps to
-      // another machine, is a new one.
-      saved.remove('leadStartId');
-      await persist();
-      rethrow;
-    }
+      },
+    };
+    await persist();
+    await _replay('leadStartRequest');
     final title = start.title ?? 'New project';
     saved['title'] = title;
     await persist();
@@ -544,6 +549,35 @@ class SuperTabLaunch {
     controller.select(conversationId);
     await app.superTabs.storage.delete(key);
   }
+
+  /// Sends the journal's request [key] exactly as it was first written: the
+  /// server answers a repeated operation with its receipt, and refuses one
+  /// whose request changed. Only a definite refusal drops it, so the next
+  /// attempt (perhaps to another machine) is a new request; any other failure
+  /// may have been committed and keeps it.
+  Future<void> _replay(String key) async {
+    try {
+      await app.superTabs.map(
+        'POST',
+        '/api/super-tabs/${saved['tabId']}/commands',
+        body: superTabMap(saved[key]),
+      );
+    } on SuperTabFailure catch (failure) {
+      if (_refusedOutright(failure)) {
+        saved.remove(key);
+        await persist();
+      }
+      rethrow;
+    }
+  }
+
+  /// The Swarm said no and wrote nothing: a 4xx answer other than a timeout
+  /// or a rate limit. A transport failure or a 5xx may have been committed.
+  static bool _refusedOutright(SuperTabFailure failure) =>
+      failure.statusCode >= 400 &&
+      failure.statusCode < 500 &&
+      failure.statusCode != 408 &&
+      failure.statusCode != 429;
 
   /// Refuses a machine the list cannot start the Product Manager on now.
   void checkLeadMachine(List<LeadMachine> machines, String machine) {
