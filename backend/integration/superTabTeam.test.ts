@@ -800,6 +800,16 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId })).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId: 'another' }, team)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     expect(await start()).toBe('TEAM_ACCOUNT_HELD')
+    // Nor the Mac's owner from an ordinary sign-in, which shares the Team session's person but is not its host, with no
+    // purge run (both security reviews of 0a181c00c), even once that sign-in resets the account row's Team mark.
+    const ordinary = () => run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, person).then(() => 'closed', (error: { code?: string }) => error.code)
+    expect({ forged: await ordinary(), after: await start() }).toEqual({ forged: 'TEAM_HOST_ONLY', after: 'TEAM_ACCOUNT_HELD' })
+    const row = (await db.machine.findFirst({ where: { machineId: 'team-mac' } }))!
+    const restore = () => db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: row.sessionKind, hostMachineId: row.hostMachineId } })
+    await db.machine.update({ where: { machineId: 'team-mac' }, data: { sessionKind: 'computer', hostMachineId: null } })
+    onTestFinished(async () => { await restore() })
+    expect({ forged: await ordinary(), after: await start() }).toEqual({ forged: 'TEAM_HOST_ONLY', after: 'TEAM_ACCOUNT_HELD' })
+    await restore()
     await run(f.tab, { type: 'agent.sessionClosed', agentId: pm, harnessId }, team)
     expect(await start()).not.toBe('TEAM_ACCOUNT_HELD')
   })

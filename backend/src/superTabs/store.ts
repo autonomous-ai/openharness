@@ -964,6 +964,14 @@ export class SuperTabStore {
       }
       if (hostMachineId && !['agent.startDispatch', 'agent.started', 'agent.startFailed', 'agent.startSettled', 'route.modelResult'].includes(command.type)) fail('FORBIDDEN', 'A host can only settle its queued starts.', 403)
       if (team !== null && !hostMachineId) this.teamCommand(original, team, user, command)
+      // A Team account's session is closed by its own team session: the Mac's owner is its machine owner too, and from an
+      // ordinary sign-in confirmed it, ending its hold with its data still there. A held one is on a Team account by
+      // definition, whatever the account row says now (review of #2142).
+      if (command.type === 'agent.sessionClosed' && team === null) {
+        const closing = original.closingSessions?.find(c => c.agentId === command.agentId && c.harnessId === command.harnessId && c.machineOwnerId === user.sub)
+        if (closing) await this.notTeamMachine(user, () => tx.machine.findFirst({ where: { machineId: closing.machineId, userId: user.sub,
+          autonomousEnv: user.autonomousEnv, ...machineAlive } }), !!closing.heldFor || teamByRecord(original, closing.machineId))
+      }
       // Accepting a Swarm's invitation from outside its Workspace makes the person a guest of the Workspace first (design, Roles).
       if (command.type === 'invite.accept' && !hostMachineId && original.workspaceId) {
         const email = user.email.trim().toLowerCase()
