@@ -103,7 +103,7 @@ export function planSetup(input: { state: Json; policy: Policy; leadId: string; 
       ...(pool.availableSlots === 0 ? ['This machine has no available agent slots.'] : []),
       ...unready.all,
       ...shortfalls(observed, needs),
-      ...(stalled(list(state.starts), id) ? [STALLED] : []),
+      ...(stalled(list(state.starts), id, pool, now) ? [STALLED] : []),
     ]
     // An engine that is not ready, or whose account has a window used up, starts nothing (the route refuses both).
     const exhausted = (engine: string) => {

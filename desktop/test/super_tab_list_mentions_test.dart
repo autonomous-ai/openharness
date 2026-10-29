@@ -64,7 +64,7 @@ SuperTabClient _client(
     transport: backend.call,
     discoveryInterval: Duration.zero,
     onTabs: (_, _) {},
-    onMention: (mention) => arrived?.add(mention.text),
+    onMention: (_, mention) => arrived?.add(mention.text),
     onTagCounts: onTagCounts,
   );
   addTearDown(client.dispose);

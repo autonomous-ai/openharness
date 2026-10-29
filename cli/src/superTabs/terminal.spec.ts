@@ -311,6 +311,23 @@ describe('dismissing Codex\'s update screen for a Swarm agent', () => {
   })
 })
 
+// Nova, the Lead of the Swarm autonomous-harness (2026-10-29): Claude Code's drafted bug report covered its prompt, and every
+// message to it came back undelivered until someone pressed a key in its terminal.
+describe('dismissing Claude Code\'s feedback popups for a Swarm agent', () => {
+  const DRAFT = '│ ✻ Bug report drafted: Lead switched Codex model │\n│ 1 to review · 2 to send · 0 to dismiss │\n────\n❯ '
+  const TURN_OFF = 'Turn off Claude-drafted feedback? 0 to turn off · Esc to keep\n────\n❯ '
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
+
+  it('dismisses the draft with 0, then keeps the setting with Esc, through the if-screen door, and raises no alert', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: DRAFT, hold: 'prompt_hidden' }) })
+    await t.host.tick([row()])
+    t.showing(() => ({ ok: true, text: TURN_OFF, hold: 'prompt_hidden' })); t.wait(15_000); await t.host.tick([row()])
+    expect(dismissed(t)).toEqual([['h1', ['0'], DRAFT], ['h1', ['Escape'], TURN_OFF]])
+    expect(t.core.superTabs!.input).not.toHaveBeenCalled()
+    expect(t.alerts()).toEqual([])
+  })
+})
+
 describe('progress for the machine report', () => {
   const showing = (text: string) => (): SuperTabScreen => ({ ok: true, text, hold: null })
 

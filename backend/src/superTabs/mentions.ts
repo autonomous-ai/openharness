@@ -1,4 +1,4 @@
-/** A Lead tags people in its message; each tag waits in the person's Swarm-wide list until they reply in that
+/** A person, or a project's Lead, tags people in a message; each tag waits in the person's Swarm-wide list until they reply in that
  *  conversation or mark it done. Tags live in SuperTabMention, never in the tab state, so an older backend still
  *  reads and writes a tab that has them. Called inside SuperTabStore's transactions. */
 import { createHash } from 'node:crypto'
@@ -7,6 +7,7 @@ import { ensureIndex } from '../lib/db/indexes.js'
 import { fail, isLeads, person, stableId, type Actor, type Conversation, type MessageDraft, type SuperTabState } from './model.js'
 import { canReadGroup, groupProject, ledProject, projectOf } from './projects.js'
 import { groupsBy } from './parts/indexed.js'
+import { usernameOf } from './usernames.js'
 
 type Tx = Prisma.TransactionClient
 export const MAX_MENTIONS = 5
@@ -22,17 +23,21 @@ export async function ensureMentionExpiry(db: PrismaClient): Promise<void> {
   await ensureIndex(db, 'SuperTabMention', { key: { createdAt: 1 }, name: 'mention_expiry', expireAfterSeconds: MENTION_EXPIRY_MS / 1000 })
 }
 
-/** Only the project's Lead tags, only in that project's conversations, and only people who can read the conversation. */
+/** A person who can post here tags people; among agents only the project's Lead, in that project's conversations. Never in
+ *  the Leads conversation, and only people who can read the conversation. A person's tag of themselves is dropped. */
 export function checkMentions(state: SuperTabState, actor: Actor, group: Conversation, personIds: string[]): string[] {
-  const ids = [...new Set(personIds)]
+  const ids = [...new Set(personIds)].filter(id => actor.kind !== 'person' || id !== actor.userId)
   if (!ids.length) return ids
-  const led = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
-  if (!led) fail('MENTION_FORBIDDEN', 'Only a project’s Lead can tag people.', 403)
-  if (isLeads(group) || groupProject(state, group).id !== led.id) fail('MENTION_FORBIDDEN', 'A Lead can tag people only in its own project’s conversations.', 403)
+  if (isLeads(group)) fail('MENTION_FORBIDDEN', 'Nobody is tagged in the Leads conversation.', 403)
+  if (actor.kind === 'agent') {
+    const led = ledProject(state, actor.agentId)
+    if (!led) fail('MENTION_FORBIDDEN', 'Only a project’s Lead can tag people.', 403)
+    if (groupProject(state, group).id !== led.id) fail('MENTION_FORBIDDEN', 'A Lead can tag people only in its own project’s conversations.', 403)
+  }
   for (const id of ids) {
     const member = state.people.find(p => p.id === id) ?? fail('INVALID_MENTION', 'Tag a person in this Swarm.', 400)
     if (!canReadGroup(state, { kind: 'person', userId: member.id, email: member.email }, group)) {
-      fail('INVALID_MENTION', `${member.email} cannot read this conversation.`, 400)
+      fail('INVALID_MENTION', `${usernameOf(state, member.id)} cannot read this conversation.`, 400)
     }
   }
   return ids
@@ -121,10 +126,12 @@ export async function listMentions(tx: Tx, tabId: string, state: SuperTabState, 
     select: { id: true, text: true, author: true } }) : []
   return tagged.map(({ row, group }) => {
     const message = messages.find(m => m.id === row.messageId)
-    const author = message?.author as { name?: string; displayName?: string } | undefined
+    const author = message?.author as { kind?: string; name?: string; displayName?: string } | undefined
+    // A person's name in a message is their email: the inbox shows their username, as everywhere in the Swarm.
+    const authorName = author?.kind === 'person' ? usernameOf(state, row.authorAgentId) ?? 'Someone' : author?.displayName ?? author?.name ?? 'Lead'
     return { id: row.id, projectId: row.projectId, projectName: projectOf(state, group.projectId ?? 'lead').name,
       conversationId: row.conversationId, conversationTitle: group.title, messageId: row.messageId,
-      leadId: row.authorAgentId, leadName: author?.displayName ?? author?.name ?? 'Lead', text: (message?.text ?? '').slice(0, 200),
+      leadId: row.authorAgentId, leadName: authorName, text: (message?.text ?? '').slice(0, 200),
       createdAt: row.createdAt, resolvedAt: row.resolvedAt, resolvedBy: row.resolvedBy }
   })
 }
