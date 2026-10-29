@@ -5,7 +5,11 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/engine_availability.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
+import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/machines.dart';
 import 'package:harness/super_tabs/project_options.dart';
@@ -378,11 +382,47 @@ void main() {
       await captureWindow(tester, shots, '5-share-swarm-$theme');
     }, skip: shots == null);
 
-    testWidgets('add machine ($theme)', (tester) async {
+    // Sharing your computers (Dee, 2026-10-29): the first time with this Mac alone, before and after Share; the
+    // checklist for several computers, its computer that isn't listed, and after Share; Machines afterwards.
+    Future<(SuperTabLaunchFixture, dynamic)> share(
+      WidgetTester tester, {
+      bool others = false,
+      List<Map<String, dynamic>> machines = const [],
+    }) async {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.app.macOSForTest = true;
       f.app.machineStates['m']!.machine = f.app.machineStates['m']!.machine
-          .copyWith(name: 'autonomous-code-vm-01.c.autonomous-code.internal');
+          .copyWith(name: 'MacBook Pro');
+      f.app.machineStates['m']!.engines.replace(const [
+        EngineAvailability(engine: 'claude', installed: true, signedIn: true),
+        EngineAvailability(engine: 'codex', installed: true, signedIn: false),
+      ]);
+      if (others) {
+        for (final (id, name, online) in [
+          ('m2', 'Mac Studio', true),
+          ('m3', 'autonomous-code-vm-01.c.autonomous-code.internal', true),
+          ('m4', 'Old MacBook Air', false),
+        ]) {
+          final machine = Machine(
+            machineId: id,
+            authMode: MachineAuthMode.remote,
+            name: name,
+          );
+          f.app.machines = [...f.app.machines, machine];
+          f.app.machineStates[id] = MachineState(machine)
+            ..nodeOnline = online
+            ..connectionStatus = online
+                ? ConnectionStatus.connected
+                : ConnectionStatus.disconnected
+            ..agentLoadStatus = AgentLoadStatus.loaded;
+        }
+        f.app.machineStates['m2']!.engines.replace(const [
+          EngineAvailability(engine: 'claude', installed: true, signedIn: true),
+          EngineAvailability(engine: 'codex', installed: true, signedIn: true),
+        ]);
+      }
+      f.connection.server.state['machines'] = machines;
       final c = await f.app.superTabs.open(tabId);
       await c.refresh();
       await _pump(
@@ -395,15 +435,79 @@ void main() {
             controller: c,
             app: f.app,
             onAddAgent: (_) {},
+            readLocal: (_) async => null,
           ),
         ),
       );
+      return (f, c);
+    }
+
+    Future<void> settle(WidgetTester tester) async {
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+      }
+    }
+
+    testWidgets('share this Mac ($theme)', (tester) async {
+      final (f, c) = await share(tester);
+      await captureWindow(tester, shots, '6-machines-empty-$theme');
       await tester.tap(find.byTooltip('Add machine'));
       await tester.pumpAndSettle();
-      await captureWindow(tester, shots, '6-add-machine-$theme');
+      await captureWindow(tester, shots, '6-share-this-mac-$theme');
+      await tester.tap(find.widgetWithText(FilledButton, 'Share this Mac'));
+      await settle(tester);
+      await captureWindow(tester, shots, '6-share-this-mac-done-$theme');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
-      c.dispose();
+      f.app.superTabs.dispose();
+    }, skip: shots == null);
+
+    testWidgets('share your computers ($theme)', (tester) async {
+      // Mono text follows the terminal font; a capture has only the bundled
+      // Roboto Mono to draw it with.
+      final font = terminalFontStore.value;
+      terminalFontStore.value = font.copyWith(fontFamily: 'Roboto Mono');
+      addTearDown(() => terminalFontStore.value = font);
+      final (f, c) = await share(tester, others: true);
+      await tester.tap(find.byTooltip('Add machine'));
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, '7-share-computers-$theme');
+      await tester.tap(find.text('Add a computer that isn’t listed…'));
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, '7-share-computers-add-$theme');
+      await tester.tap(find.text('Add a computer that isn’t listed…'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Share 3 computers'));
+      await settle(tester);
+      await captureWindow(tester, shots, '7-share-computers-done-$theme');
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
+    }, skip: shots == null);
+
+    testWidgets('machines after sharing ($theme)', (tester) async {
+      final (f, c) = await share(
+        tester,
+        others: true,
+        machines: [
+          {
+            'machineId': 'm',
+            'contributorId': 'owner',
+            'maxAgents': 16,
+            'observation': {
+              'receivedAt': DateTime.now().millisecondsSinceEpoch,
+            },
+          },
+          {'machineId': 'm4', 'contributorId': 'owner', 'maxAgents': 8},
+        ],
+      );
+      await tester.tap(find.byKey(const ValueKey('super-machine-m')));
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, '8-machines-shared-$theme');
+      await tester.pumpWidget(const SizedBox());
+      await c.flush();
+      f.app.superTabs.dispose();
     }, skip: shots == null);
 
     // As memory allows, the mockup's own state; At most at 160% text; and At most beside a long name.
