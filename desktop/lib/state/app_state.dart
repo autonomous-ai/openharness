@@ -1875,6 +1875,12 @@ class AppNotifier extends ChangeNotifier {
   /// closure announces its history id so the screen can offer to reopen it.
   Stream<String> get superTabClosures => _superTabClosures.stream;
 
+  /// The name of Swarm [tabId] if this account belongs to it, open here or
+  /// not; null for one it is not in.
+  String? superTabName(String tabId) =>
+      swarms.where((s) => s.superTabId == tabId).firstOrNull?.name ??
+      _superTabNames[tabId];
+
   /// Swarms hidden on this computer that the account still belongs to,
   /// by name. Saved with the hidden set, so a restart keeps them.
   List<({String id, String name})> get closedSuperTabs {

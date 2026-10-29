@@ -80,6 +80,8 @@ import '../super_tabs/pm_chat_shortcut.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
 import '../super_tabs/actions.dart';
+import '../super_tabs/controller.dart' show SuperTabController;
+import '../super_tabs/notifications.dart' show SuperTabMentions;
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
 import '../state/device_finder.dart';
@@ -736,11 +738,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
       if (machineId == SystemNotifications.mentionNoticeMachine) {
         final slash = agentId.indexOf('/');
         if (slash <= 0) return;
-        await _openSwarmNotice({
-          'swarmTabId': agentId.substring(0, slash),
-          'kind': 'mention',
-          'id': agentId.substring(slash + 1),
-        });
+        await _openTagNotice(
+          agentId.substring(0, slash),
+          agentId.substring(slash + 1),
+        );
         return;
       }
       // A device notice puts its marker where an agent's machine goes and the device's key where the
@@ -7189,6 +7190,37 @@ class _SwarmScreenState extends State<SwarmScreen> {
     } finally {
       if (mounted) await revealWindow();
     }
+  }
+
+  /// A click on a tag's system notice: the Swarm it is in, open here or not
+  /// (not loaded yet, its tab closed), opens at the tag. The account must
+  /// still be in that Swarm, and the server must still list the tag as the
+  /// person's to answer; otherwise nothing opens, and a Swarm loaded only to
+  /// check is let go again.
+  Future<void> _openTagNotice(String tabId, String mentionId) async {
+    final name = app.superTabName(tabId);
+    if (name == null) return;
+    final loadedHere = app.superTabs.peek(tabId) == null;
+    final SuperTabController controller;
+    try {
+      controller = await app.superTabs.open(tabId);
+    } catch (_) {
+      return;
+    }
+    final tags = SuperTabMentions.of(controller);
+    await tags.load();
+    final waiting = tags.waiting.any((m) => m.id == mentionId);
+    if (!mounted || !waiting || controller.accessRevoked) {
+      if (loadedHere && !app.swarms.any((s) => s.superTabId == tabId)) {
+        app.superTabs.release(tabId);
+      }
+      return;
+    }
+    if (_newHarness?.requestDismiss() == false) return;
+    _closeNewHarness(restoreFocus: false);
+    _closeSearch(restoreFocus: false);
+    app.openSuperTab(tabId, name);
+    controller.openNotice('mention', mentionId);
   }
 
   /// A row of the menu bar's Swarm section: its Swarm tab comes forward and

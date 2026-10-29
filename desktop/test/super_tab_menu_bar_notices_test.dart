@@ -348,58 +348,163 @@ void main() {
       f.dispose();
     }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
+    /// Mounts [f]'s app with its windows answering, and clicks a tag's system
+    /// notice as the macOS runner sends it back.
+    Future<Future<void> Function(String agentId)> clicker(
+      WidgetTester tester,
+      SuperTabLaunchFixture f,
+    ) async {
+      final messenger = tester.binding.defaultBinaryMessenger;
+      for (final (name, answer) in [
+        ('harness/swarm_tabs', (MethodCall call) async => true),
+        // The click raises the window first; it answers as a shown one.
+        (
+          'window_manager',
+          (MethodCall call) async =>
+              call.method == 'isMinimized' ? false : null,
+        ),
+      ]) {
+        final channel = MethodChannel(name);
+        messenger.setMockMethodCallHandler(channel, answer);
+        addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      }
+      await mount(tester, f.app, nativeTabs: true);
+      await tester.pump();
+      return (agentId) async {
+        messenger.handlePlatformMessage(
+          'harness/notifications',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall('tapped', {
+              'machineId': SystemNotifications.mentionNoticeMachine,
+              'agentId': agentId,
+            }),
+          ),
+          (_) {},
+        );
+        // The Swarm loads and its tags are read from the server first; then
+        // its view reads the tagged message's page.
+        for (var i = 0; i < 6; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+        }
+      };
+    }
+
+    /// A tag of the person in [server]'s `offline` group, away from the group
+    /// a Swarm opens on: the server's second tag, `mention-2`.
+    void tagInOffline(ConversationServer server) => server
+      ..append('Can you check offline sync?', conversationId: 'offline')
+      ..tag(server.messages.last['id'] as String, conversationId: 'offline');
+
     testWidgets(
       'a click on a tag\'s system notification brings its Swarm tab forward '
       'and opens the tagged message',
       (tester) async {
-        final messenger = tester.binding.defaultBinaryMessenger;
-        const tabs = MethodChannel('harness/swarm_tabs');
-        messenger.setMockMethodCallHandler(tabs, (call) async => true);
-        addTearDown(() => messenger.setMockMethodCallHandler(tabs, null));
-        // The click raises the window first; the window answers as a shown one.
-        const window = MethodChannel('window_manager');
-        messenger.setMockMethodCallHandler(
-          window,
-          (call) async => call.method == 'isMinimized' ? false : null,
-        );
-        addTearDown(() => messenger.setMockMethodCallHandler(window, null));
-        final f = SuperTabLaunchFixture(local: true);
+        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
         await tester.runAsync(() => openWithNotices(f));
         final swarmTab = f.app.activeSwarmId;
-        final c = f.app.superTabs.peek(tabId)!;
+        tagInOffline(f.connection.server);
         f.app.newSwarm(name: 'Desktop');
-        await mount(tester, f.app, nativeTabs: true);
-        await tester.pump();
-        expect(f.app.activeSwarmId, isNot(swarmTab));
-        // What the macOS runner sends back on a click: the slots as posted.
-        Future<void> click(String machineId, String agentId) async {
-          messenger.handlePlatformMessage(
-            'harness/notifications',
-            const StandardMethodCodec().encodeMethodCall(
-              MethodCall('tapped', {
-                'machineId': machineId,
-                'agentId': agentId,
-              }),
-            ),
-            (_) {},
-          );
-          await tester.pump();
-          await tester.pump();
-          await tester.pump();
-        }
-
+        final click = await clicker(tester, f);
+        final c = f.app.superTabs.peek(tabId)!;
         // A tag no longer waiting for the person opens nothing.
-        await click(SystemNotifications.mentionNoticeMachine, '$tabId/gone');
+        await click('$tabId/gone');
         expect(f.app.activeSwarmId, isNot(swarmTab));
-        expect(c.noticeRequest, isNull);
-        await click(
-          SystemNotifications.mentionNoticeMachine,
-          '$tabId/mention-1',
-        );
+        await click('$tabId/mention-2');
         expect(f.app.activeSwarmId, swarmTab);
-        // The Swarm view shown takes it and opens the message ('a tag opens
-        // its conversation at the tagged message' above).
-        expect(c.noticeRequest, (kind: 'mention', id: 'mention-1'));
+        // Its view takes the request and opens the tagged message's group.
+        expect(c.noticeRequest, isNull);
+        expect(c.selectedId, 'offline');
+        // The read marker's save settles.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'a click on a tag in a Swarm not loaded yet loads it, checks the tag, '
+      'and opens it',
+      (tester) async {
+        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        await tester.runAsync(() => openWithNotices(f));
+        f.app.newSwarm(name: 'Atlas');
+        f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
+        final atlas = f.app.activeSwarmId;
+        f.app.newSwarm(name: 'Desktop');
+        tagInOffline((f.connection as TwoSwarms).other);
+        expect(f.app.superTabs.peek(otherId), isNull);
+        final click = await clicker(tester, f);
+        await click('$otherId/mention-2');
+        expect(f.app.activeSwarmId, atlas);
+        final c = f.app.superTabs.peek(otherId)!;
+        expect(c.noticeRequest, isNull);
+        expect(c.selectedId, 'offline');
+        // The read marker's save settles.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'a click on a tag in a closed Swarm tab reopens it at the tag; one no '
+      'longer waiting reopens nothing',
+      (tester) async {
+        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        await tester.runAsync(() => openWithNotices(f));
+        f.app.newSwarm(name: 'Atlas');
+        f.app.bindSuperTab(f.app.activeSwarmId, otherId, 'Atlas');
+        final atlas = f.app.activeSwarmId;
+        await tester.runAsync(() async {
+          await f.app.superTabs.open(otherId);
+          await f.app.requestCloseSwarm(atlas);
+          for (var i = 0; i < 20; i++) {
+            await Future<void>.value();
+          }
+        });
+        expect(f.app.closedSuperTabs.map((t) => t.id), [otherId]);
+        tagInOffline((f.connection as TwoSwarms).other);
+        final before = f.app.activeSwarmId;
+        final click = await clicker(tester, f);
+
+        await click('$otherId/gone');
+        expect(f.app.activeSwarmId, before);
+        expect(f.app.closedSuperTabs.map((t) => t.id), [otherId]);
+        // What was loaded to check is let go again.
+        expect(f.app.superTabs.peek(otherId), isNull);
+
+        await click('$otherId/mention-2');
+        expect(f.app.activeSwarm.superTabId, otherId);
+        expect(f.app.closedSuperTabs, isEmpty);
+        final c = f.app.superTabs.peek(otherId)!;
+        expect(c.noticeRequest, isNull);
+        expect(c.selectedId, 'offline');
+        // The read marker's save settles.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'a click on a tag in a Swarm this account is not in opens nothing',
+      (tester) async {
+        final f = SuperTabLaunchFixture(connectionFactory: TwoSwarms.new);
+        await tester.runAsync(() => openWithNotices(f));
+        f.app.newSwarm(name: 'Desktop');
+        final before = f.app.activeSwarmId;
+        final click = await clicker(tester, f);
+        await click('$otherId/mention-1');
+        expect(f.app.activeSwarmId, before);
+        expect(f.app.superTabs.peek(otherId), isNull);
+        // The read marker's save settles.
+        await tester.pump(const Duration(seconds: 1));
         await tester.pumpWidget(const SizedBox());
         f.dispose();
       },
