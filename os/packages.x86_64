@@ -41,6 +41,10 @@ intel-media-driver
 wl-clipboard
 grim
 slurp
+# The desktop MCP (os/desktop_mcp.py): an agent's own keyboard and mouse on the screen it sees.
+wtype
+python-pywayland
+wlr-protocols
 xdg-utils
 xdg-desktop-portal-wlr
 pipewire

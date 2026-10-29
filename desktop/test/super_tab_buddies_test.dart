@@ -5,6 +5,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
+import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -71,7 +72,7 @@ void main() {
           await c.addBuddy(
             projectId: 'lead',
             machineId: 'ken-mac',
-            engine: 'codex',
+            engine: 'claude',
           ),
           isTrue,
         );
@@ -81,13 +82,31 @@ void main() {
             'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'ken-mac',
-            'engine': 'codex',
+            'engine': 'claude',
           },
         ]);
         expect(c.buddy('lead'), isNotNull);
         expect(c.selectedId, 'buddy-peer-lead');
       },
     );
+
+    test('a Codex Buddy is refused, as the backend does for now', () async {
+      final server = buddySwarm();
+      final c = server.controller(account: 'peer');
+      addTearDown(c.dispose);
+      await c.refresh();
+
+      expect(
+        await c.addBuddy(
+          projectId: 'lead',
+          machineId: 'ken-mac',
+          engine: 'codex',
+        ),
+        isFalse,
+      );
+      expect(c.operationError, kBuddyEngineRefusals['codex']);
+      expect(c.buddy('lead'), isNull);
+    });
 
     test('a refused add says why and opens nothing', () async {
       final server = buddySwarm();
@@ -538,15 +557,13 @@ void main() {
           expect(find.text('Kens-Mini'), findsWidgets);
           await tester.tap(find.text('Kens-Mini').last);
           await tester.pumpAndSettle();
-          await tester.tap(find.text('Codex'));
-          await tester.pumpAndSettle();
           await tester.tap(submit);
           await tester.pumpAndSettle();
           expect(commands(server, 'buddy.create').single, {
             'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'ken-mini',
-            'engine': 'codex',
+            'engine': 'claude',
           });
           await close(tester, c);
         },
@@ -607,8 +624,6 @@ void main() {
         };
         final c = await show(tester, server);
         await open(tester);
-        await tester.tap(find.text('Codex'));
-        await tester.pumpAndSettle();
         await tester.tap(submit);
         await tester.pumpAndSettle();
 
@@ -626,7 +641,31 @@ void main() {
         );
         await tester.tap(submit);
         await tester.pumpAndSettle();
-        expect(commands(server, 'buddy.create').last['engine'], 'codex');
+        expect(commands(server, 'buddy.create').last['engine'], 'claude');
+        await close(tester, c);
+      });
+
+      testWidgets('offers Codex turned off, saying why, and starts Claude', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        final c = await show(tester, server);
+        await open(tester);
+
+        final codex = find.widgetWithText(RadioListTile<String>, 'Codex');
+        expect(tester.widget<RadioListTile<String>>(codex).enabled, isFalse);
+        expect(
+          find.descendant(
+            of: find.byType(AlertDialog),
+            matching: find.text(kBuddyEngineRefusals['codex']!),
+          ),
+          findsOneWidget,
+        );
+        await tester.tap(codex);
+        await tester.pumpAndSettle();
+        await tester.tap(submit);
+        await tester.pumpAndSettle();
+        expect(commands(server, 'buddy.create').single['engine'], 'claude');
         await close(tester, c);
       });
 
@@ -710,7 +749,7 @@ void main() {
         'a Buddy that is down offers Start again on the same machine',
         (tester) async {
           final server = buddySwarm();
-          giveBuddy(server, engine: 'codex');
+          giveBuddy(server, engine: 'claude');
           ((server.state['agents'] as List).last as Map)['downSince'] =
               '2026-10-28T09:00:00Z';
           final c = await show(tester, server);
@@ -727,7 +766,7 @@ void main() {
             'type': 'buddy.create',
             'projectId': 'lead',
             'machineId': 'ken-mac',
-            'engine': 'codex',
+            'engine': 'claude',
           });
           // The new Buddy replaces the down one: one Buddy, running.
           expect(c.operationError, isNull);
@@ -737,6 +776,55 @@ void main() {
           );
           expect(c.buddy('lead')!.downSince, isNull);
           expect(find.text('Wren is offline. Your chat stays.'), findsNothing);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'a down Codex Buddy offers Claude Code in its place, on the same machine (review 2 of #2087)',
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server, engine: 'codex');
+          ((server.state['agents'] as List).last as Map)['downSince'] =
+              '2026-10-28T09:00:00Z';
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          expect(find.widgetWithText(TextButton, 'Start again'), findsNothing);
+          await tester.tap(
+            find.widgetWithText(TextButton, 'Start with Claude Code'),
+          );
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single, {
+            'type': 'buddy.create',
+            'projectId': 'lead',
+            'machineId': 'ken-mac',
+            'engine': 'claude',
+          });
+          expect(c.operationError, isNull);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets(
+        'a Codex Buddy whose start failed offers Claude Code in its place (review 2 of #2087)',
+        (tester) async {
+          final server = buddySwarm();
+          startBuddy(
+            server,
+            engine: 'codex',
+            error: 'Its machine did not start it within 3 minutes.',
+          );
+          final c = await show(tester, server);
+          await tester.tap(buddyEntry);
+          await tester.pumpAndSettle();
+
+          await tester.tap(
+            find.widgetWithText(TextButton, 'Start with Claude Code'),
+          );
+          await tester.pumpAndSettle();
+          expect(commands(server, 'buddy.create').single['engine'], 'claude');
           await close(tester, c);
         },
       );

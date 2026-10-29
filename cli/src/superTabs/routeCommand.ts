@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -299,11 +299,13 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
   if ('error' in choice) return required.machines || required.devices.length ? { ...choice, waiting: true, detail: WAITING } : choice
   const verdict = decide(choice)
   const operationId = `route-${newId()}`
-  const record = (v1: boolean) => scoped({ action: 'command', operationId,
-    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, v1) } })
-  let recorded = await record(false)
-  // A backend from before phase 1 refuses the new fields as invalid; the decision is still worth keeping in the shape it knows.
-  if (recorded.error === 'VALIDATION_ERROR') recorded = await record(true)
+  const record = (shape: RecordShape) => scoped({ action: 'command', operationId,
+    command: { type: 'route.record', conversationId: input.conversationId, decision: recordOf(choice, verdict, assessment, policy, shape) } })
+  let recorded = await record('current')
+  // A backend from before kinds, or before phase 1, refuses the new fields as invalid; the decision is still worth keeping in
+  // the shape it knows. A task with no kind has nothing to leave out at the first step.
+  if (recorded.error === 'VALIDATION_ERROR' && assessment.kind) recorded = await record('unkinded')
+  if (recorded.error === 'VALIDATION_ERROR') recorded = await record('v1')
   if (typeof recorded.error === 'string' && !TRANSPORT.has(recorded.error)) return recorded
   const routeDecisionId = recorded.ok === true ? object(object(recorded.value).result).routeDecisionId : undefined
   const decision = typeof routeDecisionId === 'string' ? `,"routeDecisionId":"${routeDecisionId}"` : ''
