@@ -1,11 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { CODEX_RELAY_ACCOUNT, type SubscriptionRelay } from '../lib/subscriptionRelay.js'
+import { engineAccount } from '../lib/engineAccount.js'
 import type { TeamConfig } from './config.js'
 import {
-  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher,
+  publishTeamRelay, readTeamRelay, TEAM_RELAY_GUEST, teamRelayDir, teamRelayFile, teamRelayLaunch, teamRelayPublished, TeamRelayPublisher, prepareCodexHome, installedCodexVersion, CODEX_CLIENT_VERSION_FALLBACK,
   type TeamRelayLaunchDeps, type TeamRelayPublisherDeps, type TeamRelayReadDeps,
 } from './relay.js'
 
@@ -148,7 +149,7 @@ describe('the team daemon, reading its owner\'s relay', () => {
 describe('a launch in the team account', () => {
   const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
   const launchDeps = (over: Partial<TeamRelayLaunchDeps> = {}): TeamRelayLaunchDeps => ({
-    team: () => true, config: () => config, signedIn: async () => false, read: () => grant, onboarded: vi.fn(), ...over,
+    team: () => true, config: () => config, signedIn: async () => false, read: () => grant, onboarded: vi.fn(), codexHome: vi.fn(async () => {}), ...over,
   })
 
   it('spends the owner\'s subscription for an engine it has not signed in itself', async () => {
@@ -158,6 +159,12 @@ describe('a launch in the team account', () => {
     const codex = await teamRelayLaunch('codex', deps)
     expect(codex?.env).toEqual({ HARNESS_RELAY_TOKEN: TOKEN })
     expect(codex?.args).toContain('model_provider="harness_owner"')
+    // Its home is made ready first (the owner's model list), and Codex stays an API-key provider of the relay.
+    expect(deps.codexHome).toHaveBeenCalledWith(grant)
+    expect(codex?.args).toContain('model_providers.harness_owner.env_key="HARNESS_RELAY_TOKEN"')
+    expect(codex?.args.join(' ')).not.toContain('requires_openai_auth')
+    // A home that could not be made ready still launches, as before.
+    expect((await teamRelayLaunch('codex', launchDeps({ codexHome: async () => { throw new Error('read-only') } })))?.args).toContain('model_provider="harness_owner"')
     // A first-run screen that cannot be recorded is left for the engine to ask.
     expect(await teamRelayLaunch('claude', launchDeps({ onboarded: () => { throw new Error('read-only') } }))).not.toBeNull()
     expect(await teamRelayLaunch('codex', launchDeps({ signedIn: async () => { throw new Error('keychain') } }))).not.toBeNull()
@@ -169,5 +176,58 @@ describe('a launch in the team account', () => {
     expect(await teamRelayLaunch('claude', launchDeps({ config: () => null }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ signedIn: async () => true }))).toBeNull()
     expect(await teamRelayLaunch('claude', launchDeps({ read: () => null }))).toBeNull()
+  })
+})
+
+describe('Codex\'s home for the relay', () => {
+  const home = () => { const dir = mkdtempSync(join(tmpdir(), 'team-codex-')); onTestFinished(() => rmSync(dir, { recursive: true, force: true })); return dir }
+  const grant = { url: 'http://127.0.0.1:9', token: TOKEN }
+  const models = [{ slug: 'gpt-6.1-sol', visibility: 'list' }, { slug: 'gpt-6-astra', visibility: 'list' }]
+  const answer = (status = 200, body: unknown = { models }) => vi.fn(async () => new Response(JSON.stringify(body), { status }))
+
+  // 2026-10-29: Codex on the relay knew only its built-in models, so a start's gpt-6.1-sol could not be chosen and it ran
+  // gpt-5.5, which ChatGPT refuses for the owner's account.
+  it('keeps the owner\'s model list where Codex reads it, asked through the relay with the relay token', async () => {
+    const dir = join(home(), '.codex'), fetch = answer()
+    await prepareCodexHome(dir, grant, { fetch: fetch as never, version: () => '0.165.0', now: () => Date.parse('2026-10-29T05:00:00Z') })
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:9/codex/models?client_version=0.165.0', expect.objectContaining({
+      headers: { authorization: `Bearer ${TOKEN}`, accept: 'application/json' } }))
+    const cache = JSON.parse(readFileSync(join(dir, 'models_cache.json'), 'utf8'))
+    expect(cache).toEqual({ fetched_at: '2026-10-29T05:00:00.000Z', client_version: '0.165.0', models })
+    expect(statSync(join(dir, 'models_cache.json')).mode & 0o777).toBe(0o600)
+    // An answer that is not a list, a refusal or no answer leaves the list there was.
+    for (const fetch of [answer(503), answer(200, { models: [] }), answer(200, { nope: 1 }), vi.fn(async () => { throw new Error('down') })]) {
+      await prepareCodexHome(dir, grant, { fetch: fetch as never, version: () => null, now: () => 0 })
+      expect(JSON.parse(readFileSync(join(dir, 'models_cache.json'), 'utf8')).client_version).toBe('0.165.0')
+    }
+  })
+
+  it('removes the relay sign-in CLI 0.5.1 wrote, which Codex\'s screen could not start with, and never the account\'s own', async () => {
+    const dir = join(home(), '.codex')
+    mkdirSync(dir)
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { access_token: TOKEN, account_id: CODEX_RELAY_ACCOUNT } }))
+    await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
+    expect(existsSync(join(dir, 'auth.json'))).toBe(false)
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { access_token: 'own', account_id: 'acct-1' } }))
+    await prepareCodexHome(dir, grant, { fetch: answer(503) as never, version: () => null, now: () => 0 })
+    expect(JSON.parse(readFileSync(join(dir, 'auth.json'), 'utf8')).tokens.account_id).toBe('acct-1')
+  })
+
+  it('asks for the version of the Codex the account installed, or a known one', async () => {
+    const root = home()
+    expect(installedCodexVersion(root)).toBeNull()
+    mkdirSync(join(root, '.local', 'lib', 'node_modules', '@openai', 'codex'), { recursive: true })
+    writeFileSync(join(root, '.local', 'lib', 'node_modules', '@openai', 'codex', 'package.json'), JSON.stringify({ version: '0.165.0' }))
+    expect(installedCodexVersion(root)).toBe('0.165.0')
+    const fetch = answer()
+    await prepareCodexHome(join(root, '.codex'), grant, { fetch: fetch as never, version: () => null, now: () => 0 })
+    expect(String((fetch.mock.calls[0] as unknown[])[0])).toContain(`client_version=${CODEX_CLIENT_VERSION_FALLBACK}`)
+  })
+
+  it('reads the relay\'s left-over sign-in as Codex not signed in', async () => {
+    const root = home()
+    mkdirSync(join(root, '.codex'))
+    writeFileSync(join(root, '.codex', 'auth.json'), JSON.stringify({ tokens: { access_token: TOKEN, account_id: CODEX_RELAY_ACCOUNT } }))
+    expect((await engineAccount('codex', { home: root, env: {}, lastUsed: false })).signedIn).toBe(false)
   })
 })

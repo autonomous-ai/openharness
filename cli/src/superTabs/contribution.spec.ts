@@ -232,10 +232,12 @@ describe('the owner setting how many agents a machine offers, from a terminal', 
     expect(await unread.set(8)).toEqual({ error: 'MACHINE_MEMORY_UNKNOWN', detail: 'Mac Studio has not reported its memory yet. Try again once it is online.' })
     expect([...f.sent, ...unread.sent]).toEqual([])
   })
-  it('refuses a paused machine, which the server would resume with its new number', async () => {
+  // The server keeps a paused machine paused when its settings are sent again (review of #2084).
+  it('changes a paused machine\'s number too, sending no pause of its own', async () => {
     const f = owned(192, { paused: true })
-    expect(await f.set(32)).toEqual({ error: 'MACHINE_PAUSED', detail: 'Mac Studio is paused. Resume it first: changing its agents would also resume it.' })
-    expect(f.sent).toEqual([])
+    expect(await f.set(32)).toEqual({ ok: true, machineId: 'studio', maxAgents: 32, maximum: 96 })
+    expect(f.sent.map(body => body.command)).toEqual([{ type: 'machine.contribute', machineId: 'studio', name: 'Mac Studio', cwd: '/Users/ken/harnesses/swarms/tab',
+      scope: 'swarm', engines: ['claude', 'codex'], maxAgents: 32 }])
   })
   it('passes on the server\'s refusal, such as another person\'s machine', async () => {
     const f = owned(192)
