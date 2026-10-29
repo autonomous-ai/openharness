@@ -210,6 +210,9 @@ void main() {
     await tester.tap(walk.key('swarm-reply-m6'));
     await walk.shot('reply-bar');
     await tester.tap(walk.key('swarm-reply-cancel'));
+    // A simulator's own keyboard hides the quote above the composer.
+    FocusManager.instance.primaryFocus?.unfocus();
+    await walk.wait(900);
 
     await tester.tap(walk.key('swarm-quote-m3'));
     await walk.wait(300);

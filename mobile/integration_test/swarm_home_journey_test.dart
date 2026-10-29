@@ -12,6 +12,7 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_drawer.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -243,17 +244,32 @@ Future<AppNotifier> _openShell(WidgetTester tester, _Swarm swarm) async {
 
 /// Open an agent explicitly from the project's team; Home keeps its scroll.
 Future<void> _openTerminal(WidgetTester tester, _Walk walk) async {
-  await tester.tap(walk.key('swarm-menu'));
-  await walk.waitFor(walk.key('swarm-drawer-project-$tab-$project'));
-  await tester.tap(walk.key('swarm-drawer-project-$tab-$project'));
-  await walk.waitFor(walk.key('swarm-project-menu'));
-  await tester.tap(walk.key('swarm-project-menu'));
-  await walk.waitFor(walk.key('swarm-project-menu-status'));
-  await tester.tap(walk.key('swarm-project-menu-status'));
-  await walk.waitFor(walk.key('swarm-sheet-team'));
-  await tester.tap(walk.key('swarm-sheet-team'));
-  await walk.waitFor(walk.key('swarm-open-terminal-agent-builder'));
-  await tester.tap(walk.key('swarm-open-terminal-agent-builder'));
+  // Each tap past its page's transition: mid-slide, a page is off to the
+  // right, and the one sliding out still answers its finder.
+  Future<void> tap(String key) async {
+    await walk.waitFor(walk.key(key));
+    await walk.wait(900);
+    await tester.tap(walk.key(key));
+  }
+
+  await tap('swarm-menu');
+  await walk.waitFor(walk.key('swarm-drawer-home'));
+  // Below a Buddy row for every project.
+  await tester.scrollUntilVisible(
+    walk.key('swarm-drawer-project-$tab-$project'),
+    200,
+    scrollable: find
+        .descendant(
+          of: find.byType(SwarmDrawer),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  await tap('swarm-drawer-project-$tab-$project');
+  await tap('swarm-project-menu');
+  await tap('swarm-project-menu-status');
+  await tap('swarm-sheet-team');
+  await tap('swarm-open-terminal-agent-builder');
 }
 
 /// One Swarm, "Phone Swarm", as the backend would send it: Mobile app (River
