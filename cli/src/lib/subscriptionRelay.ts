@@ -279,3 +279,45 @@ export function codexRelayArgs(relayUrl: string): string[] {
 export function codexRelayEnv(token: string): Record<string, string> {
   return { [RELAY_TOKEN_VAR]: token }
 }
+
+/**
+ * Codex on the relay as a ChatGPT sign-in, not an API key: the provider asks for the sign-in in `auth.json`, which holds
+ * [codexRelayAuth] (the relay token, nothing of the owner's). Through an API-key provider Codex never reads the
+ * account's model list, so its `/model` picker offered only its built-in models and the agent stayed on `gpt-5.5`,
+ * which ChatGPT refuses for an account it does not offer to ("The 'gpt-5.5' model is not supported when using Codex
+ * with a ChatGPT account": every Codex start in a Harness Team account, 2026-10-29). As a sign-in, Codex reads the
+ * owner's list through the relay (`/models`, kept in `models_cache.json`), and the model a start asks for is there.
+ */
+export function codexRelaySignInArgs(relayUrl: string): string[] {
+  const p = OWNER_CODEX_PROVIDER
+  return [
+    '-c', `model_provider="${p}"`,
+    '-c', `model_providers.${p}.name="Owner subscription"`,
+    '-c', `model_providers.${p}.base_url="${relayUrl.replace(/\/$/, '')}/codex"`,
+    '-c', `model_providers.${p}.requires_openai_auth=true`,
+    '-c', `model_providers.${p}.wire_api="responses"`,
+    '-c', `model_providers.${p}.supports_websockets=false`,
+  ]
+}
+
+/** The account id a relay sign-in names: what tells it apart from a sign-in of the account's own (`isCodexRelayAuth`).
+ *  The relay puts the owner's own account id on every request in its place. */
+export const CODEX_RELAY_ACCOUNT = 'harness-relay'
+
+/**
+ * The `auth.json` Codex reads for [codexRelaySignInArgs]: the relay token as its access token, and an id token that is
+ * no secret (unsigned, no expiry: Codex reads only its plan from it). `last_refresh` is now, and written again at each
+ * launch, so Codex never asks OpenAI to refresh it: the owner's daemon refreshes the owner's own sign-in.
+ */
+export function codexRelayAuth(token: string, now: number): string {
+  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+  const idToken = `${part({ alg: 'none', typ: 'JWT' })}.${part({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus', chatgpt_account_id: CODEX_RELAY_ACCOUNT } })}.relay`
+  return `${JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: idToken, access_token: token, refresh_token: CODEX_RELAY_ACCOUNT,
+    account_id: CODEX_RELAY_ACCOUNT }, last_refresh: new Date(now).toISOString() }, null, 2)}\n`
+}
+
+/** Whether a parsed `auth.json` is [codexRelayAuth]'s: the relay's, not a sign-in of the account's own. */
+export function isCodexRelayAuth(auth: unknown): boolean {
+  const tokens = auth && typeof auth === 'object' ? (auth as { tokens?: unknown }).tokens : null
+  return !!tokens && typeof tokens === 'object' && (tokens as { account_id?: unknown }).account_id === CODEX_RELAY_ACCOUNT
+}

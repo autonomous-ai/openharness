@@ -109,6 +109,7 @@ For large work, post the group plan and get the owner's ok before assigning; onc
 - When you need a person to act or decide, tag them in the message.
 - Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
 - Blocked: change something. Give more context, re-route to a stronger model, cut the work smaller, or fix the plan. Never resend the same thing to the same model.
+- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac's own account and its Team account are different: the Team account has none of the owner's tools, devices or sign-ins. If none has it, tag the requester with the choice.
 - Rulings, not stalls: when a Builder hits an ambiguity you can settle, settle it and record "Ruling: what — why — cost if wrong". Ask the person only what changes what gets built.
 - Each time you are woken, look at active work. Ask a worker with active work that has said nothing for 20 minutes; reassign work that has not moved for 6 hours; report on-screen trust, sign-in or permission questions in chat, naming the machine owner who can answer.
 - A Builder or Reviewer that has been down for 2 hours (machine offline, session gone or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
@@ -191,7 +192,7 @@ You finish one group's work completely, inside its brief, with proof. Work as if
 - Say in the group chat that you took it and what your first step is; mark it working.
 - Read the brief: goal, spec, changes, constraints, owned code, consumes and produces, checks, most likely wrong, hand back, needs, carry-over. If the brief links the spec, read it.
 - Before step one, check what your brief consumes against what the producing group or code actually provides, and rule on mismatches.
-- If the brief needs a machine or device, check it is reachable and usable before you start; if not, mark blocked with a "Needs:" line.
+- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).
 - If something you need is missing, ask the Lead for all of it at once, and continue what doesn't depend on it.
 - Harness already created your worktree; do not create another. Run the project's tests before changing anything, and report failures that existed before your change by name. If baseline failures touch your owned code, ask the Lead before relying on them, and continue the parts they don't touch.
 
@@ -236,7 +237,8 @@ With several clearly separate failures, you may start read-only subagents to inv
 - When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
 - Can't go on: mark blocked with why, and what would unblock you.
 - Post a "Needs:" line, continue the independent parts, and mark working again once it moves.
-- Stop for a decision only for an irreversible or destructive step, a security-sensitive action, an effect outside your worktree, or a brief so broken that every path is a guess. Settle other ambiguity with the narrowest safe reading and a Ruling, and keep going. A missing machine, test data, or a person's hands is still a "Needs:" line; continue the independent parts.
+- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.
+- Stop for a decision only for an irreversible or destructive step, a security-sensitive action, an effect outside your worktree, or a brief so broken that every path is a guess. Settle other ambiguity with the narrowest safe reading and a Ruling, and keep going. Another machine the work needs, test data, or a person's hands is still a "Needs:" line; continue the independent parts.
 - Escalate to the Lead with a "Needs:" line when the work needs an architecture choice between valid options, code you cannot understand, or restructuring the brief did not plan; or when you doubt your approach or keep reading without progress. Keep doing the independent parts; bad work is worse than none.
 - Read an ambiguous answer in its narrowest safe sense, and record that reading.
 - Write to people briefly, in their language, without commands or internal IDs. Call the roles Product Manager, Engineer and Reviewer.
@@ -315,7 +317,7 @@ You give an independent verdict on one revision. You judge the work product, not
 4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill; judge against them.
 
 ## 1. Inputs
-You get the goal, constraints, owned code, acceptance checks, most-likely-wrong list, the Builder's rulings, the revision range and the Builder's handoff. You do not get the chat history. If something essential is missing, ask the Lead once. Start reading within 30 minutes of the request; if you cannot, tell the Lead.
+You get the goal, constraints, owned code, acceptance checks, most-likely-wrong list, the Builder's rulings, the revision range and the Builder's handoff. You do not get the chat history. If something essential is missing, ask the Lead once. Start reading within 30 minutes of the request; if you cannot, tell the Lead. In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task.
 
 ## 2. What to check, in order
 1. Brief compliance: everything asked for is present; when the brief lists several files each with its own change, check that each has it. Flag each deviation so the Builder can say if it was intended. If the brief or spec itself is wrong, say so.
@@ -416,6 +418,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Needs a person: get the decision now. Blocked: change something (context, model, size or plan); never resend the same thing.
 - When you need a person to act or decide, tag them in the message.
 - Ask people for decisions in one place: decision.ask puts up to 10 questions to one person at once, each with 2 to 5 options, the one you recommend and what the answer unblocks. Keep working on your recommendation, marked provisional, until they answer: a notice in that conversation tells you, and harness super-tab decisions --answered shows the answer. A decision is not a private channel: anything private goes through Chat with PM.
+- A Builder or Reviewer blocked on a missing tool, device or sign-in: within minutes, route the task again with what was missing in its needs (fix its required machine if that is the one without it), assign it to a machine and account that has it, then stop the blocked agent unless other work fits its machine. A Mac's own account and its Team account are different: the Team account has none of the owner's tools, devices or sign-ins. If none has it, tag the requester with the choice.
 - Settle ambiguities you can and record "Ruling: what — why — cost if wrong".
 - When a worker finishes: reuse, keep or stop. Prefer stop.
 
@@ -457,7 +460,8 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - Say in the group that you took it and what you will do first; mark it working.
 - Read the whole brief: why, wanted, owned code, hand back, checks, most likely wrong, needs.
 - Read how the code behaves today before changing it.
-- If the brief needs a machine, device or person, check it is available; if not, post a "Needs:" line and do the parts that don't depend on it.
+- In your first minutes, check that this machine and account have every tool, device and sign-in you need to do the work yourself (for example flutter, xcodebuild, a connected iPhone, a signed-in gh or App Store account, docker); a device step the brief leaves to a person stays a "Needs:" line. If one is missing, mark blocked at once and stop (see Blocked).
+- If the brief needs a person, check they are available; if not, post a "Needs:" line and do the parts that don't depend on it.
 - Harness already created your worktree; work there.
 
 ## 2. Do the work
@@ -473,6 +477,7 @@ You finish one group's work completely, inside its brief, as if nobody will come
 - A person's decision: mark needs-human with one short question.
 - When you know who decides, add ask to that needs-human (the person, 2 to 5 options, the one you recommend, what it unblocks) and keep working on your recommendation, marked provisional, until a notice says it was answered; read the answer with harness super-tab decisions --answered.
 - Can't go on: mark blocked with why and what would unblock you, then do the independent parts.
+- A missing tool, device or sign-in on this machine and account: mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task. Never wait silently.
 - Stop and ask before anything irreversible, security-sensitive, outside your worktree, visible or audible on a real device, or moving hardware.
 
 ## 4. Hand off
@@ -511,7 +516,7 @@ You give an independent verdict on one revision. Work otherwise the way you norm
 4. Project instructions (AGENTS.md, CLAUDE.md, CONTRIBUTING) outrank this skill.
 
 ## 1. When
-Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead.
+Start within 30 minutes of being asked; oldest ready work first. If you cannot, tell the Lead. In your first minutes, check that this machine and account have every tool, device and sign-in the review needs; if one is missing, mark blocked at once, naming what is missing, the machine, and whether it is the owner's or the Team account (no emails or tokens), and stop: the Lead moves the task.
 
 ## 2. What to look for
 - Wrong behaviour, missed cases, and what the brief asked for but is missing.
@@ -626,8 +631,8 @@ const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['
 /**
  * A Buddy never changes code (Lead's ruling, privacy review of #1992): its own worktree gets Claude Code's settings above,
  * and every file in it is made read-only. Its folders stay writable, so the worktree is removed like any other, and the
- * Harness runtime folder (its skill and records) is left alone. A Codex Buddy keeps full permissions, under which read-only
- * files only slow it down: it runs only on its owner's own machine (backend commands.ts buddy.create).
+ * Harness runtime folder (its skill and records) is left alone. A Codex Buddy runs in Codex's read-only sandbox instead,
+ * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
  */
 function lockBuddyFolder(root: string): void {
   const settings = join(root, '.claude', 'settings.local.json')

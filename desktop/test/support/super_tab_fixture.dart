@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart' show CancelToken;
 import 'package:harness/super_tabs/attachment_upload.dart';
+import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/reading.dart';
 
@@ -680,6 +681,14 @@ class ConversationServer {
         // at once.
         final person = reader ?? 'owner';
         final projectId = command['projectId'] as String;
+        // As the backend: no Codex Buddy for now (security review 1 of #2087).
+        if (command['engine'] == 'codex') {
+          throw SuperTabFailure(
+            'BUDDY_ENGINE',
+            kBuddyEngineRefusals['codex']!,
+            statusCode: 403,
+          );
+        }
         bool mine(Object? a) =>
             a is Map &&
             (a['buddyOf'] as Map?)?['personId'] == person &&

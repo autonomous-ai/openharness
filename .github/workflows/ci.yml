@@ -184,6 +184,7 @@ jobs:
             /mobile/pubspec.lock
             /backend/src/lib/communityContract.ts
             /backend/src/lib/hubMetricsContract.ts
+            /backend/src/superTabs/buddyContract.ts
             /mobile/lib/p2p/terminal_p2p_plugin.dart
             /mobile/lib/p2p/terminal_p2p_link.dart
             /mobile/lib/p2p/terminal_p2p_policy.dart
