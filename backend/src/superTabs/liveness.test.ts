@@ -67,6 +67,24 @@ describe('a task waiting for review', () => {
     expect(working('ready for review — PR #2180, head 4f9c2e1d8a').status).toBe('working')
   })
 
+  // A short hash can be all digits or all letters (review of #2176): after '@', 'at ' or 'head ' any 7-40 hex counts.
+  it('takes an all-digit or all-letter revision named right after @, at or head', () => {
+    for (const revision of ['1234567', 'abcdefa']) {
+      expect(working(`Ready for review: PR #2180 @${revision}`).status).toBe('working')
+      expect(working(`Ready for review: PR #2180 at ${revision}`).status).toBe('working')
+      expect(working(`Ready for review — PR #2180, head ${revision}`).status).toBe('working')
+      expect(working(`Ready for review: PR #2180 HEAD ${revision}`).status).toBe('working')
+    }
+  })
+
+  it('does not take an all-digit or all-letter run anywhere else as a revision', () => {
+    expect(working('Ready for review on 20261029, PR #2180').status).toBe('lost')
+    expect(working('Ready for review: 1234567').status).toBe('lost')
+    expect(working('Ready for review: abcdefa').status).toBe('lost')
+    expect(working('Ready for review: PR #2180 at 12345678901234567890123456789012345678901').status).toBe('lost')
+    expect(working('Ready for review: chat 12:00 at 1234567x').status).toBe('lost')
+  })
+
   it('counts quiet time for a hand-off without a revision, any other result, or one a review has since found problems in', () => {
     expect(working('Ready for review soon, running the suite').status).toBe('lost')
     expect(working('Fixed 4f9c2e1; running the suite').status).toBe('lost')

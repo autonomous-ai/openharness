@@ -54,9 +54,11 @@ export function renewLease(assignment: Assignment, now: number): void {
   assignment.progressAt = now
 }
 
-/** A hand-off: a result that says it is ready for review and names a revision (a commit hash with a digit and a letter). */
+/** A hand-off: a result that says it is ready for review and names a revision (a commit hash). Right after '@', 'at ' or
+ *  'head ', the forms hand-offs use, any 7-40 hex digits count, since a short hash can be all digits or all letters;
+ *  anywhere else it needs a digit and a letter, so dates and other numbers do not count (review of #2176). */
 const READY_FOR_REVIEW = /\bready for review\b/i
-const REVISION = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
+const REVISION = /(?:@|\b(?:at|head)\s+)[0-9a-f]{7,40}\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/i
 
 /** Work that waits for its review, whose quiet time therefore does not count (2026-10-29: five Engineers who had handed
  *  over lost their tasks waiting for a Reviewer). In review, or working with a hand-off as its latest result, as Engineers
