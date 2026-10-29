@@ -30,16 +30,21 @@ class SwarmModelList {
 
 /// What [snapshot]'s machines' fresh readings say the Swarm can use now
 /// ([superTabLocalModelRows]), or null while its owner has not turned its
-/// models on.
+/// models on. With [lentBy], only what that person's own machines offer it.
 SwarmModelList? swarmModelList(
   SuperTabSnapshot snapshot, {
   required DateTime now,
+  String? lentBy,
 }) {
   final models = snapshot.localModels;
   if (models == null || !models.enabled) return null;
   final apis = <SwarmModelRow>[], local = <SwarmModelRow>[];
   final oneComputer = <SwarmModelRow>[];
-  for (final row in superTabLocalModelRows(snapshot, now: now)) {
+  for (final row in superTabLocalModelRows(
+    snapshot,
+    now: now,
+    lentBy: lentBy,
+  )) {
     switch (row.kind) {
       case 'api':
         // As Desktop names an API model: its own name without the
@@ -59,8 +64,10 @@ SwarmModelList? swarmModelList(
   return SwarmModelList(apis, local, oneComputer);
 }
 
-/// Your models, from the drawer: for each of the account's Swarms, the models
-/// it can use now. Read only — running and sharing models is on a computer.
+/// Your models, from You: for each of the account's Swarms, the models it
+/// can use now from the person's own machines — never a teammate's, nor
+/// their Harness Team account's (#2253's review). Read only — running and
+/// sharing models is on a computer.
 class SwarmModelsPage extends StatelessWidget {
   const SwarmModelsPage({super.key, this.now = DateTime.now});
 
@@ -171,7 +178,11 @@ class SwarmModelsPage extends StatelessWidget {
         null => SwarmSkeletonRows(id: 'swarm-models-loading-$id', rows: 3),
       });
     }
-    final list = swarmModelList(snapshot, now: now());
+    final list = swarmModelList(
+      snapshot,
+      now: now(),
+      lentBy: reader!.accountId,
+    );
     if (list == null) {
       return alone(
         _line(
@@ -185,7 +196,7 @@ class SwarmModelsPage extends StatelessWidget {
       return alone(
         _line(
           'swarm-models-none-$id',
-          'No models are running for this Swarm right now.',
+          'None of your models is running for this Swarm right now.',
         ),
       );
     }

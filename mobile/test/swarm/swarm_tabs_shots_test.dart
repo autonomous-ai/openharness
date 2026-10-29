@@ -6,37 +6,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
-import 'package:harness_mobile/phone/settings_page.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 import 'package:harness_mobile/swarm/swarm_tabs.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 
-import '../phone_edge/edge_fixture.dart' show edgeApp;
 import '../voice_fakes.dart';
+import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
 
 /// Review screenshots of Swarm's tab bar, direction C, as Tony's prototype
 /// C1 draws it (2026-10-30), with the tabs main has screens for: Swarm Home
 /// over the bar with what waits on the person counted on Activity, each
-/// tab's touch area outlined, Activity's Needs you, and You's Settings, on a
-/// 390-point phone in both phone themes, from made-up data only, to the
+/// tab's touch area outlined, Activity's Needs you, and You as C4 draws it,
+/// on a 390-point phone in both phone themes, from made-up data only, to the
 /// folder `SWARM_TABS_SHOTS` names.
 final shots = Platform.environment['SWARM_TABS_SHOTS'];
 void main() {
   setUpAll(() async {
     if (shots == null || !Platform.isMacOS) return;
-    PackageInfo.setMockInitialValues(
-      appName: 'Harness',
-      packageName: 'ai.autonomous.harness',
-      version: '1.2.3',
-      buildNumber: '456',
-      buildSignature: '',
-    );
     final sf = ByteData.sublistView(
       await File('/System/Library/Fonts/SFNS.ttf').readAsBytes(),
     );
@@ -108,15 +98,18 @@ void main() {
         'next': null,
       };
       final load = firstLoad(
-        head: headData(
-          name: 'Autonomous',
-          projects: [
-            projectOf('p-oh', 'openharness'),
-            projectOf('p-mobile', 'harness-mobile'),
-            projectOf('p-api', 'backend-api'),
-            projectOf('p-desk', 'desktop'),
-          ],
-        ),
+        head: {
+          ...headData(
+            name: 'Autonomous',
+            projects: [
+              projectOf('p-oh', 'openharness'),
+              projectOf('p-mobile', 'harness-mobile'),
+              projectOf('p-api', 'backend-api'),
+              projectOf('p-desk', 'desktop'),
+            ],
+          ),
+          'localModels': {'grid': 'grid-1', 'enabled': true},
+        },
         agents: [
           {
             ...agent('agent-river', name: 'Lead', displayName: 'River'),
@@ -129,6 +122,33 @@ void main() {
       );
       fake.routes['/api/super-tabs/$tab/parts'] = (_) => {
         ...load,
+        // A made-up person, in a meeting (no emoji: a test draws none), and
+        // the models one machine serves.
+        'members': [
+          part(me, 1, {
+            ...person(me),
+            'email': 'ada@example.com',
+            'status': {'text': 'In a meeting'},
+          }),
+        ],
+        'machines': [
+          part('mac-1', 1, {
+            'machineId': 'mac-1',
+            'name': 'Studio',
+            'contributorId': me,
+            'observation': {
+              'receivedAt': now.millisecondsSinceEpoch,
+              'localModels': [
+                for (final (model, kind) in [
+                  ('qwen3-coder', 'local'),
+                  ('llama-4', 'shared'),
+                  ('moonshotai/kimi-k3', 'api'),
+                ])
+                  {'grid': 'grid-1', 'model': model, 'kind': kind},
+              ],
+            },
+          }),
+        ],
         // The fixture's lead chat is another project's.
         'groups': [
           for (final row in load['groups'] as List)
@@ -167,6 +187,17 @@ void main() {
       final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
         ..value = {PhoneExperiment.swarm};
       final account = ValueNotifier<String?>(me);
+      final computers =
+          FakeComputers(const [
+              (name: 'Studio', away: false),
+              (name: 'Laptop', away: false),
+              (name: 'Mini', away: true),
+            ])
+            ..own = [
+              (id: 'studio', name: 'Studio', away: false),
+              (id: 'laptop', name: 'Laptop', away: false),
+              (id: 'mini', name: 'Mini', away: true),
+            ];
       final host = SwarmHost(
         accountId: () => me,
         account: account,
@@ -174,14 +205,8 @@ void main() {
         notices: SilentSystemNotices(),
         features: features,
         readMarks: MemoryKeyValueStore(),
+        computers: computers,
       )..foreground = false;
-      // The phone's own Settings as You, for a made-up person.
-      final app = edgeApp()
-        ..currentUser = const CurrentUserProfile(
-          id: 'u',
-          name: 'Ada Lovelace',
-          email: 'ada@example.com',
-        );
       final boundary = GlobalKey();
       final targets = ValueNotifier(<Rect>[]);
       await tester.pumpWidget(
@@ -207,10 +232,7 @@ void main() {
                 ],
               ),
             ),
-            home: SwarmTabsPage(
-              onSettings: (_) {},
-              settings: (_) => SettingsPage(notifier: app),
-            ),
+            home: SwarmTabsPage(onSettings: (_) {}),
           ),
         ),
       );
@@ -237,13 +259,19 @@ void main() {
       await tester.pumpAndSettle();
       await capture('activity');
       await tester.tap(find.byKey(const ValueKey('swarm-tab-you')));
-      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
       await capture('you');
+      targets.value = [
+        for (final row in ['status', 'models', 'devices', 'settings'])
+          tester.getRect(find.byKey(ValueKey('swarm-you-$row'))),
+      ];
+      await tester.pump();
+      await capture('you-targets');
+      targets.value = [];
       await tester.pumpWidget(const SizedBox());
-      await tester.pump(const Duration(seconds: 3));
-      app.dispose();
       await tester.pump(const Duration(seconds: 30));
       host.dispose();
+      computers.dispose();
       account.dispose();
       targets.dispose();
     }

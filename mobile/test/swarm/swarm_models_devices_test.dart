@@ -51,6 +51,8 @@ void main() {
           part('mac-1', 1, {
             'machineId': 'mac-1',
             'name': 'Studio',
+            // The person's own machine: Your models lists what it offers.
+            'contributorId': me,
             'observation': {
               'receivedAt': DateTime.now().millisecondsSinceEpoch,
               'localModels': [
@@ -309,7 +311,7 @@ void main() {
 
       expect(key('swarm-models-none-$tab'), findsOneWidget);
       expect(
-        find.text('No models are running for this Swarm right now.'),
+        find.text('None of your models is running for this Swarm right now.'),
         findsOneWidget,
       );
     });
@@ -339,7 +341,9 @@ void main() {
       expect(
         tester
             .getTopLeft(
-              find.text('No models are running for this Swarm right now.'),
+              find.text(
+                'None of your models is running for this Swarm right now.',
+              ),
             )
             .dx,
         12 + 4,

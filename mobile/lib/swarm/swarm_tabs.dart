@@ -13,6 +13,7 @@ import 'swarm_buddies_page.dart';
 import 'swarm_page.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
+import 'swarm_you_page.dart';
 
 /// Swarm's four tabs, along the foot of the screen in this order, as Tony's
 /// prototype C draws them (2026-10-30).
@@ -61,11 +62,11 @@ class SwarmTabEntry {
 /// Swarm's tabs, in the bar's order: each part of Swarm plugs its screen in
 /// here, one entry each: Home; Buddies ([SwarmBuddiesView]) with the Buddy
 /// chats that have something unread counted; Activity ([SwarmActivityView])
-/// with what waits on the person counted; and [settings], the phone's
-/// Settings, as You. [onSettings] opens Settings over Home.
+/// with what waits on the person counted; and You ([SwarmYouPage]).
+/// [onSettings] opens the phone's Settings over the tabs, from Home's drawer
+/// and from You.
 List<SwarmTabEntry> swarmTabs({
   void Function(BuildContext context)? onSettings,
-  required WidgetBuilder settings,
 }) => [
   SwarmTabEntry(
     tab: SwarmTab.home,
@@ -91,7 +92,7 @@ List<SwarmTabEntry> swarmTabs({
     tab: SwarmTab.you,
     label: 'You',
     icon: LucideIcons.circleUser300,
-    screen: settings,
+    screen: (_) => SwarmYouPage(onSettings: onSettings),
   ),
 ];
 
@@ -113,18 +114,10 @@ bool showSwarmTab(BuildContext context, SwarmTab tab) {
 /// Back on another tab goes to Home first; at Home, and while Harness covers
 /// the tabs, back is not the tabs'.
 class SwarmTabsPage extends StatefulWidget {
-  const SwarmTabsPage({
-    super.key,
-    this.onSettings,
-    required this.settings,
-    this.tabs,
-  });
+  const SwarmTabsPage({super.key, this.onSettings, this.tabs});
 
-  /// Settings over Home, from its drawer.
+  /// The phone's Settings over the tabs, from Home's drawer and from You.
   final void Function(BuildContext context)? onSettings;
-
-  /// The phone's Settings, as the You tab.
-  final WidgetBuilder settings;
 
   /// The tabs, in the bar's order; [swarmTabs] when null.
   final List<SwarmTabEntry>? tabs;
@@ -135,8 +128,7 @@ class SwarmTabsPage extends StatefulWidget {
 
 class _SwarmTabsPageState extends State<SwarmTabsPage> {
   late final List<SwarmTabEntry> _tabs =
-      widget.tabs ??
-      swarmTabs(onSettings: widget.onSettings, settings: widget.settings);
+      widget.tabs ?? swarmTabs(onSettings: widget.onSettings);
 
   late SwarmTab _open = _tabs.first.tab;
 
