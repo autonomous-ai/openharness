@@ -10,6 +10,7 @@ import * as parts from '../src/superTabs/parts/index.js'
 import { migrateSwarm } from '../src/superTabs/migration/migrate.js'
 import { dropLegacyStates } from '../src/superTabs/migration/dropLegacy.js'
 import { dropLegacyUntilDone, startLegacyDrop } from '../src/superTabs/migration/dropLegacyJob.js'
+import { SuperTabStore } from '../src/superTabs/store.js'
 import { writeLegacySwarm } from '../scripts/swarm-parts/legacy.js'
 import { NOW, richSwarm } from '../src/superTabs/read/fixture.test-support.js'
 
@@ -224,5 +225,15 @@ describe('the automatic removal after a release', () => {
     const late = await migratedSwarm()
     await new Promise(resolve => setTimeout(resolve, 300))
     expect(await kept(late)).toEqual(OLD_STATE)
+  })
+
+  it('never loads a kept old state into the rows the store and the host poll read', async () => {
+    await empty()
+    const tabId = await migratedSwarm()
+    const user = { sub: (await db.superTab.findUniqueOrThrow({ where: { id: tabId } })).ownerId, email: 'o@example.com', autonomousEnv: 'prod', role: 'user' } as const
+
+    const row = await new SuperTabStore(db).row(db, user, tabId)
+
+    expect(Object.keys(row).sort()).toEqual(['format', 'id', 'ownerId', 'revision'])
   })
 })
