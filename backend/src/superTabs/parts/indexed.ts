@@ -26,27 +26,73 @@ export const GROUP_INDEX = {
 } as const
 export type GroupIndex = keyof typeof GROUP_INDEX
 
-/** The indexes SwarmGroup had when last listed; none until then. A read names only these: naming one the database lacks
- *  fails the read, and in a transaction aborts it. */
-let present = new Set<GroupIndex>()
+/** Every index a hot read names, by collection, as prisma/schema.prisma declares them (roadmap Phase 3). */
+export const NAMED_INDEX = {
+  SwarmGroup: GROUP_INDEX,
+  SuperTab: {
+    /** An owner's Swarms in id order: the grid poll. */
+    owner: { autonomousEnv: 1, ownerId: 1, _id: 1 },
+    /** A member's Swarms in id order: Swarm lists and Workspace removals. */
+    members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
+  },
+  /** Each part kind's changes since a cursor; machines also by when they were last read. */
+  SwarmHead: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmMember: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmAgent: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 } },
+  SwarmStart: { changes: { tabId: 1, changedAt: 1 } },
+  SwarmProgress: { changes: { tabId: 1, changedAt: 1 } },
+  SuperTabMessage: {
+    /** A conversation's page in (sequence, id) order. */
+    sequence: { tabId: 1, conversationId: 1, sequence: 1, _id: 1 },
+    /** One thread's page. */
+    thread: { tabId: 1, conversationId: 1, thread: 1, sequence: 1 },
+    /** One message. */
+    id: { _id: 1 },
+  },
+  SuperTabDelivery: {
+    /** An agent's deliveries by status and age: its open ones, oldest first. */
+    agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
+  },
+} as const
+export type NamedCollection = keyof typeof NAMED_INDEX
+export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string
 
-/** Lists SwarmGroup's indexes, outside any transaction, and says which hot reads go without theirs. The worker's
+/** The named indexes each collection had when last listed; none until then. A read names only these: naming one the
+ *  database lacks fails the read, and in a transaction aborts it. */
+let present = new Map<NamedCollection, Set<string>>()
+
+const COLLECTIONS = Object.keys(NAMED_INDEX) as NamedCollection[]
+const indexOf = (collection: NamedCollection, name: string) => (NAMED_INDEX[collection] as Record<string, Record<string, number>>)[name]!
+
+/** Lists the named collections' indexes, outside any transaction, and says which hot reads go without theirs. The worker's
  *  `prisma db push` builds a new index at startup (Dockerfile.k8s), possibly after a server first lists them. */
-export async function listGroupIndexes(db: PrismaClient): Promise<void> {
+export async function listNamedIndexes(db: PrismaClient): Promise<void> {
   const generation = drops
-  const reply = await db.$runCommandRaw({ listIndexes: 'SwarmGroup' }) as unknown as { cursor: { firstBatch: Array<{ key: Record<string, unknown> }> } }
+  const listed = await Promise.all(COLLECTIONS.map(async collection => {
+    const reply = await db.$runCommandRaw({ listIndexes: collection }).catch(error => {
+      // A collection nothing has written yet has no indexes either.
+      if (/NamespaceNotFound|ns does not exist/i.test(error instanceof Error ? error.message : String(error))) return null
+      throw error
+    }) as unknown as { cursor: { firstBatch: Array<{ key: Record<string, unknown> }> } } | null
+    return [collection, new Set((reply?.cursor.firstBatch ?? []).map(index => Object.keys(index.key).join(',')))] as const
+  }))
   // A read dropped the listing while this one was on its way: its reply may predate the removal (review of #1994).
   if (drops !== generation) return
-  const fields = new Set(reply.cursor.firstBatch.map(index => Object.keys(index.key).join(',')))
-  const names = Object.keys(GROUP_INDEX) as GroupIndex[]
-  present = new Set(names.filter(name => fields.has(Object.keys(GROUP_INDEX[name]).join(','))))
-  const missing = names.filter(name => !present.has(name))
-  if (missing.length) logger.error('[swarm-reads] SwarmGroup lacks indexes hot reads name; they read without them', { missing: missing.map(name => GROUP_INDEX[name]) })
+  present = new Map(listed.map(([collection, fields]) => {
+    const names = Object.keys(NAMED_INDEX[collection])
+    const found = new Set(names.filter(name => fields.has(Object.keys(indexOf(collection, name)).join(','))))
+    const missing = names.filter(name => !found.has(name))
+    if (missing.length) logger.error(`[swarm-reads] ${collection} lacks indexes hot reads name; they read without them`, { missing: missing.map(name => indexOf(collection, name)) })
+    return [collection, found] as const
+  }))
 }
+/** The SwarmGroup listing's older name: it lists every named collection now. */
+export const listGroupIndexes = listNamedIndexes
 
 /** Lists the indexes now and every five minutes, until the process ends. */
 export function watchGroupIndexes(db: PrismaClient): void {
-  const list = () => listGroupIndexes(db).catch(error => logger.warn('[swarm-reads] listing SwarmGroup indexes failed', { error: error instanceof Error ? error.message : String(error) }))
+  const list = () => listNamedIndexes(db).catch(error => logger.warn('[swarm-reads] listing Swarm indexes failed', { error: error instanceof Error ? error.message : String(error) }))
   void list()
   setInterval(list, 5 * 60_000).unref()
 }
@@ -73,27 +119,34 @@ export async function retryStaleIndex<T>(run: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The rows of an `aggregateRaw` pipeline on SwarmGroup, through `index` once the database is known to have it. An index
- * removed since the last listing (a rollback, an index replaced) fails the read: the listing is dropped, said, and the read
- * runs without it at once outside a transaction. In one, the failed command aborted it, and Prisma may report only that:
- * its runner runs it again (`listingDrops`).
+ * The rows of an `aggregateRaw` pipeline on `collection`, through its index `name` once the database is known to have it.
+ * An index removed since the last listing (a rollback, an index replaced) fails the read: the listing is dropped, said, and
+ * the read runs without it at once outside a transaction. In one, the failed command aborted it, and Prisma may report only
+ * that: its runner runs it again (`listingDrops`).
  */
-export async function groupsBy(tx: Transaction, index: GroupIndex, pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> {
-  const run = async (hint?: Record<string, number>) => await tx.swarmGroup.aggregateRaw({ pipeline, ...hint ? { options: { hint } } : {} }) as unknown as
+export async function readBy<C extends NamedCollection>(tx: Transaction, collection: C, name: NamedIndex<C>,
+  pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> {
+  const model = (tx as unknown as Record<string, { aggregateRaw(args: unknown): Promise<unknown> }>)[collection[0]!.toLowerCase() + collection.slice(1)]!
+  const run = async (hint?: Record<string, number>) => await model.aggregateRaw({ pipeline, ...hint ? { options: { hint } } : {} }) as
     Array<Record<string, unknown>>
-  if (rerun.getStore() || !present.has(index)) return run()
+  if (rerun.getStore() || !present.get(collection)?.has(name)) return run()
   try {
-    return await run(GROUP_INDEX[index])
+    return await run(indexOf(collection, name))
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (!/hint provided does not correspond to an existing index|has been aborted/.test(message)) throw error
-    present = new Set()
+    present = new Map()
     drops++
-    logger.error('[swarm-reads] SwarmGroup lacks an index a hot read names; reads name none until the next listing', { index: GROUP_INDEX[index] })
+    logger.error('[swarm-reads] A Swarm collection lacks an index a hot read names; reads name none until the next listing',
+      { collection, index: indexOf(collection, name) })
     if (typeof (tx as { $transaction?: unknown }).$transaction === 'function') return run()
     throw error
   }
 }
+
+/** The rows of an `aggregateRaw` pipeline on SwarmGroup through `index` (readBy). */
+export const groupsBy = (tx: Transaction, index: GroupIndex, pipeline: Prisma.InputJsonValue[]): Promise<Array<Record<string, unknown>>> =>
+  readBy(tx, 'SwarmGroup', index, pipeline)
 
 /** A project's quiet conversations last active since `since`, as the project index serves them. A conversation stored with no
  *  project belongs to the first one (projects.ts groupProject); a null match is a missing field too. */

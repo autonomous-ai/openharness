@@ -28,7 +28,7 @@ export const GROUP_FIELDS = {
     'assignment.lost'],
   whenRunning: ['title', 'task.owns', 'assignment.execution', 'assignment.result'],
   unread: ['number', 'brief', 'reviewOf', 'checks', 'lastMessageSequence', 'lastMainSequence', 'pullRequestUrls', 'cards', 'messageSeq', 'reportSeq', 'lastActivityAt', 'lostAttempt', 'requesterId', 'ledger', 'reactionSeq', 'proposals', 'liveness', 'leadAction', 'stepUp',
-    'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf'],
+    'assignment.configuration', 'assignment.recordingProgress', 'assignment.leaseUntil', 'assignment.progressAt', 'assignment.askedOf', 'assignment.reviewFoundAt'],
 } as const
 const LIGHT_GROUP = {
   _id: 0, key: 1, version: 1, changedAt: 1, ordinal: 1, dormant: 1,
