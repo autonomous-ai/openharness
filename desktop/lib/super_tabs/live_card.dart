@@ -109,7 +109,9 @@ class _SuperTabLiveCardState extends State<SuperTabLiveCard> {
 
   List<Widget> _task() {
     final checks = widget.group.checks;
-    final passed = checks.where((c) => c['evidence'] != null).length;
+    // A failed check keeps its evidence; only a pass names who passed it
+    // (backend commands.ts `work.check`).
+    final passed = checks.where((c) => c['passedBy'] != null).length;
     return [
       Text(widget.group.label, style: DesktopChrome.control(medium: true)),
       SuperTabCardLine([

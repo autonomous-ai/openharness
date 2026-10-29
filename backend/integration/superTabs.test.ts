@@ -2136,9 +2136,11 @@ describe('Super Tabs on a real Mongo replica set', () => {
     const first = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
     const second = (await run(tab, { type: 'route.record', conversationId: 'lead', decision } as Command, host, lead)).result.routeDecisionId as string
     expect((await store.routeDecision(owner, tab, first)).outcome).toBe('superseded')
-    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    const rows = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: 'lead' }, orderBy: { sequence: 'asc' } })
     expect(rows.at(-1)).toMatchObject({ text: expect.stringContaining('"A small API change."'),
       source: { kind: 'route', decisionId: second, via: 'order', fallback: 'unsure', why: 'A small API change.' } })
+    // The Lead's ruling, 2026-10-29: routing in the project chat is agent bookkeeping, read by no one there (commands.ts).
+    expect((await store.messages(owner, tab, 'lead', {})).messages.map(m => m.id)).not.toContain(rows.at(-1)!.id)
     await expect(run(tab, { type: 'route.override', decisionId: first, candidateId: 'c1', reason: 'Needs Opus.' } as Command))
       .rejects.toMatchObject({ code: 'ROUTE_CLOSED' })
     await run(tab, { type: 'route.override', decisionId: second, candidateId: 'c1', reason: 'Needs Opus.' } as Command)
@@ -3035,10 +3037,13 @@ describe('Leads conversation', () => {
       host, lead)).result.conversationId)
     await run(tab, { type: 'work.define', conversationId: filter, task: task(['desktop/lib/super_tabs']), checks }, host, lead)
     const leads = (await store.read(owner, tab)).state.leadsConversationId!
-    const alerts = (await store.messages(owner, tab, leads, {})).messages
+    const alerts = await db.superTabMessage.findMany({ where: { tabId: tab, conversationId: leads } })
     expect(alerts).toEqual([expect.objectContaining({ source: { kind: 'overlap', conversationIds: [filter, roster] }, recipientIds: [docsLead],
       text: expect.stringContaining('"Agents filter" (Pilot') })])
     expect((await store.deliveries(host, tab, docsLead)).filter(d => d.conversationId === leads)).toHaveLength(1)
+    // The two Leads' to settle (Ken, 2026-10-29): the Lead it reaches reads it; people in the Leads chat do not.
+    expect((await store.messages(host, tab, leads, {}, docsLead)).messages.map(m => m.id)).toContain(alerts[0]!.id)
+    expect((await store.messages(owner, tab, leads, {})).messages.map(m => m.id)).not.toContain(alerts[0]!.id)
   })
 })
 

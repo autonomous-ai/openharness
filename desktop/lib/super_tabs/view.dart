@@ -20,6 +20,7 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'catch_up_card.dart';
 import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
@@ -28,6 +29,7 @@ import 'profile_actions.dart';
 import 'live_card.dart';
 import 'pull_request_facts.dart';
 import 'pull_requests.dart';
+import 'composer_files.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
@@ -341,7 +343,10 @@ class _SuperTabViewState extends State<SuperTabView>
     _selected = id;
     setState(() {});
     final mark = c.readMark(id), shown = _shownMessages(id);
-    if (_unread.startHistory(
+    if (c.awaitsNewest(id)) {
+      // Held from an earlier visit: the line is placed, the end followed and
+      // anything marked read once the newest messages have landed.
+    } else if (_unread.startHistory(
       id,
       shown,
       mark,
@@ -352,6 +357,7 @@ class _SuperTabViewState extends State<SuperTabView>
       // The line is placed once the messages reach back to the mark.
     } else if (_unread.decide(id, shown, mark, own: c.isOwn)) {
       _revealUnreadLine(id);
+      _loadCatchUp(id, mark);
     } else if (firstView || (grew && atEnd)) {
       _followEnd(id);
     } else if (atEnd) {
@@ -444,6 +450,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _readToEnd(String id, int sequence) {
     final scroll = _scroll[id];
     if (c.selectedId != id ||
+        c.awaitsNewest(id) ||
         _unread.waitsForHistory(id) ||
         !_chatIsVisible ||
         scroll == null ||
@@ -499,14 +506,28 @@ class _SuperTabViewState extends State<SuperTabView>
       id,
       0,
       arrived: (row) {
+        // The line itself, not its row: with the catch-up card under it the
+        // row can be taller than the view, and its top would go above it.
+        final line = _unread.key.currentContext;
         unawaited(
-          Scrollable.ensureVisible(row, alignment: .15).then((_) {
+          Scrollable.ensureVisible(
+            line != null && line.mounted ? line : row,
+            alignment: .15,
+          ).then((_) {
             _checkUnreadLine();
           }),
         );
       },
     );
   }
+
+  /// Reads [id]'s catch-up card for the span after [mark], shown under its
+  /// line once it arrives.
+  void _loadCatchUp(String id, int mark) => unawaited(
+    _unread.catchUps.load(id, () => c.readCatchUp(id, mark)).then((shown) {
+      if (shown && mounted) setState(() {});
+    }),
+  );
 
   /// Shows the jump pill while the reader is scrolled away from the line, and
   /// Jump to latest while the list is away from its newest message.
@@ -760,12 +781,7 @@ class _SuperTabViewState extends State<SuperTabView>
 
   /// A line break at the cursor. The field only calls [_composerEdited] for
   /// edits that come from the platform, so this reports its own.
-  void _insertNewline() {
-    final value = withNewline(_composer.value);
-    if (value == null) return;
-    _composer.value = value;
-    _composerEdited(value.text);
-  }
+  void _insertNewline() => insertComposerNewline(_composer, _composerEdited);
 
   void _composerMoved() {
     if (!mounted) return;
@@ -2701,8 +2717,17 @@ class _SuperTabViewState extends State<SuperTabView>
                 previous?.createdAt?.toLocal(),
               ))
             _date(time),
-          if (message.id == _unread.lineAt(c.selectedId))
+          if (message.id == _unread.lineAt(c.selectedId)) ...[
             SuperTabNewMessagesLine(key: _unread.key),
+            if (_unread.catchUps.of(c.selectedId) case final summary?)
+              SuperTabCatchUpCard(
+                summary: summary,
+                onOpen: (messageId) =>
+                    unawaited(_openMessage(c.selectedId, messageId)),
+                onClose: () =>
+                    setState(() => _unread.catchUps.dismiss(c.selectedId)),
+              ),
+          ],
           // The message itself is kept in place: its
           // date moves above earlier ones as they come.
           _BuiltRow(
@@ -3242,20 +3267,18 @@ class _SuperTabViewState extends State<SuperTabView>
                     _readAll()) {
                   return KeyEventResult.handled;
                 }
-                final enterDown =
-                    _focus.hasFocus &&
-                    event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.enter &&
-                    !(composing.isValid && !composing.isCollapsed);
-                if (!enterDown) return KeyEventResult.ignored;
-                if (keys.isControlPressed || keys.isMetaPressed) {
-                  return KeyEventResult.ignored;
-                }
-                // Shift+Enter and Alt+Enter write the line themselves: the platform
-                // gives Option+Return none, and a handled key never reaches it.
-                if (keys.isShiftPressed || keys.isAltPressed) {
-                  _insertNewline();
-                  return KeyEventResult.handled;
+                switch (composerEnter(
+                  event,
+                  focused: _focus.hasFocus,
+                  value: _composer.value,
+                )) {
+                  case ComposerEnter.ignore:
+                    return KeyEventResult.ignored;
+                  case ComposerEnter.newline:
+                    _insertNewline();
+                    return KeyEventResult.handled;
+                  case ComposerEnter.send:
+                    break;
                 }
                 unawaited(_send());
                 return KeyEventResult.handled;
@@ -3286,23 +3309,7 @@ class _SuperTabViewState extends State<SuperTabView>
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          ListenableBuilder(
-                            listenable: _files,
-                            builder: (context, _) => _files.isEmpty
-                                ? const SizedBox.shrink()
-                                : Padding(
-                                    padding: const EdgeInsets.only(
-                                      bottom: 8,
-                                      right: 8,
-                                    ),
-                                    child: NewHarnessAttachmentChips(
-                                      attachments: _files,
-                                      enabled: !c.saving,
-                                      isUploading: c.isUploading,
-                                      progressOf: c.uploadProgress,
-                                    ),
-                                  ),
-                          ),
+                          SuperTabComposerChips(controller: c, files: _files),
                           ConstrainedBox(
                             constraints: BoxConstraints(
                               minHeight: grid.AppControl.heightFieldScaled,

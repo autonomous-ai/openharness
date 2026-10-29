@@ -3,6 +3,7 @@ import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
+import { startFinished } from './parts/write.js'
 import { agentProjectId, canReadProject, groupProject, ledProject, projectsOf, teamAccountPool, type SwarmProject } from './projects.js'
 export { teamAccountPool } from './projects.js'
 import { conversation } from './model.js'
@@ -497,7 +498,9 @@ function poolSlots(state: SuperTabState, pool: ContributedMachine) {
   let pending = 0
   for (const start of state.starts ?? []) {
     if (start.request.machineId !== pool.machineId || start.error) continue
-    if (start.harnessId) { if (!stopped.has(start.harnessId)) running.add(start.harnessId) }
+    // A finished start's harness counts through its agent or its host's report. Reads keep finished starts until they expire,
+    // and counted every harness ever started there (Mac Studio, 10-29: 13 running, 121 counted, no free agents shown).
+    if (start.harnessId) { if (!startFinished(start) && !stopped.has(start.harnessId)) running.add(start.harnessId) }
     else pending++
   }
   return running.size + pending
@@ -537,22 +540,25 @@ export function localModelAllowed(state: SuperTabState, request: AgentStartReque
 
 /** `teamMachines`: the tab's machines whose account row is signed in as a team account, read by the store. A start is
  *  admitted again when its host launches it, so a Team machine whose check failed or went stale since never launches it. */
+/** [forProject]: the project it is for when that is not yet its conversation's, as New Project's Product Manager before the
+ *  project exists (leadStart.ts leadChoices). */
 export function admitMachineStart(state: SuperTabState, request: AgentStartRequest, now: number, start?: AgentStart, teamMachines: readonly string[] = [],
-  otherWorkspaceMachines: readonly string[] = []) {
+  otherWorkspaceMachines: readonly string[] = [], forProject?: SwarmProject) {
   const pool = machineContribution(state, request.machineId)
   if (!pool) return null
   if (pool.removal) fail('MACHINE_REMOVED', 'This machine is being removed from the Swarm.')
   if (start && start.poolGeneration !== pool.generation) fail('CONTRIBUTION_REVOKED', 'This machine contribution changed. Reconcile the original start.', 403)
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
-  const project = groupProject(state, conversation(state, request.conversationId))
+  const project = forProject ?? groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
   const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
   if (held && held !== project.id) {
     fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
   }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
-  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
-  if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
+  // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it. Nor to
+  // a Product Manager outside a Team account: any machine of the Swarm takes it (leadStart.ts, Ken 10-29).
+  if (!request.buddyOf && !(request.leadFor && !teamAccountPool(pool))) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)
   const cwd = projectFolder(pool, project)
   // Every refused field is named, with what the machine does accept. Values the caller sent are not echoed: an account
   // setting can be a path or a name of the caller's own.
