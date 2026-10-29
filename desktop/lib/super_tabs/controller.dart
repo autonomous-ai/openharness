@@ -1015,11 +1015,12 @@ class SuperTabController extends ChangeNotifier {
       final thread = SuperTabThread.fromJson(superTabMap(row));
       if ((held[thread.id]?.lastSequence ?? -1) > thread.lastSequence) continue;
       held[thread.id] = thread;
-      // A thread first seen here is read as far as the conversation is:
-      // replies the reader passed before threads were counted stay read.
+      // A thread first seen here is read as far as the conversation is,
+      // here or on another device: replies the reader passed before threads
+      // were counted stay read.
       _threadSeen.putIfAbsent(
         thread.id,
-        () => min(_readAt[id] ?? 0, thread.lastSequence),
+        () => min(readMark(id), thread.lastSequence),
       );
       if (openedThread?.root == thread.id) _seeThread(thread.id);
     }
