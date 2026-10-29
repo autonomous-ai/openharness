@@ -135,11 +135,14 @@ harnesses as `ps` does (name, the person's last asks, what each is about) and as
 nothing is asked of the backend beyond Jev's own route. `--json` answers `{"decided":"session", "id", "name",
 "machine", "confidence", "reason"}` (Jev's odds and its trace: names and odds, never the words) or
 `{"decided":"new", "reason"}`; new work is the caller's to start with `harness new`. When the router cannot be asked
-it answers `ROUTER_UNAVAILABLE` (exit 1): nothing was decided, and the caller acts on nothing.
+it answers `ROUTER_UNAVAILABLE` (exit 1): nothing was decided, and the caller acts on nothing. That covers Jev
+unreachable, the router busy (eight decisions in flight, two per caller) and a caller it does not take; its `detail`
+says which.
 
 - **`--send`** types the words into the harness picked exactly as `harness reply` does: idle only, through its
-  machine's mailbox. The answer adds `"sent": {"state": "queued"}`, or `{"error": "NOT_IDLE" | "NOT_RUNNING"}` with
-  nothing sent. Exit 0 once decided, sent or not: read `sent`.
+  machine's mailbox. The answer adds `"sent": {"state": "queued"}`, or `{"error": "NOT_IDLE" | "NOT_RUNNING" |
+  "FAILED", "detail"}` with nothing sent: `FAILED` is the machine's mailbox refusing the words (its `detail` says
+  why). Exit 0 once decided, sent or not: read `sent`.
 - **`NOT_IDLE`** means it is still on the last words, or waits for the person. Wait for it (`harness wait`, the
   answer's `next`) and send them with `harness reply`, or say so. Never start new work for them: a follow-up ("how is
   it going?") would become a second harness.

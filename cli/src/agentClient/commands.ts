@@ -77,10 +77,12 @@ Says which of a machine's harnesses in a pane <words> belong to, as the person's
 With --send, words for an idle one are typed into it, as harness reply does; nothing is ever started. For a program
 acting for the person, while they allow it (harness settings programs-reply).
 --json answers {"decided":"session","id","name","machine","confidence","reason"} or {"decided":"new","reason"},
-and with --send "sent": {"state":"queued"} or {"error":"NOT_IDLE"|"NOT_RUNNING",…}. NOT_IDLE: it is still working
+and with --send "sent": {"state":"queued"} or {"error":"NOT_IDLE"|"NOT_RUNNING"|"FAILED",…}, nothing typed (FAILED:
+its machine's mailbox refused them). NOT_IDLE: it is still working
 on the last words or waits for the person. Wait for it (harness wait <name>) and send them with harness reply, or
 say so: never start new work for them, or a follow-up ("how is it going?") becomes a second harness.
-Exit status: 0 once decided (sent or not: read "sent"), 5 refused (switch off), 1 nothing decided (ROUTER_UNAVAILABLE).
+Exit status: 0 once decided (sent or not: read "sent"), 5 refused (switch off), 1 nothing decided (ROUTER_UNAVAILABLE:
+Jev unreachable, the router busy, or a caller it does not take; its detail says which).
 ${ON_MACHINE}`
 export const TELL_USAGE = `Usage: harness tell [--machine <name>] <name> [--json] -- <work…>
 
