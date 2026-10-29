@@ -1121,7 +1121,8 @@ export class SuperTabHost {
     // tried again later, rather than hand the Buddy files it cannot open.
     const links = artifactLinks(message.text)
     const key = this.isBuddy(entry) && (files.paths.length || links.length) ? this.core.agents.byAgent(entry.harnessId)?.swarmSkill?.key : undefined
-    const sent = key && await this.fromOwnPerson(entry, message, result.buddyNews === true) ? { key, files: files.paths, links } : null
+    const own = key ? await this.fromOwnPerson(entry, message, result.buddyNews === true) : null
+    const sent = key && own ? { key, files: files.paths, links: own.onTheirMachine ? links : [] } : null
     this.prefix ??= this.agentCommand(this.core, this.machineId).catch(() => fullCommandPrefix(this.core.daemon, this.machineId))
     const command = await this.prefix
     let quote = this.quotes.get(deliveryId)
@@ -1150,18 +1151,21 @@ export class SuperTabHost {
   /** Whether a Buddy's delivery is its own person's message in their own Buddy chat, the one source of files and links its
    *  guard lets it read (lib/buddyGuard.ts). Read as the Buddy now, never from the delivery alone. Not its person's own: news
    *  from outside its chat (the server marks it), the PM's private lines there, another person's message, another chat, an
-   *  archived one, and its agent id on another session, as another person's Buddy, or from an earlier membership. */
-  private async fromOwnPerson(entry: Entry, message: Json, buddyNews: boolean): Promise<boolean> {
+   *  archived one, and its agent id on another session, as another person's Buddy, or from an earlier membership.
+   *  `onTheirMachine`: the Buddy runs on its person's own machine, whose Claude sign-in the Artifact tool reads as; on
+   *  anybody else's it would read their artifacts, so a link is listed only there. */
+  private async fromOwnPerson(entry: Entry, message: Json, buddyNews: boolean): Promise<{ onTheirMachine: boolean } | null> {
     const author = object(message.author)
-    if (buddyNews || author.kind !== 'person' || !identifier(author.id)) return false
+    if (buddyNews || author.kind !== 'person' || !identifier(author.id)) return null
     const { state } = await this.sources.reads.read(entry.tabId, entry.agentId)
     const agent = (Array.isArray(state.agents) ? state.agents.map(object) : []).find(a => a.id === entry.agentId)
     const chat = (Array.isArray(state.conversations) ? state.conversations.map(object) : []).find(c => c.id === message.conversationId)
     const owner = object(agent?.buddyOf)
-    return !!agent && !!chat && agent.harnessId === entry.harnessId && owner.personId === author.id
+    const own = !!agent && !!chat && agent.harnessId === entry.harnessId && owner.personId === author.id
       && typeof owner.generation === 'string' && owner.generation === author.membershipGeneration
       && chat.kind === 'buddy' && chat.buddyOwnerId === author.id && chat.archived !== true
       && Array.isArray(chat.agentIds) && chat.agentIds.includes(entry.agentId) && chat.projectId === agent.projectId
+    return own ? { onTheirMachine: agent!.machineOwnerId === author.id } : null
   }
 
   /** The message a reply answers, quoted into the delivery: agents skipped the command that reads it, and a Lead took Ken's

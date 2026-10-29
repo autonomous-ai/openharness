@@ -1000,7 +1000,8 @@ describe('Super Tab attachments in delivered input', () => {
 describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
   const LINK = 'https://claude.ai/artifact/abc-123'
   const person = { kind: 'person', id: 'peer', name: 'peer@example.com', membershipGeneration: 'g' }
-  const buddyAgent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', projectId: 'app', buddyOf: { personId: 'peer', generation: 'g' } }
+  const buddyAgent = { id: 'agent', harnessId: 'harness', machineId: 'machine-1', machineOwnerId: 'peer', projectId: 'app',
+    buddyOf: { personId: 'peer', generation: 'g' } }
   const buddyChat = { id: 'chat', kind: 'buddy', projectId: 'app', title: 'Buddy', leadId: null, agentIds: ['agent'], buddyOwnerId: 'peer' }
   const key = 'buddy-session'
   const picture = { id: 'a1', name: 'screen.png', mime: 'image/png', size: 3, url: 'https://cdn.example.test/x' }
@@ -1070,6 +1071,17 @@ describe('what a Buddy\'s own person sends it in their Buddy chat', () => {
     await host.tick()
     expect(delivered).toHaveLength(1)
     expect(listed()).toBeNull()
+    expect(delivered[0]!.text).not.toContain('Artifact links your owner sent')
+  })
+
+  // The Artifact tool reads as the Claude sign-in of the machine the Buddy runs on: its person's own, or nobody's link.
+  it.each([
+    ['someone else\'s machine', { ...buddyAgent, machineOwnerId: 'sam' }],
+    ['a machine its read names no owner of', { ...buddyAgent, machineOwnerId: undefined }],
+  ])('lists its files but no Artifact link when it runs on %s', async (_, agent) => {
+    const { host, shot, delivered } = buddyOn({}, { agents: [agent] })
+    await host.tick()
+    expect(delivered[0]!.list).toMatchObject({ files: [{ path: shot }], links: [] })
     expect(delivered[0]!.text).not.toContain('Artifact links your owner sent')
   })
 
