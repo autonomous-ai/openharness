@@ -10,7 +10,10 @@ import 'package:harness/shared/theme/app_icons.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/shared/widgets/app_menu.dart';
 import 'package:harness/state/harness_attachments.dart';
+import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_launch_integration.dart';
+import 'package:harness/state/lead_placement.dart';
 import 'package:harness/state/new_harness.dart';
 import 'package:harness/super_tabs/project_visibility.dart';
 import 'package:harness/widgets/new_harness_form.dart';
@@ -52,6 +55,8 @@ void main() {
     bool attachments = true,
     bool visibilityLocked = false,
     bool otherRequest = false,
+    List<LeadMachine>? leadMachines,
+    void Function(SuperTabLaunchFixture f)? setup,
   }) async {
     final oldBrightness = grid.AppTheme.brightness.value;
     grid.AppTheme.brightness.value = brightness;
@@ -65,6 +70,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final f = SuperTabLaunchFixture();
+    setup?.call(f);
     final files = attachments ? HarnessAttachments() : null;
     final box = NewHarnessController(
       f.app,
@@ -80,7 +86,7 @@ void main() {
         prepare: (_, task) async => task,
         beforeSubmit: (_, _) async {},
         complete: (_, _) async {},
-      ),
+      )..leadMachines = leadMachines,
     )..linkingProfile = otherRequest;
     addTearDown(box.dispose);
     final boundary = GlobalKey();
@@ -272,4 +278,290 @@ void main() {
       },
     );
   }
+
+  const studio = LeadMachine(
+    id: 'm',
+    name: 'Mac Studio',
+    online: true,
+    freeAgents: 9,
+    repositories: {'github.com/autonomous-ai/autonomous-os'},
+  );
+  const rig = LeadMachine(
+    id: 'rig',
+    name: '2x 4090 Rig',
+    online: true,
+    freeAgents: 14,
+    unavailable: 'Another person’s machine',
+  );
+  const laptop = LeadMachine(
+    id: 'laptop',
+    name: 'Ken MacBook',
+    online: true,
+    freeAgents: 2,
+    maySleep: true,
+  );
+  void addLaptop(SuperTabLaunchFixture f) {
+    const machine = Machine(
+      machineId: 'laptop',
+      authMode: MachineAuthMode.remote,
+      name: 'Ken MacBook',
+    );
+    f.app.machines = [...f.app.machines, machine];
+    f.app.machineStates['laptop'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agentLoadStatus = AgentLoadStatus.loaded
+      ..agents = [];
+  }
+
+  final leadLine = find.byKey(const ValueKey('new-harness-lead-line'));
+  final change = find.byKey(const ValueKey('new-harness-lead-change'));
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'New Project in a Swarm asks only task, repo and visibility in ${brightness.name}',
+      (tester) async {
+        final (box, boundary) = await mount(
+          tester,
+          brightness: brightness,
+          leadMachines: [studio, rig],
+        );
+        expect(
+          find.descendant(
+            of: leadLine,
+            matching: find.textContaining(
+              'Product Manager: Mac Studio · ${box.agentLabel}',
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: _composer, matching: leadLine),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: _composer,
+            matching: find.byKey(const ValueKey('new-harness-field-project')),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: _composer, matching: _visibility),
+          findsOneWidget,
+        );
+        for (final hidden in [
+          'agent',
+          'machine',
+          'model',
+          'worktree',
+          'branch',
+          'approvals',
+          'profile',
+        ]) {
+          expect(
+            find.byKey(ValueKey('new-harness-field-$hidden')),
+            findsNothing,
+            reason: hidden,
+          );
+        }
+        expect(
+          tester.getCenter(leadLine).dy,
+          closeTo(tester.getCenter(_start).dy, 4),
+        );
+        await shot(tester, boundary, 'new-project-lead-${brightness.name}');
+
+        await tester.tap(change);
+        await tester.pumpAndSettle();
+        final studioRow = find.byKey(
+          const ValueKey('new-harness-lead-machine-m'),
+        );
+        final rigRow = find.byKey(
+          const ValueKey('new-harness-lead-machine-rig'),
+        );
+        expect(studioRow, findsOneWidget);
+        expect(rigRow, findsOneWidget);
+        expect(
+          find.descendant(
+            of: studioRow,
+            matching: find.text('Online · 9 agents free · Has repo'),
+          ),
+          findsNothing,
+          reason: 'has repo is only known for a known repository',
+        );
+        expect(
+          find.descendant(
+            of: studioRow,
+            matching: find.textContaining('Online · 9 agents free'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(of: studioRow, matching: find.byIcon(AppIcons.check)),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: rigRow,
+            matching: find.text('Another person’s machine'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<Semantics>(
+                find
+                    .descendant(of: rigRow, matching: find.byType(Semantics))
+                    .first,
+              )
+              .properties
+              .enabled,
+          isFalse,
+        );
+        await shot(
+          tester,
+          boundary,
+          'new-project-lead-${brightness.name}-change',
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-lead-advanced')),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('new-harness-field-agent')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('new-harness-field-model')),
+          findsOneWidget,
+        );
+        expect(find.text('Engine'), findsOneWidget);
+        expect(find.text('Model'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('new-harness-field-worktree')),
+          findsNothing,
+        );
+        await shot(
+          tester,
+          boundary,
+          'new-project-lead-${brightness.name}-advanced',
+        );
+        expect(tester.takeException(), isNull);
+        await unmount(tester);
+      },
+    );
+  }
+
+  testWidgets('The Swarm places the Product Manager on the best machine', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      setup: addLaptop,
+      leadMachines: rankLeadMachines([laptop, rig], null),
+    );
+    expect(box.machineId, 'laptop');
+    expect(
+      find.descendant(
+        of: leadLine,
+        matching: find.textContaining('Product Manager: Ken MacBook'),
+      ),
+      findsOneWidget,
+    );
+    await unmount(tester);
+  });
+
+  testWidgets('Choosing another of your machines moves the Product Manager', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      setup: addLaptop,
+      leadMachines: [studio, laptop, rig],
+    );
+    expect(box.machineId, 'm');
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-rig')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      box.machineId,
+      'm',
+      reason: 'another person’s machine is not a choice',
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-laptop')),
+    );
+    await tester.pumpAndSettle();
+    expect(box.machineId, 'laptop');
+    expect(
+      find.descendant(
+        of: leadLine,
+        matching: find.textContaining('Product Manager: Ken MacBook'),
+      ),
+      findsOneWidget,
+    );
+    await unmount(tester);
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'With no machine free New Project says so and waits in ${brightness.name}',
+      (tester) async {
+        final (box, boundary) = await mount(
+          tester,
+          brightness: brightness,
+          leadMachines: [
+            const LeadMachine(
+              id: 'm',
+              name: 'Mac Studio',
+              online: true,
+              freeAgents: 0,
+            ),
+            rig,
+          ],
+        );
+        expect(
+          find.text(
+            'No machine of yours in this Swarm is free. New Project can start once one is.',
+          ),
+          findsOneWidget,
+        );
+        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+        box.setTask('Plan the launch');
+        await tester.pump();
+        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+        await shot(
+          tester,
+          boundary,
+          'new-project-lead-${brightness.name}-waiting',
+        );
+        await unmount(tester);
+      },
+    );
+  }
+
+  testWidgets('The Product Manager always starts in its own worktree', (
+    tester,
+  ) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio],
+      setup: (f) => f.app.gitProjectReaderForTest = (_, _) async => {
+        'isGit': true,
+        'branch': 'main',
+        'branches': [
+          {'ref': 'refs/heads/main', 'name': 'main'},
+        ],
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(box.isGitProject, isTrue);
+    box.toggleWorktree();
+    expect(box.worktree, isTrue);
+    await unmount(tester);
+  });
 }

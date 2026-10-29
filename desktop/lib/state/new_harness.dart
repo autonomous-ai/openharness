@@ -33,6 +33,7 @@ import 'attached_task_delivery.dart';
 import 'harness_placement.dart';
 import 'harness_attachments.dart';
 import 'harness_launch_integration.dart';
+import 'lead_placement.dart';
 import 'pane_arrangement.dart';
 
 /// Whether New Harness opens as a line in the box, or as the full form.
@@ -862,14 +863,16 @@ class NewHarnessController extends ChangeNotifier {
   bool get worktree =>
       isGitProject &&
       !inWorktree &&
-      (_worktree ??
-          (_desktopChoices
-              ? app.agentPreference.successfulWorktree ?? true
-              : app.projectHistory.worktreeFor(
-                      _machineId,
-                      _project.folder ?? '',
-                    ) ??
-                    worktreeByDefault(_gitProject)));
+      // A Swarm's Product Manager never edits the person's checkout.
+      (placesLead ||
+          (_worktree ??
+              (_desktopChoices
+                  ? app.agentPreference.successfulWorktree ?? true
+                  : app.projectHistory.worktreeFor(
+                          _machineId,
+                          _project.folder ?? '',
+                        ) ??
+                        worktreeByDefault(_gitProject))));
 
   bool? _recoveredWorktreePreference;
 
@@ -969,7 +972,7 @@ class NewHarnessController extends ChangeNotifier {
       : _branchHere == null && _worktreeOf(branchRef) != null;
 
   void toggleWorktree() {
-    if (locked || !canUseWorktree) return;
+    if (locked || !canUseWorktree || placesLead) return;
     _worktree = !worktree;
     _recoveredWorktreePreference = null;
     if (_project.folder case final folder? when !_desktopChoices) {
@@ -1556,6 +1559,60 @@ class NewHarnessController extends ChangeNotifier {
   /// servers, so it takes no folder, model, approvals or branch here — a coding
   /// one takes a GitHub repository, and Devin Cloud an ACU limit.
   bool get isCloud => _harnessId == null && isCloudAgentId(_engine);
+
+  /// New Project in a Swarm: the Swarm places the Product Manager on one of
+  /// [HarnessLaunchIntegration.leadMachines], and the form asks only the
+  /// task, repo and visibility.
+  bool get placesLead => integration?.leadMachines != null;
+
+  /// The machine the Product Manager starts on, as the Swarm lists it.
+  LeadMachine? get leadMachine =>
+      integration?.leadMachines?.where((m) => m.id == _machineId).firstOrNull;
+
+  /// Why New Project cannot start its Product Manager now, or null.
+  String? get leadBlocked {
+    final machines = integration?.leadMachines;
+    if (machines == null || leadMachine?.startable == true) return null;
+    if (bestLeadMachine(machines, cloudRepository) == null) {
+      return 'No machine of yours in this Swarm is free. New Project can start once one is.';
+    }
+    final name = leadMachine?.name ?? machineLabel;
+    return '$name cannot start the Product Manager. Choose another machine.';
+  }
+
+  /// Moves the Product Manager to the best machine the Swarm lists, unless
+  /// it is already there or nothing can take it.
+  void placeLead() {
+    final machines = integration?.leadMachines;
+    if (machines == null || locked) return;
+    final best = bestLeadMachine(machines, cloudRepository);
+    if (best == null || best.id == _machineId) return;
+    chooseLeadMachine(best.id);
+  }
+
+  /// Starts the Product Manager on [id], one of the person's own machines the
+  /// list can start it on now. Anything else is refused with its reason.
+  void chooseLeadMachine(String id) {
+    if (locked) return;
+    final listed = integration?.leadMachines
+        ?.where((m) => m.id == id)
+        .firstOrNull;
+    final choice = machineChoices.where((m) => m.id == id).firstOrNull;
+    if (listed == null ||
+        !listed.startable ||
+        choice == null ||
+        !choice.enabled) {
+      warn(
+        listed?.unavailable ??
+            choice?.why ??
+            '${listed?.name ?? 'This machine'} cannot start the Product Manager.',
+      );
+      return;
+    }
+    error = null;
+    _selectMachine(id);
+    notifyListeners();
+  }
 
   /// The GitHub repository a cloud coding agent works on: the one chosen to
   /// clone, else the chosen folder's own remote; null when neither is on GitHub.
