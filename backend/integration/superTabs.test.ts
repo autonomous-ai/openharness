@@ -3386,29 +3386,32 @@ describe('Swarm parts storage', () => {
   })
 })
 
-describe('private conversations through the store', () => {
-  it('keeps one out of everyone else\'s reads, messages and mentions, and changing who is in it reloads readers and drops their deliveries', async () => {
+describe('a closed Chat with PM through the store (Buddies replaced it, 10-29)', () => {
+  it('is never opened again, by a person or the PM', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)
-    const group = String((await run(tab, { type: 'conversation.create', title: 'Peer and PM', brief: '', checks: [], audience: { personIds: [peer.sub] } }, peer))
-      .result.conversationId)
-    const sent = await run(tab, { type: 'message.send', conversationId: group, text: 'Only for the PM.', replyTo: null, recipientIds: [] }, peer)
-    const ids = async (user: AuthUser, asAgentId?: string) => (await store.read(user, tab, asAgentId)).state.conversations.map(c => c.id)
-    expect(await ids(peer)).toContain(group)
-    expect(await ids(host, lead)).toContain(group)
-    expect(await ids(owner)).not.toContain(group)
-    await expect(store.messages(owner, tab, group, {})).rejects.toMatchObject({ code: 'NOT_FOUND' })
-    await expect(run(tab, { type: 'message.send', conversationId: group, text: 'Hi', replyTo: null, recipientIds: [], mentions: [owner.sub] }, host, lead))
-      .rejects.toMatchObject({ code: 'INVALID_MENTION' })
-    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).toContain(sent.result.messageId)
+    const open = { type: 'conversation.create' as const, title: 'Peer and PM', brief: '', checks: [], audience: { personIds: [peer.sub] } }
+    await expect(run(tab, open, peer)).rejects.toMatchObject({ code: 'PM_CHAT_CLOSED' })
+    await expect(run(tab, { ...open, brief: 'Talk', checks: [{ description: 'Talked', independent: false }] }, host, lead)).rejects.toMatchObject({ code: 'PM_CHAT_CLOSED' })
+  })
 
-    const epoch = async () => (await db.$transaction(tx => parts.loadAll(tx, tab))).visibilityEpoch
-    const before = await epoch()
-    await run(tab, { type: 'conversation.audience', conversationId: group, personIds: [] }, host, lead)
-    expect(await epoch()).toBe(before + 1)
-    expect(await ids(peer)).not.toContain(group)
-    expect((await store.deliveries(host, tab, lead)).map(d => d.messageId)).not.toContain(sent.result.messageId)
-    expect((await db.superTabDelivery.findFirstOrThrow({ where: { tabId: tab, messageId: sent.result.messageId as string } })).status).toBe('cancelled')
+  it('is out of everyone\'s reads and messages, its person\'s and the PM\'s included, takes no post, and stays stored', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const group = randomUUID()
+    const state = await storedState(tab)
+    state.conversations.push({ ...structuredClone(state.conversations.find(c => c.id === 'lead')!), id: group, title: 'Chat with PM', leadId: lead,
+      agentIds: [lead], assignment: null, audience: { people: [{ id: peer.sub, generation: state.people.find(p => p.id === peer.sub)!.generation }] } })
+    await saveState(tab, state)
+    const ids = async (user: AuthUser, asAgentId?: string) => (await store.read(user, tab, asAgentId)).state.conversations.map(c => c.id)
+    for (const [user, asAgentId] of [[peer], [owner], [host, lead]] as const) {
+      expect(await ids(user, asAgentId)).not.toContain(group)
+      await expect(store.messages(user, tab, group, {}, asAgentId)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    }
+    const say = { type: 'message.send' as const, conversationId: group, text: 'Hi', replyTo: null, recipientIds: [] }
+    await expect(run(tab, say, peer)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(run(tab, say, host, lead)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect((await storedState(tab)).conversations.find(c => c.id === group)).toMatchObject({ title: 'Chat with PM', agentIds: [lead] })
   })
 })
 
@@ -3416,8 +3419,8 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
   const bob: AuthUser = { sub: '100000000000000000000004', email: 'bob@example.com', autonomousEnv: 'prod', role: 'user' }
   /** Someone the machine's owner shared the PM's terminal with the ordinary way, outside any Swarm. */
   const carol: AuthUser = { sub: '100000000000000000000005', email: 'carol@example.com', autonomousEnv: 'prod', role: 'user' }
-  /** Alice (peer) and Bob read a public project whose machine neither owns; Alice has a private chat with its PM, and Bob held
-   *  a share of the PM's terminal from before that chat. */
+  /** Alice (peer) and Bob read a public project whose machine neither owns; Alice told its PM something in the project chat,
+   *  and Bob held a share of the PM's terminal from before. */
   async function privateChat() {
     const { tab, lead } = await fixture()
     await invite(tab)
@@ -3435,9 +3438,7 @@ describe('the PM\'s terminal after a private chat (final review, Critical 1)', (
       ownerId: host.sub, machineId: 'test-host', agentId, recipientEmail: recipient.email, autonomousEnv: 'prod', name: 'Lead', ownerPublicKey: 'fixture-key',
       expiresAt: new Date(Date.now() + 86_400_000), revokedAt: null } }).then(row => row.id)
     const swarmShare = await share(tab, bob), ordinaryShare = await share(null, carol)
-    const chat = String((await run(tab, { type: 'conversation.create', title: 'Chat with PM', brief: '', checks: [], audience: { personIds: [peer.sub] } }, peer))
-      .result.conversationId)
-    const secret = await run(tab, { type: 'message.send', conversationId: chat, text: 'Only for the PM: the launch slips a week.', replyTo: null, recipientIds: [] }, peer)
+    const secret = await run(tab, { type: 'message.send', conversationId: 'lead', text: 'For the PM: the launch slips a week.', replyTo: null, recipientIds: [] }, peer)
     // The PM's host types it into the PM's terminal and confirms it.
     const delivery = (await store.deliveries(host, tab, lead)).find(d => d.messageId === secret.result.messageId)!
     const claimId = randomUUID()
@@ -3628,7 +3629,6 @@ describe('terminal-context revoke on an ordinary command', () => {
     const { tab } = await fixture()
     await invite(tab)
     await run(tab, { type: 'project.create', name: 'Owner only', visibility: 'private', brief: '' })
-    await run(tab, { type: 'conversation.create', title: 'Owner and PM', brief: '', checks: [], audience: { personIds: [owner.sub] } })
     for (let i = 0; i < 30; i++) {
       const group = String((await run(tab, { type: 'conversation.create', title: `Old ${i}`, brief: '', checks: [] })).result.conversationId)
       await run(tab, { type: 'conversation.archive', conversationId: group, archived: true })

@@ -9,6 +9,22 @@ import { resolve } from 'node:path'
 import { readInsideFolder, uploadAttachments, type UploadTarget } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
+import { inDaemonPane, NOT_IN_PANE, runningPane, type PaneProbe } from './callerPane.js'
+// cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
+export { buddyRefusal } from './buddyPane.js'
+import { agentShell, buddiesHere, WINDOWS_BUDDY } from './buddyPane.js'
+import { sendPane } from '../messages/command.js'
+
+/** A frame with its terminals, as agents_list sends them: a pty host pane is named by its instance and pane (Windows). */
+type PaneFrame = Frame & { terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } }
+/** Whether [pane] is a harness's here: a tmux pane as `callerOf` finds it, or a pty host's `<instance>:%N`. */
+function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolean {
+  const pty = /^([^:]+):(%\d+)$/.exec(pane)
+  if (!pty) return !!callerOf(frames, pane, machineId)
+  return frames.some(frame => frame.terminal?.runtimes?.some(r => r.backend === 'ptyhost' && r.instance === pty[1] && r.paneId === pty[2]))
+}
+
+const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
 const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | costs [--days N] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON [--attach PATH]... | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 /** The files one proposal may carry (backend buddies.ts MAX_PROPOSAL_ATTACHMENTS). */
@@ -118,35 +134,65 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
 }
 
 export async function superTabCommand(argv: readonly string[], deps: {
-  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
+  where?: () => Where; open?: typeof openDaemon; print?: (text: string) => void; pane?: string; probe?: PaneProbe; fetch?: typeof fetch; env?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
 } = {}): Promise<number> {
   let daemon: Daemon | null = null
   let operationId: unknown
   const print = deps.print ?? console.log
   try {
-    const here = (deps.where ?? (() => whereFor(process.env.TMUX_PANE)))()
-    const request = parseSuperTabArgs(argv, here)
+    const platform = deps.platform ?? process.platform, env = deps.env ?? process.env, open = deps.open ?? openDaemon
+    // The pane this runs in, from its processes: TMUX_PANE is what the command says, and it may not name another harness's.
+    const running = 'pane' in deps ? { pane: deps.pane } : runningPane(env, deps.probe, platform)
+    if (running.refused) throw new Error(running.refused)
+    const pane = running.pane
+    const local = (deps.where ?? (() => whereFor(pane)))()
+    const request = parseSuperTabArgs(argv, local)
     operationId = request.payload.operationId
-    daemon = await (deps.open ?? openDaemon)(request.where)
+    // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
+    // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
+    const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId
+    // Windows has no cheap check of a pty host pane, so its pane is the one the shell names, for the refusal below alone; and
+    // while this computer runs a Buddy, an agent's shell there names no agent. Both are asked of this computer's daemon,
+    // never the other machine's (re-check of #2093: --machine asked the other one, which does not answer for this computer).
+    const asking = pane ?? (platform === 'win32' ? sendPane(env) : undefined)
+    const windowsAgent = platform === 'win32' && !!request.payload.agentId && agentShell(env)
+    const checks = async (home: Daemon) => {
+      if (elsewhere && asking) {
+        const listed = await home.request('agents_list')
+        if (harnessIn(Array.isArray(listed.agents) ? listed.agents as PaneFrame[] : [], asking, local.machineId)) throw new Error(ELSEWHERE)
+      }
+      if (windowsAgent && await buddiesHere(home)) throw new Error(WINDOWS_BUDDY)
+    }
+    if (elsewhere && (asking || windowsAgent)) {
+      const home = await open(local)
+      try { await checks(home) } finally { home.close() }
+    }
+    daemon = await open(request.where)
+    if (!elsewhere) await checks(daemon)
     const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
     if (owners) {
       // The owner's own acts: removal deletes this machine's Swarm folders, and no agent raises its own machine's room
       // (Lead, 2026-10-28). So neither a Swarm agent on it (its pane, or --agent) nor an outside agent's shell may run
       // them with the owner's authority.
-      const listed = request.payload.agentId || outsideCaller(deps.env ?? process.env, request.where.machineId) ? null : await daemon.request('agents_list')
-      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], deps.pane ?? process.env.TMUX_PANE, request.where.machineId)) {
+      const listed = request.payload.agentId || outsideCaller(env, request.where.machineId) ? null : await daemon.request('agents_list')
+      if (!listed || callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, request.where.machineId)) {
         throw new Error(request.payload.action === 'backend' ? 'Remove a machine from your own terminal or from Desktop, not from an agent.'
           : 'Set a machine\'s agents from your own terminal or from Desktop, not from an agent.')
       }
     }
     // Help names the caller when it can, so a Lead also reads its own options; outside a harness it is the plain help.
     const help = request.payload.action === 'help'
-    if (!owners && !request.payload.agentId && (!help || request.payload.tabId)) {
+    // A harness's pane speaks as its own agent alone: with --agent too, its harness goes with the request, and the daemon
+    // refuses an agent that is not that harness's (security review of #2087: a Buddy named its Builder). A person's terminal
+    // is no harness, and its --agent is the person's as before.
+    if (!owners && (!request.payload.agentId || pane) && (!help || request.payload.tabId)) {
       const listed = await daemon.request('agents_list')
       const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
-      const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, request.where.machineId)
+      const caller = callerOf(frames, pane, request.where.machineId)
+      if (caller && !await inDaemonPane(daemon, caller.agentId, running.ancestors)) throw new Error(NOT_IN_PANE)
       if (caller) request.payload.harnessId = caller.agentId
-      else if (!help) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
+      else if (!help && !request.payload.agentId) throw new Error('Run this command inside the participating harness, or supply its --agent ID.')
     }
     const source = daemon
     const scoped = (payload: Record<string, unknown>) => source.request('super_tabs', {
@@ -161,7 +207,7 @@ export async function superTabCommand(argv: readonly string[], deps: {
       const known = await scoped({ action: 'status' })
       if (known.error) result = known
       else {
-        const target = await (deps.open ?? openDaemon)(request.where, String(request.payload.targetMachineId))
+        const target = await open(request.where, String(request.payload.targetMachineId))
         try { result = { ok: true, ...await inspectCapacity(target, object(request.payload.request)) } }
         finally { target.close() }
       }
@@ -186,8 +232,8 @@ export async function superTabCommand(argv: readonly string[], deps: {
         const command = object(payload.command)
         const target = { tabId: String(payload.tabId), conversationId: String(command.conversationId), port: request.where.port, dataDir: request.where.dataDir }
         command.attachmentIds = command.type === 'buddy.propose'
-          ? await proposalFiles(attach as string[], String(payload.operationId), command, target, daemon, scoped, { ...deps,
-            local: request.where.machineId === here.machineId && request.where.port === here.port })
+          ? await proposalFiles(attach as string[], String(payload.operationId), command, target, daemon, scoped, { ...deps, pane,
+            local: request.where.machineId === local.machineId && request.where.port === local.port })
           : await uploadAttachments(attach as string[], String(payload.operationId), target, scoped, deps.fetch)
       }
       result = await daemon.request('super_tabs', payload, 30_000)
@@ -212,7 +258,8 @@ async function proposalFiles(paths: string[], operationId: string, command: Reco
   if (new Set(named).size + paths.length > MAX_PROPOSAL_FILES) throw new Error(`Attach at most ${MAX_PROPOSAL_FILES} files to a proposal.`)
   const listed = await daemon.request('agents_list')
   const frames = Array.isArray(listed.agents) ? listed.agents as Frame[] : []
-  const caller = callerOf(frames, deps.pane ?? process.env.TMUX_PANE, String(daemon.machineId))
+  // The pane its parent processes prove (callerPane.ts), never TMUX_PANE as the command says it.
+  const caller = callerOf(frames, deps.pane, String(daemon.machineId))
   const folder = frames.find(f => f.id === caller?.agentId)?.project?.cwd
   if (!folder) throw new Error('Attach files to a proposal from your Buddy\'s own terminal.')
   const files = readInsideFolder(paths, folder)

@@ -14,6 +14,7 @@ import { MemoryAttachmentStore } from '../src/superTabs/attachments.js'
 import type { Command } from '../src/superTabs/commands.js'
 import { poolRows } from './hostRows.test-support.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
+import { beforeFirstWrite } from './interleave.test-support.js'
 
 // Buddies end to end through the store (buddies.ts): a person adds one on their own Swarm machine, its host starts it, they
 // talk to it alone, and it sends their proposal to the PM. A fresh loopback replica set, created here.
@@ -41,7 +42,17 @@ afterAll(async () => {
   await replica?.stop()
 })
 
-/** A Swarm whose PM runs on the owner's Mac, peer a member with their own Mac in the Machines list, and Buddies on. */
+/** A Chat with PM from before Buddies replaced it (10-29): nobody opens one now, so a stored group is made one, as
+ *  superTabLiveness.test.ts does. What was written or asked there before stays. */
+async function closedPmChat(f: { store: SuperTabStore; tab: string }, conversationId: string, personIds: string[]): Promise<string> {
+  const people = (await f.store.read(owner, f.tab)).state.people
+  const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: conversationId } })
+  await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object,
+    audience: { people: personIds.map(id => ({ id, generation: people.find(p => p.id === id)!.generation })) } } } })
+  return conversationId
+}
+
+/** A Swarm whose PM runs on the owner's Mac, and peer a member with their own Mac in the Machines list. */
 async function swarm() {
   const files = new MemoryAttachmentStore()
   const store = new SuperTabStore(db, () => Date.now(), { store: files, prefix: 'super-tabs', publicBase: 'https://cdn.example.test' })
@@ -57,7 +68,6 @@ async function swarm() {
   await store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
   quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-  await execute({ type: 'tab.buddies', enabled: true })
   return { store, tab, execute, lead, files }
 }
 
@@ -148,10 +158,8 @@ describe('a Buddy through the store', () => {
   it('reads its project\'s work as its person: which task owns it, its pull request, its state and what blocks it', async () => {
     const f = await swarm()
     // Opened before Buddies were on: the owner's private chat with the PM, which their Buddy may never read either.
-    await f.execute({ type: 'tab.buddies', enabled: false })
-    const owners = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'owner', brief: '', checks: [],
-      audience: { personIds: [owner.sub] } })).result.conversationId)
-    await f.execute({ type: 'tab.buddies', enabled: true })
+    const owners = await closedPmChat(f, String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'owner', brief: '',
+      checks: [] })).result.conversationId), [owner.sub])
     const { agentId } = await buddy(f)
     const group = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'Offline sync', brief: 'Desktop keeps edits offline.',
       checks: [{ description: 'Edits survive a restart', independent: false }] })).result.conversationId)
@@ -189,10 +197,8 @@ describe('a Buddy through the store', () => {
 
   it('is refused another person\'s private chat, the Leads conversation and another project', async () => {
     const f = await swarm()
-    await f.execute({ type: 'tab.buddies', enabled: false })
-    const owners = String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'owner', brief: '', checks: [],
-      audience: { personIds: [owner.sub] } })).result.conversationId)
-    await f.execute({ type: 'tab.buddies', enabled: true })
+    const owners = await closedPmChat(f, String((await f.execute({ type: 'conversation.create', projectId: 'lead', title: 'owner', brief: '',
+      checks: [] })).result.conversationId), [owner.sub])
     const web = (await f.execute({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' })).result as { projectId: string; conversationId: string }
     const landing = String((await f.execute({ type: 'conversation.create', projectId: web.projectId, title: 'Landing', brief: '', checks: [] })).result.conversationId)
     const { agentId } = await buddy(f)
@@ -355,5 +361,47 @@ describe('a Buddy through the store', () => {
     expect('reload' in seen && seen.reload).toBe(false)
     expect((seen as { machines: unknown[] }).machines).toEqual([])
     expect(JSON.stringify(seen)).not.toMatch(/owner-studio|Owner Studio/)
+  })
+})
+
+describe('a person\'s Buddy chat before any Buddy, and the PM\'s private lines (Ken, 10-29)', () => {
+  const tell = (text: string) => ({ type: 'person.tell' as const, personId: peer.sub, text })
+
+  it('opens on the person\'s ask and takes the PM\'s line, which they read and the PM cannot', async () => {
+    const f = await swarm()
+    const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    await f.execute(tell('Your fix is merged.'), owner, f.lead)
+    expect((await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)).toEqual(['Your fix is merged.'])
+    await expect(f.store.messages(owner, f.tab, chat, {}, f.lead)).rejects.toThrow('unavailable')
+    expect(await db.superTabDelivery.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
+  })
+
+  it('never lands for someone who stops reading the project while the line is sent (security review 2 of #2090)', async () => {
+    const f = await swarm()
+    const chat = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    // The line reads the Swarm with peer still a reader; just before it writes, the owner makes the project theirs alone.
+    let raced = false
+    const racing = new SuperTabStore(beforeFirstWrite(db, async () => {
+      if (raced) return
+      raced = true
+      await f.execute({ type: 'project.sharing', projectId: 'lead', visibility: 'private', memberIds: [] })
+    }), () => Date.now())
+    await expect(racing.execute(owner, f.tab, { operationId: randomUUID(), command: tell('Your fix is merged.') }, f.lead))
+      .rejects.toThrow('cannot read this project')
+    expect(raced).toBe(true)
+    expect(await db.superTabMessage.count({ where: { tabId: f.tab, conversationId: chat } })).toBe(0)
+  })
+
+  it('is opened for the PM\'s first line, and a quiet one takes the next line rather than a second chat', async () => {
+    const f = await swarm()
+    await f.execute(tell('First.'), owner, f.lead)
+    const chats = async () => (await db.swarmGroup.findMany({ where: { tabId: f.tab, deleted: false } }))
+      .filter(row => (row.data as { kind?: string }).kind === 'buddy').map(row => row.key)
+    const [chat] = await chats()
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: chat }, data: { dormant: true } })
+    await f.execute(tell('Second.'), owner, f.lead)
+    expect((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId).toBe(chat)
+    expect(await chats()).toEqual([chat])
+    expect((await f.store.messages(peer, f.tab, chat!, {})).messages.map(m => m.text)).toEqual(['First.', 'Second.'])
   })
 })

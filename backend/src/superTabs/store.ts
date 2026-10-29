@@ -18,6 +18,7 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
+import { buddyChatId } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { isBuddyReader, refuseBuddyRouting, routingRow } from './buddies.js'
@@ -25,7 +26,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
 import { answersRequest, dirtyGroups, noteProjectReports, projectUpdateRequest, UNANSWERED_REQUEST_MS } from './projectUpdates.js'
 import { digestDue, digestMessageId, digestRequest, digestSince } from './digest.js'
-import { judgedMachines, loseTasks, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
+import { judgedMachines, loseTasks, sweepForLead, sweepLiveness, SWEEP_EVERY_MS } from './liveness.js'
 import { archivable, archiveLine, ASLEEP_FIELDS, asleepMatch, stopIdleWorkers, stoppedMachines, type GroupActivity } from './tidy.js'
 import { clock, insertParts, loadActive, loadObserved, reassemble, split, type HeadData, type SwarmParts } from './parts/index.js'
 import { groupsBy, listingDrops, quietSince, withoutHints } from './parts/indexed.js'
@@ -86,7 +87,7 @@ export interface Named { groupIds?: string[]; agentIds?: string[]; projectIds?: 
 /** The groups, agents, projects and starts a command names in its own fields (design section 3.1). */
 /** Commands that register a session or can make one a Lead or a private member: checked against the other Swarms'
  *  registrations (projects.ts requireSingleRegistration). A rebind is refused onto any terminal registered elsewhere already. */
-const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'conversation.audience', 'project.create'])
+const REGISTERS = new Set(['agent.add', 'agent.started', 'conversation.agent', 'conversation.create', 'project.create'])
 /** The session a command registers, when it names one. */
 function registeredBy(state: SuperTabState, command: Command): Array<{ machineId: string; harnessId: string }> {
   if (command.type === 'agent.add') return [{ machineId: command.machineId, harnessId: command.harnessId }]
@@ -559,7 +560,7 @@ export class SuperTabStore {
 
   /** What a command touches beyond its own fields: a named start's group, a decision's group and start, a delivery's
    *  group, and every group of the agents it removes or writes into (dormant ones too, design section 1.1 D8). */
-  private async moreNamed(tx: Transaction, tabId: string, state: SuperTabState, command: Command): Promise<Named> {
+  private async moreNamed(tx: Transaction, tabId: string, state: SuperTabState, command: Command, personId: string | null, asAgentId?: string): Promise<Named> {
     const named = namedFor(command)
     const groupIds = [...named.groupIds ?? []], startIds = [...named.startIds ?? []], agentIds: string[] = [], startAgentIds: string[] = []
     const start = 'startId' in command ? state.starts?.find(s => s.id === command.startId) : undefined
@@ -578,6 +579,13 @@ export class SuperTabStore {
       // Left to the PM: the person's Chat with PM in that project, quiet or not, takes the PM's line.
       if (asked && command.delegate) projectIds.push(asked.projectId)
     }
+    // A person's Buddy chat may have gone quiet: it is loaded by its id before it is opened again, never made twice.
+    const buddyChat = (projectId: string | undefined, id: string | null | undefined) => {
+      const owner = state.people.find(p => p.id === id)
+      if (projectId && owner) groupIds.push(buddyChatId(projectId, owner))
+    }
+    if (command.type === 'buddy.chat' || command.type === 'buddy.create') buddyChat(command.projectId, personId)
+    if (command.type === 'person.tell' && asAgentId) buddyChat(ledProject(state, asAgentId)?.id, command.personId)
     if (command.type === 'delivery.resolve') {
       const delivery = await tx.superTabDelivery.findFirst({ where: { id: command.deliveryId, tabId }, select: { conversationId: true } })
       if (delivery) groupIds.push(delivery.conversationId)
@@ -925,7 +933,7 @@ export class SuperTabStore {
       started = []
       const stamp = clock.next()
       const first = await this.load(tx, user, tabId, namedFor(command))
-      const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command))
+      const loaded = await this.ensure(tx, first, await this.moreNamed(tx, tabId, first.state, command, asAgentId ? null : user.sub, asAgentId))
       const original = loaded.state
       const team = await this.teamHost(tx, user)
       // Removal retries can arrive after the actor itself left. Return only this host's exact prior receipt.
@@ -1035,8 +1043,7 @@ export class SuperTabStore {
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime() }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
-      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-        || command.type === 'tab.buddies') && command.askedIn) {
+      if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
         const asked = await tx.superTabMessage.findFirst({ where: { id: command.askedIn.messageId, tabId, conversationId: command.askedIn.conversationId } })
         if (asked) context.askedIn = { author: asked.author as unknown as Author, source: !!asked.source, createdAt: asked.createdAt.getTime() }
       }
@@ -1160,16 +1167,10 @@ export class SuperTabStore {
       // so a claim of one conflicts with it. An archived conversation, or one its receiver left, ends them: kept for a
       // reopening, 6 of the 9 deliveries prod watch found stuck for days on 2026-10-28 waited in archived groups, unread.
       const unreadable = command.type === 'conversation.archive' && command.archived || command.type === 'conversation.agent' && !command.present
-      if (unreadable || command.type === 'conversation.audience') {
+      if (unreadable) {
         await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, status: { in: ['queued', 'claimed', 'uncertain'] },
           ...(command.type === 'conversation.agent' ? { agentId: command.agentId } : {}) },
-          data: unreadable ? { status: 'cancelled', holdReason: null, holdSince: null } : { updatedAt: new Date(context.now) } })
-      }
-      if (command.type === 'conversation.audience') {
-        const kept = new Set(conversation(effects.state, command.conversationId).audience?.people.map(p => p.id))
-        const removed = (conversation(original, command.conversationId).audience?.people ?? []).filter(p => !kept.has(p.id)).map(p => p.id)
-        if (removed.length) await tx.superTabDelivery.updateMany({ where: { tabId, conversationId: command.conversationId, authorKind: 'person',
-          authorId: { in: removed }, status: { in: ['queued', 'claimed', 'uncertain'] } }, data: { status: 'cancelled', holdReason: null, holdSince: null } })
+          data: { status: 'cancelled', holdReason: null, holdSince: null } })
       }
       const removedGroups = original.conversations.filter(c => !effects.state.conversations.some(n => n.id === c.id))
       if (removedGroups.length) {
@@ -2284,7 +2285,7 @@ export class SuperTabStore {
       author(state, await this.actor(tx, user, state, agentId), true)
       const target = agent(state, agentId)
       // A Lead's poll runs the time checks (liveness.ts): lost work wakes it in this same poll.
-      const written = ledProject(state, agentId) ? sweepLiveness(state, this.now()) : []
+      const written = ledProject(state, agentId) ? sweepForLead(state, this.now()) : []
       // The Lead's poll stops its project's idle workers too (tidy.ts): it is where what waits for each agent is known.
       // Of their asleep groups, it reads only those that can still keep one, and only what the stop reads (tidy.ts asleepMatch),
       // judged at the same time as the stop.

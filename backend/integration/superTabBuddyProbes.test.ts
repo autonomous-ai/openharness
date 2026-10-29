@@ -39,6 +39,16 @@ afterAll(async () => {
   await replica?.stop()
 })
 
+/** A Chat with PM from before Buddies replaced it (10-29): nobody opens one now, so a stored group is made one, as
+ *  superTabLiveness.test.ts does. What was written or asked there before stays. */
+async function closedPmChat(f: { store: SuperTabStore; tab: string }, conversationId: string, personIds: string[]): Promise<string> {
+  const people = (await f.store.read(owner, f.tab)).state.people
+  const row = await db.swarmGroup.findFirstOrThrow({ where: { tabId: f.tab, key: conversationId } })
+  await db.swarmGroup.update({ where: { id: row.id }, data: { data: { ...row.data as object,
+    audience: { people: personIds.map(id => ({ id, generation: people.find(p => p.id === id)!.generation })) } } } })
+  return conversationId
+}
+
 /** A Swarm whose PM runs on the owner's Mac, peer a member with their own Mac in the Machines list, and Buddies on. */
 async function swarm() {
   const store = new SuperTabStore(db, () => Date.now())
@@ -54,7 +64,6 @@ async function swarm() {
   await store.observeMachine(peer, tab, 'peer-mac', { generation, resources: { cpuPercent: 10, memoryTotalBytes: 32e9, memoryUsedBytes: 4e9,
     diskFreeBytes: 120e9, diskTotalBytes: 500e9, projectDiskFreeBytes: 120e9, deviceType: 'Laptop', chip: 'Fixture', os: 'macOS', gpuPercent: null },
   quotas: [], tools: {}, runningHarnessIds: [], stoppedHarnessIds: [] })
-  await execute({ type: 'tab.buddies', enabled: true })
   return { store, tab, execute, lead }
 }
 
@@ -103,10 +112,9 @@ describe('security review 1 of #2115: a Buddy\'s reads, probed by two people', (
 
   it('refuses private chats, other Buddies, Leads and other-project groups even with forged paging inputs',async()=>{
     const f=await swarm()
-    await f.execute({type:'tab.buddies',enabled:false})
-    const privateChat=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Owners private chat',brief:'',checks:[],audience:{personIds:[owner.sub]}})).result.conversationId)
+    const privateChat=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Owners private chat',brief:'',checks:[]})).result.conversationId)
     await f.execute({type:'message.send',conversationId:privateChat,text:'PRIVATE FIXTURE TEXT',replyTo:null,recipientIds:[]})
-    await f.execute({type:'tab.buddies',enabled:true})
+    await closedPmChat(f,privateChat,[owner.sub])
     const web:any=(await f.execute({type:'project.create',name:'Other project',visibility:'public',brief:''})).result
     const other=String((await f.execute({type:'conversation.create',projectId:web.projectId,title:'Other project task',brief:'',checks:[]})).result.conversationId)
     const {agentId}=await buddy(f)
@@ -157,11 +165,11 @@ it('pages messages that share a sequence by sequence and id, as the CLI now send
 
 it('does not disclose a decision question from a private chat visible to its own person',async()=>{
   const f=await swarm()
-  await f.execute({type:'tab.buddies',enabled:false})
-  const privateChat=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Shared private',brief:'',checks:[],audience:{personIds:[owner.sub,peer.sub]}})).result.conversationId)
+  // Asked before the chat closed as a Chat with PM: its person still reads it there (projects.ts readsRecordsIn).
+  const privateChat=String((await f.execute({type:'conversation.create',projectId:'lead',title:'Shared private',brief:'',checks:[]})).result.conversationId)
   await f.execute({type:'decision.ask',conversationId:privateChat,personId:peer.sub,questions:[{question:'PRIVATE QUESTION SENTINEL',options:['Yes','No'],recommended:0,unblocks:'Private plan'}]},owner,f.lead)
+  await closedPmChat(f,privateChat,[owner.sub,peer.sub])
   expect(JSON.stringify(await f.store.decisions(peer,f.tab,'open'))).toContain('PRIVATE QUESTION SENTINEL')
-  await f.execute({type:'tab.buddies',enabled:true})
   const {agentId}=await buddy(f)
   expect(JSON.stringify(await f.store.decisions(peer,f.tab,'open',agentId))).not.toContain('PRIVATE QUESTION SENTINEL')
 })

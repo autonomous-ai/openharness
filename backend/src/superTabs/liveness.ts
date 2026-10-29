@@ -1,10 +1,12 @@
 import { activeWork, stableId, type Agent, type AgentStart, type Assignment, type Author, type Conversation, type MessageDraft,
-  type SuperTabState } from './model.js'
+  type SuperTabState, type TaskLiveness } from './model.js'
 import { machineOffline, sessionStopped } from './lostReason.js'
 import { agentDisplayName } from './agentNames.js'
 import { failureNotice, STILL_PREPARING_SUFFIX, STOPPED_REPORTING_SUFFIX, TIMED_OUT_SUFFIX } from './startFailure.js'
 import { leadOf, toLead } from './terminal.js'
 import { MACHINE_FRESH_MS } from './machines.js'
+import { ledProject, projectsOf } from './projects.js'
+import { waitedOn } from './leaderboard/record.js'
 
 // Work never sits with a dead owner (design: "A Swarm that never stops", 2026-10-26). A worker's active assignment is held
 // by a lease that its progress renews. A dead, stalled or limited worker loses it within minutes: the assignment becomes
@@ -181,6 +183,127 @@ export function sweepLiveness(state: SuperTabState, now: number): MessageDraft[]
   return [...loseTasks(state, now), ...failStalledStarts(state, now)]
 }
 
+/** The Lead's own time checks: those above, then each task's state, waking the Lead for those that just stalled. Only the
+ *  Lead's poll runs them, where the whole active Swarm is loaded and the one they wake is listening: a machine's reading
+ *  loads only running work and must write no group (read/host.ts). */
+export function sweepForLead(state: SuperTabState, now: number): MessageDraft[] {
+  return [...sweepLiveness(state, now), ...recordTaskStates(state, now)]
+}
+
+/** A task whose agent has reported nothing itself (a status, check or post) this long is quiet, and its Lead is woken to act
+ *  (Ken, 2026-10-29). Its screen may still be changing: a session whose screen stays still this long loses its task. */
+export const TASK_QUIET_MS = 30 * 60_000
+/** A start for a task still not launched this long after it was asked for, and after the Lead last acted on the task, leaves
+ *  the task orphaned: its Lead's machine never found room for it. */
+export const START_PICKUP_MS = 10 * 60_000
+
+const FINISHED_WORK = ['done', 'cancelled', 'stopped']
+
+/** The state of a project task now, from what is loaded (never a further read), or null while it is working (its agent
+ *  reported in the last 30 minutes) and for anything that is not a task: a Lead or Leads conversation, a private chat (it
+ *  never holds work), an archived group, finished work, or none yet. */
+export function taskLiveness(state: SuperTabState, group: Conversation, now: number): TaskLiveness | null {
+  if (group.kind || group.audience || group.archived || projectsOf(state).some(p => p.leadConversationId === group.id)) return null
+  if (!projectsOf(state).some(p => p.id === (group.projectId ?? 'lead'))) return null
+  const assignment = group.assignment
+  if (assignment && activeWork(group)) {
+    const worker = state.agents.find(a => a.id === assignment.agentId)
+    if (worker && ledProject(state, worker.id)) return null
+    if (!worker || assignment.status === 'reconciling') return { state: 'orphaned', why: 'removed', since: now }
+    const progress = assignment.progressAt ?? (group.lastActivityAt ? Date.parse(group.lastActivityAt) : now)
+    if (assignment.status === 'needs_human') {
+      // The person its agent asked, else whom the work waits on by default (its requester, else the project's owner).
+      const asked = assignment.askedOf && state.people.some(p => p.id === assignment.askedOf) ? assignment.askedOf : undefined
+      return { state: 'waiting', why: 'person', personId: asked ?? waitedOn(state, group), since: group.ledger?.waiting?.since ?? progress }
+    }
+    if (assignment.status === 'review' || assignment.status === 'blocked') return { state: 'waiting', why: assignment.status, since: progress }
+    // A review whose build is back with its Engineer waits for the new revision.
+    const build = group.reviewOf ? state.conversations.find(c => c.id === group.reviewOf) : undefined
+    if (build && activeWork(build) && build.assignment!.status !== 'review') return { state: 'waiting', why: 'revision', since: progress }
+    return now - progress >= TASK_QUIET_MS ? { state: 'quiet', why: 'silent', since: progress } : null
+  }
+  // Only unfinished starts are loaded, with those that ended in this same write.
+  const start = state.starts?.findLast(s => s.request.conversationId === group.id && !s.request.buddyOf)
+  if (start && !start.harnessId && !start.error) {
+    if (start.dispatched) return { state: 'waiting', why: 'starting', since: start.dispatchedAt ?? now }
+    // A start from before requestedAt runs from when it was first recorded queued.
+    const recorded = group.liveness?.why === 'queued' || group.liveness?.why === 'unstarted' ? group.liveness.since : now
+    const asked = start.requestedAt ?? recorded
+    const stale = now - Math.max(asked, group.leadAction?.at ?? 0) >= START_PICKUP_MS
+    return { state: stale ? 'orphaned' : 'waiting', why: stale ? 'unstarted' : 'queued', since: asked }
+  }
+  if (assignment && FINISHED_WORK.includes(assignment.status)) return null
+  if (start?.error && !start.harnessId) return { state: 'orphaned', why: 'start-failed', since: now }
+  if (assignment?.status === 'lost') return { state: 'orphaned', why: 'lost', since: assignment.lost?.at ?? now }
+  return null
+}
+
+const FINISHED_OR_ARCHIVED = (group: Conversation) => group.archived || (!!group.assignment && FINISHED_WORK.includes(group.assignment.status))
+
+/** What a task's record becomes: its state now. A task whose start failed stays orphaned until it has work again, since
+ *  that start is no longer loaded once it ended; nothing else outlives what made it. */
+const nextState = (state: SuperTabState, group: Conversation, now: number) => taskLiveness(state, group, now)
+  ?? (group.liveness?.why === 'start-failed' && !activeWork(group) && !FINISHED_OR_ARCHIVED(group) ? group.liveness : undefined)
+
+/** Records the state of the task a command changed, in that command's own write, so the time checks find nothing to rewrite
+ *  (a machine's reading must write no group, read/host.ts). A stall is left to the time checks, which wake the Lead for it;
+ *  a failed start is not, since its own notice told the Lead and the next sweep no longer loads it. */
+export function recordTaskState(state: SuperTabState, group: Conversation, now: number): void {
+  const next = nextState(state, group, now)
+  if (sameState(group.liveness, next) || (next && next.state !== 'waiting' && next.why !== 'start-failed')) return
+  if (next) group.liveness = next
+  else delete group.liveness
+}
+
+/** A new question, review or blocker moves a wait's start; any other `since` is kept as first recorded, so a sweep never
+ *  rewrites a group just because its clock moved. */
+const sameState = (a: TaskLiveness | undefined, b: TaskLiveness | undefined) => a?.state === b?.state && a?.why === b?.why
+  && a?.personId === b?.personId && (a?.state !== 'waiting' || a.why === 'queued' || a.why === 'starting' || a.since === b?.since)
+
+function stalledLine(state: SuperTabState, group: Conversation, liveness: TaskLiveness, now: number): string {
+  const task = `${group.number ? `#${group.number} ` : ''}"${group.title}"`
+  const worker = state.agents.find(a => a.id === group.assignment?.agentId)
+  const minutes = plural(Math.max(0, Math.floor((now - liveness.since) / 60_000)), 'minute')
+  const why = liveness.why === 'silent' ? `quiet, ${worker?.displayName ?? worker?.name ?? 'its agent'} has reported nothing for ${minutes}`
+    : liveness.why === 'removed' ? 'orphaned, its agent was removed from the Swarm' : `orphaned, its agent has not started for ${minutes}`
+  return `- ${task}: ${why}.`
+}
+
+/** Records each task's state where it changed, so readers see it, and wakes each project's Lead once, in its chat, for the
+ *  tasks that just turned quiet or orphaned. A task lost or whose start failed has had its own notice already. The record
+ *  is the deduplication: a sweep on another server writes the same group, so one of the two retries and finds it recorded.
+ *  A stall is recorded only with a wake that reaches its Lead: a project with none yet is told once it has one. A working
+ *  task has no record, so a steady Swarm's sweeps write nothing. */
+function recordTaskStates(state: SuperTabState, now: number): MessageDraft[] {
+  const stalled = new Map<string, Array<{ group: Conversation; next: TaskLiveness }>>()
+  for (const group of state.conversations) {
+    const before = group.liveness
+    const next = nextState(state, group, now)
+    if (sameState(before, next)) continue
+    if (next && (next.state === 'quiet' || next.state === 'orphaned') && before?.state !== next.state && next.why !== 'lost' && next.why !== 'start-failed') {
+      const projectId = group.projectId ?? 'lead'
+      stalled.set(projectId, [...stalled.get(projectId) ?? [], { group, next }])
+      continue
+    }
+    if (next) group.liveness = next
+    else delete group.liveness
+  }
+  return [...stalled].flatMap(([projectId, tasks]) => {
+    const chat = state.conversations.find(c => c.id === projectsOf(state).find(p => p.id === projectId)!.leadConversationId)
+    const lead = chat?.leadId ? state.agents.find(a => a.id === chat.leadId) : undefined
+    if (!chat || !lead) return []
+    const one = tasks.length === 1
+    const text = `${one ? 'A task needs' : `${tasks.length} tasks need`} you:\n${tasks.map(t => stalledLine(state, t.group, t.next, now)).join('\n')}\n`
+      + `Act on ${one ? 'it' : 'each'} now: nudge its agent, reassign it, or post in its chat why it waits.`
+    const row = reachable(state, { id: stableId('work-stalled', state.id, projectId, String(now)), conversationId: chat.id, author: writtenBy(state, lead), replyTo: null,
+      recipients: chat.agentIds.includes(lead.id) ? [lead.id] : [], text,
+      source: { kind: 'work-stalled', tasks: tasks.map(t => ({ conversationId: t.group.id, state: t.next.state, why: t.next.why })) } })
+    if (!row.recipients.length) return []
+    for (const t of tasks) t.group.liveness = t.next
+    return [row]
+  })
+}
+
 /** A Buddy's start its machine has not taken this long after it was asked for, while that machine reports, has failed: a
  *  host from before Buddies never sees one (read/hostRows.ts). */
 export const BUDDY_PICKUP_MS = 5 * 60_000
@@ -205,6 +328,8 @@ function failStalledStarts(state: SuperTabState, now: number): MessageDraft[] {
     // Never a lookup that throws: these checks run inside every machine's report.
     if (start.request.buddyOf) return buddyNotice(state, start)
     const group = state.conversations.find(c => c.id === start.request.conversationId)
+    // Recorded in this write: once the start has ended, no later poll loads it.
+    if (group) recordTaskState(state, group, now)
     const lead = group?.leadId ? state.agents.find(a => a.id === group.leadId) : undefined
     if (!group || !lead) return []
     return [reachable(state, { id: stableId('start-timeout', start.id), conversationId: group.id, replyTo: null,
