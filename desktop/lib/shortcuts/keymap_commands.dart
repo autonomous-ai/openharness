@@ -30,6 +30,11 @@ class HarnessCommand {
   /// Workspace defaults come from the live shortcut table. A command cannot
   /// quietly propose different keys from the ones the user already uses.
   List<String> get keys {
+    if (id == 'swarm.quick_switcher') {
+      return [
+        defaultTargetPlatform == TargetPlatform.macOS ? 'cmd+k' : 'ctrl+k',
+      ];
+    }
     // Cmd-Alt-T cannot collapse to Alt-T in a browser: that is New Tab.
     // Use the companion chord already used by the other Alt-prefix platform.
     if (kIsWeb && id == 'app.daemon_talk') return const ['alt+shift+a'];
@@ -219,6 +224,13 @@ final harnessCommands = <HarnessCommand>[
     ShortcutGroup.navigate,
     action: ShortcutAction.showAttention,
     nativeAction: 'notifications',
+  ),
+  const HarnessCommand(
+    'swarm.quick_switcher',
+    'Switch conversation',
+    ShortcutGroup.navigate,
+    context: KeymapContext.swarmChat,
+    keywords: ['Swarm', 'chat', 'people', 'agents'],
   ),
   // The current project's Chat with PM, in a Swarm tab. K for "talk": free on
   // every platform (Alt+Shift+K on Linux, the web and Windows).
