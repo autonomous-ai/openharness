@@ -620,6 +620,23 @@ class VerifyReuseTests(ReuseFixture):
         with self.assertRaisesRegex(ValueError, "mobile/test/root_test.dart reads backend/src/app.ts"):
             planner.verify_reuse(self.root, self.receipt(plan), later, self.evidence)
 
+    def test_a_look_alike_inside_the_component_cannot_hide_a_root_read_from_the_helper(self):
+        for name, line in (("root", "File(p.join(repo, 'backend/src/app.ts')).readAsStringSync();"),
+                           ("relative", "File('../backend/src/app.ts').readAsStringSync();")):
+            with self.subTest(form=name):
+                _, main, head, receipt = self.reusing(pr_paths=("mobile/lib/app.dart", "mobile/test/root_test.dart"))
+                self.git("checkout", "-q", "--detach", head)
+                (self.root / "mobile/test/root_test.dart").write_text(line)
+                self.write("mobile/backend/src/app.ts", "an unused look-alike")
+                reader = self.commit(f"reads the backend past a look-alike ({name})")
+                self.evidence.add(self.root, reader, {"mobile"}, run_id=51)
+                later = self.branch(main, ["backend/src/app.ts"], f"main-look-alike-{name}")
+                merged = self.update(reader, later)
+                plan = self.plan(merged, later)
+                self.assertEqual(list(plan["reused"]), ["mobile"])
+                with self.assertRaisesRegex(ValueError, "mobile/test/root_test.dart reads backend/src/app.ts"):
+                    planner.verify_reuse(self.root, self.receipt(plan), later, self.evidence)
+
     def test_mismatched_parents_run_tree_or_link_are_refused(self):
         passed, main, head, receipt = self.reusing()
         record = receipt["reused"]["mobile"]
@@ -743,6 +760,17 @@ class CrossReadTests(unittest.TestCase):
         self.assertEqual(planner.undeclared_reads(self.root, "os"), [
             ("os/tests/test_a.py", "backend/src/"), ("os/tests/test_a.py", "backend/src/types/productUsage.ts"),
             ("os/tests/test_a.py", "website/src/dial.ts")])
+
+    def test_a_look_alike_inside_the_component_does_not_hide_a_real_read(self):
+        # A PR could add an unused mobile/backend/src/app.ts so that a read of backend/src/app.ts looks internal.
+        self.write("mobile/backend/src/app.ts", "unused")
+        self.write("mobile/test/root_test.dart", "File(p.join(repo, 'backend/src/app.ts'));")
+        self.write("mobile/test/relative_test.dart", "File('../backend/src/app.ts');")
+        self.write("mobile/lib/only_inside.dart", "File(p.join(here, 'backend/src/inner.ts'));")
+        self.write("mobile/backend/src/inner.ts", "an internal file with no root twin")
+        self.write("mobile/lib/notes.dart", "/// `../backend/src/app.ts` named in a doc comment is not a read")
+        self.assertEqual(planner.undeclared_reads(self.root, "mobile"), [
+            ("mobile/test/relative_test.dart", "backend/src/app.ts"), ("mobile/test/root_test.dart", "backend/src/app.ts")])
 
     def test_strings_that_are_only_data_are_listed_with_a_reason(self):
         for source, (reason, targets) in planner.NOT_READS.items():

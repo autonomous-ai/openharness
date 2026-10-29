@@ -81,10 +81,12 @@ DEPENDS = {
                "daemons/banner.json", "daemons/frames.json", "daemons/plates.json", "daemons/roster.json", "desktop/",
                "docs/performance/"),
     # pty-checks also runs the CLI's ptyhost contract, which imports CLI code.
-    # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages.
-    "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "tui/"),
+    # os-checks reads the CLI's dial ids (cli/src/cable/serial.ts), its version and the TUI it packages;
+    # term/ by hand: the update fixture copies `git ls-files -- tui term`, which the scan cannot see.
+    "os": ("cli/", "devices/harness-device/firmware/README.md", "docs/naming-system.md", "docs/terminology.md", "term/", "tui/"),
     "pty": ("cli/", "desktop/windows/runner/resources/app_icon.ico"),
-    "tui": ("cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
+    # THIRD_PARTY_NOTICES.md: tui/src/main.rs includes ../THIRD_PARTY_NOTICES.md, which names a root file too.
+    "tui": ("THIRD_PARTY_NOTICES.md", "cli/package.json", "os/network.py", "os/onboarding.py", "os/root/usr/bin/hn",
             "tests/fixtures/shared-pane-layouts.json"),
     "website": ("backend/src/", "cli/packages/harness-mcp/", "cli/src/agentClient/commands.ts", "cli/src/lib/newCommand.ts",
                 "cli/src/messages/command.ts", "desktop/lib/core/phone_app_links.dart",
@@ -112,6 +114,8 @@ NOT_READS = {
     "cli/src/lib/transcriptReader.spec.ts": ("test data: a tool result's text", {"devices/"}),
     "companions/src/application/modelProfile.spec.ts": ("test data: a model name", {"provider/"}),
     "companions/src/memory/lessons/signals.spec.ts": ("test data: a test id", {"tests/"}),
+    "desktop/test/p2p/mobile_parity_test.dart": ("reads ../mobile/<file> only for the phone files desktop-tests' sparse "
+                                                  "checkout holds, each declared in ci.SOURCE_INPUTS", {"mobile/"}),
     "desktop/test/community_publish_test.dart": ("test data: a file in a temporary folder", {"docs/"}),
     "desktop/test/runtime_model_name_test.dart": ("test data: a model name", {"provider/"}),
     "desktop/test/super_tab_read_fixtures/first_load.json": ("test data: a task's owned paths", {"docs/design/"}),
@@ -330,7 +334,9 @@ def undeclared_reads(root, suite):
                 return None
             return known + "/" if known in folders else known
 
-        for match in RELATIVE_READ.finditer(text):
+        data = NOT_READS.get(source, ("", set()))[1]
+        code = "\n".join("" if line.lstrip().startswith(COMMENT_LINE) else line for line in text.splitlines())
+        for match in RELATIVE_READ.finditer(code):
             relative = match.group(1) + match.group(2)
             targets = []
             for start in (str(PurePosixPath(source).parent), top):  # beside the file, or from its package root
@@ -345,6 +351,14 @@ def undeclared_reads(root, suite):
                 known = existing(inside[0])
                 if known and not reads(suite, known + "x" if known.endswith("/") else known):
                     found.append((source, known))
+                # Fail closed when the other reading names a real path too: a look-alike file inside the
+                # component (which the PR controls) must not hide a read of another directory.
+                for target in targets:
+                    if target.split("/", 1)[0] != top and (target in tracked or target in folders):
+                        known = target + "/" if target in folders else target
+                        probe = known + "x" if known.endswith("/") else known
+                        if known not in data and not shared_input(probe) and not reads(suite, probe):
+                            found.append((source, known))
                 continue
             for target in targets:
                 if target.split("/", 1)[0] == top:
@@ -359,15 +373,15 @@ def undeclared_reads(root, suite):
                 break
 
         # Paths named from the repository root, on lines that are not comments.
-        data = NOT_READS.get(source, ("", set()))[1]
-        code = "\n".join("" if line.lstrip().startswith(COMMENT_LINE) else line for line in text.splitlines())
         for match in QUOTED_PATH.finditer(code):
             target = os.path.normpath(match.group(1)).replace(os.sep, "/")
             if target.split("/", 1)[0] not in tops or target.split("/", 1)[0] == top:
                 continue
-            # The same path inside its own directory or beside the file ("OS / 'tests/x.py'"): internal.
-            if any(f"{start}/{target}" in tracked or f"{start}/{target}" in folders
-                   for start in (top, str(PurePosixPath(source).parent))):
+            # The same path inside its own directory or beside the file ("OS / 'tests/x.py'") is internal,
+            # but only when the repository root has no such path: an ambiguous path counts as a read.
+            if target not in tracked and target not in folders and any(
+                    f"{start}/{target}" in tracked or f"{start}/{target}" in folders
+                    for start in (top, str(PurePosixPath(source).parent))):
                 continue
             known = existing(target)
             if known is None or known in data:
