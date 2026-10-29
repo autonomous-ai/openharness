@@ -2165,14 +2165,8 @@ class NewHarnessFormState extends State<NewHarnessForm> {
     final chosen = machine.id == box.leadMachine?.id;
     final enabled = machine.startable && !box.locked;
     final status = _leadStatusWord(machine);
-    return Semantics(
+    return KeyedSubtree(
       key: ValueKey('new-harness-lead-machine-${machine.id}'),
-      selected: chosen,
-      // Its full reason stays with assistive technology; the row shows one word.
-      label: machine.startable
-          ? machine.name
-          : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
-      excludeSemantics: true,
       child: MenuItemButton(
         autofocus: chosen && enabled,
         onPressed: enabled ? () => box.chooseLeadMachine(machine.id) : null,
@@ -2216,53 +2210,63 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                     : Colors.transparent,
               ),
             ),
-        child: SizedBox(
-          width: 232,
-          child: Row(
-            children: [
-              if (machine.owner case final owner?)
-                Opacity(
-                  opacity: enabled ? 1 : .55,
-                  child: SuperTabAvatar.person(owner, size: 16),
-                )
-              else
-                Icon(
-                  box.app.stateOf(machine.id)?.isLocalMachine == true
-                      ? AppIcons.laptop
-                      : AppIcons.monitor,
-                  size: 16,
-                ),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 3,
-                child: Text(
-                  machine.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              // Enlarged text shortens the word rather than the row overflowing.
-              if (status != null) ...[
-                const SizedBox(width: 8),
-                Flexible(
-                  flex: 2,
-                  fit: FlexFit.tight,
+        // Inside the button, so it keeps its press action and enabled state
+        // (review of #2237); assistive technology hears the full reason where
+        // the row shows one word.
+        child: Semantics(
+          selected: chosen,
+          label: machine.startable
+              ? machine.name
+              : '${machine.name}, ${leadMachineDetail(machine, box.cloudRepository)}',
+          excludeSemantics: true,
+          child: SizedBox(
+            width: 232,
+            child: Row(
+              children: [
+                if (machine.owner case final owner?)
+                  Opacity(
+                    opacity: enabled ? 1 : .55,
+                    child: SuperTabAvatar.person(owner, size: 16),
+                  )
+                else
+                  Icon(
+                    box.app.stateOf(machine.id)?.isLocalMachine == true
+                        ? AppIcons.laptop
+                        : AppIcons.monitor,
+                    size: 16,
+                  ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 3,
                   child: Text(
-                    status,
+                    machine.name,
                     maxLines: 1,
-                    softWrap: false,
                     overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
-                    style: grid.AppType.caption(height: 1.35),
                   ),
                 ),
+                // Enlarged text shortens the word rather than the row overflowing.
+                if (status != null) ...[
+                  const SizedBox(width: 8),
+                  Flexible(
+                    flex: 2,
+                    fit: FlexFit.tight,
+                    child: Text(
+                      status,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.end,
+                      style: grid.AppType.caption(height: 1.35),
+                    ),
+                  ),
+                ],
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 16,
+                  child: chosen ? Icon(AppIcons.check, size: 16) : null,
+                ),
               ],
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 16,
-                child: chosen ? Icon(AppIcons.check, size: 16) : null,
-              ),
-            ],
+            ),
           ),
         ),
       ),

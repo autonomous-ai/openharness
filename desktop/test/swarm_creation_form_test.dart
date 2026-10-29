@@ -597,6 +597,64 @@ void main() {
     );
   }
 
+  // Review of #2237: each row keeps its button for assistive technology, the
+  // press action and the enabled state with it; only its label says more.
+  testWidgets(
+    'Assistive technology can press a machine row, and not an offline or busy one',
+    (tester) async {
+      final handle = tester.ensureSemantics();
+      final (box, _) = await mount(
+        tester,
+        leadMachines: swarm,
+        setup: addLaptop,
+      );
+      await openMachines(tester);
+      SemanticsNode node(String id) => tester.getSemantics(
+        find.descendant(of: leadRow(id), matching: find.byType(MenuItemButton)),
+      );
+      expect(
+        node('laptop'),
+        matchesSemantics(
+          label: 'Ken MacBook',
+          hasEnabledState: true,
+          isEnabled: true,
+          hasSelectedState: true,
+          isFocusable: true,
+          hasTapAction: true,
+          hasFocusAction: true,
+        ),
+      );
+      for (final (id, why) in [
+        ('mini', 'Offline'),
+        ('linux', 'Online · No agents free'),
+      ]) {
+        final row = node(id);
+        expect(row.getSemanticsData().label, contains(why), reason: id);
+        expect(
+          row,
+          matchesSemantics(
+            label: row.getSemanticsData().label,
+            hasEnabledState: true,
+            isEnabled: false,
+            hasSelectedState: true,
+          ),
+          reason: id,
+        );
+        expect(
+          row.getSemanticsData().hasAction(SemanticsAction.tap),
+          isFalse,
+          reason: id,
+        );
+      }
+      // Pressed through its semantics, the enabled row is chosen.
+      tester.semantics.tap(find.semantics.byLabel('Ken MacBook'));
+      await tester.pumpAndSettle();
+      expect(box.leadMachine?.id, 'laptop');
+      handle.dispose();
+      await unmount(tester);
+    },
+  );
+
   testWidgets('Nothing moves the Product Manager to a machine by itself', (
     tester,
   ) async {
@@ -1065,7 +1123,18 @@ void main() {
             findsOneWidget,
           );
           expect(find.text(why), findsNothing);
-          expect(tester.getSemantics(leadRow(id)).label, contains(why));
+          expect(
+            tester
+                .getSemantics(
+                  find.descendant(
+                    of: leadRow(id),
+                    matching: find.byType(MenuItemButton),
+                  ),
+                )
+                .getSemanticsData()
+                .label,
+            contains(why),
+          );
           expect(rowEnabled(tester, id), isFalse);
         }
         await shot(tester, boundary, 'new-project-none-${brightness.name}-why');
