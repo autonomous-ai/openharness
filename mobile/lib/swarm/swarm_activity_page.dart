@@ -618,7 +618,13 @@ class SwarmActivityRow extends StatelessWidget {
               ),
               if (busy != null) ...[
                 const SizedBox(height: AppSpace.m),
-                Padding(padding: const EdgeInsets.only(left: 44), child: busy),
+                // Under the words, past the 32-point avatar and the gap beside it.
+                Row(
+                  children: [
+                    const SizedBox(width: 32 + 12),
+                    Expanded(child: busy),
+                  ],
+                ),
               ],
             ],
           ),
