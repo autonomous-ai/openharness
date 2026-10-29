@@ -292,6 +292,22 @@ export function machineTeamWork(state: SuperTabState, pool: ContributedMachine, 
   return teamWorkRefusal(subject, now, teamMachines.includes(subject.machineId), teamAccountRequired(state), otherWorkspaceMachines.includes(subject.machineId))
 }
 
+/** The projects with work on [machineId]: its agents' and its pending starts'. */
+export function projectsOnMachine(state: SuperTabState, machineId: string): Set<string> {
+  const pending = (state.starts ?? []).filter(s => s.request.machineId === machineId && !s.harnessId && !s.error)
+    .map(s => s.request.leadFor?.projectId ?? groupProject(state, conversation(state, s.request.conversationId)).id)
+  return new Set([...state.agents.filter(a => a.machineId === machineId).map(a => agentProjectId(state, a)), ...pending])
+}
+
+/** The project whose Product Manager runs, or is starting, on [machineId]; null when none does. In a Harness Team account it
+ *  serves only that project: every agent there is one macOS user, which reads the others' files, the Product Manager's
+ *  saved sessions with people's private chats among them (#895). */
+export function productManagerOn(state: SuperTabState, machineId: string): string | null {
+  const led = state.agents.find(a => a.machineId === machineId && ledProject(state, a.id))
+  if (led) return ledProject(state, led.id)!.id
+  return state.starts?.find(s => s.request.machineId === machineId && s.request.leadFor && !s.harnessId && !s.error)?.request.leadFor!.projectId ?? null
+}
+
 /** Whether [pool] is a Harness Team account: a Mac's (it names its Mac) or a machine used only for agents (its reading came
  *  from a team session). */
 export const teamAccountPool = (pool: ContributedMachine | null | undefined): boolean =>
@@ -509,6 +525,10 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   if (pool.paused) fail('MACHINE_PAUSED', 'New work is paused on this machine.')
   const project = groupProject(state, conversation(state, request.conversationId))
   if (!pool.scope && project.id !== 'lead') fail('PROJECT_CONTRIBUTION', 'Ask its owner to add this machine to the swarm again to support other projects.')
+  const held = teamAccountPool(pool) ? productManagerOn(state, pool.machineId) : null
+  if (held && held !== project.id) {
+    fail('TEAM_ACCOUNT_HELD', `The Harness Team account on ${pool.name} runs another project's Product Manager, so it takes only that project's work for now.`, 403)
+  }
   // Before the request's own fields: a machine that takes none of this project's work says so first. A Buddy is its owner's
   // own agent on their own machine (commands.ts buddy.create), as a Lead is: teammates' work rules do not apply to it.
   if (!request.buddyOf) requireTeamWork(state, pool.machineId, pool.contributorId, project, now, teamMachines, otherWorkspaceMachines)

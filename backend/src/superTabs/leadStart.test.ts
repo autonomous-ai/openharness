@@ -291,3 +291,42 @@ describe('the terminal of a Product Manager in a Team account', () => {
     expect(t.input(mate)).toBe('TERMINAL_PRIVATE')
   })
 })
+
+// Every agent in a Team account runs as one macOS user and can read the others' files, the Product Manager's saved
+// sessions with people's private chats among them. So a Team account hosting a Product Manager serves only its project.
+describe('a Team account hosting a Product Manager', () => {
+  const other = (f: ReturnType<typeof swarm>) => {
+    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string; conversationId: string }
+    const group = f.run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    const request = { conversationId: group, machineId: 'mate-mac', engine: 'claude', name: 'Builder', cwd: `/swarm/${web.projectId}`, worktree: true,
+      requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } }
+    const pooled = { contribution: { machineOwnerId: 'mate', contributorId: 'mate', hostGrant: null } }
+    return { start: () => f.run({ type: 'agent.start', request }, owner, pooled), web }
+  }
+
+  it('takes no other project\'s new work while the Product Manager starts or runs there', () => {
+    const f = swarm(), web = other(f)
+    f.lead('mate-mac')
+    expect(refusal(() => web.start())).toMatchObject({ code: 'TEAM_ACCOUNT_HELD',
+      message: 'The Harness Team account on MacBook Pro runs another project\'s Product Manager, so it takes only that project\'s work for now.' })
+  })
+
+  it('is not where a Product Manager goes while another project\'s agents run there', () => {
+    const f = swarm(), web = other(f)
+    web.start()
+    expect(refusal(() => f.lead('mate-mac'))).toMatchObject({ code: 'TEAM_ACCOUNT_BUSY',
+      message: 'The Harness Team account on MacBook Pro runs other projects\' agents, so it cannot host this Product Manager now.' })
+    // From the queue it goes to the next free machine instead.
+    expect(f.lead(null).result).toMatchObject({ machineId: 'owner-mac' })
+  })
+
+  it('leaves the project owner\'s own machine as it is', () => {
+    const f = swarm()
+    f.lead('owner-mac')
+    const web = f.run({ type: 'project.create', name: 'Web', visibility: 'public', brief: '' }).result as { projectId: string }
+    const group = f.run({ type: 'conversation.create', projectId: web.projectId, title: 'Work', brief: 'Build it.', checks: [] }).result.conversationId as string
+    expect(f.run({ type: 'agent.start', request: { conversationId: group, machineId: 'owner-mac', engine: 'claude', name: 'Builder', cwd: `/swarm/${web.projectId}`,
+      worktree: true, requirements: { memoryBytes: 0, diskBytes: 0, maxCpuPercent: 100, tools: [], devices: [], quotaRequired: false } } }, owner,
+      { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } }).result.startId).toBeTruthy()
+  })
+})

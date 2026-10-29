@@ -3,7 +3,7 @@
  *  that Mac's Harness Team account, never as the Mac's owner, whatever the Swarm's switch (machines.ts teamAccountRequired)
  *  says for workers: a Product Manager reads people's private chats. With no machine named, it waits for the first free
  *  one. Desktop's own-machine flow (project.create, a local start, agent.add) is unchanged. */
-import { admitMachineStart, failTeamWork, machineContribution, machineSlots, projectFolder, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
+import { admitMachineStart, failTeamWork, machineContribution, machineSlots, projectFolder, projectsOnMachine, teamAccountPool, teamAccountSwarm, teamPoolOf, teamWorkRefusal,
   type ContributedMachine } from './machines.js'
 import { actorKey, fail, person, stableId, SuperTabError, type AgentStart, type AgentStartRequest, type Conversation, type Person, type SuperTabState } from './model.js'
 import { mutableProjects, projectsOf, type SwarmProject } from './projects.js'
@@ -67,6 +67,10 @@ export function placeLead(state: SuperTabState, project: SwarmProject, by: Perso
     cwd: projectFolder(pool, project), worktree: true, ...(request.branchRef ? { branchRef: request.branchRef } : {}),
     requirements: LEAD_REQUIREMENTS, leadFor: { projectId: project.id, personId: by.id, generation: by.generation } }
   admitMachineStart(state, start, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)
+  // Its Team account will serve only this project (machines.ts productManagerOn), so not one running another's work now.
+  if (teamAccountPool(pool) && [...projectsOnMachine(state, pool.machineId)].some(id => id !== project.id)) {
+    fail('TEAM_ACCOUNT_BUSY', `The Harness Team account on ${pool.name} runs other projects' agents, so it cannot host this ${LEAD_NAME} now.`, 409)
+  }
   if (!pool.observation?.capabilities?.includes(LEAD_CAPABILITY)) {
     fail('HOST_OUTDATED', `Update Harness on ${pool.name} to run a ${LEAD_NAME} there.`, 409)
   }
