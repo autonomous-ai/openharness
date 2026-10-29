@@ -86,7 +86,11 @@ class HarnessLaunchIntegration {
 
   /// With [leadMachines]: the Swarm's model list for its engine and model.
   LeadModelList? leadModels;
-  final Future<String> Function(String machineId, String task) prepare;
+
+  /// Before anything is created: the prompt for [task], which a destination
+  /// may refuse for [machineId] and [engine], the engine about to start.
+  final Future<String> Function(String machineId, String task, String engine)
+  prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;
   Future<void> Function()? resume;

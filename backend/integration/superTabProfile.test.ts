@@ -13,6 +13,7 @@ import { CdnAvatarStore, MemoryAttachmentStore, MemoryAvatarStore } from '../src
 import { superTabRoutes } from '../src/routes/superTabs.js'
 import { errorHandler } from '../src/middlewares/errorHandler.js'
 import type { Command } from '../src/superTabs/commands.js'
+import { usernames } from '../src/superTabs/usernames.js'
 
 // A fresh loopback replica set, created here. This suite never reads DATABASE_URL or an existing database.
 let replica: MongoMemoryReplSet
@@ -106,6 +107,52 @@ describe('status line', () => {
     const members = (await read(tab, owner)).body.data.members as Array<{ key: string; data: { status?: { text: string } } }>
     expect(members.find(m => m.key === owner.sub)!.data.status!.text).toBe('Coffee')
     expect(members.find(m => m.key === peer.sub)!.data.status!.text).toBe('Reviewing')
+  })
+})
+
+describe('usernames', () => {
+  const members = async (tab: string, user = owner) =>
+    (await read(tab, user)).body.data.members as Array<{ key: string; data: { username?: string } }>
+
+  it('reaches members through first loads and changes, and nobody outside the Swarm', async () => {
+    const tab = await swarm()
+    const first = await read(tab, peer)
+    await run(tab, { type: 'member.username', username: 'Pilot' })
+    const changes = await read(tab, peer, `changes?cursor=${first.body.data.cursor}`)
+    expect(changes.body.data.members.find((m: { key: string }) => m.key === owner.sub).data.username).toBe('pilot')
+    expect((await members(tab, peer)).find(m => m.key === owner.sub)!.data.username).toBe('pilot')
+    const stranger = await read(tab, outsider)
+    expect(stranger.status).not.toBe(200)
+    expect(stranger.text).not.toContain('pilot')
+  })
+
+  it('lets a viewer choose their own name, and nothing else', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Office')).id
+    const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'viewer', conversationId: 'lead' })
+    await run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)
+    await run(tab, { type: 'member.username', username: 'watcher' }, peer)
+    expect((await members(tab)).find(m => m.key === peer.sub)!.data.username).toBe('watcher')
+    await expect(run(tab, { type: 'member.status', status: { text: 'Hi' } }, peer)).rejects.toMatchObject({ code: 'READ_ONLY' })
+  })
+
+  it('gives a name to one of two people choosing it at once', async () => {
+    const tab = await swarm()
+    const results = await Promise.allSettled([run(tab, { type: 'member.username', username: 'captain' }),
+      run(tab, { type: 'member.username', username: 'captain' }, peer)])
+    expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect((results.find(r => r.status === 'rejected') as PromiseRejectedResult).reason).toMatchObject({ code: 'USERNAME_TAKEN' })
+    expect((await members(tab)).filter(m => m.data.username === 'captain')).toHaveLength(1)
+  })
+
+  it('keeps names distinct when someone joins while another person chooses the joiner’s default', async () => {
+    const tab = (await store.create(owner, randomUUID(), 'Office')).id
+    const invitation = await run(tab, { type: 'invite.create', email: peer.email, role: 'collaborator', conversationId: 'lead' })
+    const [chosen] = await Promise.allSettled([run(tab, { type: 'member.username', username: 'peer' }),
+      run(tab, { type: 'invite.accept', inviteId: invitation.result.inviteId as string }, peer)])
+    const names = usernames((await store.read(owner, tab)).state.people)
+    // Either the choice came first and the joiner is numbered, or the join came first and the choice was refused.
+    expect(names).toEqual(chosen.status === 'fulfilled' ? new Map([[owner.sub, 'peer'], [peer.sub, 'peer2']])
+      : new Map([[owner.sub, 'owner'], [peer.sub, 'peer']]))
   })
 })
 

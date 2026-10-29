@@ -157,6 +157,14 @@ class SuperTabParts {
       _live['groups']?.containsKey(groupId) == true ||
       _dormant.containsKey(groupId);
 
+  /// When group [groupId] last changed, in epoch milliseconds: its part's `changedAt` (backend read/contract.ts), which
+  /// moves with anything in it, a message included. Null for a group this reader does not hold.
+  int? groupChangedAt(String groupId) =>
+      switch ((_live['groups']?[groupId] ?? _dormant[groupId])?['changedAt']) {
+        final num at => at.toInt(),
+        _ => null,
+      };
+
   /// Dormant groups held with data from before a stub closed them, to read again by id.
   List<String> get staleGroups => _stale.toList();
 
@@ -308,6 +316,8 @@ class SuperTabParts {
     if (_derived['decisionsDigest'] case final String digest) {
       state['decisionsDigest'] = digest;
     }
+    // Sent only where the server does not try Harness Team accounts yet.
+    if (_derived['teamAccounts'] == false) state['teamAccounts'] = false;
     if (_readMarks.isNotEmpty) state['readMarks'] = Map.of(_readMarks);
     return state;
   }

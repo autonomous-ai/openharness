@@ -66,7 +66,9 @@ export function createAccountHttp(deps: AccountHttpDeps) {
     } catch (error) {
       const e = error as Error & { cause?: { message?: string } }
       if (timedOut(e)) return timeout()
-      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend (${e.cause?.message ?? e.message}). Check the connection and try again.`)
+      // An empty reason is no reason: no parentheses then (Scholes 10-29).
+      const reason = [e.cause?.message, e.message].map(text => text?.trim()).find(Boolean)
+      return failure(502, 'BACKEND_UNREACHABLE', `Could not reach the Harness backend${reason ? ` (${reason})` : ''}. Check the connection and try again.`)
     }
     // The timeout also covers the body: a success that stalls after the headers, or a proxy's HTML page, is not an empty
     // success (Diego 10-29). A refusal keeps its status whatever its body does: 401/403 sign out, 426 asks for an update.
