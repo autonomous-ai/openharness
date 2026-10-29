@@ -223,7 +223,7 @@ export interface SuperTabServiceOptions {
   /** What reports the Harness Team account's own engines to its owner (team/engines.ts), for a spec. */
   teamEngines?: () => Pick<TeamEngineReporter, 'start' | 'stop'>
   /** What sets up the Harness Team account when Desktop asks (team/autoSetup.ts), for a spec. */
-  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>>
+  teamSetup?: () => Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>>
   /** Whether this daemon runs team work only (a Harness Team account, `harness team on`), for a spec. */
   team?: () => boolean
   /** The Harness Team account's own tmux (team/tmux.ts), for a spec. */
@@ -291,7 +291,7 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
     () => readTeamConfig(), options.team ?? (() => readAuthSession()?.kind === 'team'), line => console.log(`[team] ${line}`),
     // A team account still on a build that cannot use the relay is updated from here (team/refresh.ts).
     (publishedAt) => refreshTeamAccount(realTeamRefreshDeps(core, publishedAt)))))()
-  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'>> | null = null
+  let autoSetup: Promise<Pick<TeamAutoSetup, 'offer' | 'decline'> & Partial<Pick<TeamAutoSetup, 'status'>>> | null = null
   // In the Harness Team account: a tmux and a gh of its own when it has none it can run (team/tmux.ts, team/gh.ts). Looked
   // at as it connects, and a failed install again half an hour later.
   const settled = (outcome: string) => outcome === 'present' || outcome === 'installed' || outcome === 'not-team'
@@ -353,11 +353,17 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // Harness Team account, behind macOS's own administrator prompt. Never through the relay, with nobody at this Mac.
         // `teamSetupCheck` only says whether it is wanted, so Desktop explains it before macOS asks; `teamSetupDecline` is
         // that explanation's "Not now". Both are new names, so an older daemon refuses them rather than asking unexplained.
-        if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline') {
+        // `teamSetupStatus`: why there is no account yet, for this Mac's own machine row (cancelled, failed and why, running).
+        if (payload.action === 'teamSetup' || payload.action === 'teamSetupCheck' || payload.action === 'teamSetupDecline'
+          || payload.action === 'teamSetupStatus') {
           if (!asker.local) return { error: 'OWNER_REQUIRED' }
           const setup = () => autoSetup ??= (options.teamSetup ?? (() => realTeamAutoSetup(core.dataDir, line => console.log(`[team] ${line}`))))()
             .catch(error => { autoSetup = null; throw error })
           if (payload.action === 'teamSetupDecline') { (await setup()).decline(); return { ok: true } }
+          if (payload.action === 'teamSetupStatus') {
+            const made = await setup()
+            return made.status ? { ok: true, ...await made.status() } : { error: 'INVALID_REQUEST' }
+          }
           if (!AUTO_SETUP_REASONS.includes(payload.reason as AutoSetupReason)) return { error: 'INVALID_REQUEST' }
           // Desktop asks at every launch. A Mac that hosts no Swarm work, as no regular user's does, answers at once:
           // nothing read, run or asked of the backend.
