@@ -128,6 +128,9 @@ describe('which host a part concerns from its data alone', () => {
     expect(plainHost('start', { request: {} })).toBeNull()
     expect(plainHost('group', { agentIds: [] })).toBeNull()
     expect(plainHost('machine', { machineId: 'A' })).toBeNull()
+  })
+})
+
 describe('which people a commit tells (WS roadmap Phase 2a, client reads)', () => {
   const swarm = (...people: string[]) => {
     const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
