@@ -1,7 +1,7 @@
 /** Persistence for route decisions. Called inside SuperTabStore's transactions. */
 import type { Prisma, SuperTabRouteDecision } from '@prisma/client'
 import { ms } from './parts/light.js'
-import type { Conversation, SuperTabState } from './model.js'
+import type { SuperTabState } from './model.js'
 import { attemptChanges, endRun, startRun, type RouteRun } from './costs/attempts.js'
 import { finalMatches, type RouteDecision, type RouteDecisionEffect, type RouteFinal, type RouteOverride, type RouteRecord } from './routeRecord.js'
 
@@ -95,8 +95,8 @@ export async function closeUnassignedStart(tx: Tx, tabId: string, decisionId: st
  * again: it is the same attempt going on. Only decisions with that assignment are touched, by the tabId+assignmentId index.
  * Runs inside the store's write, after the route effects, so an assignment made in the same write is linked already.
  */
-export async function recordAttempts(tx: Tx, tabId: string, before: Conversation[], after: SuperTabState, now: number): Promise<void> {
-  const { started, ended, resumed } = attemptChanges(before, after)
+export async function recordAttempts(tx: Tx, tabId: string, before: SuperTabState, after: SuperTabState, now: number): Promise<void> {
+  const { started, ended, resumed } = attemptChanges(before.conversations, after)
   for (const assignment of started) {
     await tx.superTabRouteDecision.updateMany({ where: { tabId, assignmentId: assignment.id }, data: { run: json(startRun(after, assignment, now)) } })
   }
@@ -109,7 +109,7 @@ export async function recordAttempts(tx: Tx, tabId: string, before: Conversation
       // A decision routed before runs were kept: what it ran on is known now, its start tokens never were.
       const began = (row.run as unknown as RouteRun | null) ?? { ...startRun(after, assignment, now), startedAt: row.createdAt.getTime(), start: null }
       const close = outcome && row.outcome == null ? { outcome, outcomeAt: new Date(now) } : {}
-      await tx.superTabRouteDecision.update({ where: { id: row.id }, data: { run: json(endRun(began, after, assignment, assignment.agentId, now)), ...close } })
+      await tx.superTabRouteDecision.update({ where: { id: row.id }, data: { run: json(endRun(began, after, assignment, assignment.agentId, now, before)), ...close } })
     }
   }
 }

@@ -126,6 +126,18 @@ describe('an attempt’s record on its route decision', () => {
     expect((await f.decision(next)).run).toMatchObject({ startedAt: f.clock.now })
   })
 
+  it('ends a task lost to its stopped session with the counts reported before the session stopped', async () => {
+    const f = await swarm()
+    await f.beat(opus(10, 1))
+    const id = await f.route()
+    await f.assign(id)
+    await f.beat(opus(250, 25))
+    f.clock.now += 5_000
+    // The report that says the session stopped no longer lists it, nor its counts.
+    await f.observe('test-host', [], { stoppedHarnessIds: [f.harness.worker] })
+    expect(await f.decision(id)).toMatchObject({ outcome: 'lost', run: { start: opus(10, 1), end: opus(250, 25), endedAt: f.clock.now } })
+  })
+
   it('never shows the machine’s raw token counts to a reader', async () => {
     const f = await swarm()
     await f.beat(opus(10, 1))

@@ -89,12 +89,14 @@ export function startRun(state: SuperTabState, assignment: Assignment, now: numb
   return { machineId, harnessId, ...ran, billing: billingOf(state, machineId, ran.engine, ran.grid), startedAt: now, start: tokensOf(state, machineId, harnessId) }
 }
 
-/** Its end: the totals its machine last reported, and the model and effort its agent ran at last. A session replaced during the
- *  attempt (agent.rebind) counts from zero, so only the new session's tokens are counted. */
-export function endRun(run: RouteRun, state: SuperTabState, assignment: Assignment, agentId: string, now: number): RouteRun {
+/** Its end: the totals its machine last reported, and the model and effort its agent ran at last. The report that says a
+ *  session stopped no longer lists it, nor its counts: then its totals are those reported before this write (`before`). A
+ *  session replaced during the attempt (agent.rebind) counts from zero, so only the new session's tokens are counted. */
+export function endRun(run: RouteRun, state: SuperTabState, assignment: Assignment, agentId: string, now: number, before?: SuperTabState): RouteRun {
   const { machineId, harnessId } = assignment.execution
   const { engine: _engine, grid: _grid, ...ran } = ranOn(state, assignment, agentId)
-  return { ...run, ...ran, ...(harnessId !== run.harnessId ? { harnessId, start: {} } : {}), endedAt: now, end: tokensOf(state, machineId, harnessId) }
+  const end = tokensOf(state, machineId, harnessId) ?? (before ? tokensOf(before, machineId, harnessId) : null)
+  return { ...run, ...ran, ...(harnessId !== run.harnessId ? { harnessId, start: {} } : {}), endedAt: now, end }
 }
 
 /** The tokens the attempt used, by model: its session's end totals less its start totals. A count lower at the end than at the

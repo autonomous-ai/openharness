@@ -64,6 +64,13 @@ describe('what an attempt ran on and how it was paid', () => {
     expect(ended).toEqual({ ...start, effort: 'max', endedAt: 5000, end: { 'claude-opus-5-5': opus(900, 40) } })
   })
 
+  it('ends with the totals its machine reported before this write when this write’s report no longer lists the session', () => {
+    const start = startRun(swarm({ tokens: { h1: { m: opus(500) } } }), assignment(), 1000)
+    const ended = endRun(start, swarm(), assignment(), 'w', 5000, swarm({ tokens: { h1: { m: opus(800) } } }))
+    expect(ended).toMatchObject({ endedAt: 5000, end: { m: opus(800) } })
+    expect(endRun(start, swarm({ tokens: { h1: { m: opus(900) } } }), assignment(), 'w', 5000, swarm({ tokens: { h1: { m: opus(800) } } })).end).toEqual({ m: opus(900) })
+  })
+
   it('starts from nothing when the attempt ends on another session than it began (a replaced terminal)', () => {
     const start = startRun(swarm({ tokens: { h1: { m: opus(500) } } }), assignment(), 1000)
     const moved = swarm({ tokens: { h2: { m: opus(30) } } })

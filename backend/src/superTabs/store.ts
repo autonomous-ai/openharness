@@ -1219,7 +1219,7 @@ export class SuperTabStore {
       ended = endedHolds(original, effects.state)
       started = startedHolds(original, effects.state)
       await writeRouteEffects(tx, tabId, effects.routeDecisions, context.now)
-      await recordAttempts(tx, tabId, original.conversations, effects.state, context.now)
+      await recordAttempts(tx, tabId, original, effects.state, context.now)
       if (command.type === 'agent.startFailed') {
         const start = original.starts?.find(s => s.id === command.startId)
         if (start?.routeDecisionId) await closeUnassignedStart(tx, tabId, start.routeDecisionId, start.id, 'failed', context.now)
@@ -1973,7 +1973,7 @@ export class SuperTabStore {
         const sequences = numberMessages(state, rows, now)
         const touches = judgedMachines(loaded.state, state, rows).filter(t => t.key !== machineId)
         await this.endRuns(tx, tabId, loaded.state, state)
-        await recordAttempts(tx, tabId, loaded.state.conversations, state, now)
+        await recordAttempts(tx, tabId, loaded.state, state, now)
         const version = (await this.save(tx, loaded, state, stamp, touches)).versions.get(`machine:${machineId}`) ?? 0
         await this.writeMessages(tx, tabId, state, rows, sequences, true)
         return { version }
@@ -2245,7 +2245,7 @@ export class SuperTabStore {
       // The poll also frees agents whose task the checks just lost, and any an older server left marked running (each poll; a
       // second finds none).
       await this.endRuns(tx, tabId, loaded.state, state)
-      await recordAttempts(tx, tabId, loaded.state.conversations, state, this.now())
+      await recordAttempts(tx, tabId, loaded.state, state, this.now())
       if (ledProject(state, agentId)) {
         await this.releaseRuns(tx, tabId, await this.staleRuns(tx, tabId, state))
       }
@@ -2436,7 +2436,7 @@ export class SuperTabStore {
       // A confirmed stop finishes its worker, as work.status stopped does (design ruling R5).
       const project = group ? groupProject(state, group).id : undefined
       await this.save(tx, loaded, state, clock.next(), project && state.projects ? [{ kind: 'progress', key: project }] : [])
-      await recordAttempts(tx, tabId, before.conversations, state, this.now())
+      await recordAttempts(tx, tabId, { ...state, conversations: before.conversations }, state, this.now())
       await this.writeMessages(tx, tabId, state, notices, sequences)
       if (!prior) await tx.superTabStopReceipt.create({ data: { id, tabId, assignmentId, ...execution, receipt } })
       ended = endedHolds(before, state)
