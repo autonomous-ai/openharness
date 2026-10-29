@@ -36,6 +36,33 @@ describe('the empty id list check', () => {
     expect(lint(`async function f(tx, usable) { const ids = usable.filter(u => u.ok); return tx.user.findMany({ where: { id: { in: ids } } }) }`)).toEqual(['ids'])
   })
 
+  it('follows a filter built in its own variable and passed to the read', () => {
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
+    expect(lint(`async function f(tx, ids) { const filter = { id: { in: ids }, active: true }; return tx.user.findMany({ where: filter }) }`)).toEqual(['ids'])
+    expect(lint(`async function f(tx, ids) { const base = { id: { in: ids } }; return tx.machine.findMany({ where: { ...base, ok: true } }) }`)).toEqual(['ids'])
+    expect(lint(`async function f(tx, ids) { if (!ids.length) return []; const where = { id: { in: ids } }; return tx.user.findMany({ where }) }`)).toEqual([])
+    // A filter for another model, or one never passed to a read of these three, is not this check's business.
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return tx.swarmMachine.findMany({ where }) }`)).toEqual([])
+  })
+
+  it('counts only a test that tells empty from not empty', () => {
+    const read = `return tx.user.findMany({ where: { id: { in: ids } } })`
+    const guarded = ['if (!ids.length) return []', 'if (ids.length === 0) return []', 'if (ids.length == 0) return []', 'if (0 === ids.length) return []',
+      'if (ids.length < 1) return []', 'if (ids.length <= 0) return []', 'if (ids.length > 0) { return tx.user.findMany({ where: { id: { in: ids } } }) }',
+      'if (ids.length !== 0) { return tx.user.findMany({ where: { id: { in: ids } } }) }', 'if (ids.length >= 1) { return tx.user.findMany({ where: { id: { in: ids } } }) }',
+      'if (ids.length) { return tx.user.findMany({ where: { id: { in: ids } } }) }', 'if (!ids.size) return []', 'if (!ids.length || ok) return []']
+    for (const guard of guarded) {
+      const code = guard.includes('return tx') ? `async function f(tx, ids) { ${guard} return [] }` : `async function f(tx, ids) { ${guard}; ${read} }`
+      expect(lint(code), guard).toEqual([])
+    }
+    // Looking at the length is not testing it: these let an empty list through.
+    for (const guard of ['if (ids.length > 5) return []', 'if (ids.length === 3) return []', 'if (ids.length < max) return []', 'if (!ok) return [ids.length]',
+      'console.log(ids.length)', 'if (xids.length === 0) return []',
+      'if (ids.lengthy === 0) return []', 'if (!ok && ids.length > 5) return []']) {
+      expect(lint(`async function f(tx, ids) { ${guard}; ${read} }`), guard).toEqual(['ids'])
+    }
+  })
+
   it('accepts a literal list, a constant and other models', () => {
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { authMode: { in: BILLED_MODES } } }) }`)).toEqual([])
     expect(lint(`async function f(tx) { return tx.machine.findMany({ where: { sessionKind: { in: ['team', 'person'] } } }) }`)).toEqual([])
