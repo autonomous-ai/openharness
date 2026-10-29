@@ -6,7 +6,6 @@
  * pane as every other writer does, under the pane's write lock.
  */
 import { stripVTControlCharacters } from 'node:util'
-import { updateDismissKeys } from '../../engines/codex/screen.js'
 import type { ScreenReading } from '../../engines/facets/screen.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TerminalCaptureOptions, TerminalReadResult } from '../../lib/terminalTypes.js'
@@ -27,7 +26,7 @@ export interface SuperTabTerminalDeps {
 /** The spec's cap; the tmux capture keeps at most 300 lines in any case. */
 const MAX_SCROLLBACK = 200
 const GONE = { ok: false as const, error: 'The agent is not running on this machine.' }
-const CHANGED = { ok: false as const, error: 'The screen changed before the key was sent; nothing was typed.' }
+const CHANGED = { ok: false as const, error: 'The screen changed before the keys were sent; nothing was typed.' }
 
 export function createSuperTabTerminal({ resolve, capture, read, type, key, locked }: SuperTabTerminalDeps) {
   return {
@@ -51,20 +50,20 @@ export function createSuperTabTerminal({ resolve, capture, read, type, key, lock
       })
     },
     /**
-     * Esc on Codex's update prompt, when it is still exactly that prompt: the screen is read again UNDER the pane's write
-     * lock, where no other writer can change it before the key lands, and the key is the one that read gave (engines/codex/
-     * screen.ts `updateDismissKeys`). The host's own earlier read cannot say this: the Lead, or the person, may answer the
-     * prompt in between, and a key typed then lands in the composer or the next question.
+     * Named keys, only while the visible screen is still exactly `screen`: it is read again UNDER the pane's write lock,
+     * where no other writer can change it before the keys land. A caller that read the screen earlier (the host's watch,
+     * which answers Codex's update prompt for an agent nobody sits at) cannot say it is still there: the Lead, or the
+     * person, may have answered it in between, and a key typed then lands in the composer or the next question. What the
+     * screen means is the caller's to judge; this only keeps the keys from reaching a different one.
      */
-    async dismissUpdate(agentId: string): Promise<SuperTabTyped> {
+    async inputIfScreen(agentId: string, keys: string[], screen: string): Promise<SuperTabTyped> {
       const session = resolve(agentId)
       if (!session) return GONE
+      if (!keys.length) return { ok: false, error: 'Nothing to type.' }
       return locked(agentId, async () => {
         const captured = await capture(session, { mode: 'visible', ansi: false })
         if (captured.state !== 'succeeded') return { ok: false, error: `Could not read the terminal: ${captured.reason}` }
-        const text = stripVTControlCharacters(captured.value)
-        const keys = (await read(session, text))?.messageHold === 'update_prompt_open' ? updateDismissKeys(text) : null
-        if (!keys) return CHANGED
+        if (stripVTControlCharacters(captured.value) !== screen) return CHANGED
         for (const name of keys) if (!await key(agentId, name)) return { ok: false, error: `The terminal did not take the key ${name}.` }
         return { ok: true }
       })

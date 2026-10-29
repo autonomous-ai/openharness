@@ -890,7 +890,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         shareObservers: () => { if (outOfProcess.has('sharing')) coreLink.want('sharing') },
         screen: (agentId, scrollback) => swarmDoors.terminal.screen(agentId, scrollback),
         input: (agentId, text, keys) => swarmDoors.terminal.input(agentId, text, keys),
-        dismissUpdate: (agentId) => swarmDoors.terminal.dismissUpdate(agentId) },
+        inputIfScreen: (agentId, keys, screen) => swarmDoors.terminal.inputIfScreen(agentId, keys, screen) },
       // The devices' `cardsWanted`, `cardRecap` and `cardOpen`, and no other action of the Super Tab service (superTabs/inCore/cards.ts `ask`).
       superTabRequest: (payload) => swarmDoors.cards.ask(payload),
     } : {}),

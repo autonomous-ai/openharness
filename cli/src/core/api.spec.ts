@@ -150,7 +150,7 @@ describe('the core API services stand on', () => {
     expect(createCoreApi({ ...deps, cloud }).cloud).toBe(cloud)
     // The Super Tab service's door, the same way.
     expect(core.superTabs).toBeUndefined()
-    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), dismissUpdate: vi.fn() }
+    const superTabs = { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(), screen: vi.fn(), input: vi.fn(), inputIfScreen: vi.fn() }
     expect(createCoreApi({ ...deps, superTabs }).superTabs).toBe(superTabs)
     // The devices' way to its card requests, the same way.
     expect(core.superTabRequest).toBeUndefined()

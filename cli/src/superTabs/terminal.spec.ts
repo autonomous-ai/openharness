@@ -22,7 +22,7 @@ function setup(options: { live?: string[]; screen?: (harnessId: string) => Super
     account: { backend },
     agents: { byAgent: vi.fn((id: string) => (options.live ?? ['h1']).includes(id) ? { agentId: id } as never : undefined) },
     superTabs: { attention: vi.fn(), cards: vi.fn(), cardRecap: vi.fn(), shareObservers: vi.fn(),
-      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), dismissUpdate: vi.fn(async () => ({ ok: true as const })) },
+      screen: vi.fn(async (harnessId: string) => screen(harnessId)), input: vi.fn(async () => ({ ok: true as const })), inputIfScreen: vi.fn(async () => ({ ok: true as const })) },
   })
   const host = new TerminalHost(core, 'm1', { now: () => clock, log: vi.fn() })
   return { core, backend, sent, host,
@@ -250,12 +250,12 @@ describe('the stuck and usage-limit alerts', () => {
 describe('dismissing Codex\'s update screen for a Swarm agent', () => {
   const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
   const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
-  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.dismissUpdate).mock.calls
+  const dismissed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.inputIfScreen).mock.calls
 
-  it('asks the core to dismiss it (Esc, checked again under the pane\'s lock), types nothing itself, and raises no alert', async () => {
+  it('sends Esc through the core\'s if-screen door with the screen it read, types nothing itself, and raises no alert', async () => {
     const t = setup({ screen: update })
     await t.host.tick([row()])
-    expect(dismissed(t)).toEqual([['h1']])
+    expect(dismissed(t)).toEqual([['h1', ['Escape'], CODEX_UPDATE_PROMPT]])
     expect(t.core.superTabs!.input).not.toHaveBeenCalled()
     t.showing(idle)
     for (let i = 0; i < 14; i++) { t.wait(15_000); await t.host.tick([row()]) }
@@ -266,7 +266,7 @@ describe('dismissing Codex\'s update screen for a Swarm agent', () => {
   it('answers only the agent whose screen shows it, and only a Swarm agent of this machine', async () => {
     const t = setup({ screen: harnessId => harnessId === 'h2' ? update() : idle(), live: ['h1', 'h2', 'h3'] })
     await t.host.tick([row('a1', 'h1'), row('a2', 'h2'), { tabId: 'tab', agent: { id: 'a3', harnessId: 'h3', machineId: 'other' } }])
-    expect(dismissed(t)).toEqual([['h2']])
+    expect(dismissed(t)).toEqual([['h2', ['Escape'], CODEX_UPDATE_PROMPT]])
   })
 
   it.each([['trust', CODEX_TRUST_PROMPT, 'trust_open'], ['model', CODEX_MODEL_MIGRATION, 'model_prompt_open'],
@@ -302,8 +302,8 @@ describe('dismissing Codex\'s update screen for a Swarm agent', () => {
 
   it('goes on watching when the core refuses, because the screen had changed or the terminal did not take the key', async () => {
     const t = setup({ screen: update })
-    vi.mocked(t.core.superTabs!.dismissUpdate).mockResolvedValueOnce({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
-    vi.mocked(t.core.superTabs!.dismissUpdate).mockRejectedValueOnce(new Error('core gone'))
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockResolvedValueOnce({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
+    vi.mocked(t.core.superTabs!.inputIfScreen).mockRejectedValueOnce(new Error('core gone'))
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])

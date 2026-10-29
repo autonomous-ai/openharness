@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ScreenReading } from '../../engines/facets/screen.js'
-import { CODEX_UPDATE_PROMPT } from '../../lib/__fixtures__/takeoverScreens.js'
 import { createSuperTabTerminal } from './terminal.js'
 
 const session = { agentId: 'h1', engine: 'claude' } as RegisteredSession
@@ -63,56 +62,53 @@ describe('a Lead reading and typing into a Swarm member\'s terminal', () => {
   })
 })
 
-describe('dismissing Codex\'s update prompt for a Swarm member', () => {
-  const codex = { agentId: 'h1', engine: 'codex' } as RegisteredSession
-  const prompt = 'update_prompt_open' as ScreenReading['messageHold']
+describe('typing keys only while the screen is still the one that was read', () => {
+  const PROMPT = 'Update available · 0.165.0 → 99.0.0\n› 1. Update now\n  2. Skip\n  enter continue · esc skip'
   /** A pane whose screen the test changes, and a write lock the test can hold while "another writer" works. */
   function pane(first: string) {
     let screen = first, release = () => {}
-    const writes: string[] = [], reads: string[] = []
+    const writes: string[] = []
     const held = new Promise<void>(resolve => { release = resolve })
     const terminal = createSuperTabTerminal({
-      resolve: id => id === 'h1' ? codex : undefined,
-      capture: async () => { reads.push(screen); return { state: 'succeeded' as const, value: screen } },
-      read: async (_s, text) => ({ messageHold: text?.includes('Update available') ? prompt : null } as ScreenReading),
+      resolve: id => id === 'h1' ? session : undefined,
+      capture: async () => ({ state: 'succeeded' as const, value: screen }),
+      read: async () => null,
       type: async (_id, text) => { writes.push(`text:${text}`); return true },
       key: async (_id, key) => { writes.push(`key:${key}`); return true },
       locked: async (_id, write) => { await held; return write() },
     })
-    return { terminal, writes, reads, show: (next: string) => { screen = next }, release: () => release() }
+    return { terminal, writes, show: (next: string) => { screen = next }, release: () => release() }
   }
 
-  it('sends Esc alone, once the screen is read again under the pane\'s write lock and is still the prompt', async () => {
-    const t = pane(CODEX_UPDATE_PROMPT)
-    const done = t.terminal.dismissUpdate('h1')
+  it('sends the keys once the screen, read again under the pane\'s write lock, is exactly the one given', async () => {
+    const t = pane(PROMPT)
+    const done = t.terminal.inputIfScreen('h1', ['Escape'], PROMPT)
     t.release()
     expect(await done).toEqual({ ok: true })
     expect(t.writes).toEqual(['key:Escape'])
   })
 
-  it('sends nothing when another writer cleared the prompt while this write waited for the lock', async () => {
-    const t = pane(CODEX_UPDATE_PROMPT)
-    const done = t.terminal.dismissUpdate('h1')
-    // The Lead (or the person) answers it, and the composer is up, before the lock comes free.
-    t.show('  gpt-5.5 high · ~/project\n\n› Write tests\n')
+  it('sends nothing when another writer changed the screen while this write waited for the lock', async () => {
+    const t = pane(PROMPT)
+    const done = t.terminal.inputIfScreen('h1', ['Escape'], PROMPT)
+    t.show('› Write tests')
     t.release()
-    expect(await done).toEqual({ ok: false, error: 'The screen changed before the key was sent; nothing was typed.' })
+    expect(await done).toEqual({ ok: false, error: 'The screen changed before the keys were sent; nothing was typed.' })
     expect(t.writes).toEqual([])
   })
 
-  it('sends nothing when the prompt under the lock is not exactly the update prompt, or cannot be read, or the agent is gone', async () => {
-    const misread = pane(CODEX_UPDATE_PROMPT.replace('  2. Skip\n', '  0. Skip\n'))
-    misread.release()
-    expect(await misread.terminal.dismissUpdate('h1')).toMatchObject({ ok: false })
-    expect(misread.writes).toEqual([])
-    const unreadable = setup({ captured: null })
-    expect(await unreadable.terminal.dismissUpdate('h1')).toMatchObject({ ok: false })
-    expect(unreadable.writes).toEqual([])
-    expect(await setup().terminal.dismissUpdate('gone')).toEqual({ ok: false, error: 'The agent is not running on this machine.' })
+  it('sends nothing for a screen that differs in the least, even by a trailing line', async () => {
+    const t = pane(`${PROMPT}\n`)
+    t.release()
+    expect(await t.terminal.inputIfScreen('h1', ['Escape'], PROMPT)).toMatchObject({ ok: false })
+    expect(t.writes).toEqual([])
   })
 
-  it('says when the terminal does not take the key', async () => {
-    const t = setup({ captured: CODEX_UPDATE_PROMPT, reading: { messageHold: 'update_prompt_open' } as ScreenReading, keyed: () => false })
-    expect(await t.terminal.dismissUpdate('h1')).toEqual({ ok: false, error: 'The terminal did not take the key Escape.' })
+  it('says plainly when the agent or its screen is not there, or the terminal does not take a key, and types nothing for no keys', async () => {
+    expect(await setup().terminal.inputIfScreen('gone', ['Escape'], 'x')).toEqual({ ok: false, error: 'The agent is not running on this machine.' })
+    expect(await setup({ captured: null }).terminal.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'Could not read the terminal: pane gone' })
+    const refused = setup({ captured: 'x', keyed: () => false })
+    expect(await refused.terminal.inputIfScreen('h1', ['Escape'], 'x')).toEqual({ ok: false, error: 'The terminal did not take the key Escape.' })
+    expect(await setup().terminal.inputIfScreen('h1', [], 'Allow? 1. Yes')).toEqual({ ok: false, error: 'Nothing to type.' })
   })
 })

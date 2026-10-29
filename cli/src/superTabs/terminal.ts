@@ -260,16 +260,17 @@ export class TerminalHost {
     }
   }
 
-  /** Codex's "Update available" screen on a Swarm agent's terminal, where no one will answer it and its task waits: asks the
-   *  core to dismiss it with Esc, never a row number and Enter (that could run the update, engines/codex/screen.ts
-   *  `updateDismissKeys`). Only a screen read as exactly that prompt is asked about, and the core reads it once more under
-   *  the pane's write lock before the key (superTabs/inCore/terminal.ts), so what this pass saw cannot be stale when the key
-   *  lands. After [SKIP_TRIES] the 3-minute alert takes over. Returns the tries made for this screen, none once it is gone.
-   *  The held task goes on by itself: the mailbox types it again once the prompt is gone. */
+  /** Codex's "Update available" screen on a Swarm agent's terminal, where no one will answer it and its task waits: Esc, through
+   *  the core's door that types only while the screen is still exactly the one read here, so a screen another writer cleared
+   *  meanwhile gets nothing (superTabs/inCore/terminal.ts `inputIfScreen`). Never a row number and Enter (on a misread row
+   *  that could run the update), and only a screen read as exactly that prompt (engines/codex/screen.ts `updateDismissKeys`).
+   *  After [SKIP_TRIES] the 3-minute alert takes over. Returns the tries made for this screen, none once it is gone. The held
+   *  task goes on by itself: the mailbox types it again once the prompt is gone. */
   private async skipUpdate(agent: Own, read: Extract<SuperTabScreen, { ok: true }>, tries: number): Promise<number> {
-    if (read.hold !== 'update_prompt_open' || !updateDismissKeys(read.text)) return 0
+    const keys = read.hold === 'update_prompt_open' ? updateDismissKeys(read.text) : null
+    if (!keys) return 0
     if (tries >= SKIP_TRIES) return tries
-    const dismissed = await this.core.superTabs!.dismissUpdate(agent.harnessId).catch(error => ({ ok: false as const, error: String(error) }))
+    const dismissed = await this.core.superTabs!.inputIfScreen(agent.harnessId, keys, read.text).catch(error => ({ ok: false as const, error: String(error) }))
     if (!dismissed.ok) this.log(`could not dismiss Codex's update screen for ${agent.agentId}: ${dismissed.error}`)
     return tries + 1
   }
