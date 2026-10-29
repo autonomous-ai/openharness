@@ -92,6 +92,9 @@ class SuperTabMentions extends ChangeNotifier {
   Future<void>? _loading;
   // Something changed while a read was under way: read once more after it.
   bool _dirty = false;
+  // Reads in the order they were asked, and the latest one shown: an older
+  // answer arriving late never replaces a newer one (review of #2088).
+  int _asked = 0, _shown = 0;
 
   /// Starts from tags already announced elsewhere, so they are not news here.
   void seen(Set<String>? ids) {
@@ -163,7 +166,7 @@ class SuperTabMentions extends ChangeNotifier {
   /// opens the tag reads it from the answer that confirmed it, with no second
   /// read to decide otherwise.
   Future<bool> waitingNow(String mentionId) async {
-    final epoch = _epoch;
+    final epoch = _epoch, asked = ++_asked;
     final List<SuperTabMention> fresh;
     try {
       fresh = await _list('waiting');
@@ -174,6 +177,9 @@ class SuperTabMentions extends ChangeNotifier {
     // A Swarm just loaded learns its first epoch meanwhile; that is no change.
     final moved = epoch != null && epoch != _epoch;
     if (moved || !fresh.any((m) => m.id == mentionId)) return false;
+    // A read asked after this one already shows what is newer.
+    if (asked < _shown) return true;
+    _shown = asked;
     if (!_sameMentions(waiting, fresh)) {
       waiting = fresh;
       notifyListeners();
@@ -197,7 +203,7 @@ class SuperTabMentions extends ChangeNotifier {
   }
 
   Future<void> _read() async {
-    final epoch = _epoch;
+    final epoch = _epoch, asked = ++_asked;
     try {
       final [nextWaiting, nextEarlier] = await Future.wait([
         _list('waiting'),
@@ -206,6 +212,13 @@ class SuperTabMentions extends ChangeNotifier {
       // Read before who may read what changed: the read asked again since
       // replaces it.
       if (epoch != _epoch) return;
+      // Asked before a read already shown: older news. Read once more, so
+      // both lists and what arrived come from one answer after it.
+      if (asked < _shown) {
+        _dirty = true;
+        return;
+      }
+      _shown = asked;
       final same =
           error == null &&
           _sameMentions(waiting, nextWaiting) &&
@@ -223,7 +236,7 @@ class SuperTabMentions extends ChangeNotifier {
       // The same lists again: nothing to show, so nobody is told.
       if (same) return;
     } catch (_) {
-      if (epoch != _epoch) return;
+      if (epoch != _epoch || asked < _shown) return;
       error = 'Could not load notifications. Try again.';
     }
     notifyListeners();

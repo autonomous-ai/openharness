@@ -96,6 +96,38 @@ class RefusingTags extends SuperTabFixtureConnection {
   }
 }
 
+/// The fixture's machine, holding the answer to the next waiting-tag read
+/// until [releaseOld] completes: an older refresh still on its way (review of
+/// #2088).
+class StaleTagRefresh extends SuperTabFixtureConnection {
+  StaleTagRefresh(super.store) : super(local: true);
+  bool holdNextWaiting = false;
+  Completer<void>? releaseOld;
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String type, {
+    Map<String, dynamic> payload = const {},
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final hold =
+        holdNextWaiting &&
+        type == 'super_tabs' &&
+        (payload['path'] as String? ?? '').contains('/mentions?state=waiting');
+    if (hold) holdNextWaiting = false;
+    final answer = await super.request(
+      type,
+      payload: payload,
+      timeout: timeout,
+    );
+    if (hold) {
+      releaseOld = Completer<void>();
+      await releaseOld!.future;
+    }
+    return answer;
+  }
+}
+
 /// A Swarm open in a tab of [f]'s app, with a tag and a decision waiting.
 Future<void> openWithNotices(SuperTabLaunchFixture f) async {
   f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
@@ -640,6 +672,49 @@ void main() {
         expect(f.app.activeSwarmId, swarmTab);
         expect(c.noticeRequest, isNull);
         expect(c.selectedId, 'offline');
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpWidget(const SizedBox());
+        f.dispose();
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.macOS),
+    );
+
+    testWidgets(
+      'an older tag refresh still on its way cannot replace the read that '
+      'confirmed the click',
+      (tester) async {
+        final f = SuperTabLaunchFixture(connectionFactory: StaleTagRefresh.new);
+        await tester.runAsync(() => openWithNotices(f));
+        final swarmTab = f.app.activeSwarmId;
+        f.app.newSwarm(name: 'Desktop');
+        final click = await clicker(tester, f);
+        final connection = f.connection as StaleTagRefresh;
+        final c = f.app.superTabs.peek(tabId)!;
+        final tags = SuperTabMentions.of(c);
+        // A refresh read before the new tag, answering only after the click's.
+        connection.holdNextWaiting = true;
+        final refresh = tags.load();
+        for (var i = 0; i < 8; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        }
+        expect(connection.releaseOld, isNotNull);
+        tagInOffline(connection.server);
+        void releaseStale() {
+          if (tags.waiting.any((m) => m.id == 'mention-2') &&
+              !connection.releaseOld!.isCompleted) {
+            connection.releaseOld!.complete();
+          }
+        }
+
+        tags.addListener(releaseStale);
+        await click('$tabId/mention-2');
+        await tester.runAsync(() => refresh);
+        tags.removeListener(releaseStale);
+        expect(f.app.activeSwarmId, swarmTab);
+        expect(c.noticeRequest, isNull);
+        expect(c.selectedId, 'offline');
+        // The older answer did not take the tag away afterwards either.
+        expect(tags.waiting.map((m) => m.id), contains('mention-2'));
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpWidget(const SizedBox());
         f.dispose();
