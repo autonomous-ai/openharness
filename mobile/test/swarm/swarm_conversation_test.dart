@@ -6,6 +6,7 @@ import 'package:harness_mobile/swarm/swarm_conversation.dart';
 import 'package:harness_mobile/swarm/swarm_read_marks.dart';
 import 'package:harness_mobile/swarm/swarm_reader.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
+import 'package:harness_mobile/swarm/swarm_unread.dart';
 
 import 'swarm_fixture.dart';
 
@@ -1162,6 +1163,66 @@ void main() {
       addTearDown(c.dispose);
       await settle();
       expect(m.sent, [1], reason: 'only through the message it opened at');
+    });
+
+    test('a loaded chat whose newest message is a reply only in a thread is '
+        'not bold; a message in the main stream bolds it', () async {
+      final r = rig();
+      final m = marked(r);
+      r.swarm.routes[messages] = (_) => {
+        'messages': [message('m2', 2)],
+        'next': null,
+      };
+      await r.reader.refresh();
+      await settle();
+      // Loaded while another screen covers it, so it marks nothing itself.
+      final c = SwarmConversation(r.reader, 'g1', shown: false);
+      addTearDown(c.dispose);
+      await c.load();
+      SuperTabConversation g1() => r.reader.snapshot!.conversation('g1')!;
+      bool bold() => swarmChatNews(r.reader, null, g1()).bold;
+
+      r.swarm.routes['$messages?after=2'] = (_) => {
+        'messages': [
+          {...message('m3', 3, text: 'in the thread'), 'thread': 'm2'},
+        ],
+        'next': null,
+      };
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part('g1', 30, {
+            ...groupData('g1', title: 'Fix login', lastMessageSequence: 3),
+            'lastMainSequence': 2,
+          }),
+        ],
+      );
+      await r.reader.refresh();
+      await settle();
+
+      expect(c.messages.last.threadReply, isTrue, reason: 'loaded, last');
+      expect(m.marks.unread(g1()), isFalse);
+      expect(bold(), isFalse);
+
+      r.swarm.routes['$messages?after=3'] = (_) => {
+        'messages': [message('m4', 4, text: 'in the chat')],
+        'next': null,
+      };
+      r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c4',
+        groups: [
+          part('g1', 31, {
+            ...groupData('g1', title: 'Fix login', lastMessageSequence: 4),
+            'lastMainSequence': 4,
+          }),
+        ],
+      );
+      await r.reader.refresh();
+      await settle();
+
+      expect(c.messages.last.id, 'm4');
+      expect(bold(), isTrue);
+      expect(m.sent, isEmpty, reason: 'covered: it marked nothing');
     });
 
     test('a Swarm without read marks marks nothing', () async {
