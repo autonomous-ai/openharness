@@ -11,7 +11,6 @@ import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
-import 'package:harness_mobile/shared/theme/swarm_tokens_set_a.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'identity.dart';
@@ -62,7 +61,6 @@ Future<void> showSwarmProfile(
   context: context,
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
-  barrierColor: SwarmTokensSetA.sheetBarrier,
   shape: AppControl.sheetShape,
   // On the page's own navigator, under the shell's [SwarmScope].
   builder: (_) => SwarmProfileSheet(swarmId: swarmId, pickPhoto: pickPhoto),
@@ -623,7 +621,6 @@ Future<void> showSwarmPerson(
   context: context,
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
-  barrierColor: SwarmTokensSetA.sheetBarrier,
   shape: AppControl.sheetShape,
   builder: (sheet) => SwarmPersonSheet(
     swarmId: swarmId,

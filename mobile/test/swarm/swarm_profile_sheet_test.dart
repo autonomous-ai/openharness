@@ -8,8 +8,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/shared/widgets/app_dialog.dart'
-    show kSheetVeilOpacity;
 import 'package:harness_mobile/swarm/swarm_profile_sheet.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -367,7 +365,7 @@ void main() {
 
       expect(
         ModalRoute.of(tester.element(find.text('Your profile')))!.barrierColor,
-        Colors.black.withValues(alpha: kSheetVeilOpacity),
+        Colors.black54,
       );
       expect(
         tester

@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/notify/system_notices.dart';
 import 'package:harness_mobile/settings/experimental_features.dart';
-import 'package:harness_mobile/shared/widgets/app_dialog.dart'
-    show kSheetVeilOpacity;
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
@@ -146,7 +144,7 @@ void main() {
 
     expect(
       ModalRoute.of(tester.element(key('swarm-person')))!.barrierColor,
-      Colors.black.withValues(alpha: kSheetVeilOpacity),
+      Colors.black54,
     );
     expect(
       tester.widget<Padding>(key('swarm-person')).padding,

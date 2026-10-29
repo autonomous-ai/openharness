@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
-import 'package:harness_mobile/shared/widgets/app_dialog.dart'
-    show kSheetVeilOpacity;
 import 'package:harness_mobile/swarm/model.dart';
 import 'package:harness_mobile/swarm/parts.dart';
 import 'package:harness_mobile/swarm/swarm_reactions.dart';
@@ -275,10 +273,7 @@ void main() {
       final route = ModalRoute.of(
         tester.element(find.byKey(const ValueKey('swarm-react-rocket'))),
       )!;
-      expect(
-        route.barrierColor,
-        Colors.black.withValues(alpha: kSheetVeilOpacity),
-      );
+      expect(route.barrierColor, Colors.black54);
       expect(
         tester.widget<Text>(find.text('🚀')).style!.fontSize,
         24,

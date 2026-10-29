@@ -5,7 +5,6 @@ import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
-import 'package:harness_mobile/shared/theme/swarm_tokens_set_a.dart';
 
 import 'model.dart';
 import 'swarm_message_row.dart'
@@ -152,7 +151,6 @@ Future<SuperTabReactionEmoji?> showSwarmReactionPicker(
   return showModalBottomSheet<SuperTabReactionEmoji>(
     context: context,
     backgroundColor: AppGlass.rowFill,
-    barrierColor: SwarmTokensSetA.sheetBarrier,
     shape: AppControl.sheetShape,
     builder: (context) => _Picker(mine: mine),
   );
