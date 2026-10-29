@@ -8,14 +8,14 @@ import { PrismaClient } from '@prisma/client'
 import { PROFILE_STAGES, profileEntry, queryShape, type ProfileEntry } from './bench/profile.js'
 
 /** A fresh loopback replica set with the schema pushed; never DATABASE_URL. */
-export async function planDatabase(prefix: string): Promise<{ replica: MongoMemoryReplSet; db: PrismaClient }> {
+export async function planDatabase(prefix: string): Promise<{ replica: MongoMemoryReplSet; db: PrismaClient; uri: string }> {
   const replica = await MongoMemoryReplSet.create({ binary: { version: '7.0.24', downloadDir: join(tmpdir(), 'harness-super-tab-mongodb-binaries') },
     replSet: { count: 1, ip: '127.0.0.1', storageEngine: 'wiredTiger' } })
   const uri = replica.getUri(`${prefix}_${randomUUID().replaceAll('-', '_')}`)
   await promisify(execFile)(join(process.cwd(), 'node_modules/.bin/prisma'), ['db', 'push', '--skip-generate'], {
     env: { ...process.env, DATABASE_URL: uri }, timeout: 60000,
   })
-  return { replica, db: new PrismaClient({ datasources: { db: { url: uri } } }) }
+  return { replica, db: new PrismaClient({ datasources: { db: { url: uri } } }), uri }
 }
 
 /** Every operation `run` sends, as the profiler records it. */

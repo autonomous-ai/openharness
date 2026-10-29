@@ -94,6 +94,22 @@ export async function messagesPast(tx: Transaction, at: { tabId: string; convers
   return [...same, ...await read(edge ? { [op]: edge.sequence } : undefined, undefined, limit - same.length)]
 }
 
+/**
+ * The messages of one conversation with these ids, by the id index: what a page's rows name as their thread or reply-to but
+ * the page does not hold (store.ts messages), so what this reader may see of them can be checked. Named, not Prisma's `id in`,
+ * which is sent as $expr and left to the planner (roadmap Phase 3; plan test in integration/superTabNamedReads.test.ts).
+ */
+export async function messagesById(tx: Transaction, tabId: string, conversationId: string, ids: string[]):
+  Promise<Array<Pick<SuperTabMessage, 'id' | 'source' | 'recipientIds'>>> {
+  if (!ids.length) return []
+  const rows = await readBy(tx, 'SuperTabMessage', 'id', [{ $match: { _id: { $in: ids }, tabId, conversationId } },
+    { $project: { source: 1, recipientIds: 1 } }])
+  return rows.map(row => {
+    const { id, source, recipientIds } = prismaRow<SuperTabMessage>('SuperTabMessage', row)
+    return { id, source, recipientIds }
+  })
+}
+
 /** The Lead's notices that leave a copy in a task's chat when the Lead hears them in its own chat (terminal.ts toLead). */
 const LEAD_COPY_KINDS = new Set<unknown>(['work-lost', 'work-resumed'])
 
