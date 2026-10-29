@@ -424,7 +424,7 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  /// Open decisions the reader set aside in Chat with PM (Not now, Hide):
+  /// Open decisions the reader set aside in their Buddy chat (Not now, Hide):
   /// saved on this computer for this reader, so they stay folded after a
   /// restart. A decision asked later is not among them, so it shows.
   final _decisionsAside = <String>{};

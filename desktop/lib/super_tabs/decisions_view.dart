@@ -68,7 +68,7 @@ class SuperTabDecisionList extends StatelessWidget {
   );
 }
 
-/// The open decisions asked in one project, above its Chat with PM. Hide
+/// The open decisions asked in one project, above the reader's Buddy chat. Hide
 /// and each card's Not now fold them into the one heading line until the
 /// reader shows them again; a decision asked later shows.
 class SuperTabDecisionsPanel extends StatelessWidget {
@@ -150,7 +150,7 @@ Widget quietDecisionAction({
 
 /// One question: what it unblocks, one button per option, the recommended
 /// one marked, and the quiet Let PM decide (only with a recommendation) and
-/// Not now ([onNotNow], in Chat with PM). Answered, it shows the choice, or
+/// Not now ([onNotNow], in the Buddy chat). Answered, it shows the choice, or
 /// that the PM decided.
 class SuperTabDecisionCard extends StatelessWidget {
   const SuperTabDecisionCard({

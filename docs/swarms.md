@@ -165,25 +165,6 @@ from being reused for private work after removal.
 Private projects control application access. Contributing machine owners are
 trusted execution hosts and can access work running on their computers.
 
-## Chat with PM
-
-Each person has a private chat with each project's product manager, next to the
-shared project chat, for their own questions and answers. In Desktop and the
-web app it is **Chat with PM**, the first entry under an expanded project. The
-first click opens a private conversation for that person alone, named after
-them, with the project's product manager in it. Later clicks, other windows and
-other devices open the same one: the request that creates it is the same for
-each person and project, and the server answers a repeat with the conversation
-it already made.
-
-It behaves like the project chat: replies, attachments, the unread mark and the
-product manager's tags in Notifications. While the Swarm's Buddies are on, it is read-only (see Buddies). Only that person and the product
-manager read it. Other members, the project's owner and the Swarm's owner
-included, never receive it, its messages or its notifications. The chat is
-chat only: no work is assigned in it, and only the product manager joins it
-among agents. As with any session, the owner of the machine running the
-product manager can see what its terminal shows.
-
 ## Buddies
 
 A Buddy is a person's own agent in one project. They brainstorm with it in a chat that only they and their Buddy read:
@@ -192,9 +173,18 @@ them. When they say to send it to the product manager, it posts one proposal (go
 chat. The proposal is addressed to the product manager and marked as on that person's behalf. The product manager assigns
 the work as usual; a Buddy never assigns work, starts agents, changes code or opens pull requests.
 
-The Swarm's owner turns Buddies on for the Swarm; they are off until then. Turning them off removes every Buddy, fails
-any still starting, and stops their posts. Their chats stay for their owners to read.
+Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (Ken, 2026-10-29).
 
+- **Buddy chat.** Each person has a Buddy chat in each project they read, from the start, before any Buddy runs. In
+  Desktop and the web app the sidebar's **Buddies** section has a row for each project; opening it opens the chat, and
+  ⇧⌘K opens the current project's. A row with new lines shows its name in bold, with no count; the Swarm tab counts
+  them. A chat with no Buddy running offers **Start**: one of the person's own machines and Claude Code, already
+  chosen, or Codex.
+- **The product manager's private lines.** Everything the product manager tells one person privately goes to that
+  person's Buddy chat in the project (a line it sends with `person.tell`, and the line saying what it chose for a
+  decision left to it). The chat opens for the line if the person has none yet, so no line drops. Such a line reads
+  as "River (PM) → you": the product manager writes there but cannot read the chat. It is addressed to the person;
+  their Buddy does not answer it for them. They answer in the project chat, or through a proposal.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
   list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
   account: never on a machine shared with them, and never in a Harness Team account.
@@ -215,8 +205,14 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 - Removing a Buddy, the owner leaving the Swarm, or deleting the project closes its session. Adding a Buddy again
   reopens the same chat. Adding one while the person's Buddy there is down replaces it in one step, in the same chat;
   while it runs or starts, adding another is refused. The idle tidy-up leaves Buddies alone: a Buddy waits for its owner.
-- While Buddies are on, Chat with PM is read-only. Nobody opens a new one or posts in an old one, the product manager
-  included, and old history stays readable. To talk to the product manager, people use the project chat.
+
+### Chat with PM, closed
+
+Chat with PM, each person's private chat with a project's product manager, is gone from Desktop, the phone and the
+web. Nobody opens a new one, and nobody reads or posts in an old one, the product manager and its person included.
+Old ones stay in the database, unread by anyone; nothing deleted or rewrote them. A decision asked in one before it
+closed stays in its person's Needs-you list and stays answerable; the answer's notice reaches the product manager in
+the project chat. (On 2026-10-29 production held 9 such chats in 4 Swarms, and none had a decision asked in it.)
 
 ## Leaderboard
 
@@ -234,8 +230,8 @@ Each person has three numbers:
 
 - **Shipped**: requests the person asked for whose pull request merged. A group
   records its requester when it is opened. A person's own new group names them,
-  and a product manager names the person who asked in the project chat or in
-  their Chat with PM. Right after merging, the product manager records the merge
+  and a product manager names the person who asked in the project chat, or
+  whose Buddy proposed it. Right after merging, the product manager records the merge
   with the group and the PR link (and the merge time, for one recorded later, up
   to four weeks back). The request ships at the merge, even if its work is lost
   or cancelled afterwards. A group that is Done with a linked PR ships too; the
@@ -283,7 +279,7 @@ opens the reader's own waiting item, or the first one when none waits on them.
 Only facts count, never message text. The leaderboard records when work was asked
 for and shipped, who answered what kind of item, and how long it waited. It
 never records what anyone wrote. The only text it shows is the title of a
-conversation the reader can read. Private conversations, Chat with PM among
+conversation the reader can read. Private conversations, Buddy chats among
 them, never count and never appear in it.
 
 ## Avatars, status and celebrations
