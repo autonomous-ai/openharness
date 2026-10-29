@@ -84,10 +84,30 @@ describe('the empty id list check', () => {
     expect(lint(`async function f(tx, ids, x) { const where = { ok: true }; if (x) { const where = { id: { in: ids } }; use(where) } return tx.user.findMany({ where }) }`)).toEqual([])
     // The read inside the inner block sees the inner one.
     expect(lint(`async function f(tx, ids, x) { const where = { ok: true }; if (x) { const where = { id: { in: ids } }; return tx.user.findMany({ where }) } }`)).toEqual(['ids'])
-    // A parameter of the same name hides an outer filter; a filter declared after the read is not seen by it.
-    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return (where2 => tx.user.findMany({ where: where2 }))({ ok: true }) }`)).toEqual([])
-    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; const g = (where) => tx.user.findMany({ where }); return g }`)).toEqual([])
-    expect(lint(`async function f(tx, ids) { const found = tx.user.findMany({ where }); const where = { id: { in: ids } }; return found }`)).toEqual([])
+    // A filter the check cannot see into is flagged, not passed: a parameter, one declared after the read, a call's result, an import.
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; return (where2 => tx.user.findMany({ where: where2 }))({ ok: true }) }`)).toEqual(['where2'])
+    expect(lint(`async function f(tx, ids) { const where = { id: { in: ids } }; const g = (where) => tx.user.findMany({ where }); return g }`)).toEqual(['where'])
+    expect(lint(`async function f(tx, ids) { const found = tx.user.findMany({ where }); const where = { id: { in: ids } }; return found }`)).toEqual(['where'])
+    expect(lint(`async function f(tx, ids) { const where = buildWhere(ids); return tx.user.findMany({ where }) }`)).toEqual(['where'])
+    // An import is fixed when the module loads: it holds no list of this call.
+    expect(lint(`import { where } from './w.js'\nasync function f(tx) { return tx.machine.findMany({ where }) }`)).toEqual([])
+    expect(lint(`import { machineAlive } from './prisma.js'\nasync function f(tx) { return tx.machine.findMany({ where: { ...machineAlive, ok: true } }) }`)).toEqual([])
+    expect(lint(`async function f(tx, args) { return tx.user.findMany(args) }`)).toEqual(['args'])
+    // Known limit: a spread of a name it cannot see into is a part of a filter, and passes.
+    expect(lint(`async function f(tx, base) { return tx.user.findMany({ where: { ...base, ok: true } }) }`)).toEqual([])
+    // A spread it can see into is followed, through a conditional too.
+    expect(lint(`async function f(tx, ids, on) { const part = on ? { id: { in: ids } } : {}; return tx.user.findMany({ where: { ...part, ok: true } }) }`)).toEqual(['ids'])
+    expect(lint(`async function f(tx, ids, on) { const where = on ? { id: { in: ids } } : { ok: true }; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
+    // Another model is not this check's business.
+    expect(lint(`async function f(tx, where) { return tx.swarmMachine.findMany({ where }) }`)).toEqual([])
+  })
+
+  it('sees an earlier declarator of the same statement', () => {
+    expect(lint(`function f(tx, ids) { const base = { id: { in: ids } }, where = base; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
+    expect(lint(`function f(tx, ids) { const base = { id: { in: ids } }, where = { ...base, ok: true }; return tx.user.findMany({ where }) }`)).toEqual(['ids'])
+    expect(lint(`function f(tx, ids) { if (!ids.length) return []; const base = { id: { in: ids } }, where = base; return tx.user.findMany({ where }) }`)).toEqual([])
+    // A later declarator of that statement is not yet declared where an earlier one is built.
+    expect(lint(`function f(tx, ids) { const where = base, base = { id: { in: ids } }; return tx.user.findMany({ where }) }`)).toEqual(['base'])
   })
 
   it('accepts a literal list, a constant and other models', () => {
