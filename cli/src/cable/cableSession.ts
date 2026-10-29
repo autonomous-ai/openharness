@@ -185,14 +185,29 @@ function chatLead(l: SwarmLead, chat = l.chat): Record<string, unknown> {
 function buddyLead(l: SwarmLead): Record<string, unknown> {
   return { ...chatLead(l, l.sideChat ?? l.chat), ...(l.buddies ? { buddies: true } : {}), ...(l.buddies && l.buddy ? { buddy: { ...l.buddy } } : {}) }
 }
-/** A swarmBuddy dial's `supertab` frame, its Buddies' names halved (on a character) until it fits the cable's payload. With
- *  the backend's ids, 12 Leads with every name at 48 bytes and a Buddy each fit whole; with every id at the 47 characters a
- *  dial holds they come to 8,211 bytes, and a frame over the cap fails the write and closes the link. */
-function fitBuddyNames(frame: { leads: Array<Record<string, unknown>> }): void {
-  const buddies = frame.leads.map((l) => l.buddy as { name: string } | undefined).filter((b) => b !== undefined)
-  for (let bytes = 24; Buffer.byteLength(JSON.stringify(frame)) >= CABLE_MAX_PAYLOAD && buddies.some((b) => b.name); bytes = Math.floor(bytes / 2)) {
-    for (const buddy of buddies) buddy.name = truncateUtf8(buddy.name, bytes)
+/** The byte cuts a name is shortened through, on a character, when a frame would not fit. */
+const NAME_CUTS = [24, 12, 6, 3, 1, 0]
+/**
+ * A `supertab` frame shortened until it fits the cable's payload: a frame over the cap fails the write and closes the link.
+ * The Buddies' names go first (their avatars still tell them apart), then every name together; ids and engines, which the
+ * dial routes and draws by, are never touched. With the backend's ids, 12 Leads with every name at 48 bytes and a Buddy each
+ * fit whole; with every id at the 47 characters a dial holds they came to 8,211 bytes, and names of quotes, which JSON
+ * doubles, past it even with no Buddy names at all (review of #2146). Last, whole Buddy blocks go, from the least urgent Lead
+ * up: engines of control characters (six bytes each in JSON) leave a Buddy frame at 8,275 bytes with every name empty, and
+ * without its Buddies a frame is today's swarmChat one, about 5.3 KB at most. A frame that fits is sent as it is.
+ */
+function fitFrame(frame: { name: string; leads: Array<Record<string, unknown>> }): void {
+  const fits = () => Buffer.byteLength(JSON.stringify(frame)) < CABLE_MAX_PAYLOAD
+  type Named = { [key: string]: unknown }
+  const buddies: Array<[Named, string]> = frame.leads.map((l) => l.buddy as Named | undefined).filter((b) => b !== undefined).map((b) => [b, 'name'])
+  const names: Array<[Named, string]> = [[frame, 'name'], ...frame.leads.flatMap((l) => ['project', 'owner', 'chatName'].filter((key) => key in l).map((key): [Named, string] => [l, key]))]
+  for (const fields of [buddies, [...buddies, ...names]]) {
+    for (const bytes of NAME_CUTS) {
+      if (fits()) return
+      for (const [holder, key] of fields) holder[key] = truncateUtf8(String(holder[key]), bytes)
+    }
   }
+  for (let i = frame.leads.length - 1; i >= 0 && !fits(); i--) delete frame.leads[i].buddy
 }
 /** A Lead's new message as the round dial's alert, sized as the recap is. */
 function noticeFrame(tab: string, lead: string, n: LeadNotice): Message {
@@ -337,7 +352,7 @@ import type { FormCommand, FormResult } from './windowForm.js'
 import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 import type { TurnStatsFields } from './turnStats.js'
 import type { Tier } from '../lib/notifyTier.js'
-import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmCard, SwarmLead } from '../superTabs/cards.js'
+import type { CardChat, CardSide, LeadNotice, LeadRecap, SaidOnCard, SwarmCard, SwarmChat, SwarmLead } from '../superTabs/cards.js'
 import { truncateUtf8 } from '../lib/deviceRecentTrim.js'
 
 export interface RouteDecision {
@@ -379,8 +394,9 @@ export interface CableHost {
   /** A round dial that speaks swarmBuddy swiped to a side of a Swarm: the cards show that side's face. */
   swarmCardSide?(tabId: string, side: CardSide): void
   /** Words for a Lead that runs here: posted as the person in its Swarm chat. Not `said`: not a Lead, send the turn as before;
-   *  `refused`: the backend refused the post, whose words are never typed anywhere instead. */
-  swarmSay?(harnessId: string, text: string, chat?: CardChat): Promise<SaidOnCard>
+   *  `refused`: the backend refused the post, whose words are never typed anywhere instead. `chatId`: the chat they were
+   *  spoken to, the only one they may be posted in. */
+  swarmSay?(harnessId: string, text: string, chat?: CardChat, chatId?: string): Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?(superTabId: string, projectId: string): void
   /** The Swarm tab the window has on screen and the project open in it ('' when none is); null when the active tab is not a Swarm or there is no window. */
@@ -847,7 +863,10 @@ export class CableSession {
     question?: { pin?: QuestionSpeech };
     draft?: { pin?: DraftPin };
     search?: { command?: SelectionCommand; pin: Promise<SelectionResult> };
-    form?: { command?: FormCommand; pin: Promise<FormResult> } } | null = null
+    form?: { command?: FormCommand; pin: Promise<FormResult> };
+    /** The chat on this dial's face for that agent's Swarm project as the person began to speak: the words go there or
+     *  nowhere, and a Buddy chat's never reach a terminal (review of #2146). */
+    swarmFace?: SwarmChat } | null = null
   private voiceSearch?: SelectionCommand
   private voiceForm?: FormCommand
   private voiceCarryId?: string
@@ -1694,8 +1713,11 @@ export class CableSession {
         // start. Quoted text, carried text, questions and edits already have their own pinned targets.
         const focused = str('agentId') && !formVoice && !searchVoice && !draftVoice && !questionVoice &&
           !carryVoice && !('selectionId' in msg) ? this.host.appFocus?.() : undefined
+        const agentId = focused?.agentId ?? str('agentId')
+        const swarmFace = agentId ? this.swarmFaceOf(agentId) : undefined
         this.voice = {
-          agentId: focused?.agentId ?? str('agentId'),
+          agentId,
+          ...(swarmFace ? { swarmFace } : {}),
           cmd: str('cmd'),
           lang: str('lang') ?? this.host.voiceLang(),
           // The DIAL's rate, never this side's guess. Describing 8 kHz audio as 16 kHz does not make the
@@ -2322,7 +2344,8 @@ export class CableSession {
     // turn as before; a post the backend refused, and any word for the reader's Buddy, never does (spec 2026-10-29 Voice): a
     // refused post for a read-only Chat with PM was typed into the PM's terminal.
     if (turn.agentId && !carried && !selection?.ok && this.host.swarmSay) {
-      const said = await this.host.swarmSay(agentId, instruction, ...this.chatFlag()).catch((): SaidOnCard => ({ said: false }))
+      const face = turn.swarmFace
+      const said = await this.host.swarmSay(agentId, instruction, ...this.sayArgs(face)).catch((): SaidOnCard => ({ said: false }))
       if (!current()) return
       if (said.said) {
         this.log(`cable: voice → Swarm chat of ${agentId.slice(0, 8)}`)
@@ -2334,7 +2357,9 @@ export class CableSession {
         await reply({ t: 'voice.error', message: said.refused.message })
         return
       }
-      if (this.onBuddyFace(agentId)) { await reply({ t: 'voice.error', message: 'Could not reach your Buddy. Try again.' }); return }
+      // Words for the reader's Buddy chat (a swarmBuddy dial's Buddy face, an older dial's PM face), which the PM cannot read.
+      if (face?.kind === 'buddy') { await reply({ t: 'voice.error', message: 'Could not reach your Buddy. Try again.' }); return }
+      if (face?.kind === 'pm') { await reply({ t: 'voice.error', message: 'Could not reach the Swarm. Try again.' }); return }
     }
     const text = carried ? withCarriedPassage(instruction, carried)
       : selection?.ok && selection.text ? withSelectedPassage(instruction, selection.text) : instruction
@@ -2679,10 +2704,21 @@ export class CableSession {
    *  ordinary push, whose notices are old. */
   private noticesReplay = true
 
-  /** Whether this dial shows the reader's Buddy chat on the face of the Lead that runs as `harnessId` here. */
-  private onBuddyFace(harnessId: string): boolean {
-    if (!this.swarmBuddy) return false
-    return (this.host.swarmCards?.() ?? []).some((card) => card.leads.some((l) => l.local === harnessId && (l.sideChat ?? l.chat)?.kind === 'buddy'))
+  /** The chat on this dial's face for the Lead that runs as `harnessId` here; none for a device without chats. */
+  private swarmFaceOf(harnessId: string): SwarmChat | undefined {
+    if (!this.swarmChat) return undefined
+    for (const card of this.host.swarmCards?.() ?? []) {
+      const lead = card.leads.find((l) => l.local === harnessId)
+      if (lead) return this.swarmBuddy ? lead.sideChat ?? lead.chat : lead.chat
+    }
+    return undefined
+  }
+
+  /** The extra arguments of words spoken to a Swarm Lead: the dial's chat flag, and the chat they were spoken to. */
+  private sayArgs(face: SwarmChat | undefined): [chat?: CardChat, chatId?: string] {
+    const [chat] = this.chatFlag()
+    if (chat === undefined) return []
+    return face ? [chat, face.id] : [chat]
   }
 
   /** The extra argument a swarmChat dial's requests carry ('buddy' for a swarmBuddy dial's); none for any other device, whose
@@ -2751,7 +2787,7 @@ export class CableSession {
       const frame = { t: 'supertab', id: card.id, tab, name: card.name, count: card.count,
         leads: card.leads.slice(0, SWARM_LEADS_MAX).map((l) => this.swarmBuddy ? buddyLead(l) : this.swarmChat ? chatLead(l) : { id: l.id, projectId: l.projectId, project: l.project,
           engine: l.engine, owner: l.owner, local: l.local, state: l.state, order: l.order, ...(l.since === undefined ? {} : { since: l.since }) }) }
-      if (this.swarmBuddy) fitBuddyNames(frame)
+      fitFrame(frame)
       const key = JSON.stringify(frame)
       if (this.cardKeys.get(card.id) === key) continue
       this.cardKeys.set(card.id, key)

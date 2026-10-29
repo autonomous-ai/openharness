@@ -829,6 +829,11 @@ describe('the Swarm cards the devices ask for', () => {
     expect(t.cards.open).toHaveBeenLastCalledWith('s1', 't1', 'l1', 'buddy')
     await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' }, owner)
     expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
+    // The chat the words were spoken to rides with them; one that is not an id is none.
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
+    await t.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'bad id' }, owner)
+    expect(t.cards.say).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy')
   })
   it('cardSay passes a refused post\'s code and message on, and says nothing of a refusal otherwise', async () => {
     const t = withCards()

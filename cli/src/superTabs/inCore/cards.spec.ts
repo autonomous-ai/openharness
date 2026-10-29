@@ -261,11 +261,13 @@ describe('whether the Swarm cards are wanted, which the core owns', () => {
     const { cards, request } = wanting()
     await cards.ask({ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' })
     await cards.ask({ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' })
-    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' })
+    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' })
     expect(await cards.ask({ action: 'cardSide', tabId: 't1', side: 'buddy', extra: 1 })).toEqual({ ok: true })
     await cards.ask({ action: 'cardSide', tabId: 't1', side: 'pm' })
+    await cards.ask({ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true, chatId: 'bad id' })
     expect(request.mock.calls).toEqual([[{ action: 'cardRecap', tabId: 't1', leadId: 'l1', chat: 'buddy' }], [{ action: 'cardOpen', session: 's1', tabId: 't1', leadId: 'l1', chat: 'buddy' }],
-      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy' }], [{ action: 'cardSide', tabId: 't1', side: 'buddy' }], [{ action: 'cardSide', tabId: 't1', side: 'pm' }]])
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: 'buddy', chatId: 'pm1' }], [{ action: 'cardSide', tabId: 't1', side: 'buddy' }], [{ action: 'cardSide', tabId: 't1', side: 'pm' }],
+      [{ action: 'cardSay', harnessId: 'h1', text: 'ship it', chat: true }]])
     request.mockClear()
     for (const side of ['up', null, undefined, true]) expect(await cards.ask({ action: 'cardSide', tabId: 't1', side })).toEqual({ error: 'INVALID_REQUEST' })
     expect(request).not.toHaveBeenCalled()

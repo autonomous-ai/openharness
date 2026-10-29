@@ -1040,6 +1040,21 @@ describe('SwarmCards Buddy side', () => {
     expect(posts.map(p => [p.conversationId, p.text])).toEqual([['pm-web', 'to my Buddy'], ['lead-web', 'to the Lead']])
     t.cards.want(false)
   })
+
+  it('say posts only into the chat the words were spoken to, and refuses them once the face moved on', async () => {
+    const t = chatSwarm({}, true)
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    t.cards.side('t1', 'buddy')
+    expect(await t.cards.say('h-a1', 'to my Buddy', 'buddy', 'pm-web')).toEqual({ said: true })
+    // The window opened the Lead after the words were spoken to the Buddy: they are not posted in the project's chat.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'lead-web' })
+    expect(await t.cards.say('h-a1', 'still for my Buddy', 'buddy', 'pm-web')).toEqual({ said: false,
+      refused: { code: 'CHAT_MOVED', message: 'That chat is no longer on the dial. Say it again.' } })
+    const posts = t.call.mock.calls.filter(c => c[0] === 'POST').map(c => (c[2] as { command: { conversationId: string } }).command.conversationId)
+    expect(posts).toEqual(['pm-web'])
+    t.cards.want(false)
+  })
 })
 
 // Privacy edges reviews keep finding (Lead, 10-29): an answer read for one reader, or while access lasted, is never given

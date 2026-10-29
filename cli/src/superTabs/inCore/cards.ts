@@ -197,7 +197,8 @@ export function createSuperTabCards({ swarmCards, swarmCardRecap, request, log =
         return payload.side === 'pm' || payload.side === 'buddy' ? route({ action: 'cardSide', tabId: payload.tabId, side: payload.side }) : Promise.resolve({ error: 'INVALID_REQUEST' })
       }
       if (payload.action === 'cardRecap') return route({ action: 'cardRecap', tabId: payload.tabId, leadId: payload.leadId, ...chat })
-      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat })
+      // The chat on the dial's face when the words were spoken, which they may be posted in and no other.
+      if (payload.action === 'cardSay') return route({ action: 'cardSay', harnessId: payload.harnessId, text: payload.text, ...chat, ...(id(payload.chatId) ? { chatId: payload.chatId } : {}) })
       if (payload.action === 'cardOpen') return route({ action: 'cardOpen', session: payload.session, tabId: payload.tabId, leadId: payload.leadId, ...chat })
       // A card's failure from another computer: whether its agent is a Swarm's worker (services/devices.ts asks; it decides).
       if (payload.action === 'cardWorker') return route({ action: 'cardWorker', machineId: payload.machineId, harnessId: payload.harnessId })

@@ -115,7 +115,7 @@ export interface CableHostWiring {
   swarmCardSide?: (tabId: string, side: CardSide) => void
   /** Words for a Lead that runs here, posted as the person in its Swarm chat; not `said` when the harness leads no project,
    *  `refused` with the backend's reason when it refused the post. */
-  swarmSay?: (harnessId: string, text: string, chat?: CardChat) => Promise<SaidOnCard>
+  swarmSay?: (harnessId: string, text: string, chat?: CardChat, chatId?: string) => Promise<SaidOnCard>
   /** A device picked a Lead: the window opens that Swarm tab and project. */
   superTabSelected?: (superTabId: string, projectId: string) => void
   /** A finger on the dial's glass, in pieces, while it is down; `superTabId` when it scrolls that Swarm's chat (a Pro's Lead view). */
@@ -444,8 +444,8 @@ export class DaemonCableHost implements CableHost {
     this.wiring.swarmCardSide?.(tabId, side)
   }
 
-  swarmSay(harnessId: string, text: string, chat: CardChat = false): Promise<SaidOnCard> {
-    return this.wiring.swarmSay?.(harnessId, text, chat) ?? Promise.resolve({ said: false })
+  swarmSay(harnessId: string, text: string, chat: CardChat = false, chatId?: string): Promise<SaidOnCard> {
+    return this.wiring.swarmSay?.(harnessId, text, chat, ...(chatId ? [chatId] : [])) ?? Promise.resolve({ said: false })
   }
 
   superTabSelected(superTabId: string, projectId: string): void {

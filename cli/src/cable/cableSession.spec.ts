@@ -4609,10 +4609,55 @@ describe('swarm cards', () => {
 
     it('on the PM face an unreachable post still falls back to the turn', async () => {
       const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
-      const pmFace = withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })
-      expect(await spoken(BUDDY, [pmFace], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
+      const leadFace = { kind: 'lead' as const, id: 'lead-c1', name: 'Lead', working: false }
+      expect(await spoken(BUDDY, [withBuddy({ local: 'h1', sideChat: leadFace })], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
       // An older dial's face is today's, whatever a newer dial's side says.
-      expect(await spoken(ROUND, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
+      expect(await spoken(ROUND, [withBuddy({ local: 'h1', chat: leadFace })], offline)).toEqual({ errors: [], turns: [['h1', 'ship it']] })
+    })
+
+    it('an older dial\'s words for the Buddy chat (its PM face) never fall back to the Lead\'s terminal either', async () => {
+      // The PM cannot read the reader's Buddy chat: typing what was said there into the PM's terminal would show it.
+      const offline = vi.fn(async (): Promise<SaidOnCard> => { throw new Error('offline') })
+      expect(await spoken(ROUND, [withBuddy({ local: 'h1' })], offline)).toEqual({ errors: ['Could not reach the Swarm. Try again.'], turns: [] })
+    })
+
+    it('a Buddy utterance never falls back after desktop focus changes during its post', async () => {
+      const state = { cards: [card('st1', [withBuddy({ local: 'h1' })])] }
+      let rejectPost!: (error: Error) => void
+      const pending = new Promise<SaidOnCard>((_resolve, reject) => { rejectPost = reject })
+      const swarmSay = vi.fn(() => pending)
+      const host = cardHost(state, { transcribe: vi.fn(async () => 'private Buddy idea'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        voice(port, 'h1')
+        await vi.waitFor(() => expect(swarmSay).toHaveBeenCalledOnce())
+        // The window opens the Lead while the private post is on its way.
+        state.cards = [card('st1', [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })])]
+        await session.syncSwarmCards()
+        rejectPost(new Error('backend unreachable'))
+        await vi.waitFor(() => expect(port.sent.some(m => m.t === 'voice.error' || m.t === 'voice.transcript')).toBe(true))
+        expect(host.sendTurn).not.toHaveBeenCalled()
+        expect(ofType(port, 'voice.error').map(m => m.message)).toEqual(['Could not reach your Buddy. Try again.'])
+      } finally { await session.stop() }
+    })
+
+    it('posts the words into the chat on the face when they were spoken, whatever the face shows by the time they are sent', async () => {
+      const state = { cards: [card('st1', [withBuddy({ local: 'h1' })])] }
+      const swarmSay = vi.fn(async (): Promise<SaidOnCard> => ({ said: true }))
+      const host = cardHost(state, { transcribe: vi.fn(async () => 'private Buddy idea'), route: vi.fn(), swarmSay })
+      const { session, port } = await connect(host)
+      try {
+        port.say(BUDDY)
+        await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+        port.say({ t: 'voice.begin', uploadId: 'u-h1', agentId: 'h1' })
+        // The window opens the Lead while the person is still speaking.
+        state.cards = [card('st1', [withBuddy({ local: 'h1', sideChat: { kind: 'lead', id: 'lead-c1', name: 'Lead', working: false } })])]
+        port.pcm(Buffer.alloc(3200)); port.say({ t: 'voice.end' })
+        await vi.waitFor(() => expect(swarmSay).toHaveBeenCalledOnce())
+        expect(swarmSay.mock.calls[0]).toEqual(['h1', 'private Buddy idea', 'buddy', 'pm1'])
+      } finally { await session.stop() }
     })
 
     /** 13 Leads (12 are sent), every name at its 48-byte cut, each working in a group with a Buddy; `id(kind, l)` names the ids. */
@@ -4650,7 +4695,60 @@ describe('swarm cards', () => {
       expect(frame.leads).toHaveLength(12)
       expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(8192)
       expect(tokens(frame)).toBeLessThan(512)
-      for (const l of frame.leads) expect(l.buddy.name).toBe('é'.repeat(12))
+      // The Buddies' names go first: the avatar still tells them apart, and every other name is whole.
+      for (const l of frame.leads as unknown as Array<{ buddy: { name: string }; project: string; chatName: string }>) {
+        expect([l.buddy.name, l.project, l.chatName]).toEqual(['é'.repeat(12), 'é'.repeat(24), 'é'.repeat(24)])
+      }
+    })
+
+    it('12 Leads with 48-byte JSON-escaped names fit without dropping the dial', async () => {
+      const cards = fullCards((kind, l) => `${kind}${'x'.repeat(44)}${String(l).padStart(2, '0')}`)
+      const wide = '"'.repeat(48)
+      for (const c of cards) {
+        c.name = wide
+        for (const l of c.leads) {
+          l.project = l.owner = wide
+          l.chat!.name = l.sideChat!.name = l.buddy!.name = wide
+        }
+      }
+      // These same valid names fit the existing legacy frame.
+      for (const hello of [ROUND, BUDDY]) {
+        const { session, port } = await connect(cardHost({ cards }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab').length > 0 || !port.isOpen).toBe(true))
+          expect(port.isOpen, hello === BUDDY ? 'new dial must stay connected' : 'legacy baseline must fit').toBe(true)
+          expect(Buffer.byteLength(JSON.stringify(ofType(port, 'supertab')[0]))).toBeLessThan(8192)
+        } finally { await session.stop() }
+      }
+    })
+
+    it('fits the fullest frame a dial can be sent: every id at 47 characters, every name and engine escaping at its cut', async () => {
+      const cards = fullCards((kind, l) => `${kind}${'x'.repeat(44)}${String(l).padStart(2, '0')}`)
+      const wide = '"'.repeat(48), engine = '\u0001'.repeat(16)
+      for (const c of cards) {
+        c.name = wide
+        for (const l of c.leads) {
+          l.project = l.owner = wide
+          l.engine = l.buddy!.engine = engine
+          l.chat!.name = l.sideChat!.name = l.buddy!.name = wide
+        }
+      }
+      for (const hello of [ROUND, BUDDY]) {
+        const { session, port } = await connect(cardHost({ cards }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab').length > 0 || !port.isOpen).toBe(true))
+          expect(port.isOpen).toBe(true)
+          const [frame] = ofType(port, 'supertab') as Array<{ leads: Array<{ id: string; projectId: string; chatId: string; engine: string }> }>
+          expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(8192)
+          // Every id and engine still names what it names; the Buddies of the least urgent Leads went last, the rest kept theirs.
+          expect(frame.leads.map((l) => [l.id, l.projectId, l.chatId, l.engine])).toEqual(cards[0].leads.slice(0, 12).map((l) => [l.id, l.projectId, l.chat!.id, engine]))
+          const kept = frame.leads.map((l) => 'buddy' in l)
+          if (hello === BUDDY) expect(kept.slice(0, 6)).toEqual(Array(6).fill(true))
+          expect(kept.indexOf(false) === -1 || kept.slice(kept.indexOf(false)).every((k) => !k)).toBe(true)
+        } finally { await session.stop() }
+      }
     })
   })
 })

@@ -1040,6 +1040,8 @@ describe('Swarm cards', () => {
     expect(w.swarmCardRecap).toHaveBeenLastCalledWith('st1', 'l1', 'buddy')
     host.swarmCardSide('st1', 'buddy')
     expect(w.swarmCardSide).toHaveBeenLastCalledWith('st1', 'buddy')
+    await host.swarmSay('h1', 'ship it', 'buddy', 'pm1')
+    expect(w.swarmSay).toHaveBeenLastCalledWith('h1', 'ship it', 'buddy', 'pm1')
     const bare = new DaemonCableHost(wiring())
     bare.swarmCardsWanted(false); bare.swarmCardOpen('c1', 'st1', null); bare.swarmCardSide('st1', 'pm'); bare.superTabSelected('st1', 'p1')
     expect(await bare.swarmCardRecap('st1', 'l1')).toBeNull()

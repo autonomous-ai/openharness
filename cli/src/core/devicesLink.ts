@@ -130,7 +130,8 @@ export function createDevicesLink(deps: DevicesLinkDeps) {
       // window's open conversation rides with the wish (superTabs/inCore/cards.ts checks them); absent, the request is today's.
       const chat = payload.chat === true || payload.chat === 'buddy' ? { chat: payload.chat } : {}
       return core.superTabRequest(action === 'cardsWanted' ? { action, on: on === true, include, ...(focus !== undefined ? { focus } : {}) }
-        : action === 'cardSay' ? { action, harnessId, text, ...chat } : action === 'cardWorker' ? { action, machineId, harnessId }
+        : action === 'cardSay' ? { action, harnessId, text, ...chat, ...(typeof payload.chatId === 'string' ? { chatId: payload.chatId } : {}) }
+        : action === 'cardWorker' ? { action, machineId, harnessId }
         : action === 'cardSide' ? { action, tabId, side }
         : { action, tabId, leadId, session, ...chat })
     },
