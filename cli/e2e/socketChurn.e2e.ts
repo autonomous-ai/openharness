@@ -25,6 +25,8 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import { offlineRetryProblems, runSocketScenario, shortfalls, type ScenarioResult } from './harness/socketScenario.js'
 
 const minutes = Number(process.env.SOCKET_SCENARIO_MINUTES ?? 3)
+/** The scenario's daemons, A and B (harness/socketScenario.ts). */
+const DAEMONS = 2
 let result: ScenarioResult
 
 /** When each web-ws select of `machineId` was sent, in order. */
@@ -54,8 +56,11 @@ describe.skipIf(!process.env.HARNESS_E2E_SERVICES_DIR)('WebSocket phases 0 and 1
     expect(below).toEqual([])
   })
 
-  it('Phase 1: a deleted machine is selected once, by the socket that finds it gone, and never again', () => {
-    expect(selectTimes(result.machines.deleted).length).toBeLessThanOrEqual(1)
+  // Once per daemon, not once per account (Lead, 2026-10-29, #2101): A pinned the deleted machine, and B learns it from A's
+  // roster before A finds it gone, so each finds it gone once (remoteRelay.ts marks it gone) and neither dials it again. The
+  // meter cannot tell the two daemons apart; a daemon that kept dialling would fail this within a minute (main: 16 in 3).
+  it('Phase 1: a deleted machine is selected at most once by each daemon, by the socket that finds it gone, and never again', () => {
+    expect(selectTimes(result.machines.deleted).length).toBeLessThanOrEqual(DAEMONS)
   })
 
   // Per daemon (Lead, 2026-10-29, #2104): each of A and B is told the 30 s, and each waits it out; one daemon's select
