@@ -231,6 +231,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                             key: const ValueKey('super-buddy-machine'),
                             machines: machines,
                             value: _picked!.id,
+                            action: 'Add Buddy',
                             onChanged: (value) {
                               if (!_busy) setState(() => _machine = value);
                             },
@@ -238,6 +239,17 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
+              if (_picked?.joins == true) ...[
+                const SizedBox(height: 4),
+                Padding(
+                  padding: const EdgeInsets.only(left: _labelWidth),
+                  child: Text(
+                    buddyJoinsNote('Add Buddy'),
+                    key: const ValueKey('super-buddy-joins'),
+                    style: DesktopChrome.control(color: DesktopChrome.muted),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -545,6 +557,7 @@ class _BuddyStartState extends State<_BuddyStart> {
                   key: const ValueKey('super-buddy-start-machine'),
                   machines: machines,
                   value: machine.id,
+                  action: 'Start',
                   fitNames: true,
                   onChanged: (value) {
                     if (!busy) setState(() => _machine = value);
@@ -578,6 +591,14 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
               ],
             ),
+          if (machine?.joins == true) ...[
+            const SizedBox(height: 4),
+            Text(
+              buddyJoinsNote('Start'),
+              key: const ValueKey('super-buddy-start-joins'),
+              style: DesktopChrome.control(color: DesktopChrome.muted),
+            ),
+          ],
           if (_error case final error?) ...[
             const SizedBox(height: 4),
             Text(

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../models/model_search_catalog.dart' show thisComputerName;
-import '../shared/theme/app_theme.dart' as grid;
 import '../shared/widgets/app_select_field.dart';
 import '../state/app_state.dart';
 import '../widgets/desktop_chrome.dart';
@@ -13,8 +12,10 @@ import 'machines.dart';
 /// this Mac while it is not in the Swarm yet: starting there adds it first.
 typedef BuddyMachine = ({String id, String name, bool joins});
 
-/// What the picker says under this Mac while Start would add it.
-const kBuddyJoinsNote = 'Not in this Swarm yet: Start adds it';
+/// What the pickers say about this Mac while [action] would add it to the
+/// Swarm: `Start` in the Buddy chat's bar, `Add Buddy` in the dialog.
+String buddyJoinsNote(String action) =>
+    'Not in this Swarm yet: $action adds it';
 
 /// The reader's own machines in the Swarm: a Buddy runs only there, like a
 /// Lead, whatever its engine (Ken, 10-28). Not a machine the reader may use
@@ -63,42 +64,26 @@ BuddyMachine? pickedBuddyMachine(List<BuddyMachine> machines, String? chosen) =>
     machines.where((m) => m.id == chosen).firstOrNull ?? machines.firstOrNull;
 
 /// The Machine field of the Buddy pickers. With [fitNames] it is as wide as
-/// its longest name rather than the row.
+/// its longest name rather than the row. [action] is the button that adds
+/// this Mac when it is picked, named in its note.
 class BuddyMachineField extends StatelessWidget {
   const BuddyMachineField({
     super.key,
     required this.machines,
     required this.value,
+    required this.action,
     required this.onChanged,
     this.fitNames = false,
   });
   final List<BuddyMachine> machines;
   final String value;
+  final String action;
   final ValueChanged<String> onChanged;
   final bool fitNames;
 
-  /// Padding, gap, chevron and border around the name in the closed field.
-  static const _chrome = 18.0 + 6.0 + grid.AppControl.iconSize + 3.0;
-
-  /// Wide enough for [kBuddyJoinsNote] whole under a name, which a menu only as
-  /// wide as a fitted field would cut off.
+  /// Wide enough for the note whole under a name, which a menu only as wide as
+  /// a fitted field would cut off.
   static const _joinsMenuWidth = 320.0;
-
-  double _fieldWidth(BuildContext context, TextStyle style) {
-    final scaler = MediaQuery.textScalerOf(context);
-    var widest = 0.0;
-    for (final m in machines) {
-      final painter = TextPainter(
-        text: TextSpan(text: m.name, style: style),
-        textDirection: TextDirection.ltr,
-        textScaler: scaler,
-        maxLines: 1,
-      )..layout();
-      widest = widest > painter.width ? widest : painter.width;
-      painter.dispose();
-    }
-    return widest.ceilToDouble() + _chrome;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -107,20 +92,30 @@ class BuddyMachineField extends StatelessWidget {
       value: value,
       semanticLabel: 'Machine',
       textStyle: style,
-      width: fitNames ? _fieldWidth(context, style) : null,
+      width: fitNames
+          ? AppSelectField.fitWidth(
+              context,
+              labels: [for (final m in machines) m.name],
+              textStyle: style,
+            )
+          : null,
       menuWidth: machines.any((m) => m.joins) ? _joinsMenuWidth : null,
       options: [
         for (final m in machines)
           SelectOption(
             value: m.id,
             label: m.name,
-            detail: m.joins ? kBuddyJoinsNote : null,
+            detail: m.joins ? buddyJoinsNote(action) : null,
           ),
       ],
       onChanged: onChanged,
     );
   }
 }
+
+/// Why nothing was added when the reader's write access ended during the add.
+const kBuddyAccessLost =
+    'You can no longer change this Swarm, so this Mac was not added.';
 
 /// Where a Buddy starts, once the person has clicked Start: the picked
 /// machine, added to the Swarm first when it is this Mac and not in it yet.
@@ -150,6 +145,8 @@ class BuddyMachineAdder {
         alive: alive,
       );
       _setupId = null;
+      // Nothing was added though nobody gave up: write access is gone.
+      if (id == null && alive()) return (id: null, error: kBuddyAccessLost);
       return (id: id, error: null);
     } catch (failure) {
       if (failure is! SuperTabFailure || failure.code != 'SETUP_PENDING') {

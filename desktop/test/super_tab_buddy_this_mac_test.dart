@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/buddies.dart';
+import 'package:harness/super_tabs/buddy_machines.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -23,6 +24,7 @@ void main() {
   setUpAll(() => loadCaptureFonts(shots));
 
   const notInSwarm = 'Not in this Swarm yet: Start adds it';
+  const notInSwarmDialog = 'Not in this Swarm yet: Add Buddy adds it';
 
   /// Another machine of the reader's, already in the Swarm.
   Map<String, dynamic> rig() => {
@@ -151,11 +153,72 @@ void main() {
       );
       await tester.tap(barMachine);
       await tester.pumpAndSettle();
-      expect(find.text(notInSwarm), findsOneWidget);
+      // Beside the Mac's row in the menu, as well as under the bar.
+      expect(find.text(notInSwarm), findsNWidgets(2));
       expect(menuRows(tester, ['This Mac · $mac', '2x 4090 Rig']), [
         'This Mac · $mac',
         '2x 4090 Rig',
       ]);
+      await close(tester, f, c);
+    });
+
+    testWidgets('says Start adds this Mac before the menu is opened', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+
+      expect(find.text(notInSwarm), findsOneWidget);
+      // Under the bar's row, not inside the field.
+      expect(
+        tester.getTopLeft(find.text(notInSwarm)).dy,
+        greaterThan(tester.getBottomLeft(barMachine).dy),
+      );
+      await close(tester, f, c);
+    });
+
+    testWidgets(
+      'says nothing when the picked machine is already in the Swarm',
+      (tester) async {
+        final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+
+        await tester.tap(barMachine);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('2x 4090 Rig').last);
+        await tester.pumpAndSettle();
+
+        expect(find.text(notInSwarm), findsNothing);
+        await close(tester, f, c);
+      },
+    );
+
+    testWidgets('a retry while setup is still running joins that setup', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+      f.connection.keepPreparing = true;
+      List<Object?> setups() => [
+        for (final call in f.connection.calls)
+          if (call.$2['action'] == 'prepareContribution')
+            call.$2['operationId'],
+      ];
+
+      await tester.tap(start);
+      await settle(tester);
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(seconds: 60));
+      }
+      await tester.pumpAndSettle();
+      expect(find.textContaining('still running'), findsOneWidget);
+      final first = setups().toSet();
+      expect(first, hasLength(1));
+
+      f.connection.keepPreparing = false;
+      await tester.tap(start);
+      await settle(tester);
+
+      // The same setup was asked again, not a second one started.
+      expect(setups().toSet(), first);
+      expect(sent(f), ['machine.contribute m', 'buddy.create m']);
       await close(tester, f, c);
     });
 
@@ -312,6 +375,34 @@ void main() {
       await close(tester, f, c);
     });
 
+    testWidgets('a Mac someone else already added is not offered again', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(
+        tester,
+        machines: [
+          rig(),
+          {
+            ...rig(),
+            'machineId': 'm',
+            'name': 'Office.local',
+            'contributorId': 'other',
+          },
+        ],
+      );
+
+      expect(
+        find.descendant(of: barMachine, matching: find.text('2x 4090 Rig')),
+        findsOneWidget,
+      );
+      await tester.tap(barMachine);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('This Mac'), findsNothing);
+      expect(find.text('Office'), findsNothing);
+      expect(find.text(notInSwarm), findsNothing);
+      await close(tester, f, c);
+    });
+
     testWidgets("a Mac signed in to another account is never offered", (
       tester,
     ) async {
@@ -354,7 +445,87 @@ void main() {
     });
   });
 
+  testWidgets('the field fits its longest name at large text', (tester) async {
+    final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpAndSettle();
+
+    final text = tester.widget<Text>(
+      find.descendant(of: barMachine, matching: find.text('This Mac · $mac')),
+    );
+    final painter = TextPainter(
+      text: TextSpan(text: text.data, style: text.style),
+      textDirection: TextDirection.ltr,
+      textScaler: const TextScaler.linear(2),
+    )..layout();
+    // Whole, not cut to an ellipsis.
+    expect(
+      tester.getSize(find.text('This Mac · $mac').last).width,
+      closeTo(painter.width, 1),
+    );
+    await close(tester, f, c);
+  });
+
   group('Add a Buddy', () {
+    testWidgets('says Add Buddy adds this Mac before the menu is opened', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()], bar: false);
+
+      expect(find.text(notInSwarmDialog), findsOneWidget);
+      expect(find.text(notInSwarm), findsNothing);
+      await tester.tap(dialogMachine);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('2x 4090 Rig').last);
+      await tester.pumpAndSettle();
+      expect(find.text(notInSwarmDialog), findsNothing);
+      await close(tester, f, c);
+    });
+
+    testWidgets('write access lost while it adds says so and adds nothing', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()], bar: false);
+
+      await tester.tap(addBuddy);
+      await tester.pump();
+      for (final person in f.connection.server.state['people'] as List) {
+        if ((person as Map)['id'] == 'owner') person['role'] = 'viewer';
+      }
+      await c.refresh();
+      await settle(tester);
+
+      // The dialog's scope swaps the form for its own message, so the person
+      // is not left looking at Adding….
+      expect(sent(f), isEmpty);
+      expect(find.text('This action is no longer available.'), findsOneWidget);
+      expect(find.text('Adding…'), findsNothing);
+      await close(tester, f, c);
+    });
+
+    testWidgets('an add that loses write access gives the reason', (
+      tester,
+    ) async {
+      final (:f, :c, :mac) = await open(tester, machines: [rig()]);
+      for (final person in f.connection.server.state['people'] as List) {
+        if ((person as Map)['id'] == 'owner') person['role'] = 'viewer';
+      }
+      await c.refresh();
+      await tester.pumpAndSettle();
+      expect(c.canWrite, isFalse);
+
+      final (:id, :error) = await BuddyMachineAdder(
+        c,
+        f.app,
+      ).resolve(buddyMachines(c, app: f.app).first, alive: () => true);
+
+      expect(id, isNull);
+      expect(error, kBuddyAccessLost);
+      expect(sent(f), isEmpty);
+      await close(tester, f, c);
+    });
+
     testWidgets('lists this Mac first and picked', (tester) async {
       final (:f, :c, :mac) = await open(tester, machines: [rig()], bar: false);
 
@@ -368,7 +539,7 @@ void main() {
       expect(tester.widget<FilledButton>(addBuddy).onPressed, isNotNull);
       await tester.tap(dialogMachine);
       await tester.pumpAndSettle();
-      expect(find.text(notInSwarm), findsOneWidget);
+      expect(find.text(notInSwarmDialog), findsNWidgets(2));
       await close(tester, f, c);
     });
 
@@ -454,6 +625,7 @@ void main() {
         bar: false,
         brightness: brightness,
       );
+      await captureWindow(tester, shots, 'buddy-add-${brightness.name}');
       await tester.tap(dialogMachine);
       await tester.pumpAndSettle();
       await captureWindow(tester, shots, 'buddy-add-menu-${brightness.name}');

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -528,7 +529,7 @@ Future<Map<String, dynamic>?> _prepareContribution(
   required String setupId,
   required bool Function() alive,
 }) async {
-  final deadline = DateTime.now().add(const Duration(minutes: 5));
+  final deadline = clock.now().add(const Duration(minutes: 5));
   while (true) {
     if (!alive() || !c.canWrite) return null;
     final prepared = await app.superTabMachineRequest(machineId, {
@@ -546,7 +547,7 @@ Future<Map<String, dynamic>?> _prepareContribution(
         'Update Harness on this machine, then try again.',
       );
     }
-    if (DateTime.now().isAfter(deadline)) {
+    if (clock.now().isAfter(deadline)) {
       throw const SuperTabFailure(
         'SETUP_PENDING',
         'Project setup is still running. Try again to check its progress.',
