@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, hostsToTell, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, plainHost, sameData, visibilityChanged } from './commit.js'
 import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {
@@ -114,6 +114,20 @@ describe('which machines\' hosts a commit tells (WS roadmap Phase 2a)', () => {
     const after = swarm()
     after.agents = after.agents.filter(a => a.machineId !== 'C')
     expect(hostsToTell([update('head', 'head', {})], swarm(), after).sort()).toEqual(['A', 'B', 'C'])
+  })
+})
+
+// Review of #2113: the host read (read/host.ts) and the push (hostsToTell) share one rule, so they cannot drift apart.
+describe('which host a part concerns from its data alone', () => {
+  it('is every host for the head and the Swarm\'s people, an agent\'s or a start\'s machine, and none for other kinds', () => {
+    expect(plainHost('head', {})).toBe('all')
+    expect(plainHost('member', {})).toBe('all')
+    expect(plainHost('agent', { machineId: 'A' })).toBe('A')
+    expect(plainHost('start', { request: { machineId: 'B' } })).toBe('B')
+    expect(plainHost('agent', null)).toBeNull()
+    expect(plainHost('start', { request: {} })).toBeNull()
+    expect(plainHost('group', { agentIds: [] })).toBeNull()
+    expect(plainHost('machine', { machineId: 'A' })).toBeNull()
   })
 })
 

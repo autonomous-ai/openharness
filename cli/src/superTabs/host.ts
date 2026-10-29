@@ -390,12 +390,13 @@ export class SuperTabHost {
     })
   }
   /** The server said work waits for one agent here, or (naming none) that it pushes: read at once. Or that a commit changed
-   *  what this host reads (WS roadmap Phase 2a): its feed reads on this tick, or the next once a second has passed. */
+   *  what this host reads (WS roadmap Phase 2a): a pass now if its feed reads now, else on the tick after its one-second gap. */
   private pushed(notice: BackendNotice): void {
     if (this.stopped) return
     if (notice.type === 'swarm_host_changed') {
       this.sources.feed.heard(notice)
-      void this.tick()
+      // A pass reads every busy agent's list again: started only when the feed reads now, else the next tick reads it.
+      if (this.sources.feed.readsNow) void this.tick()
       return
     }
     if (notice.type !== 'super_tab_deliveries') return

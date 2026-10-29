@@ -3,7 +3,8 @@ import { logger } from '../utils/logger.js'
 import type { HostsChanged } from '../superTabs/store.js'
 
 /** Repeated so a host keeps reading only when told: it goes back to each second 5 minutes after it last heard it (cli
- *  superTabs/hostFeed.ts HOST_PUSH_LEASE_MS), which covers a server rolled back to one that does not push. */
+ *  superTabs/hostFeed.ts HOST_PUSH_LEASE_MS), which covers a server rolled back to one that does not push. The repeat goes
+ *  through the machine's own channel, so a Redis gone silent stops it too (review of #2113), and that is logged. */
 const PUSHES_REPEAT_MS = 4 * 60_000
 
 /**
@@ -25,8 +26,9 @@ export async function relaySwarmHostChanges(machineId: string, send: (frame: unk
   let unsubscribe: () => void
   try {
     unsubscribe = await subscribeSwarmHost(machineId, msg => {
-      const { tabId, lastChangedAt } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
+      const { tabId, lastChangedAt, pushes } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
       if (typeof tabId === 'string' && typeof lastChangedAt === 'number') tell({ tabId, lastChangedAt })
+      else if (pushes === true) tell({})
     })
   } catch (error) {
     // Not told that the server pushes, the host keeps reading each second: nothing waits longer, only the saving is lost.
@@ -34,7 +36,11 @@ export async function relaySwarmHostChanges(machineId: string, send: (frame: unk
     return () => {}
   }
   tell({})
-  const repeat = setInterval(() => tell({}), PUSHES_REPEAT_MS)
+  const repeat = setInterval(() => {
+    void publishSwarmHost(machineId, { pushes: true }).then(heard => {
+      if (!heard) logger.warn('[swarm] host push repeat reached no one; hosts fall back to reading each second', { machineId })
+    })
+  }, PUSHES_REPEAT_MS)
   return () => {
     clearInterval(repeat)
     unsubscribe()

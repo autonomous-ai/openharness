@@ -14,8 +14,9 @@ export interface HostRead { roster: Json[]; pools: Json[]; assignments: Json[] }
 
 /** The bound on a roster that lags a revoked share (design section 8, Q2), and on one that missed a push. */
 export const HOST_FULL_MS = 60_000
-/** WS roadmap Phase 2a: a server that pushes (backend lib/swarmHostPushes.ts) says so every 4 minutes. Without that word for
- *  this long (an older server, a rollback, Redis down) the host reads each second again. */
+/** WS roadmap Phase 2a: a server that pushes (backend lib/swarmHostPushes.ts) says so every 4 minutes, through Redis like the
+ *  pushes themselves. Without that word for this long (an older server, a rollback, Redis gone silent) the host reads each
+ *  second again. */
 export const HOST_PUSH_LEASE_MS = 5 * 60_000
 /** Told many times in a second, by a busy Swarm, the host still reads at most once a second, as it did before pushes. */
 export const HOST_PUSH_GAP_MS = 1_000
@@ -66,10 +67,16 @@ export class HostFeed {
   /** The host's one-second tick: a read each second, unless the server pushes; then one when told, at most once a second,
    *  and the full read a minute after the last, the safety net for a push lost on the way. */
   due(): Promise<HostRead> {
-    if (!this.pushing || this.running || this.cursor === null) return this.refresh()
+    return this.running || this.readsNow ? this.refresh() : Promise.resolve(this.snapshot())
+  }
+
+  /** Whether [due] would send a read now, not counting one already out: the host starts a pass for a push only then, since
+   *  every pass reads each busy agent's delivery list again (review of #2113: 5 pushes in 250 ms were 5 list reads). */
+  get readsNow(): boolean {
+    if (this.running) return false
+    if (!this.pushing || this.cursor === null) return true
     const now = this.now()
-    if ((this.told && now - this.readAt >= HOST_PUSH_GAP_MS) || now - this.fullAt >= HOST_FULL_MS) return this.refresh()
-    return Promise.resolve(this.snapshot())
+    return (this.told && now - this.readAt >= HOST_PUSH_GAP_MS) || now - this.fullAt >= HOST_FULL_MS
   }
 
   /** The last read while it is at most `maxAgeMs` old, else a new one: for readers off the host's own one-second tick. While

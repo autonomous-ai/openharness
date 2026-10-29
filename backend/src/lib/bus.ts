@@ -805,7 +805,8 @@ export function subscribeSwarmDeliveries(machineId: string, cb: (msg: unknown) =
 
 // Per-MACHINE Swarm host changes: a commit changed what this machine's host reads (superTabs/store.ts hostsChanged), on some
 // REST worker; the worker holding that machine's adapter socket tells its host to read its changes (lib/swarmHostPushes.ts).
-export interface SwarmHostMsg { tabId: string; lastChangedAt: number }
+// `pushes` is that socket's own 4-minute repeat that it pushes, sent through Redis so a silent Redis stops it.
+export type SwarmHostMsg = { tabId: string; lastChangedAt: number } | { pushes: true }
 
 const swarmHostChannel = (machineId: string): string => `swarm-host:${machineId}`
 

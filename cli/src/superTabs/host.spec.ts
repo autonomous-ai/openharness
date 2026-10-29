@@ -2489,6 +2489,39 @@ describe('Swarm changes the server pushes', () => {
     expect(feedReads(t)).toBe(3)
   })
 
+  // Review of #2113: each push started a host pass, and each pass reads every busy agent's delivery list again: 5 pushes in
+  // 250 ms were 5 extra list reads. A push inside the feed's one-second gap is left to the next tick.
+  it('starts no host pass for a push its feed will not read yet, so a busy list is not read again per push', async () => {
+    const t = setup(), host = t.open()
+    const lists = () => vi.mocked(t.call).mock.calls.filter(([method, path]) => method === 'GET' && path.endsWith('/deliveries')).length
+    t.push(pushes)
+    await host.tick()
+    expect(t.core.turns.deliver).toHaveBeenCalledTimes(1)
+    const [listed, read] = [lists(), feedReads(t)]
+    for (let i = 0; i < 5; i++) {
+      t.wait(50)
+      t.push(changed)
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(lists()).toBe(listed)
+    expect(feedReads(t)).toBe(read)
+    // The next tick, a second after the last read, reads the change once.
+    t.wait(750)
+    await host.tick()
+    expect(feedReads(t)).toBe(read + 1)
+  })
+
+  it('starts a host pass at once for a push its feed reads now', async () => {
+    const t = setup(), host = t.open()
+    t.idle()
+    t.push(pushes)
+    await host.tick()
+    const read = feedReads(t)
+    t.wait(2_000)
+    t.push(changed)
+    await vi.waitFor(() => expect(feedReads(t)).toBe(read + 1))
+  })
+
   // The Lead's rule (2026-10-29): pushes can be missed, so a reconnect reads at once, and the old reading each second
   // comes back until the new socket's server says it pushes.
   it('reads at once and each second again on the new host a reconnect starts', async () => {

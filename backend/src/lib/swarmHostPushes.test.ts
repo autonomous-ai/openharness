@@ -13,12 +13,17 @@ const bus = vi.hoisted(() => {
       return () => { set.delete(cb) }
     },
     publish(machineId: string, msg: unknown) { for (const cb of channels.get(machineId) ?? []) cb(msg) },
+    /** False: Redis has gone silent, and a publish reaches nobody. */
+    carries: true,
   }
 })
+const warn = vi.hoisted(() => vi.fn())
+vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn() } }))
 vi.mock('./bus.js', () => ({
   subscribeSwarmHost: (machineId: string, cb: (msg: unknown) => void) => bus.subscribe(machineId, cb),
   publishSwarmHost: async (machineId: string, msg: unknown) => {
     bus.published.push([machineId, msg])
+    if (!bus.carries) return 0
     bus.publish(machineId, JSON.parse(JSON.stringify(msg)))
     return 1
   },
@@ -30,7 +35,7 @@ const pushes = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([frame])
 const told = (payload: object) => ({ t: 'down', connId: '', frame: { type: 'swarm_host_changed', payload } })
 
 describe('Swarm host pushes on a daemon socket', () => {
-  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; vi.useFakeTimers() })
+  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; bus.carries = true; warn.mockClear(); vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
   it('says it pushes as soon as the socket is attached, so the host stops reading its changes each second', async () => {
@@ -89,6 +94,23 @@ describe('Swarm host pushes on a daemon socket', () => {
     expect(pushes(send)).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
     expect(pushes(send)).toEqual([told({})])
+  })
+
+  // Review of #2113: the repeat came from a local timer, so a Redis gone silent left hosts sure that pushes come, waiting for
+  // the minute's full read, with nothing logged. It goes through the machine's channel: no Redis, no repeat, and in 5
+  // minutes the host reads each second again.
+  it('says it again through the machine\'s own channel, and logs a repeat nobody heard', async () => {
+    const send = vi.fn()
+    await relaySwarmHostChanges('machine-a', send)
+    send.mockClear()
+    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(bus.published).toEqual([['machine-a', { pushes: true }]])
+    expect(pushes(send)).toEqual([told({})])
+    send.mockClear()
+    bus.carries = false
+    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(pushes(send)).toEqual([])
+    expect(warn).toHaveBeenCalledWith('[swarm] host push repeat reached no one; hosts fall back to reading each second', { machineId: 'machine-a' })
   })
 
   // The host keeps reading each second while it has not heard that the server pushes: nothing is lost, only the saving.
