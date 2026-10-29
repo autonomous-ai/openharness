@@ -237,6 +237,15 @@ class SuperTabController extends ChangeNotifier {
   int? get visibilityEpoch => _parts?.epoch;
   String? error, operationError, operationErrorCode;
 
+  /// Why the files of each conversation's last send did not go up. Kept apart
+  /// from [operationError] so it shows only under its own conversation.
+  final _uploadErrors = <String, String>{};
+
+  /// What the composer of [conversationId] says went wrong: its own upload
+  /// failure, else the last action's [operationError].
+  String? composerError(String conversationId) =>
+      _uploadErrors[conversationId] ?? operationError;
+
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
   String? operationNotice;
@@ -2468,6 +2477,7 @@ class SuperTabController extends ChangeNotifier {
     final run = ++_uploadRun;
     uploading = true;
     operationError = null;
+    _uploadErrors.remove(conversationId);
     _sending = (conversationId: conversationId, files: files);
     _uploaded.removeWhere((file, _) => !files.contains(file));
     _changed();
@@ -2486,12 +2496,12 @@ class SuperTabController extends ChangeNotifier {
       return ids;
     } catch (failure) {
       if (!_disposed && run == _uploadRun) {
-        operationError = failure is SuperTabFailure
+        // Into the conversation the files were for, whichever is shown now.
+        _uploadErrors[conversationId] = failure is SuperTabFailure
             ? failure.message
             : failure is TimeoutException
             ? 'The upload stopped moving. Try again.'
             : 'Could not upload ${files.length == 1 ? 'the file' : 'the files'}. Try again.';
-        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
       }
       return null;
     } finally {
