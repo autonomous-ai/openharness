@@ -90,7 +90,7 @@ class SuperTabOutgoing {
 /// live on the backend; refreshing never selects another person's conversation.
 /// WS roadmap Phase 2a: a server that pushes Swarm changes (backend
 /// lib/swarmClientPushes.ts) says so every 4 minutes. Without that word for
-/// this long (an older server, a rollback, the switch off) a Swarm polls as
+/// this long (an older server, a rollback, Redis down) a Swarm polls as
 /// before.
 const kSwarmPushLease = Duration(minutes: 5);
 

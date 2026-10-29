@@ -19,8 +19,8 @@ import { relaySwarmChanges } from './swarmClientPushes.js'
  *    is for the DAEMON itself, which trusts the keys the log holds: it re-reads from its own head.
  *  - `connectors_changed` — the account's sealed connections changed (routes/connectorVault.ts). Also
  *    for the daemon: it re-reads the envelope and merges it into this computer's connections.
- *  - `swarm_changed`    — a Swarm the account is in changed (lib/swarmClientPushes.ts, off unless
- *    SWARM_CLIENT_PUSH=on): the windows read it again instead of every 3 s.
+ *  - `swarm_changed`    — a Swarm the account is in changed (lib/swarmClientPushes.ts): the
+ *    windows read it again instead of every 3 s.
  *
  * `zoo` is the server's daemons switch (lib/daemonsSwitch.ts): off, the zoo channel is not even listened
  * on, since nothing publishes it.

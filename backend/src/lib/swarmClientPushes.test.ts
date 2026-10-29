@@ -30,8 +30,8 @@ const frames = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([frame])
 const told = (payload: object) => ({ type: 'swarm_changed', payload })
 
 describe('Swarm change pushes to a person\'s apps', () => {
-  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; vi.useFakeTimers(); vi.stubEnv('SWARM_CLIENT_PUSH', 'on') })
-  afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
+  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
 
   it('says it pushes as soon as the socket is attached, and again every 4 minutes', async () => {
     const send = vi.fn()
@@ -120,15 +120,13 @@ describe('Swarm change pushes to a person\'s apps', () => {
     expect(frames(send)).toEqual([])
   })
 
-  // Rollout: deployed off, so every app keeps today's timers until SWARM_CLIENT_PUSH=on on every pod.
-  it('neither listens, says it pushes, nor publishes while SWARM_CLIENT_PUSH is not on', async () => {
-    vi.stubEnv('SWARM_CLIENT_PUSH', '')
+  // Ken's rule (2026-10-29): an optimization ships on, with no switch. Old apps ignore the frame and keep their timers; a
+  // server rolled back stops saying it pushes, and apps go back to their timers 5 minutes later.
+  it('says it pushes and publishes with no setting at all', async () => {
     const send = vi.fn()
     await relaySwarmChanges('kim', send)
-    announceSwarmChanges({ tabId: 'tab-1', userIds: ['kim'], lastChangedAt: 1, parts: ['main'] })
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(frames(send)).toEqual([])
-    expect(bus.channels.size).toBe(0)
-    expect(bus.published).toEqual([])
+    expect(frames(send)).toEqual([told({})])
+    announceSwarmChanges({ tabId: 'tab-plain', userIds: ['kim'], lastChangedAt: 1, parts: ['main'] })
+    await vi.waitFor(() => expect(bus.published).toEqual([['kim', { tabId: 'tab-plain', lastChangedAt: 1, parts: ['main'] }]]))
   })
 })

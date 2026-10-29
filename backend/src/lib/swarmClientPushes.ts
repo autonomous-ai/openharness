@@ -3,17 +3,13 @@ import { logger } from '../utils/logger.js'
 import type { SwarmChanged } from '../superTabs/store.js'
 
 /** Repeated so an app keeps reading only when told: it goes back to its own timers 5 minutes after it last heard it
- *  (desktop super_tabs/swarm_pushes.dart), which covers a server rolled back to one that does not push, or switched off. */
+ *  (desktop super_tabs/swarm_pushes.dart), which covers a server rolled back to one that does not push. */
 const PUSHES_REPEAT_MS = 4 * 60_000
 /** The Lead's rule (2026-10-29): at most one push per Swarm a second, so a Swarm committing every second is one read a
  *  second per window, not one per commit. */
 const COALESCE_MS = 1_000
 type Part = 'main' | 'machine'
 const PARTS: readonly Part[] = ['main', 'machine']
-
-/** The rollout switch: off unless SWARM_CLIENT_PUSH=on. Off, no socket says it pushes, so every app keeps today's timers,
- *  and no commit is published. */
-const clientPushesOn = () => process.env.SWARM_CLIENT_PUSH === 'on'
 
 /**
  * Per key, the first event goes at once; those within the next second wait, merged, and go together at its end. A key
@@ -58,7 +54,6 @@ const mergeParts = (a: readonly Part[], b: readonly Part[]) => PARTS.filter(part
  * Resolves to the unsubscribe. Redis unreachable, it says nothing and never fails the socket.
  */
 export async function relaySwarmChanges(userId: string, send: (frame: unknown) => unknown): Promise<() => void> {
-  if (!clientPushesOn()) return () => {}
   const tell = (payload: Partial<SwarmMemberMsg>) => { send({ type: 'swarm_changed', payload }) }
   const perSwarm = coalescer<SwarmMemberMsg>((held, next) => ({ tabId: held.tabId, lastChangedAt: Math.max(held.lastChangedAt, next.lastChangedAt),
     parts: mergeParts(held.parts, next.parts) }), (_tabId, msg) => tell(msg))
@@ -94,6 +89,5 @@ const announced = coalescer<SwarmChanged>((held, next) => ({ tabId: held.tabId, 
 /** The store's `swarmChanged` on every server that writes Swarms (routes/superTabs.ts, worker.ts). Dropped when Redis is
  *  away; each app's safety-net read still finds the change. */
 export function announceSwarmChanges(change: SwarmChanged): void {
-  if (!clientPushesOn()) return
   announced.add(change.tabId, change)
 }

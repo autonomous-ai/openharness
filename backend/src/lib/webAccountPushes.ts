@@ -12,8 +12,8 @@ import { relaySwarmChanges } from './swarmClientPushes.js'
  *    never re-fetches the zoo and the other way round.
  *  - `device_keys_changed` — the account's device key log grew (lib/deviceKeyLog.ts): the app re-reads
  *    from its own head and trusts the machines the log adds.
- *  - `swarm_changed` — a Swarm the account is in changed (lib/swarmClientPushes.ts, off unless
- *    SWARM_CLIENT_PUSH=on): the app reads it again instead of every 15 s. A phone hears it once per
+ *  - `swarm_changed` — a Swarm the account is in changed (lib/swarmClientPushes.ts): the app
+ *    reads it again instead of every 15 s. A phone hears it once per
  *    machine socket; the app reads once per burst.
  *
  * ⚠️ A phone holds one of these sockets PER MACHINE, so it hears each change once per machine. The
