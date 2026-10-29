@@ -60,22 +60,34 @@ function typeReceiver(type: ts.TypeNode): string | undefined {
 /** Combines what the branches of a conditional may be: hot if any is, else unresolved if any is. */
 const either = (...receivers: Array<string | undefined>) => receivers.find(r => r && r !== UNRESOLVED) ?? receivers.find(r => r === UNRESOLVED)
 
-/** Whether a type names a Prisma client or transaction, also through a type alias declared in the same file. */
+/** Type names that are a Prisma client themselves. */
+const CLIENT_TYPES = new Set(['PrismaClient', 'TransactionClient'])
+/** Wrappers that keep a client a client (`Pick<PrismaClient, '$transaction'>`). */
+const CLIENT_WRAPPERS = new Set(['Pick', 'Omit', 'Readonly'])
+
+/**
+ * Whether a type is itself a Prisma client or transaction (`PrismaClient`, `Prisma.TransactionClient`, a type alias of one
+ * declared in the same file, `Pick`/`Omit` of one, an intersection with one). A type that only holds one (`{ client:
+ * PrismaClient }`) is not.
+ */
 function clientType(type: ts.TypeNode, seen = new Set<string>()): boolean {
-  for (const word of type.getText().match(/\w+/g) ?? []) {
-    if (word === 'PrismaClient' || word === 'TransactionClient') return true
-    if (seen.has(word)) continue
-    seen.add(word)
-    const alias = type.getSourceFile().statements.find((statement): statement is ts.TypeAliasDeclaration =>
-      ts.isTypeAliasDeclaration(statement) && statement.name.text === word)
-    if (alias && clientType(alias.type, seen)) return true
-  }
-  return false
+  if (ts.isParenthesizedTypeNode(type)) return clientType(type.type, seen)
+  if (ts.isIntersectionTypeNode(type)) return type.types.some(member => clientType(member, seen))
+  if (ts.isUnionTypeNode(type)) return type.types.every(member => clientType(member, seen))
+  if (!ts.isTypeReferenceNode(type)) return false
+  const name = ts.isIdentifier(type.typeName) ? type.typeName.text : type.typeName.right.text
+  if (CLIENT_TYPES.has(name)) return true
+  if (CLIENT_WRAPPERS.has(name)) return !!type.typeArguments?.[0] && clientType(type.typeArguments[0], seen)
+  if (!ts.isIdentifier(type.typeName) || seen.has(name)) return false
+  seen.add(name)
+  const alias = type.getSourceFile().statements.find((statement): statement is ts.TypeAliasDeclaration =>
+    ts.isTypeAliasDeclaration(statement) && statement.name.text === name)
+  return !!alias && clientType(alias.type, seen)
 }
 
 /**
  * Whether `node` is proven a Prisma client or transaction: a name typed as one, `new PrismaClient()`, the app's client
- * imported from lib/prisma, a `$transaction` callback's parameter, or a class field that is one.
+ * imported from lib/prisma, the callback parameter of a proven client's `$transaction`, or a class field that is one.
  */
 function prismaClient(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
   const inner = unwrap(node)
@@ -93,7 +105,7 @@ function prismaClient(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
     const callback = bound.parent
     const call = callback.parent
     return (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) && ts.isCallExpression(call)
-      && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === '$transaction'
+      && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === '$transaction' && prismaClient(call.expression.expression, seen)
   }
   return !!bound.initializer && prismaClient(bound.initializer, seen)
 }
@@ -423,6 +435,22 @@ describe('no new Prisma in/has filter on a hot Swarm collection', () => {
     `)
     expect(found.map(f => [f.call, f.operator])).toEqual([['swarmGroup.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'],
       ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in']])
+  })
+
+  it('takes neither a type holding a client nor any object\'s $transaction as proof', () => {
+    const found = lint(`
+      async function read(repo: { client: PrismaClient; machine: typeof db.swarmGroup }) {
+        await repo.machine.findMany({ where: { key: { in: ids } } })
+      }
+      async function held(box: Box) { await box.machine.findMany({ where: { machineId: { in: ids } } }) }
+      type Box = { client: PrismaClient }
+      await repo.$transaction(async t => t.machine.findMany({ where: { machineId: { in: ids } } }))
+      await db.$transaction(async t => t.machine.findMany({ where: { machineId: { in: ids } } }))
+      async function picked(client: Pick<PrismaClient, 'machine'> & Prisma.TransactionClient) {
+        await client.machine.findMany({ where: { machineId: { in: ids } } })
+      }
+    `)
+    expect(found.map(f => [f.call, f.operator])).toEqual([['unresolved.findMany', 'in'], ['unresolved.findMany', 'in'], ['unresolved.findMany', 'in']])
   })
 
   it('covers every SuperTab and Swarm model in the schema', () => {
