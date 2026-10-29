@@ -864,6 +864,21 @@ describe('a task that stalls', () => {
     expect(await stalledRows(f)).toEqual([])
   })
 
+  it('is orphaned when a machine\'s report times its launched start out, and stays so once the start has ended', async () => {
+    const f = await swarm()
+    await f.beat(f.clock.now)
+    const { group, startId } = await started(f)
+    await f.timed.execute(host, f.tab, { operationId: randomUUID(), command: { type: 'agent.startDispatch', startId } as Command }, undefined, 'test-host')
+    // Only the worker's machine reports: its time checks fail the start.
+    f.clock.now += 3 * MINUTE + 1_000
+    await f.observe('test-host', [f.harness.worker], { harnessProgress: { [f.harness.worker]: f.clock.now } })
+    expect((await f.timed.read(owner, f.tab)).state.starts!.find(s => s.id === startId)!.error).not.toBeNull()
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    await tick(f, f.clock.now + 5 * MINUTE)
+    expect(await liveness(f, group)).toMatchObject({ state: 'orphaned', why: 'start-failed' })
+    expect(await stalledRows(f)).toEqual([])
+  })
+
   it('waits queued while its start is not launched, and is orphaned 10 minutes after it was asked for, waking the Lead once', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
