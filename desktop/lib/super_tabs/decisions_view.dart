@@ -45,17 +45,13 @@ class SuperTabDecisionList extends StatelessWidget {
       if (decision.batchId != batch) {
         batch = decision.batchId;
         final count = d.open.where((o) => o.batchId == batch).length;
-        // The reader's own chat with the PM is named as the sidebar names it,
-        // not by the reader's own name (as notifications.dart does).
-        // With Buddies on there is no Chat with PM: it opens the project's
-        // chat, and is named so.
+        // An old Chat with PM an older server still sends opens the project's
+        // chat, and is named so (as notifications.dart does).
         final c = d.controller;
-        final place =
-            c.pmChat(decision.projectId)?.id != decision.conversationId
+        final hidden = c.snapshot?.conversation(decision.conversationId);
+        final place = hidden == null || !c.hiddenByBuddies(hidden)
             ? decision.conversationTitle
-            : c.buddiesOn
-            ? '#${decision.projectName}'
-            : 'Chat with PM';
+            : '#${decision.projectName}';
         yield _note(
           '${decision.askerName} asked $count '
           '${count == 1 ? 'question' : 'questions'} · '

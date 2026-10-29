@@ -280,7 +280,6 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
-      buddiesEnabled = row['buddies'] == true,
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -310,10 +309,6 @@ class SuperTabSnapshot {
   final String id, name, ownerId;
   final Map<String, dynamic>? project;
   final bool paused;
-
-  /// The Swarm's Buddies setting: off unless its owner turned it on, and off
-  /// from a backend before Buddies.
-  final bool buddiesEnabled;
 
   /// The starts of Buddies, oldest first: a Buddy's add is under way while
   /// its start has neither a harness nor an error.

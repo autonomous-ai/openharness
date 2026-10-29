@@ -244,14 +244,12 @@ void main() {
     ];
     (server.state['conversations'] as List).addAll(<Map<String, dynamic>>[
       {...conversationFixture('design-lead', 'Lead'), 'projectId': 'design'},
+      // The reader's Buddy chat, where the PM's private lines land.
       {
-        ...conversationFixture('design-pm', 'Chat with PM'),
+        ...conversationFixture('design-pm', "owner's Buddy"),
         'projectId': 'design',
-        'audience': {
-          'people': [
-            {'id': 'owner'},
-          ],
-        },
+        'kind': 'buddy',
+        'buddyOwnerId': 'owner',
       },
       {
         ...conversationFixture('design-fix', 'Fix login'),

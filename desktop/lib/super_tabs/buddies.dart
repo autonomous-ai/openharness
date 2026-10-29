@@ -337,18 +337,21 @@ class SuperTabBuddyBar extends StatelessWidget {
     grid.AppDesktop.menuInset,
   );
 
-  /// A start under way, or one that failed with Start again; nothing once
-  /// there is no start (a removed Buddy: Add a Buddy brings it back).
+  /// A start under way, or one that failed with Start again; with none, the
+  /// Start bar: the chat is there before any Buddy (Lead's ruling, 10-29).
   Widget _starting(SuperTabController c) {
     final start = c.buddyStart(chat.projectId);
-    if (start == null) return const SizedBox.shrink();
+    final error = start?['error'];
+    if (start == null || (error is! String && start['harnessId'] != null)) {
+      return _BuddyStart(
+        controller: c,
+        projectId: chat.projectId,
+        padding: _padding,
+      );
+    }
     final request = superTabMap(start['request']);
     final engine = request['engine'] as String? ?? '';
     final machineId = request['machineId'] as String? ?? '';
-    final error = start['error'];
-    if (error is! String && start['harnessId'] != null) {
-      return const SizedBox.shrink();
-    }
     final busy = !c.canWrite || c.saving || c.hasPendingAction;
     return Padding(
       key: const ValueKey('super-buddy-bar'),
@@ -429,6 +432,111 @@ class SuperTabBuddyBar extends StatelessWidget {
                           ),
                         ),
                   child: const Text('Start again'),
+                ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A Buddy chat with no Buddy: one click starts one, on the reader's own
+/// machine and with Claude unless they pick otherwise (mockup A, Lead 10-29).
+/// A viewer, who adds nothing, sees no bar.
+class _BuddyStart extends StatefulWidget {
+  const _BuddyStart({
+    required this.controller,
+    required this.projectId,
+    required this.padding,
+  });
+  final SuperTabController controller;
+  final String projectId;
+  final EdgeInsets padding;
+
+  @override
+  State<_BuddyStart> createState() => _BuddyStartState();
+}
+
+class _BuddyStartState extends State<_BuddyStart> {
+  SuperTabController get c => widget.controller;
+  String? _machine;
+  String _engine = 'claude';
+
+  @override
+  Widget build(BuildContext context) {
+    if (!c.canWrite) return const SizedBox.shrink();
+    final machines = buddyMachines(c);
+    final machine = machines.any((m) => m.id == _machine)
+        ? _machine
+        : machines.firstOrNull?.id;
+    final busy = c.saving || c.hasPendingAction;
+    return Padding(
+      key: const ValueKey('super-buddy-start'),
+      padding: widget.padding,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Start your Buddy to brainstorm here',
+            style: DesktopChrome.control(medium: true),
+          ),
+          const SizedBox(height: 8),
+          if (machine == null)
+            Text(
+              'A Buddy runs on one of your own machines. Add one of yours to '
+              'this Swarm first.',
+              style: DesktopChrome.metadata(),
+            )
+          else
+            Row(
+              children: [
+                Expanded(
+                  child: AppSelectField<String>(
+                    key: const ValueKey('super-buddy-start-machine'),
+                    value: machine,
+                    semanticLabel: 'Machine',
+                    textStyle: DesktopChrome.control(),
+                    options: [
+                      for (final m in machines)
+                        SelectOption(value: m.id, label: m.name),
+                    ],
+                    onChanged: (value) {
+                      if (!busy) setState(() => _machine = value);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 120,
+                  child: AppSelectField<String>(
+                    key: const ValueKey('super-buddy-start-engine'),
+                    value: _engine,
+                    semanticLabel: 'Agent',
+                    textStyle: DesktopChrome.control(),
+                    options: [
+                      for (final MapEntry(:key, :value)
+                          in kBuddyEngines.entries)
+                        SelectOption(value: key, label: value),
+                    ],
+                    onChanged: (value) {
+                      if (!busy) setState(() => _engine = value);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: busy
+                      ? null
+                      : () => unawaited(
+                          c.addBuddy(
+                            projectId: widget.projectId,
+                            machineId: machine,
+                            engine: _engine,
+                          ),
+                        ),
+                  child: const Text('Start'),
                 ),
               ],
             ),
