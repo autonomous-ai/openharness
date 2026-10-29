@@ -27,6 +27,7 @@ import { openReview, openReviewOf, projectPullRequest, verdictPending } from './
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
 import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
+import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -1382,6 +1383,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
       if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
+      // Codex runs a command its rules files allow outside its sandbox without asking, and those are the person's own and
+      // Harness's, shared by all their Codex sessions: a Buddy could run harness new or send, or anything they once told
+      // Codex to always allow. Refused here, so every machine refuses whatever its CLI, until a Buddy has a Codex home of
+      // its own (security review 1 of #2087). Desktop names this reason beside a disabled Codex.
+      if (command.engine === 'codex') fail('BUDDY_ENGINE', CODEX_BUDDY_REFUSAL, 403)
       const project = readProject(state, actor, command.projectId), me = person(state, actor.userId)
       const chatId = buddyChatId(project.id, me)
       // A down Buddy is replaced (Desktop's Start again, review of #1992): its session closes in this same command, so a

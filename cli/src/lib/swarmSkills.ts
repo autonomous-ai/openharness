@@ -626,8 +626,8 @@ const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['
 /**
  * A Buddy never changes code (Lead's ruling, privacy review of #1992): its own worktree gets Claude Code's settings above,
  * and every file in it is made read-only. Its folders stay writable, so the worktree is removed like any other, and the
- * Harness runtime folder (its skill and records) is left alone. A Codex Buddy keeps full permissions, under which read-only
- * files only slow it down: it runs only on its owner's own machine (backend commands.ts buddy.create).
+ * Harness runtime folder (its skill and records) is left alone. A Codex Buddy runs in Codex's read-only sandbox instead,
+ * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
  */
 function lockBuddyFolder(root: string): void {
   const settings = join(root, '.claude', 'settings.local.json')
