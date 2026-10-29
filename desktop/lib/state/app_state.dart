@@ -20999,6 +20999,17 @@ class AppNotifier extends ChangeNotifier {
       _orchestratorProjects['$machineId/${payload['id']}']?.changed();
       return;
     }
+    // A Swarm this account is in changed, or (naming none) the server pushes
+    // (backend lib/swarmClientPushes.ts). On a computer only its own daemon
+    // relays the server's word (CLI backendSocket.ts): another machine's
+    // connection could forge it, and quiet this window's Swarm polls. A browser
+    // hears it from the server on its own sockets.
+    if (type == 'swarm_changed') {
+      if (viewer != null || machine.isLocalMachine) {
+        superTabs.swarmChanged(payload);
+      }
+      return;
+    }
     // Window frames come only from this computer's own daemon; another
     // connection's are not about this window's tabs.
     if (type == 'shared_tabs_changed' || type == 'shared_activity') {
