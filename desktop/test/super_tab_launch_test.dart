@@ -558,7 +558,7 @@ void main() {
         ),
       );
       await expectLater(
-        box.integration!.prepare('m', 'Start work'),
+        box.integration!.prepare('m', 'Start work', box.engine),
         throwsA(
           isA<SuperTabFailure>().having(
             (e) => e.code,
@@ -1133,6 +1133,40 @@ void main() {
       },
     );
   }
+
+  test('New Project started by this computer refuses its machine when the '
+      'chosen engine signed out since the box opened', () async {
+    final f = SuperTabLaunchFixture();
+    knownRepo(f);
+    // Your Mac Studio, connected to this Desktop: it starts the PM itself.
+    Map<String, dynamic> studio(List<Map<String, dynamic>> readiness) =>
+        offering(machineRow('m', 'Mac Studio', contributor: 'owner'), [
+          'claude',
+          'codex',
+        ], readiness: readiness);
+    f.connection.server.state['machines'] = [studio(const [])];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true, engine: 'codex');
+    box.placeLead();
+    expect((box.leadMachine?.id, box.engine), ('m', 'codex'));
+    expect(box.leadMachine?.native, isTrue);
+    expect(box.leadThroughSwarm, isFalse);
+    expect(box.leadBlocked, isNull);
+    // Codex signs out there; Claude Code still runs.
+    f.connection.server.state['machines'] = [
+      studio([
+        {'engine': 'codex', 'installed': true, 'signedIn': false},
+      ]),
+    ];
+    expect(await box.create(), NewHarnessOutcome.failed);
+    expect(
+      box.error,
+      'Mac Studio can’t run Codex: Codex isn’t signed in. Choose another '
+      'engine under Advanced.',
+    );
+    expect(commandsOf(f, 'project.create'), isEmpty);
+    expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+  });
 
   test(
     'New Project asks the Swarm to start the PM in a teammate’s Team account',

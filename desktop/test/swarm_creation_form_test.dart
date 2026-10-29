@@ -85,7 +85,7 @@ void main() {
               actionLabel: 'New Project',
               projectVisibility: 'public',
               projectVisibilityLocked: visibilityLocked,
-              prepare: (_, task) async => task,
+              prepare: (_, task, _) async => task,
               beforeSubmit: (_, _) async {},
               complete: (_, _) async {},
             )

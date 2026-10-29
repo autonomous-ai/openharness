@@ -4392,7 +4392,7 @@ class NewHarnessController extends ChangeNotifier {
     if (integration case final destination?) {
       try {
         launchMessage = destination.preparedPrompt ??= await destination
-            .prepare(_machineId, firstMessage);
+            .prepare(_machineId, firstMessage, base);
       } catch (failure) {
         return _fail(failure.toString());
       }

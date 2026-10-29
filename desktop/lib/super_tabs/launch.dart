@@ -160,9 +160,13 @@ class SuperTabLaunch {
             projectVisibilityLocked:
                 saved['projectPrepared'] == true ||
                 saved['creationRequest'] != null,
-            prepare: (machine, task) async {
+            prepare: (machine, task, engine) async {
               if (integration.leadMachines != null) {
-                await launch.recheckLeadMachine(integration, machine);
+                await launch.recheckLeadMachine(
+                  integration,
+                  machine,
+                  engine: engine,
+                );
               }
               if (integration.roles != null) {
                 final chosen = integration.roles!
