@@ -1,6 +1,9 @@
 /** Persistence for route decisions. Called inside SuperTabStore's transactions. */
 import type { Prisma, SuperTabRouteDecision } from '@prisma/client'
 import { ms } from './parts/light.js'
+import type { SuperTabState } from './model.js'
+import { attemptChanges, endRun, startRun, type RouteRun } from './costs/attempts.js'
+import type { TokensByModel } from './costs/tokens.js'
 import { finalMatches, type RouteDecision, type RouteDecisionEffect, type RouteFinal, type RouteOverride, type RouteRecord } from './routeRecord.js'
 
 type Tx = Prisma.TransactionClient
@@ -12,11 +15,16 @@ export const RETENTION_MS = 90 * 24 * 60 * 60_000
 export const decisionOf = (row: SuperTabRouteDecision): RouteDecision => ({
   id: row.id, conversationId: row.conversationId, record: row.record as unknown as RouteRecord,
   final: (row.final ?? null) as unknown as RouteFinal | null, override: (row.override ?? null) as unknown as RouteOverride | null,
-  assignmentId: row.assignmentId, outcome: row.outcome,
+  assignmentId: row.assignmentId, outcome: row.outcome, run: (row.run ?? null) as unknown as RouteRun | null,
 })
 
-/** The decision with the times the log shows: when it was recorded and when its outcome was. */
-export const timedDecisionOf = (row: SuperTabRouteDecision) => ({ ...decisionOf(row), createdAt: row.createdAt, outcomeAt: row.outcomeAt })
+/** The decision as its readers get it, with the times the log shows: when it was recorded and when its outcome was. Its run
+ *  stays internal: the session totals in it are a member's raw counts, which readers get only summed (costs/read.ts; review
+ *  of #2106). */
+export const timedDecisionOf = (row: SuperTabRouteDecision) => {
+  const { run: _run, ...decision } = decisionOf(row)
+  return { ...decision, createdAt: row.createdAt, outcomeAt: row.outcomeAt }
+}
 
 export async function readDecision(tx: Tx, tabId: string, id: string): Promise<RouteDecision | undefined> {
   const row = await tx.superTabRouteDecision.findFirst({ where: { id, tabId } })
@@ -31,7 +39,7 @@ export async function recentDecisions(tx: Tx, tabId: string, conversationIds: st
     { $sort: { createdAt: -1 } }, { $limit: 100 }] }) as unknown as Array<Record<string, unknown>>
   return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string,
     record: row.record as Prisma.JsonValue, final: (row.final ?? null) as Prisma.JsonValue, override: (row.override ?? null) as Prisma.JsonValue,
-    assignmentId: (row.assignmentId ?? null) as string | null, outcome: (row.outcome ?? null) as string | null,
+    assignmentId: (row.assignmentId ?? null) as string | null, outcome: (row.outcome ?? null) as string | null, run: (row.run ?? null) as Prisma.JsonValue,
     outcomeAt: row.outcomeAt == null ? null : new Date(ms(row.outcomeAt)), createdAt: new Date(ms(row.createdAt)) }))
 }
 
@@ -84,4 +92,34 @@ export async function closeUnassignedStart(tx: Tx, tabId: string, decisionId: st
   await tx.superTabRouteDecision.updateMany({ where: { id: decisionId, tabId,
     AND: [open, { OR: [{ assignmentId: null }, { assignmentId: { isSet: false } }] }] },
     data: { outcome, outcomeAt: new Date(now) } })
+}
+
+/**
+ * Keeps each attempt's run on its route decision (costs/attempts.ts) as a write starts, ends or resumes it: how it began when
+ * it is assigned, its end and the totals then when it ends however it ends (a command, a machine's report, the Lead's poll),
+ * and outcome `lost` or `superseded` when that is how it ended. A lost attempt its own session takes back (work.resume) opens
+ * again: it is the same attempt going on. Only decisions with that assignment are touched, by the tabId+assignmentId index.
+ * Runs inside the store's write, after the route effects, so an assignment made in the same write is linked already.
+ */
+/** `finished`: the attempt its own agent finished in this write (Done or Stopped), with the totals it sent, or null when it
+ *  sent none (costs/attempts.ts endRun). */
+export async function recordAttempts(tx: Tx, tabId: string, before: SuperTabState, after: SuperTabState, now: number,
+  finished?: { assignmentId: string; tokens: TokensByModel | null }): Promise<void> {
+  const { started, ended, resumed } = attemptChanges(before.conversations, after)
+  for (const assignment of started) {
+    await tx.superTabRouteDecision.updateMany({ where: { tabId, assignmentId: assignment.id }, data: { run: json(startRun(after, assignment, now)) } })
+  }
+  for (const assignment of resumed) {
+    await tx.superTabRouteDecision.updateMany({ where: { tabId, assignmentId: assignment.id, outcome: 'lost' }, data: { outcome: null, outcomeAt: null } })
+  }
+  for (const { assignment, outcome } of ended) {
+    const rows = await tx.superTabRouteDecision.findMany({ where: { tabId, assignmentId: assignment.id }, select: { id: true, run: true, outcome: true, createdAt: true } })
+    for (const row of rows) {
+      // A decision routed before runs were kept: what it ran on is known now, its start tokens never were.
+      const began = (row.run as unknown as RouteRun | null) ?? { ...startRun(after, assignment, now), startedAt: row.createdAt.getTime(), start: null }
+      const close = outcome && row.outcome == null ? { outcome, outcomeAt: new Date(now) } : {}
+      await tx.superTabRouteDecision.update({ where: { id: row.id }, data: { run: json(endRun(began, after, assignment, assignment.agentId, now, before,
+        finished?.assignmentId === assignment.id ? finished.tokens : undefined)), ...close } })
+    }
+  }
 }

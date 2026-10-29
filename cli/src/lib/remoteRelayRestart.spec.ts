@@ -70,10 +70,10 @@ async function fixture(opts: { offline?: boolean; lingerMs?: number } = {}) {
 
 describe('remote daemon restart recovery', () => {
   // WebSocket roadmap Phase 0: 2,304 of 2,308 web-ws opens in 15 minutes declared nothing (prod, 2026-10-28).
-  it('dials as a daemon relay, saying which CLI', async () => {
+  it('dials as a daemon relay, saying which CLI and that it reads an HTTP 401', async () => {
     const f = await fixture({ offline: true })
     await f.pool.acquire(machineId, 'prod', f.select, { sendFrame: () => true, sendBinary: () => true }, () => {}).catch(() => {})
-    expect(f.urls).toEqual([`/api/web-ws?autonomousEnv=prod&client=relay&v=${encodeURIComponent(VERSION)}`])
+    expect(f.urls).toEqual([`/api/web-ws?autonomousEnv=prod&client=relay&v=${encodeURIComponent(VERSION)}&auth=http`])
   })
 
   it('reports an offline peer immediately during the handshake and keeps its trust', async () => {
