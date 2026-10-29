@@ -32,7 +32,7 @@ import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
 import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
-import { MACHINE_KINDS_READ_TIMEOUT_MS, MachineKinds } from '../lib/e2ee/machineKinds.js'
+import { MACHINE_KINDS_READ_TIMEOUT_MS, MachineKinds, machineKindsOf } from '../lib/e2ee/machineKinds.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { applySharedTrust, isSharedKey } from './sharedTrust.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -146,7 +146,12 @@ export function startGateway(host: GatewayHost): StartedGateway {
     computer: { id: host.computerId, name: host.machineName, hostname: host.hostname }, environment: host.autonomousEnv,
     changed: host.machines,
     reachable: (ids) => { reachable = ids ? new Set(ids) : null },
-    listed: (body) => { if (body) machineKinds.adopt(body); else machineKinds.clear() },
+    listed: (body) => {
+      if (!body) { machineKinds.clear(); return }
+      machineKinds.adopt(body)
+      // A machine marked gone (deleted, remoteRelay.ts) that the list names again is back: pin it again from the roster now.
+      if (relayPeers.restore(machineKindsOf(body)?.keys() ?? [])) groupSyncer?.resume()
+    },
     log: (line) => console.log(`[gateway] ${line}`),
   })
   const gateway = new RelayGateway({

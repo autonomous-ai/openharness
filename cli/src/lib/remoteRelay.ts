@@ -491,6 +491,14 @@ export class RemoteRelayPool {
    *  An unlinked machine is not held: nothing was dialled, and a link made a moment later must work at once. */
   private backOff(machineId: string, error: unknown): void {
     if (error instanceof RelayConnectError && error.message === 'NO_PEER_LINK') return
+    // The person's own machine was deleted (roadmap Phase 1.1: one daemon dialled a machine deleted weeks before every few
+    // seconds). Its pin goes, and stays gone until the machine list shows it again; every select is then NO_PEER_LINK,
+    // answered here without a dial. Only this reason: a share check that failed for a moment says NOT_YOUR_MACHINE too.
+    if (error instanceof RelayConnectError && error.message === 'NOT_YOUR_MACHINE' && error.reason === 'deleted') {
+      this.peers.markGone(machineId)
+      this.refusals.delete(machineId)
+      return
+    }
     const count = (this.refusals.get(machineId)?.count ?? 0) + 1
     const backoff = Math.min(REFUSED_BACKOFF_MAX_MS, 1_000 * 2 ** (count - 1))
     const asked = error instanceof RelayConnectError && typeof error.retryAfterMs === 'number' && Number.isFinite(error.retryAfterMs)
@@ -502,7 +510,8 @@ export class RemoteRelayPool {
     const peer = this.peers.get(machineId)
     if (!peer) throw new RelayConnectError('NO_PEER_LINK')
     const token = await this.auth.accessToken({ force: forceRefresh })
-    const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}&${declaredClientQuery('relay')}`
+    // `auth=http`: this relay reads a bad token refused with HTTP 401 before the upgrade (below), as a 4401.
+    const url = `${this.backendWsBase}/api/web-ws?autonomousEnv=${encodeURIComponent(autonomousEnv)}&${declaredClientQuery('relay')}&auth=http`
     const ws = new WebSocket(url, [token])
     // An 'error' with no listener throws out of the emitter and takes the daemon down. The handshake's
     // once('error') below is consumed by its first emit, and nothing listens after the handshake at all;
@@ -599,10 +608,10 @@ export class RemoteRelayPool {
               if (!settled) {
                 settled = true; clearTimeout(timeout)
                 const code = typeof payload.error === 'string' ? payload.error : 'machine_select_error'
-                const retryAfterMs = (payload as { retryAfterMs?: unknown }).retryAfterMs
+                const { retryAfterMs, reason } = payload as { retryAfterMs?: unknown; reason?: unknown }
                 // Offline closes the window's socket as the node_status answer below does (1013, try again later).
                 reject(new RelayConnectError(code, code === 'MACHINE_OFFLINE' ? 1013 : undefined,
-                  typeof retryAfterMs === 'number' ? retryAfterMs : undefined))
+                  typeof retryAfterMs === 'number' ? retryAfterMs : undefined, typeof reason === 'string' ? reason : undefined))
               }
               return
             }
@@ -742,6 +751,15 @@ export class RemoteRelayPool {
       })
       ws.once('error', (err) => {
         if (!settled) { settled = true; clearTimeout(timeout); reject(err instanceof Error ? err : new Error(String(err))) }
+      })
+      // The backend refused before the upgrade (WEB_WS_AUTH_HTTP_401): a 401 is the 4401 it used to close with, which
+      // connect() answers with one refresh. With this listener `ws` leaves the request open, so it is ended here.
+      ws.once('unexpected-response', (_req, res) => {
+        if (!settled) {
+          settled = true; clearTimeout(timeout)
+          reject(new RelayConnectError(`relay refused: HTTP ${res.statusCode ?? 0}`, res.statusCode === 401 ? 4401 : undefined))
+        }
+        ws.terminate()
       })
     })
     try {

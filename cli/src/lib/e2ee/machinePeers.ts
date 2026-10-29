@@ -19,6 +19,10 @@ import { b64d, fingerprint } from './core.js'
 
 const DIR = join(env.ADAPTER_DATA_DIR, 'e2e')
 const FILE = join(DIR, 'machinePeers.json')
+// Machines the backend said were deleted (remoteRelay.ts): kept out of this file until the machine list shows them again.
+// Not per account (accountTrust.ts leaves it in place): a deleted machine id is gone for every account.
+const GONE_FILE = join(DIR, 'machinePeers-gone.json')
+const GONE_MAX = 256
 
 export interface MachinePeer {
   machineId: string
@@ -46,6 +50,11 @@ function writeAll(peers: Map<string, MachinePeer>): void {
   writeFileSync(FILE, JSON.stringify([...peers.values()], null, 2), { mode: 0o600 })
 }
 
+function writeGone(gone: Set<string>): void {
+  mkdirSync(DIR, { recursive: true, mode: 0o700 })
+  writeFileSync(GONE_FILE, JSON.stringify([...gone].slice(-GONE_MAX)), { mode: 0o600 })
+}
+
 export class MachinePeerStore {
   get(machineId: string): MachinePeer | null {
     return readAll().get(machineId) ?? null
@@ -62,6 +71,32 @@ export class MachinePeerStore {
     if (!peers.delete(machineId)) return false
     writeAll(peers)
     return true
+  }
+
+  /** The backend said [machineId] was deleted: drop its pin, and remember it so the trust group does not pin it again. */
+  markGone(machineId: string): void {
+    this.unlink(machineId)
+    const gone = this.gone()
+    gone.delete(machineId)
+    gone.add(machineId)
+    writeGone(gone)
+  }
+
+  /** Machines marked gone. */
+  gone(): Set<string> {
+    try {
+      const raw = JSON.parse(readFileSync(GONE_FILE, 'utf-8')) as unknown
+      return new Set(Array.isArray(raw) ? raw.filter((id): id is string => typeof id === 'string') : [])
+    } catch { return new Set() }
+  }
+
+  /** The account's machine list names [listed]: any of them marked gone is back (re-added, or shared again). True when one was. */
+  restore(listed: Iterable<string>): boolean {
+    const gone = this.gone()
+    let back = false
+    for (const id of listed) back = gone.delete(id) || back
+    if (back) writeGone(gone)
+    return back
   }
 
   list(): Array<MachinePeer & { fingerprint: string }> {
