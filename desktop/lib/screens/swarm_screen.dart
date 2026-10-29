@@ -79,6 +79,7 @@ import '../super_tabs/buddy_chat.dart' show countText;
 import '../super_tabs/buddy_chat_shortcut.dart';
 import '../super_tabs/team_account_setup.dart';
 import '../super_tabs/workspace.dart';
+import '../super_tabs/quick_switcher.dart';
 import '../super_tabs/actions.dart';
 import 'swarm_menu_bus.dart';
 import '../state/device_form.dart';
@@ -2459,6 +2460,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
   }
 
   Future<void> _actOnNative(MethodCall call) async {
+    if (mounted && call.method == 'keymapCommand') {
+      final command = (call.arguments as Map?)?['command'];
+      if (command is String && dispatchSwarmQuickSwitcherCommand(command)) return;
+    }
+
     if (mounted && call.method == 'keymapPending') {
       final keys = (call.arguments as Map?)?['keys'];
       if (keys is List &&
@@ -8114,7 +8120,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
               for (final id in _commands.keys) id: () => _runShortcut(id),
             },
             onPending: (keys) => setState(() => _pendingKeys = keys),
-            child: Focus(
+            child: SuperTabQuickSwitcherScope(
+              app: app,
               focusNode: _shellFocus,
               autofocus: app.panes.isNotEmpty,
               child: Scaffold(
