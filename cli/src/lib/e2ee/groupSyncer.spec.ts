@@ -484,6 +484,24 @@ describe('GroupSyncer', () => {
     for (const n of f.nodes) n.syncer.stop()
   })
 
+  // Review of #2104: with the first retry at 30 s, a new link waited behind the pending retry instead of going out at
+  // once. Fresh news is sent now, whatever retry for a missed member is pending.
+  it('a new link goes out at once, even while a retry for a missed member is pending', async () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const [a, b, phone] = [f.add('a'), f.add('b'), f.add('p', false)]
+    b.online = false
+    f.link(a, b)
+    b.syncer.stop()
+    await vi.advanceTimersByTimeAsync(0) // the link's fan-out misses B: a retry is pending
+    await vi.advanceTimersByTimeAsync(5_000)
+    b.online = true
+    a.syncer.linked({ pub: phone.pub, kind: 'viewer', label: 'new phone' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(b.trusted.has(phone.pub)).toBe(true)
+    for (const n of f.nodes) n.syncer.stop()
+  })
+
   it('sessionOpened() does not re-sync a machine it just synced with', async () => {
     vi.useFakeTimers()
     const f = fleet()
