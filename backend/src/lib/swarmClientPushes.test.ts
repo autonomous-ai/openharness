@@ -13,12 +13,17 @@ const bus = vi.hoisted(() => {
       return () => { set.delete(cb) }
     },
     publish(userId: string, msg: unknown) { for (const cb of channels.get(userId) ?? []) cb(msg) },
+    /** False: Redis has gone silent, and a publish reaches nobody. */
+    carries: true,
   }
 })
+const warn = vi.hoisted(() => vi.fn())
+vi.mock('../utils/logger.js', () => ({ logger: { warn, info: vi.fn(), error: vi.fn() } }))
 vi.mock('./bus.js', () => ({
   subscribeSwarmMember: (userId: string, cb: (msg: unknown) => void) => bus.subscribe(userId, cb),
   publishSwarmMember: async (userId: string, msg: unknown) => {
     bus.published.push([userId, msg])
+    if (!bus.carries) return 0
     bus.publish(userId, JSON.parse(JSON.stringify(msg)))
     return 1
   },
@@ -30,7 +35,7 @@ const frames = (send: ReturnType<typeof vi.fn>) => send.mock.calls.map(([frame])
 const told = (payload: object) => ({ type: 'swarm_changed', payload })
 
 describe('Swarm change pushes to a person\'s apps', () => {
-  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; vi.useFakeTimers() })
+  beforeEach(() => { bus.channels.clear(); bus.published.length = 0; bus.carries = true; warn.mockClear(); vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
   it('says it pushes as soon as the socket is attached, and again every 4 minutes', async () => {
@@ -42,6 +47,25 @@ describe('Swarm change pushes to a person\'s apps', () => {
     expect(frames(send)).toEqual([])
     await vi.advanceTimersByTimeAsync(1)
     expect(frames(send)).toEqual([told({})])
+  })
+
+  // Review of #2113, carried here: the repeat through the person's channel, so a Redis gone silent stops it. Each socket
+  // names itself, so a person with several sockets hears one repeat per socket, not one per socket per socket.
+  it('says it again through the person\'s own channel, once per socket, and logs a repeat nobody heard', async () => {
+    const phone = vi.fn(), laptop = vi.fn()
+    await relaySwarmChanges('kim', phone)
+    await relaySwarmChanges('kim', laptop)
+    phone.mockClear()
+    laptop.mockClear()
+    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(bus.published.map(([userId]) => userId)).toEqual(['kim', 'kim'])
+    expect(frames(phone)).toEqual([told({})])
+    expect(frames(laptop)).toEqual([told({})])
+    phone.mockClear()
+    bus.carries = false
+    await vi.advanceTimersByTimeAsync(4 * 60_000)
+    expect(frames(phone)).toEqual([])
+    expect(warn).toHaveBeenCalledWith('[swarm] change push repeat reached no one; apps fall back to their timers', { userId: 'kim' })
   })
 
   it('carries a commit to each person it names, and to no one else', async () => {

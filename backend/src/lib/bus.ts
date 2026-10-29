@@ -821,10 +821,12 @@ export function subscribeSwarmHost(machineId: string, cb: (msg: unknown) => void
 // Per-USER Swarm changes: a commit changed a Swarm this person is in (superTabs/store.ts swarmChanged), on some REST worker;
 // every socket of theirs, daemon or web, tells their apps to read it again (lib/swarmClientPushes.ts).
 export interface SwarmMemberMsg { tabId: string; lastChangedAt: number; parts: Array<'main' | 'machine'> }
+/** One socket's own 4-minute repeat that the server pushes, named by that socket so its other sockets ignore it. */
+export interface SwarmMemberRepeat { pushes: string }
 
 const swarmMemberChannel = (userId: string): string => `swarm-member:${userId}`
 
-export function publishSwarmMember(userId: string, msg: SwarmMemberMsg): Promise<number> {
+export function publishSwarmMember(userId: string, msg: SwarmMemberMsg | SwarmMemberRepeat): Promise<number> {
   return safePublish(swarmMemberChannel(userId), JSON.stringify(msg))
 }
 

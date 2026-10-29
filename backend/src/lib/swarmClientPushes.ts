@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { publishSwarmMember, subscribeSwarmMember, type SwarmMemberMsg } from './bus.js'
 import { logger } from '../utils/logger.js'
 import type { SwarmChanged } from '../superTabs/store.js'
 
 /** Repeated so an app keeps reading only when told: it goes back to its own timers 5 minutes after it last heard it
- *  (desktop super_tabs/swarm_pushes.dart), which covers a server rolled back to one that does not push. */
+ *  (desktop super_tabs/controller.dart kSwarmPushLease), which covers a server rolled back to one that does not push, and a Redis
+ *  gone silent: the repeat goes through it. */
 const PUSHES_REPEAT_MS = 4 * 60_000
 /** The Lead's rule (2026-10-29): at most one push per Swarm a second, so a Swarm committing every second is one read a
  *  second per window, not one per commit. */
@@ -57,10 +59,14 @@ export async function relaySwarmChanges(userId: string, send: (frame: unknown) =
   const tell = (payload: Partial<SwarmMemberMsg>) => { send({ type: 'swarm_changed', payload }) }
   const perSwarm = coalescer<SwarmMemberMsg>((held, next) => ({ tabId: held.tabId, lastChangedAt: Math.max(held.lastChangedAt, next.lastChangedAt),
     parts: mergeParts(held.parts, next.parts) }), (_tabId, msg) => tell(msg))
+  // This socket's repeat goes through the person's channel (review of #2113): no Redis, no repeat, and the apps go back to
+  // their timers. Each socket names its own, so the person's other sockets ignore it.
+  const self = randomUUID()
   let unsubscribe: () => void
   try {
     unsubscribe = await subscribeSwarmMember(userId, msg => {
-      const { tabId, lastChangedAt, parts } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
+      const { tabId, lastChangedAt, parts, pushes } = (msg && typeof msg === 'object' ? msg : {}) as Record<string, unknown>
+      if (pushes !== undefined) { if (pushes === self) tell({}); return }
       if (typeof tabId !== 'string' || typeof lastChangedAt !== 'number' || !Array.isArray(parts) || !parts.length
         || !parts.every(part => PARTS.includes(part as Part))) return
       perSwarm.add(tabId, { tabId, lastChangedAt, parts: mergeParts(parts as Part[], []) })
@@ -71,7 +77,11 @@ export async function relaySwarmChanges(userId: string, send: (frame: unknown) =
     return () => {}
   }
   tell({})
-  const repeat = setInterval(() => tell({}), PUSHES_REPEAT_MS)
+  const repeat = setInterval(() => {
+    void publishSwarmMember(userId, { pushes: self }).then(heard => {
+      if (!heard) logger.warn('[swarm] change push repeat reached no one; apps fall back to their timers', { userId })
+    })
+  }, PUSHES_REPEAT_MS)
   return () => {
     clearInterval(repeat)
     perSwarm.stop()
