@@ -14,10 +14,10 @@ class SuperTabCountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     constraints: const BoxConstraints(minWidth: 18),
-    padding: const EdgeInsets.symmetric(horizontal: 5),
-    decoration: BoxDecoration(
+    padding: const EdgeInsets.symmetric(horizontal: grid.AppDesktop.badgeInset),
+    decoration: ShapeDecoration(
       color: grid.AppPalette.warn.withValues(alpha: .16),
-      borderRadius: BorderRadius.circular(9),
+      shape: const StadiumBorder(),
     ),
     child: Text(
       countText(count),
@@ -68,7 +68,7 @@ class SuperTabBuddyRow extends StatelessWidget {
         ? DesktopChrome.muted
         : DesktopChrome.foreground;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 2),
+      padding: const EdgeInsets.only(bottom: grid.AppDesktop.listRowGap),
       child: Material(
         color: selected ? grid.AppSurface.selectedFill : Colors.transparent,
         borderRadius: BorderRadius.circular(DesktopChrome.rowRadius),
@@ -102,7 +102,9 @@ class SuperTabBuddyRow extends StatelessWidget {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(minHeight: 36),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: grid.AppDesktop.controlGap,
+                        ),
                         child: Row(
                           children: [
                             Flexible(
