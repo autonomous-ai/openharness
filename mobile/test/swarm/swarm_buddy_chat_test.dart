@@ -13,7 +13,11 @@ import 'package:harness_mobile/swarm/swarm_session.dart';
 import '../voice_fakes.dart';
 
 import 'package:harness_mobile/swarm/swarm_buddy.dart'
-    show swarmBuddyMachineOffline, swarmBuddyOwnMachines;
+    show
+        swarmBuddyMachineOffline,
+        swarmBuddyOwnMachines,
+        swarmBuddyTeamMachines,
+        swarmBuddyTeamReaders;
 import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmComputers;
 
 import 'swarm_computers_fake.dart';
@@ -686,6 +690,45 @@ void main() {
             'cwd': '/home/me/swarm',
             'engines': ['claude', 'codex'],
           },
+        },
+      ]);
+    });
+
+    testWidgets('a teammate\'s Mac is under Team machines; picked, it says who '
+        'reads the chat there and starts on the Mac with no setup', (
+      tester,
+    ) async {
+      final fake = backend(
+        machines: [
+          machine('mac-1', 'Tonys-MacBook-Pro'),
+          machine('ken-studio', 'Mac Studio', owner: 'person-ken'),
+          {
+            ...machine('ken-team', 'Mac Studio', owner: 'person-ken'),
+            'hostMachineId': 'ken-studio',
+          },
+        ],
+      );
+      final computers = FakeComputers(const []);
+      await pump(tester, fake, computers: computers);
+
+      expect(key('swarm-buddy-team-readers'), findsNothing);
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text(swarmBuddyTeamMachines.toLowerCase()), findsOneWidget);
+      await tester.tap(find.text('Mac Studio').last);
+      await tester.pumpAndSettle();
+      expect(key('swarm-buddy-team-readers'), findsOneWidget);
+      expect(find.text(swarmBuddyTeamReaders), findsOneWidget);
+      await tester.tap(key('swarm-buddy-start-button'));
+      await tester.pumpAndSettle();
+
+      expect(computers.asked, isEmpty);
+      expect(fake.commands, [
+        {
+          'type': 'buddy.create',
+          'projectId': project,
+          'machineId': 'ken-studio',
+          'engine': 'claude',
         },
       ]);
     });

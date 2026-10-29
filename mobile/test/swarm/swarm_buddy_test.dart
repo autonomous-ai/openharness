@@ -428,8 +428,22 @@ void main() {
       await r.refresh();
 
       expect(swarmBuddyMachines(r), [
-        (id: 'mac-4', name: 'Mac Studio', inSwarm: true, away: false),
-        (id: 'mac-1', name: 'Tonys-MacBook-Pro', inSwarm: true, away: false),
+        (
+          id: 'mac-4',
+          name: 'Mac Studio',
+          inSwarm: true,
+          away: false,
+          team: false,
+          owner: null,
+        ),
+        (
+          id: 'mac-1',
+          name: 'Tonys-MacBook-Pro',
+          inSwarm: true,
+          away: false,
+          team: false,
+          owner: null,
+        ),
       ]);
     });
 
@@ -454,9 +468,30 @@ void main() {
           ],
         ),
         [
-          (id: 'studio', name: 'Studio', inSwarm: false, away: false),
-          (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
-          (id: 'air', name: 'MacBook Air', inSwarm: false, away: true),
+          (
+            id: 'studio',
+            name: 'Studio',
+            inSwarm: false,
+            away: false,
+            team: false,
+            owner: null,
+          ),
+          (
+            id: 'mac-1',
+            name: 'tropic',
+            inSwarm: true,
+            away: false,
+            team: false,
+            owner: null,
+          ),
+          (
+            id: 'air',
+            name: 'MacBook Air',
+            inSwarm: false,
+            away: true,
+            team: false,
+            owner: null,
+          ),
         ],
       );
       expect(
@@ -529,6 +564,52 @@ void main() {
             m.id,
         ],
         ['zulu', 'alpha', 'beta', 'aaa'],
+      );
+    });
+
+    // Dee, 10-29: a teammate's Swarm Mac, where the Buddy runs in its Team
+    // account and reads only its own chat (backend chatOnlyBuddy).
+    test('include a teammate\'s Mac with a Team account after their own, '
+        'never the account itself; one with no Team account is left out, one '
+        'whose account is silent is offline', () async {
+      final swarm = FakeSwarm();
+      final stale = DateTime.now()
+          .subtract(const Duration(minutes: 5))
+          .millisecondsSinceEpoch;
+      swarm.routes['/api/super-tabs/$tab/parts'] = (_) => firstLoad(
+        machines: [
+          pool('mine', 'Mine'),
+          pool('ken-studio', 'Mac Studio', owner: 'person-ken'),
+          pool(
+            'ken-team',
+            'Mac Studio',
+            owner: 'person-ken',
+            host: 'ken-studio',
+          ),
+          pool('dee-mini', 'Dee Mini', owner: 'person-dee'),
+          pool('dee-air', 'Dee Air', owner: 'person-dee'),
+          {
+            ...pool(
+              'dee-team',
+              'Dee Air',
+              owner: 'person-dee',
+              host: 'dee-air',
+            ),
+            'observation': {'receivedAt': stale},
+          },
+        ],
+      );
+      final r = reader(swarm);
+      addTearDown(r.dispose);
+      await r.refresh();
+
+      expect(
+        [for (final m in swarmBuddyMachines(r)) (m.id, m.team, m.away)],
+        [
+          ('mine', false, false),
+          ('ken-studio', true, false),
+          ('dee-air', true, true),
+        ],
       );
     });
 
@@ -673,7 +754,14 @@ void main() {
       await actions.start(
         machineId: 'studio',
         engine: 'claude',
-        machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+        machine: (
+          id: 'studio',
+          name: 'Studio',
+          inSwarm: false,
+          away: false,
+          team: false,
+          owner: null,
+        ),
         computers: computers,
       );
 
@@ -711,7 +799,14 @@ void main() {
       await actions.start(
         machineId: 'mac-1',
         engine: 'claude',
-        machine: (id: 'mac-1', name: 'tropic', inSwarm: true, away: false),
+        machine: (
+          id: 'mac-1',
+          name: 'tropic',
+          inSwarm: true,
+          away: false,
+          team: false,
+          owner: null,
+        ),
         computers: computers,
       );
 
@@ -731,7 +826,14 @@ void main() {
         await actions.start(
           machineId: 'studio',
           engine: 'claude',
-          machine: (id: 'studio', name: 'Studio', inSwarm: false, away: false),
+          machine: (
+            id: 'studio',
+            name: 'Studio',
+            inSwarm: false,
+            away: false,
+            team: false,
+            owner: null,
+          ),
           computers: computers,
         );
 

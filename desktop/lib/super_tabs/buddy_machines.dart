@@ -13,7 +13,7 @@ import 'machines.dart';
 import 'model.dart';
 
 /// A machine a Buddy may run on, as the pickers list it: one of the reader's
-/// own, or with an [owner] a teammate's Swarm Mac. One of their own outside
+/// own, or a teammate's Swarm Mac ([team]) with its [owner]. One of their own outside
 /// the Swarm ([inSwarm] false) stays theirs: the server records it for their
 /// Buddies alone and never adds it to the Swarm (Dee, 10-29). On a teammate's
 /// Mac the Buddy runs in its Harness Team account and reads only its own chat
@@ -23,6 +23,7 @@ typedef BuddyMachine = ({
   String name,
   bool inSwarm,
   bool offline,
+  bool team,
   SuperTabPerson? owner,
 });
 
@@ -61,6 +62,7 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       // Not in the account's list (yet): only a fresh Swarm reading says it
       // is there, else it is offline until one does (review of #2240).
       offline: app?.stateOf(id)?.isOffline ?? _silent(m),
+      team: false,
       owner: null,
     );
   }
@@ -81,6 +83,7 @@ List<BuddyMachine> buddyMachines(SuperTabController c, {AppNotifier? app}) {
       name: name,
       inSwarm: listed != null,
       offline: s.isOffline,
+      team: false,
       owner: null,
     );
   }
@@ -121,6 +124,7 @@ List<BuddyMachine> buddyTeamMachines(SuperTabController c) {
             name: superTabMachineName(mac['name'] as String? ?? ''),
             inSwarm: true,
             offline: _silent(team),
+            team: true,
             owner: snapshot.people
                 .where((p) => p.id == mac['contributorId'])
                 .firstOrNull,
@@ -278,15 +282,15 @@ class _BuddyMachineFieldState extends State<BuddyMachineField> {
           onOpen: () => setState(() {}),
           onClose: () => setState(() {}),
           menuChildren: [
-            if (widget.machines.any((m) => m.owner == null)) ...[
+            if (widget.machines.any((m) => !m.team)) ...[
               _heading(kBuddyOwnMachines, menuWidth),
               for (final m in widget.machines)
-                if (m.owner == null) _row(m, menuWidth, focusId),
+                if (!m.team) _row(m, menuWidth, focusId),
             ],
-            if (widget.machines.any((m) => m.owner != null)) ...[
+            if (widget.machines.any((m) => m.team)) ...[
               _heading(kBuddyTeamMachines, menuWidth),
               for (final m in widget.machines)
-                if (m.owner != null) _row(m, menuWidth, focusId),
+                if (m.team) _row(m, menuWidth, focusId),
             ],
           ],
           builder: (context, menu, _) => CallbackShortcuts(

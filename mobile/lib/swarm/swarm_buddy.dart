@@ -239,14 +239,29 @@ bool swarmCanWrite(SwarmReader reader) =>
     false;
 
 /// A machine a Buddy may start on, as Start your Buddy lists it: one of the
-/// person's own. One outside the Swarm ([inSwarm] false) stays theirs: the
+/// person's own, or a teammate's Swarm Mac ([team]) with its [owner] when the
+/// Swarm lists them. One outside the Swarm ([inSwarm] false) stays theirs: the
 /// server records it for their Buddies alone and never adds it to the Swarm
 /// (Dee, 10-29). An [away] one is listed but cannot be picked.
-typedef SwarmBuddyMachine = ({String id, String name, bool inSwarm, bool away});
+typedef SwarmBuddyMachine = ({
+  String id,
+  String name,
+  bool inSwarm,
+  bool away,
+  bool team,
+  SuperTabPerson? owner,
+});
 
-/// The menu's group of the person's own machines: the picker has only its
-/// heading, machine names and 'offline' (Dee, 10-29).
+/// The menu's groups: the person's own machines, then teammates'. The picker
+/// has only its headings, machine names, owners' avatars and 'offline' (Dee,
+/// 10-29).
 const swarmBuddyOwnMachines = 'Your machines';
+const swarmBuddyTeamMachines = 'Team machines';
+
+/// The one line under the field once a teammate's machine is picked: who can
+/// read the chat there (Lead, 10-29, provisional until Dee rules; the
+/// desktop's words).
+const swarmBuddyTeamReaders = 'Teammates there can read this chat.';
 
 /// Why a row cannot be picked, as the sidebar says a Buddy is 'not started'.
 const swarmBuddyMachineOffline = 'offline';
@@ -291,6 +306,8 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       name: _machineName(m['name']),
       inSwarm: true,
       away: !_reporting(m, at),
+      team: false,
+      owner: null,
     );
   }
   for (final c in computers) {
@@ -300,6 +317,8 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       name: _machineName(c.name.isEmpty ? listed?.name : c.name),
       inSwarm: listed != null,
       away: c.away,
+      team: false,
+      owner: null,
     );
   }
   final last = _lastBuddyMachine(reader);
@@ -311,7 +330,54 @@ List<SwarmBuddyMachine> swarmBuddyMachines(
       return byName(a, b);
     });
   final away = byId.values.where((m) => m.away).toList()..sort(byName);
-  return [...online, ...away];
+  return [...online, ...away, ...swarmBuddyTeammateMachines(reader, now: at)];
+}
+
+/// Teammates' Swarm Macs a Buddy may run on: each with a Harness Team account
+/// in the Swarm, where the Buddy runs (never the owner's own account) and
+/// reads only its own chat (backend chatOnlyBuddy). By name with its owner;
+/// offline while that account is silent. Online ones first, by name.
+List<SwarmBuddyMachine> swarmBuddyTeammateMachines(
+  SwarmReader reader, {
+  DateTime? now,
+}) {
+  final snapshot = reader.snapshot;
+  if (snapshot == null) return const [];
+  final at = now ?? DateTime.now();
+  final pools = snapshot.machines;
+  final teams = <SwarmBuddyMachine>[
+    for (final mac in pools)
+      if (mac['hostMachineId'] == null &&
+          mac['removal'] == null &&
+          mac['machineId'] is String &&
+          mac['contributorId'] is String &&
+          mac['contributorId'] != reader.accountId)
+        if (pools
+                .where(
+                  (t) =>
+                      t['hostMachineId'] == mac['machineId'] &&
+                      t['contributorId'] == mac['contributorId'] &&
+                      t['removal'] == null,
+                )
+                .firstOrNull
+            case final team?)
+          (
+            id: mac['machineId'] as String,
+            name: _machineName(mac['name']),
+            inSwarm: true,
+            away: !_reporting(team, at),
+            team: true,
+            owner: snapshot.people
+                .where((p) => p.id == mac['contributorId'])
+                .firstOrNull,
+          ),
+  ];
+  int byName(SwarmBuddyMachine a, SwarmBuddyMachine b) =>
+      a.name.toLowerCase().compareTo(b.name.toLowerCase());
+  return [
+    ...teams.where((m) => !m.away).toList()..sort(byName),
+    ...teams.where((m) => m.away).toList()..sort(byName),
+  ];
 }
 
 /// Whether [pool]'s own reading is fresh (backend `MACHINE_FRESH_MS`, as the

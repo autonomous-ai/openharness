@@ -256,7 +256,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   child: BuddyNoMachine(machines: machines),
                 ),
               ],
-              if (_picked?.owner != null) ...[
+              if (_picked?.team == true) ...[
                 const SizedBox(height: 4),
                 Padding(
                   padding: const EdgeInsets.only(left: _labelWidth),
@@ -629,7 +629,7 @@ class _BuddyStartState extends State<_BuddyStart> {
             const SizedBox(height: 4),
             BuddyNoMachine(machines: machines),
           ],
-          if (machine?.owner != null) ...[
+          if (machine?.team == true) ...[
             const SizedBox(height: 4),
             Text(
               kBuddyTeamReaders,

@@ -12,6 +12,7 @@ import 'package:harness_mobile/shared/theme/app_type.dart';
 import 'package:harness_mobile/shared/widgets/touch_target.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
+import 'identity.dart';
 import 'model.dart';
 import 'swarm_buddy.dart';
 import 'swarm_conversation_page.dart';
@@ -243,30 +244,49 @@ class _BuddyStartState extends State<_BuddyStart> {
   String? _machine;
   String _engine = 'claude';
 
-  /// The machines under their one heading, each by its name; an offline one
-  /// says so and cannot be picked (Dee, 10-29: no notes).
-  Future<void> _pickMachine(List<SwarmBuddyMachine> machines, String? chosen) =>
-      showPhoneSheet(
-        context,
-        title: 'Machine',
-        sections: [
-          PhoneSheetSection(
-            caption: swarmBuddyOwnMachines,
-            actions: [
-              for (final m in machines)
-                PhoneSheetAction(
-                  icon: m.id == chosen ? LucideIcons.check : LucideIcons.laptop,
-                  label: m.name,
-                  value: m.away ? swarmBuddyMachineOffline : null,
-                  enabled: !m.away,
-                  onTap: () {
-                    if (mounted) setState(() => _machine = m.id);
-                  },
-                ),
-            ],
-          ),
-        ],
-      );
+  /// The machines under their headings, each by its name, a teammate's with
+  /// its owner's avatar; an offline one says so and cannot be picked (Dee,
+  /// 10-29: no notes).
+  Future<void> _pickMachine(List<SwarmBuddyMachine> machines, String? chosen) {
+    PhoneSheetAction row(SwarmBuddyMachine m) => PhoneSheetAction(
+      icon: m.id == chosen ? LucideIcons.check : LucideIcons.laptop,
+      label: m.name,
+      value: m.away ? swarmBuddyMachineOffline : null,
+      enabled: !m.away,
+      mark: switch (m.owner) {
+        final owner? => SwarmAvatar(
+          id: owner.id,
+          name: superTabPersonName(owner.email),
+          picture: owner.avatar,
+          size: 20,
+        ),
+        null => null,
+      },
+      onTap: () {
+        if (mounted) setState(() => _machine = m.id);
+      },
+    );
+    return showPhoneSheet(
+      context,
+      title: 'Machine',
+      sections: [
+        PhoneSheetSection(
+          caption: swarmBuddyOwnMachines,
+          actions: [
+            for (final m in machines)
+              if (!m.team) row(m),
+          ],
+        ),
+        PhoneSheetSection(
+          caption: swarmBuddyTeamMachines,
+          actions: [
+            for (final m in machines)
+              if (m.team) row(m),
+          ],
+        ),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -349,6 +369,18 @@ class _BuddyStartState extends State<_BuddyStart> {
               ),
             ),
           ),
+          if (machine.team)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: _Field._labelWidth,
+                top: AppSpace.xs,
+              ),
+              child: SwarmRow.line(
+                swarmBuddyTeamReaders,
+                key: const ValueKey('swarm-buddy-team-readers'),
+                lines: 2,
+              ),
+            ),
           _Field(
             label: 'Agent',
             child: Wrap(

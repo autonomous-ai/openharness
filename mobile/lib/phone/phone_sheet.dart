@@ -28,7 +28,12 @@ class PhoneSheetAction {
     this.enabled = true,
     this.chevron = false,
     this.quiet = false,
+    this.mark,
   });
+
+  /// A small mark after the label, before its [value]: a machine owner's
+  /// avatar on a team machine's row.
+  final Widget? mark;
 
   final IconData icon;
   final String label;
@@ -361,6 +366,8 @@ class _TmuxMenuState extends State<_TmuxMenu> {
                 weight: FontWeight.w500,
               ),
             ),
+            if (action.mark case final mark?)
+              Padding(padding: const EdgeInsets.only(left: 8), child: mark),
             if (action.value case final value?)
               Padding(
                 padding: const EdgeInsets.only(left: 8),
