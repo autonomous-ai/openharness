@@ -317,6 +317,7 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       conversationId: project.leadConversationId,
       header: false,
       mention: widget.mention,
+      homeC: _homeC,
     ),
     SwarmProjectTab.buddy => SwarmProjectBuddy(
       reader: reader,

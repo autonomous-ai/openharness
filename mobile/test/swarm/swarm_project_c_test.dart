@@ -130,6 +130,7 @@ void main() {
       request: fake.request,
       notices: SilentSystemNotices(),
       features: features,
+      readMarks: MemoryKeyValueStore(),
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -744,6 +745,192 @@ void main() {
       expect(key('swarm-project-tab-team'), findsNothing);
       expect(tester.widget<Text>(key('swarm-title')).data, 'Mobile');
       expect(key('swarm-project-team'), findsOneWidget);
+    });
+  });
+
+  group('Chat, its New messages line', () {
+    /// River's message [sequence] in the project's chat, [author] another's.
+    Map<String, dynamic> said(
+      int sequence, {
+      String author = 'agent-lead',
+      String kind = 'agent',
+      String? text,
+    }) => {
+      'id': 'msg-$sequence',
+      'conversationId': leadChat,
+      'text': text ?? 'Update $sequence.',
+      'sequence': sequence,
+      'author': {'kind': kind, 'id': author, 'name': author},
+      'createdAt': DateTime.utc(2026, 10, 29, 2, sequence).toIso8601String(),
+    };
+
+    /// [backend] whose project chat holds [messages], read through [mark]
+    /// on some device (the server's mark, #2131), [older] ones before them.
+    FakeSwarm chat(
+      List<Map<String, dynamic>> messages, {
+      required int mark,
+      bool older = false,
+    }) {
+      final fake = backend();
+      final load = fake.routes['/api/super-tabs/$tab/parts']!;
+      fake.routes['/api/super-tabs/$tab/parts'] = (body) async {
+        final read = (await load(body))! as Map<String, dynamic>;
+        ((read['groups'] as List).first as Map)['data']['lastMessageSequence'] =
+            messages.last['sequence'];
+        return {
+          ...read,
+          'derived': {
+            'readMarks': {leadChat: mark},
+          },
+        };
+      };
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+          (_) => {
+            'messages': messages,
+            'next': older
+                ? {'sequence': messages.first['sequence'], 'id': 'msg-older'}
+                : null,
+          };
+      return fake;
+    }
+
+    final line = key('swarm-new-messages-line');
+
+    /// The read marks sent for the project's chat, in order.
+    List<Object?> marksSent(FakeSwarm fake) => [
+      for (final call in fake.calls)
+        if (call.method == 'POST' &&
+            call.path == '/api/super-tabs/$tab/conversations/$leadChat/read')
+          call.body?['sequence'],
+    ];
+
+    /// Whether [f] is drawn inside the chat's list, not scrolled out of it.
+    bool onScreen(WidgetTester tester, Finder f) {
+      if (f.evaluate().isEmpty) return false;
+      final list = tester.getRect(key('swarm-messages'));
+      final row = tester.getRect(f);
+      return row.top >= list.top && row.bottom <= list.bottom;
+    }
+
+    testWidgets('sits above the first message the person has not read, from '
+        'someone else, and says so in words', (tester) async {
+      await pump(
+        tester,
+        chat([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
+        page,
+      );
+
+      expect(line, findsOneWidget);
+      expect(find.text('New messages'), findsOneWidget);
+      expect(tester.getSemantics(line).label, 'New messages');
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 3.')).dy, greaterThan(y));
+    });
+
+    testWidgets("passes over the person's own messages; their own newest "
+        'reads what came before it', (tester) async {
+      await pump(
+        tester,
+        chat([
+          said(1),
+          said(2),
+          said(3, author: me, kind: 'person', text: 'On it.'),
+        ], mark: 1),
+        page,
+      );
+
+      expect(line, findsNothing);
+    });
+
+    testWidgets('is placed once: a message that comes later and the mark '
+        'moving on leave it where it was', (tester) async {
+      final fake = chat([for (var i = 1; i <= 3; i++) said(i)], mark: 1);
+      await pump(tester, fake, page);
+      expect(
+        tester.getTopLeft(find.text('Update 2.')).dy,
+        greaterThan(tester.getTopLeft(line).dy),
+      );
+
+      fake.routes['/api/super-tabs/$tab/conversations/$leadChat/messages'] =
+          (_) => {
+            'messages': [for (var i = 1; i <= 4; i++) said(i)],
+            'next': null,
+          };
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+        cursor: 'c3',
+        groups: [
+          part(
+            leadChat,
+            9,
+            groupData(
+              leadChat,
+              title: 'Mobile',
+              agentIds: ['agent-lead'],
+              leadId: 'agent-lead',
+              lastMessageSequence: 4,
+            ),
+          ),
+        ],
+      );
+      await host(tester).session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Update 4.'), findsOneWidget);
+      expect(line, findsOneWidget);
+      final y = tester.getTopLeft(line).dy;
+      expect(tester.getTopLeft(find.text('Update 1.')).dy, lessThan(y));
+      expect(tester.getTopLeft(find.text('Update 2.')).dy, greaterThan(y));
+    });
+
+    testWidgets('a chat never read anywhere, or one read through its end, '
+        'has none', (tester) async {
+      await pump(tester, chat([said(1), said(2)], mark: 2), page);
+      expect(line, findsNothing);
+    });
+
+    testWidgets('more unread than one read reaches has none, and opens at '
+        'the foot as before', (tester) async {
+      await pump(
+        tester,
+        chat([for (var i = 10; i <= 12; i++) said(i)], mark: 2, older: true),
+        page,
+      );
+
+      expect(line, findsNothing);
+      expect(onScreen(tester, find.text('Update 12.')), isTrue);
+    });
+
+    testWidgets('above the screen, the chat opens at it, and what is below '
+        'is read only once the person goes down to it', (tester) async {
+      final fake = chat([for (var i = 1; i <= 40; i++) said(i)], mark: 5);
+      await pump(tester, fake, page);
+
+      expect(onScreen(tester, line), isTrue, reason: 'opened at the line');
+      expect(onScreen(tester, find.text('Update 6.')), isTrue);
+      expect(onScreen(tester, find.text('Update 40.')), isFalse);
+      expect(
+        marksSent(fake).where((s) => (s! as int) > 5),
+        isEmpty,
+        reason: 'nothing past the line is read yet',
+      );
+
+      await tester.fling(key('swarm-messages'), const Offset(0, -6000), 4000);
+      await tester.pumpAndSettle();
+
+      expect(onScreen(tester, find.text('Update 40.')), isTrue);
+      expect(marksSent(fake).last, 40);
+    });
+
+    testWidgets("direction B's chat has none", (tester) async {
+      await pump(
+        tester,
+        chat([for (var i = 1; i <= 4; i++) said(i)], mark: 2),
+        const SwarmProjectPage(swarmId: tab, projectId: project),
+      );
+
+      expect(find.text('Update 4.'), findsOneWidget);
+      expect(line, findsNothing);
     });
   });
 }

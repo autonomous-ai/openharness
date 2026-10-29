@@ -125,6 +125,15 @@ class SwarmReadMarks extends ChangeNotifier {
     return group.mainSequence > max(server, _marks[group.id] ?? 0);
   }
 
+  /// How far the person has read [conversationId]: the higher of the
+  /// server's mark and the phone's. Null until the marks count, and once
+  /// access is lost.
+  int? markOf(String conversationId) {
+    if (!_loaded || !_started || reader.accessRevoked) return null;
+    final server = reader.snapshot?.readMarks[conversationId] ?? 0;
+    return max(server, _marks[conversationId] ?? 0);
+  }
+
   /// The person saw [conversationId] through [sequence]: sent to the server,
   /// and kept on the phone when it moves the phone's mark on.
   void markRead(String conversationId, int sequence) {

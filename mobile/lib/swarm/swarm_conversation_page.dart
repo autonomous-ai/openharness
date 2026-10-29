@@ -41,6 +41,7 @@ import 'swarm_style.dart';
 import 'swarm_thread.dart';
 import 'swarm_thread_line.dart';
 import 'swarm_thread_page.dart';
+import 'swarm_unread_line.dart';
 import 'swarm_voice.dart';
 import 'team_glance.dart';
 
@@ -110,6 +111,7 @@ class SwarmConversationPage extends StatefulWidget {
     this.messageId,
     this.decisionId,
     this.mention,
+    this.homeC = false,
   });
 
   final String swarmId, conversationId;
@@ -128,6 +130,12 @@ class SwarmConversationPage extends StatefulWidget {
   /// holds it, for its own header's menu; null makes the chat its own while
   /// it is their Buddy chat.
   final SwarmBuddyActions? buddy;
+
+  /// Swarm Home C's project chat (Tony, 2026-10-30): a New messages line
+  /// above the first message the person had not read as it opened
+  /// ([swarmFirstUnread]), placed once, the chat opening at it when it is
+  /// above the screen.
+  final bool homeC;
 
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
@@ -197,6 +205,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   /// Each entry's row as last built, with what it was built from ([_row]).
   final _rows = <String, ({Object inputs, Widget row})>{};
 
+  /// Swarm Home C's New messages line: the message it sits above once
+  /// placed, and whether it was placed this visit.
+  String? _lineAt;
+  bool _lineDecided = false;
+  final _lineKey = GlobalKey(debugLabel: 'New messages line');
+
+  /// No message has this id: held at it, a chat reads nothing until its New
+  /// messages line is placed ([SwarmConversation.heldAt]).
+  static const _undecided = '';
+
   /// What [_shown] was made from; the messages by id, and each entry's
   /// place in [_shown] by its key.
   Object? _madeFrom;
@@ -262,12 +280,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     session.inbox.removeListener(_attach);
     // Set before what the chat kept is shown, so it is read only as far as
     // it is seen: opened at a message, through it until the person goes
-    // down to the foot.
+    // down to the foot; with a New messages line to place, nothing until it
+    // is placed.
     final c = _conversation = SwarmConversation(
       reader,
       widget.conversationId,
       shown: _seen,
-      heldAt: widget.messageId ?? _held.value,
+      heldAt:
+          widget.messageId ??
+          _held.value ??
+          (widget.homeC && !_lineDecided ? _undecided : null),
     );
     c.composer.addListener(_drafted);
     if (widget.mention case final agentId?) c.mention(agentId);
@@ -277,6 +299,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _watch();
     unawaited(
       c.load().then((_) {
+        _placeLine(c);
         if (!mounted || _conversation != c || _noticeHandled) return;
         if (widget.messageId case final messageId?) {
           _noticeHandled = true;
@@ -285,6 +308,80 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       }),
     );
     if (rebuild && mounted) setState(() {});
+  }
+
+  /// Places Swarm Home C's New messages line once, from what the chat's
+  /// first read brought and how far the person had read it
+  /// ([SwarmReadMarks.markOf]; nothing here is read until then, so that is
+  /// how far as it opened) ([swarmFirstUnread]). It stays there however the
+  /// chat and its marks move on. Without one, everything shown is read. A
+  /// line above the screen opens the chat at it ([_openAtLine]), unless a
+  /// notice opened it at a message.
+  void _placeLine(SwarmConversation c) {
+    if (!mounted || _conversation != c || _lineDecided || !widget.homeC) {
+      return;
+    }
+    _lineDecided = true;
+    final at = swarmFirstUnread(
+      c.messages,
+      c.reader.readMarks?.markOf(c.id),
+      accountId: c.reader.accountId,
+      hasOlder: c.hasOlder,
+    );
+    if (at == null) {
+      if (c.heldAt == _undecided) c.heldAt = null;
+      return;
+    }
+    setState(() => _lineAt = at);
+    if (widget.messageId == null) _openAtLine(c, at, 0);
+  }
+
+  /// Once the line is drawn: on screen, all that is shown is read; above
+  /// it, the chat goes to the line, and what came before the line is read
+  /// while the rest waits until the person goes down to it. The list builds
+  /// only the rows near what is shown, so it jumps near the line by its place
+  /// until its row is built, as [_reveal] does.
+  void _openAtLine(SwarmConversation c, String at, int attempt) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _conversation != c || _lineAt != at) return;
+      final row = _lineKey.currentContext;
+      if (attempt == 0) {
+        if (row != null && _onScreen(row)) {
+          if (c.heldAt == _undecided) c.heldAt = null;
+          return;
+        }
+        final place = c.messages.indexWhere((m) => m.id == at);
+        if (place > 0 && c.heldAt == _undecided) {
+          c.heldAt = c.messages[place - 1].id;
+        }
+      }
+      if (row != null) {
+        unawaited(Scrollable.ensureVisible(row, alignment: 1));
+        return;
+      }
+      final index = _shown.indexWhere((entry) => entry is _LineEntry);
+      if (!_scroll.hasClients || index < 0 || attempt > 20) return;
+      final position = _scroll.position;
+      position.jumpTo(
+        (position.maxScrollExtent * (index + 1) / _shown.length).clamp(
+          0,
+          position.maxScrollExtent,
+        ),
+      );
+      _openAtLine(c, at, attempt + 1);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  /// Whether [row]'s top is inside its list: the list runs from the foot, so
+  /// a row drawn there is on screen unless it starts above the list's top.
+  static bool _onScreen(BuildContext row) {
+    final box = row.findRenderObject(), list = Scrollable.maybeOf(row);
+    final view = list?.context.findRenderObject();
+    if (box is! RenderBox || view is! RenderBox) return false;
+    if (!box.hasSize || !view.hasSize) return false;
+    return box.localToGlobal(Offset.zero).dy >=
+        view.localToGlobal(Offset.zero).dy;
   }
 
   /// Its Swarm is watched while the chat is open and visible, so it is read
@@ -350,6 +447,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _buddy = null;
     _rows.clear();
     _madeFrom = null;
+    _lineAt = null;
+    _lineDecided = false;
     if (_watching) session?.unwatch(widget.swarmId);
     _watching = false;
     _conversation = null;
@@ -1093,6 +1192,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       c.hasOlder,
       _held.value,
       answered.join(','),
+      _lineAt,
     );
     if (from != _madeFrom) {
       // Read back: the messages after the newest shown then wait below, and
@@ -1109,7 +1209,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
               for (final need in view.decisions)
                 if (!(need.decision.createdAt?.isAfter(last) ?? false)) need,
             ];
-      _shown = _timeline(shown, asks, hasOlder: c.hasOlder).reversed.toList();
+      _shown = _timeline(
+        shown,
+        asks,
+        hasOlder: c.hasOlder,
+        lineAt: _lineAt,
+      ).reversed.toList();
       // Every message read, for the quotes.
       _byId = {for (final m in c.messages) m.id: m};
       _placeOf = {for (final (i, entry) in _shown.indexed) _keyOf(entry): i};
@@ -1130,6 +1235,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     Widget entry(_Entry entry) {
       final key = _keyOf(entry);
       switch (entry) {
+        case _LineEntry():
+          return _row(key, const (), () => SwarmNewMessagesLine(key: _lineKey));
         case _DayEntry(:final day):
           final today = DateUtils.dateOnly(DateTime.now());
           return _row(key, (day, today), () => _Day(day: day, today: today));
@@ -1369,6 +1476,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// The key a row of [entry] keeps wherever it moves in the list.
   static String _keyOf(_Entry entry) => switch (entry) {
+    _LineEntry() => 'swarm-new-messages-line',
     _DayEntry(:final day) => 'swarm-row-day-${day.toIso8601String()}',
     _MessageEntry(:final message) => 'swarm-row-m-${message.id}',
     _AskEntry(:final need) => 'swarm-row-${need.key}',
@@ -1767,6 +1875,9 @@ class _ChatView {
 /// One row of the chat.
 sealed class _Entry {}
 
+/// Swarm Home C's New messages line, above the first unread message.
+final class _LineEntry extends _Entry {}
+
 /// Where a day starts.
 final class _DayEntry extends _Entry {
   _DayEntry(this.day);
@@ -1793,11 +1904,14 @@ final class _AskEntry extends _Entry {
 /// [messages] (oldest first) with the [asks] put where they were asked and a
 /// divider where each day starts. An ask from before the messages read so far
 /// — while there are [hasOlder] ones — goes at the foot instead, so a question
-/// still open is never out of sight behind "Earlier messages".
+/// still open is never out of sight behind "Earlier messages". The New
+/// messages line goes right above [lineAt], which is then drawn in full, not
+/// as a follow-up of the one before.
 List<_Entry> _timeline(
   List<SuperTabMessage> messages,
   List<SwarmDecisionNeed> asks, {
   required bool hasOlder,
+  String? lineAt,
 }) {
   final grouped = swarmGroupedMessages(messages);
   final oldest = messages.map((m) => m.createdAt).nonNulls.firstOrNull;
@@ -1840,7 +1954,8 @@ List<_Entry> _timeline(
       ask(waiting[next]);
       next++;
     }
-    // Grouped only right under a message: not under a question.
+    if (m.id == lineAt) rows.add((_LineEntry(), m.createdAt));
+    // Grouped only right under a message: not under a question or the line.
     final under = rows.isNotEmpty && rows.last.$1 is _MessageEntry;
     rows.add((
       _MessageEntry(m, grouped: under && grouped.contains(m.id)),
