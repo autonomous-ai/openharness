@@ -1678,6 +1678,9 @@ model ExperimentalSettings {
   agentMessagesHideSummary Boolean @default(false)
   /// An agent may give more work to a harness it started (`harness tell`, cli/src/messages/tell.ts). Off by default.
   agentsTellAgents     Boolean @default(false)
+  /// A program acting for the person (a lamp's lamp-tasks, not an agent) may give more work to an idle harness of
+  /// theirs in a pane (`harness reply`, cli/src/messages/replyLocal.ts, #1628). Off by default.
+  programsReply        Boolean @default(false)
   revision         Int     @default(0)
 
   @@index([userId])

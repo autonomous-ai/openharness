@@ -68,3 +68,69 @@ it('four backend processes reporting at once still count every report', async ()
   expect(answers.filter(a => a.status === 'rejected').map(a => (a as PromiseRejectedResult).reason?.code)).toEqual([])
   expect(await total('queue_capped')).toBe(192)
 }, 60000)
+
+// Relay connects: counted in memory, written once a minute. Each import after a reset is another process.
+const connectDay = new Date('2026-10-27')
+const connectTotal = async (metric: string): Promise<number | undefined> =>
+  (await db.productUsageTotal.findUnique({ where: { dayUtc_metric: { dayUtc: connectDay, metric } } }))?.value
+
+it('connects from four processes at once, and the people who turned sharing off, total exactly the connects that were counted', async () => {
+  const processes = [usage]
+  for (let i = 1; i < 4; i++) { vi.resetModules(); processes.push(await import('../src/lib/productUsage.js')) }
+  await usage.setProductUsageChoice('6a0000000000000000000f01', false)
+  const receiptsBefore = await db.productUsageReceipt.count()
+  await Promise.all(processes.map((each, p) => Promise.all(Array.from({ length: 150 }, (_, i) =>
+    each.recordRelayUsage(i % 5 === 0 ? '6a0000000000000000000f01' : `6a00000000000000000${p}0${i % 7}`,
+      new Date('2026-10-27T10:00:00Z'), 'relay_tui_opens', i % 2 ? ['relay_machine_connections'] : [])))))
+  expect(await connectTotal('relay_tui_opens')).toBeUndefined()
+  await Promise.all(processes.map(each => each.flushRelayUsage()))
+  // 150 per process, minus every fifth (the person who is off): 120; the odd ones also add a machine connection.
+  expect(await connectTotal('relay_tui_opens')).toBe(4 * 120)
+  expect(await connectTotal('relay_machine_connections')).toBe(4 * 60)
+  expect(await db.productUsageReceipt.count()).toBe(receiptsBefore + 4)
+  expect(await db.productUsageTotal.count({ where: { dayUtc: connectDay } })).toBe(2)
+}, 60000)
+
+it('a flush whose answer was lost and is sent again counts once', async () => {
+  vi.resetModules()
+  const each = await import('../src/lib/productUsage.js')
+  const before = await connectTotal('relay_remote_sessions')
+  await each.recordRelayUsage('6a0000000000000000000e01', new Date('2026-10-27T11:00:00Z'), 'relay_remote_sessions')
+  const real = db.$transaction.bind(db) as (fn: unknown, options?: unknown) => Promise<unknown>
+  const spy = vi.spyOn(db, '$transaction').mockImplementationOnce(async (fn: unknown, options?: unknown) => {
+    await real(fn, options)
+    throw new Error('connection reset')
+  })
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  await each.flushRelayUsage()
+  await each.flushRelayUsage()
+  await each.flushRelayUsage()
+  spy.mockRestore(); warn.mockRestore()
+  expect(await connectTotal('relay_remote_sessions')).toBe((before ?? 0) + 1)
+}, 60000)
+
+it('sharing turned off through one server stops the next connect on another server at once; turned back on, it counts again after a few seconds', async () => {
+  const servers = []
+  for (let i = 0; i < 2; i++) { vi.resetModules(); servers.push(await import('../src/lib/productUsage.js')) }
+  const [one, other] = servers
+  const person = '6a0000000000000000000d01'
+  const day = new Date('2026-10-27T12:00:00Z')
+  const counted = async (): Promise<number> => {
+    await Promise.all(servers.map(each => each.flushRelayUsage()))
+    return (await connectTotal('relay_desktop_opens')) ?? 0
+  }
+  const before = await counted()
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  expect(await counted()).toBe(before + 1)
+  await other.setProductUsageChoice(person, false)
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  expect(await counted()).toBe(before + 1)
+  // The off answer is kept by the server that read it; a change made through the other server is seen after the TTL.
+  await other.setProductUsageChoice(person, true)
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  expect(await counted()).toBe(before + 1)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+  await one.recordRelayUsage(person, day, 'relay_desktop_opens')
+  clock.mockRestore()
+  expect(await counted()).toBe(before + 2)
+}, 60000)

@@ -25,8 +25,9 @@ export type Rule =
 export interface SwarmRule { rule: Rule; text: string }
 export interface PolicyModel { engine: 'claude' | 'codex'; model: string; effort: string; quality: number; cost: number; enabled: boolean }
 export interface Policy { version: 1; models: PolicyModel[]; floor: Record<Level, number>; quotaReserve: number; notes: string;
-  /** How strong a model served on the Swarm's grid counts; absent from a backend before it, which serves none. */
-  localModels?: { quality: number; enabled: boolean } }
+  /** How strong a model served on the Swarm's grid counts ([gridQuality]); absent from a backend before it, which serves
+   *  none, and `models` from one before per-model rows. */
+  localModels?: { quality: number; enabled: boolean; models?: Array<{ model: string; quality: number }> } }
 /** One usage window, named by the reader (`5-hour`, `weekly`); `leftPercent` is what remains of it. */
 export interface QuotaWindow { name: string | null; leftPercent: number; resetsAt: number | null }
 /** `leftPercent` and `resetsAt` are the tightest window's; `windows` is every window. `account` is the reading's hashed
@@ -115,13 +116,19 @@ export function liftEffort(rules: SwarmRule[], engine: string, effort: string): 
 /** The soft rules for this task: the engine preferred for its kind (a rule for the kind before one for every task),
  * whether idle agents come first, and whether a model on the Swarm's grid comes first. */
 interface Soft { engine: string | null; idle: boolean; grid: boolean }
+/** Kinds of build a quality-2 grid model takes first at medium difficulty: docs, copy, tests, fixtures, a small specified fix,
+ *  a mechanical refactor. */
+export const CHEAP_KINDS = ['docs', 'copy', 'tests', 'fixtures', 'fix', 'refactor']
 function softOf(rules: SwarmRule[], a: Assessment): Soft {
   const prefer = rules.flatMap(({ rule }) => rule.kind === 'preferEngine' ? [rule] : [])
   const engine = (prefer.find(r => a.kind && r.taskKind === a.kind) ?? prefer.find(r => r.taskKind === null))?.engine ?? null
   // Simple work goes to the free models first (roadmap, Dec: about 30% of work on cheaper models without lower quality).
   // A grid model counts as cost 1 like Haiku, so an expiring 5-hour window or an idle member ranked above it and it was
   // rarely picked. Reviews keep the other model family, and the owner can opt out.
-  const grid = a.difficulty === 'low' && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
+  // Since 2026-10-29 (Ken) also medium work of a kind a strong grid model does well, which steps up when it fails (backend
+  // superTabs/stepUp.ts); the floor still keeps a small model off it.
+  const simple = a.difficulty === 'low' || (a.difficulty === 'medium' && CHEAP_KINDS.includes(a.kind ?? ''))
+  const grid = simple && a.risk === 'low' && a.kind !== 'review' && !rules.some(r => r.rule.kind === 'noGridFirst')
   return { engine, idle: rules.some(r => r.rule.kind === 'preferIdle'), grid }
 }
 
@@ -201,19 +208,59 @@ export function repositoryKey(url: string): string | null {
 
 /** A member's model is what its engine reported after work: Claude's full id (`claude-opus-4-7`, `claude-sonnet-4-5[1m]`),
  * Codex's slug (`gpt-5.5`). The policy names Claude families and a Codex `default`, so the id is reduced to its family
- * first, and an id with no row of its own takes the engine's `default` row before the floor. */
-export function rateFor(policy: Policy, engine: string, model: string | null, effort: string | null): { quality: number; cost: number } {
+ * first. An id with no row of its own takes the engine's `default` row only when the agent was launched on the engine's own
+ * model ([engineDefault]); otherwise it is rated 1, so a small Codex variant is never taken for a strong one (review of
+ * #2137; backend superTabs/rules.ts policyQuality). */
+export function rateFor(policy: Policy, engine: string, model: string | null, effort: string | null, engineDefault = false): { quality: number; cost: number } {
   const name = engine === 'claude' && model ? claudeAliasForModel(model.replace(/\[1m\]$/i, '')) ?? model : model ?? 'default'
-  const row = policy.models.find(m => m.engine === engine && m.model === name && m.effort === (effort ?? 'default'))
-    ?? policy.models.find(m => m.engine === engine && m.model === name)
-    ?? policy.models.find(m => m.engine === engine && m.model === 'default')
+  const rowOf = (named: string) => policy.models.find(m => m.engine === engine && m.model === named && m.effort === (effort ?? 'default'))
+    ?? policy.models.find(m => m.engine === engine && m.model === named)
+  // A small model it reports is never promoted by its launch (review of ee4ee6c9a).
+  const row = rowOf(name) ?? (engineDefault && !SMALL.test(model ?? '') ? rowOf('default') : undefined)
   return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
+}
+/** A small variant by its name: a mini or a nano (backend superTabs/rules.ts). */
+const SMALL = /(^|[^a-z0-9])(mini|nano)([^a-z0-9]|$)/i
+
+/** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
+export interface Reviewed { engine: string; gridModel?: string }
+/** A model family: a grid model's own, else its engine's. */
+const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
+/** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
+ *  below 2, or the reviewed Builder's own model family while a strong Reviewer of another family can run here ([otherFamily]).
+ *  With none, the Builder's own engine at its top tier (Lead, 2026-10-29). The server judges the same (backend
+ *  superTabs/rules.ts reviewRefusal). */
+export function reviewRefusals(p: Probe, builder: Reviewed | null, otherFamily: boolean): string[] {
+  if (p.gridModel) return ['A review never runs on a model served on the Swarm\'s grid.']
+  if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
+  if (!builder || familyOf(builder) !== familyOf(p)) return []
+  if (otherFamily) return [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`]
+  return p.quality < 3 ? [`A review on the reviewed Builder's engine, ${ENGINE[p.engine]}, needs its top tier (quality 3): no Reviewer on another engine can run in this Swarm.`] : []
+}
+/** Whether a strong Reviewer of another family than [builder]'s can run: a candidate off the grid, rated 2 or more, of
+ *  another family, that the owner's [rules] let run at the effort it would start at. Busy, offline or short of quota it
+ *  still counts, within its start window; the caller leaves out the machines the task or its access rules out (review of
+ *  ee4ee6c9a: an engine the owner ruled out blocked the fallback). */
+export const otherFamilyReviews = (probes: Probe[], builder: Reviewed | null, rules: SwarmRule[]) =>
+  !!builder && probes.some(p => !p.gridModel && p.quality >= 2 && familyOf(p) !== familyOf(builder) && !breaks(rules, lifted(rules, p)))
+
+/** A task that stepped up from a cheaper model takes no grid model and nothing below the step's floor; the server refuses
+ *  the same (backend superTabs/stepUp.ts stepUpRefusal). */
+export function stepUpRefusals(p: Probe, step: { floor: number } | null): string[] {
+  return step && (p.gridModel || p.quality < step.floor)
+    ? [`This task stepped up from a cheaper model: it runs on no model on the grid and nothing below quality ${step.floor}.`] : []
 }
 
 export const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const
 const runs = (p: Probe) => p.gridModel ? `${ENGINE[p.engine]} on ${p.gridLabel ?? p.gridModel} (${KIND_WORD[p.gridKind ?? 'local']})` : `${ENGINE[p.engine]} ${p.model} ${p.effort}`
 /** A name's words for matching: lowercase letters and digits, "4.1" read as "41". */
 const words = (text: string) => text.toLowerCase().split(/[^a-z0-9.]+/).map(w => w.replace(/\./g, '')).filter(Boolean)
+/** How strong a grid model counts: the first of the policy's named rows whose every word is in its id or label (Kimi K3
+ *  and DeepSeek v4.1 at 2 by default, backend superTabs/routingPolicy.ts gridQuality), else the policy's local quality. */
+export function gridQuality(policy: Policy, model: string, label = ''): number {
+  const name = words(`${model} ${label}`).join('')
+  return policy.localModels?.models?.find(row => words(row.model).every(w => name.includes(w)))?.quality ?? policy.localModels?.quality ?? 1
+}
 /** Whether [p] runs the model a person named: every word of theirs is in its model's name. */
 function runsNamed(p: Probe, named: string): boolean {
   const name = words([p.gridModel ?? p.model, p.gridLabel ?? '', ENGINE[p.engine]].join(' ')).join('')
