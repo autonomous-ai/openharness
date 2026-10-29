@@ -1490,8 +1490,13 @@ void main() {
       });
       expect(dots, isNotEmpty);
       expect(
+        (spans(row).children!.first as TextSpan).style?.fontSize,
+        13,
+        reason: "the caption role, as the row's own line under its title",
+      );
+      expect(
         dots,
-        everyElement(closeTo(13.5 * .8, .01)),
+        everyElement(closeTo(13 * .8, .01)),
         reason: 'about 8 points across, smaller than the words',
       );
       expect(
