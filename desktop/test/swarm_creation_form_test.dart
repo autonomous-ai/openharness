@@ -85,7 +85,7 @@ void main() {
               actionLabel: 'New Project',
               projectVisibility: 'public',
               projectVisibilityLocked: visibilityLocked,
-              prepare: (_, task) async => task,
+              prepare: (_, task, _) async => task,
               beforeSubmit: (_, _) async {},
               complete: (_, _) async {},
             )
@@ -318,6 +318,26 @@ void main() {
       ..agents = [];
   }
 
+  void agentIn(
+    SuperTabLaunchFixture f, {
+    String? model,
+    String remote = 'git@github.com:autonomous-ai/lamp-os.git',
+  }) => f.app.machineStates['m']!.agents = [
+    Agent(
+      id: 'earlier',
+      name: 'Earlier',
+      engine: 'codex',
+      modelName: model,
+      terminalAvailable: true,
+      project: AgentProject(
+        name: 'lamp-os',
+        cwd: '/work/lamp-os',
+        root: '/work/lamp-os',
+        remote: remote,
+      ),
+    ),
+  ];
+
   final leadLine = find.byKey(const ValueKey('new-harness-lead-line'));
   final change = find.byKey(const ValueKey('new-harness-lead-change'));
 
@@ -334,7 +354,7 @@ void main() {
           find.descendant(
             of: leadLine,
             matching: find.textContaining(
-              'Product Manager: Mac Studio · ${box.agentLabel}',
+              'Product Manager on Mac Studio · ${box.agentLabel}',
             ),
           ),
           findsOneWidget,
@@ -469,7 +489,7 @@ void main() {
     expect(
       find.descendant(
         of: leadLine,
-        matching: find.textContaining('Product Manager: Ken MacBook'),
+        matching: find.textContaining('Product Manager on Ken MacBook'),
       ),
       findsOneWidget,
     );
@@ -504,40 +524,50 @@ void main() {
     expect(
       find.descendant(
         of: leadLine,
-        matching: find.textContaining('Product Manager: Ken MacBook'),
+        matching: find.textContaining('Product Manager on Ken MacBook'),
       ),
       findsOneWidget,
     );
     await unmount(tester);
   });
 
+  const studioFull = LeadMachine(
+    id: 'm',
+    name: 'Mac Studio',
+    online: true,
+    freeAgents: 0,
+  );
+  const diegoTeam = LeadMachine(
+    id: 'diego-mac',
+    name: 'Diego MacBook',
+    online: true,
+    freeAgents: 3,
+    own: false,
+    native: false,
+    team: true,
+  );
+
   for (final brightness in Brightness.values) {
     testWidgets(
-      'With no machine free New Project says so and waits in ${brightness.name}',
+      'With no machine free New Project queues the PM in ${brightness.name}',
       (tester) async {
         final (box, boundary) = await mount(
           tester,
           brightness: brightness,
-          leadMachines: [
-            const LeadMachine(
-              id: 'm',
-              name: 'Mac Studio',
-              online: true,
-              freeAgents: 0,
-            ),
-            rig,
-          ],
+          leadMachines: [studioFull, rig],
+          setup: agentIn,
         );
+        expect(box.leadQueued, isTrue);
+        expect(box.leadThroughSwarm, isTrue);
         expect(
           find.text(
-            'No machine of yours in this Swarm is free. New Project can start once one is.',
+            'All Swarm machines are busy. The project starts on the first one that frees up.',
           ),
           findsOneWidget,
         );
-        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
         box.setTask('Plan the launch');
         await tester.pump();
-        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+        expect(tester.widget<FilledButton>(_start).onPressed, isNotNull);
         await shot(
           tester,
           boundary,
@@ -547,6 +577,104 @@ void main() {
       },
     );
   }
+
+  testWidgets('A queued PM needs a repo the Swarm can clone', (tester) async {
+    final (box, _) = await mount(tester, leadMachines: [studioFull, rig]);
+    expect(
+      box.leadBlocked,
+      'Choose a repo with a remote, so the Swarm can clone it for the Product Manager.',
+    );
+    expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+    await unmount(tester);
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'A teammate’s Team account takes the PM when yours are full in ${brightness.name}',
+      (tester) async {
+        final (box, boundary) = await mount(
+          tester,
+          brightness: brightness,
+          leadMachines: [studioFull, diegoTeam],
+          setup: agentIn,
+        );
+        expect(box.leadThroughSwarm, isTrue);
+        expect(box.leadQueued, isFalse);
+        expect(box.leadSwarmMachine, 'diego-mac');
+        // The repo stays the one chosen on your machine; Diego's Mac clones it.
+        expect(box.machineId, 'm');
+        final line = find.descendant(of: leadLine, matching: find.byType(Text));
+        expect(
+          tester.widget<Text>(line.first).data,
+          'Product Manager on Diego MacBook’s Team account · Codex · '
+          'Default model',
+        );
+        expect(
+          tester.widget<Text>(line.at(1)).data,
+          'Clones lamp-os there first',
+        );
+        box.setTask('Plan the launch');
+        await tester.pump();
+        expect(tester.widget<FilledButton>(_start).onPressed, isNotNull);
+        await tester.tap(change);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey('new-harness-lead-machine-diego-mac'),
+            ),
+            matching: find.byIcon(AppIcons.check),
+          ),
+          findsOneWidget,
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('new-harness-lead-advanced')),
+        );
+        await tester.pumpAndSettle();
+        // Your machine's account and branches say nothing about Diego's Mac.
+        expect(
+          find.byKey(const ValueKey('new-harness-field-profile')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('new-harness-field-branch')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('new-harness-field-agent')),
+          findsOneWidget,
+        );
+        await shot(
+          tester,
+          boundary,
+          'new-project-lead-${brightness.name}-team',
+        );
+        await unmount(tester);
+      },
+    );
+  }
+
+  testWidgets('Choosing your machine again starts the PM here', (tester) async {
+    final (box, _) = await mount(
+      tester,
+      leadMachines: [studio, diegoTeam],
+      setup: agentIn,
+    );
+    expect(box.leadThroughSwarm, isFalse);
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('new-harness-lead-machine-diego-mac')),
+    );
+    await tester.pumpAndSettle();
+    expect(box.leadSwarmMachine, 'diego-mac');
+    await tester.tap(find.byKey(const ValueKey('new-harness-lead-machine-m')));
+    await tester.pumpAndSettle();
+    expect(box.leadThroughSwarm, isFalse);
+    expect(box.leadSwarmMachine, isNull);
+    expect(box.machineId, 'm');
+    await unmount(tester);
+  });
 
   testWidgets(
     'The Product Manager line stays usable at 2x text in a compact window',
@@ -583,26 +711,6 @@ void main() {
     },
   );
 
-  void agentIn(
-    SuperTabLaunchFixture f, {
-    String? model,
-    String remote = 'git@github.com:autonomous-ai/lamp-os.git',
-  }) => f.app.machineStates['m']!.agents = [
-    Agent(
-      id: 'earlier',
-      name: 'Earlier',
-      engine: 'codex',
-      modelName: model,
-      terminalAvailable: true,
-      project: AgentProject(
-        name: 'lamp-os',
-        cwd: '/work/lamp-os',
-        root: '/work/lamp-os',
-        remote: remote,
-      ),
-    ),
-  ];
-
   testWidgets('The line never guesses the model from other agents', (
     tester,
   ) async {
@@ -614,7 +722,7 @@ void main() {
     final line = find.descendant(of: leadLine, matching: find.byType(Text));
     expect(
       tester.widget<Text>(line.first).data,
-      'Product Manager: Mac Studio · Codex · Default model',
+      'Product Manager on Mac Studio · Codex · Default model',
     );
     await unmount(tester);
   });
@@ -719,6 +827,53 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('Moving the PM drops the old machine’s branch at once', (
+    tester,
+  ) async {
+    final reads = <(String, String)>[];
+    final (box, _) = await mount(
+      tester,
+      setup: (f) {
+        addLaptop(f);
+        agentIn(f);
+        f.app.gitProjectReaderForTest = (machine, folder) async {
+          reads.add((machine, folder));
+          return {
+            'isGit': true,
+            'branch': 'main',
+            'branches': [
+              {'ref': 'refs/heads/main', 'name': 'main'},
+              {'ref': 'refs/heads/$machine-only', 'name': '$machine-only'},
+            ],
+          };
+        };
+      },
+      leadMachines: [
+        studio,
+        const LeadMachine(
+          id: 'laptop',
+          name: 'Ken MacBook',
+          online: true,
+          freeAgents: 2,
+          folders: {
+            'github.com/autonomous-ai/lamp-os': '/Users/ken/swarm/lamp-os',
+          },
+        ),
+      ],
+    );
+    await tester.pumpAndSettle();
+    box.focusField(NewHarnessField.branch);
+    box.accept(box.options.firstWhere((o) => o.id == 'refs/heads/m-only'));
+    final before = reads.length;
+    // No frame and no refresh in between: the move itself re-reads Git.
+    box.chooseLeadMachine('laptop');
+    expect(box.branchRef, isNot('refs/heads/m-only'));
+    expect(box.checkingGit, isTrue);
+    await tester.pumpAndSettle();
+    expect(reads.skip(before).first, ('laptop', '/Users/ken/swarm/lamp-os'));
+    await unmount(tester);
+  });
+
   testWidgets('Moving the PM drops a branch of the old machine, repo unknown', (
     tester,
   ) async {
@@ -765,6 +920,127 @@ void main() {
     expect(codex.enabled, isFalse);
     expect(codex.why, 'The Swarm’s model list has no enabled Codex model.');
     expect(box.options.where((o) => o.id == 'claude').single.enabled, isTrue);
+    await unmount(tester);
+  });
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'With no machine able to run a PM, the box says why and how to fix it '
+      'in ${brightness.name}',
+      (tester) async {
+        const signedOut = LeadMachine(
+          id: 'rig',
+          name: '2x 4090 Rig',
+          online: true,
+          freeAgents: 16,
+          engineRefusals: {
+            'claude': 'Claude Code isn’t offered here',
+            'codex': 'Codex isn’t signed in',
+          },
+        );
+        const kens = LeadMachine(
+          id: 'studio',
+          name: 'Mac Studio',
+          online: true,
+          freeAgents: 20,
+          own: false,
+          unavailable:
+              'ken15’s personal account: runs only ken15’s projects. Yours '
+              'need your own computer or a Team account machine',
+        );
+        final (box, boundary) = await mount(
+          tester,
+          brightness: brightness,
+          leadMachines: [signedOut, kens],
+        );
+        expect(box.leadNone, isTrue);
+        expect(
+          find.descendant(
+            of: leadLine,
+            matching: find.text('No machine can run the Product Manager now.'),
+          ),
+          findsOneWidget,
+        );
+        expect(tester.widget<FilledButton>(_start).onPressed, isNull);
+        final action = find.descendant(
+          of: change,
+          matching: find.text('See why'),
+        );
+        expect(action, findsOneWidget);
+        await shot(tester, boundary, 'new-project-none-${brightness.name}');
+        await tester.tap(change);
+        await tester.pumpAndSettle();
+        const engines =
+            'Can’t run a Product Manager: Claude Code isn’t offered here, '
+            'Codex isn’t signed in';
+        for (final (id, why) in [
+          ('rig', engines),
+          ('studio', kens.unavailable!),
+        ]) {
+          final row = find.byKey(ValueKey('new-harness-lead-machine-$id'));
+          // Greyed out, and says why under its name and on hover.
+          expect(
+            find.descendant(of: row, matching: find.text(why)),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: row, matching: find.byTooltip(why)),
+            findsOneWidget,
+          );
+          expect(
+            tester
+                .widget<Semantics>(
+                  find
+                      .descendant(of: row, matching: find.byType(Semantics))
+                      .first,
+                )
+                .properties
+                .enabled,
+            isFalse,
+          );
+        }
+        await shot(tester, boundary, 'new-project-none-${brightness.name}-why');
+        expect(tester.takeException(), isNull);
+        await unmount(tester);
+      },
+    );
+  }
+
+  testWidgets('The reasons and the clone note fit at 200% text, narrow', (
+    tester,
+  ) async {
+    const signedOut = LeadMachine(
+      id: 'rig',
+      name: '2x 4090 Rig',
+      online: true,
+      freeAgents: 16,
+      engineRefusals: {
+        'claude': 'Claude Code isn’t offered here',
+        'codex': 'Codex isn’t signed in',
+      },
+    );
+    final (box, boundary) = await mount(
+      tester,
+      width: 520,
+      textScale: 2,
+      leadMachines: [signedOut],
+    );
+    expect(box.leadNone, isTrue);
+    await tester.tap(change);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await shot(tester, boundary, 'new-project-none-200');
+    await unmount(tester);
+    final (_, teamBoundary) = await mount(
+      tester,
+      width: 520,
+      textScale: 2,
+      leadMachines: [studioFull, diegoTeam],
+      setup: agentIn,
+    );
+    expect(find.text('Clones lamp-os there first'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await shot(tester, teamBoundary, 'new-project-team-200');
     await unmount(tester);
   });
 
@@ -815,7 +1091,7 @@ void main() {
     final line = find.descendant(of: leadLine, matching: find.byType(Text));
     expect(
       tester.widget<Text>(line.first).data,
-      'Product Manager: Mac Studio · Codex · Default model',
+      'Product Manager on Mac Studio · Codex · Default model',
     );
     await unmount(tester);
   });
@@ -853,7 +1129,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(box.machineId, 'laptop');
     expect(box.project.folder, '/Users/ken/swarm/lamp-os');
-    expect(find.textContaining('will be cloned there'), findsNothing);
+    expect(find.textContaining('there first'), findsNothing);
     await unmount(tester);
   });
 
@@ -890,7 +1166,7 @@ void main() {
     expect(
       find.descendant(
         of: leadLine,
-        matching: find.textContaining('lamp-os will be cloned there'),
+        matching: find.text('Clones lamp-os there first'),
       ),
       findsOneWidget,
     );

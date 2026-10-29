@@ -42,42 +42,14 @@ Future<String?> openSwarmBuddy(
   return null;
 }
 
-/// The person's Buddy in [projectId] as a face: its own, or a plain "B" for
-/// Buddy while none runs.
-class SwarmBuddyAvatar extends StatelessWidget {
-  const SwarmBuddyAvatar({
-    super.key,
-    required this.reader,
-    required this.projectId,
-    this.size = 32,
-  });
-
-  final SwarmReader reader;
-  final String projectId;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => switch (swarmBuddy(reader, projectId)) {
-    final agent? => SwarmAvatar(
-      id: agent.id,
-      name: swarmBuddyName(reader, projectId),
-      picture: agent.avatar,
-      size: size,
-    ),
-    null => SwarmAvatar(
-      id: 'buddy:${reader.tabId}/$projectId',
-      name: 'Buddy',
-      size: size,
-    ),
-  };
-}
-
 /// Under the person's Buddy chat's header (#2090; the desktop's
-/// `SuperTabBuddyBar`): what their Buddy runs on and who else can see its
-/// terminal, and, while it is down, Start again. With no Buddy, how its start
+/// `SuperTabBuddyBar`): who else can see their Buddy's terminal, when someone
+/// can, and, while it is down, Start again. With no Buddy, how its start
 /// is going, or — with none under way — Start your Buddy, for a person who
 /// may write: the chat is there before any Buddy. Under all of it, what went
-/// wrong with the last start or removal. Nothing for a viewer with no Buddy.
+/// wrong with the last start or removal. Nothing for a viewer with no Buddy,
+/// nor while a Buddy runs on the person's own machine: the chat is the
+/// screen, and its messages start under the header (Tony, 10-29).
 class SwarmBuddyBar extends StatelessWidget {
   const SwarmBuddyBar({super.key, required this.actions});
 
@@ -132,26 +104,26 @@ class SwarmBuddyBar extends StatelessWidget {
     );
   }
 
-  /// "Claude on MacBook Pro · only you can read this chat", and, while it
-  /// is down, that it is offline with Start again.
-  Widget _running(SwarmReader reader, SuperTabAgent agent, bool canWrite) {
-    final where = [
-      '${swarmBuddyEngineName(agent.engine)} on '
-          '${swarmBuddyMachineName(reader, agent.machineId)}',
-      agent.machineOwnerId == reader.accountId
-          ? 'only you can read this chat'
-          : '${swarmBuddyPersonName(reader, agent.machineOwnerId)} can see '
-                'its terminal',
-    ].join(' · ');
+  /// On someone else's machine, "Claude on Dee Studio · dee can see its
+  /// terminal" (a Buddy from before the server kept Buddies to their owner's
+  /// machines, 10-28); and, while it is down, that it is offline with Start
+  /// again. Null on the person's own machine while it runs.
+  Widget? _running(SwarmReader reader, SuperTabAgent agent, bool canWrite) {
+    final shared = agent.machineOwnerId != reader.accountId;
+    if (!shared && agent.downSince == null) return null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        SwarmRow.line(
-          where,
-          key: const ValueKey('swarm-buddy-where'),
-          lines: 2,
-        ),
+        if (shared)
+          SwarmRow.line(
+            '${swarmBuddyEngineName(agent.engine)} on '
+            '${swarmBuddyMachineName(reader, agent.machineId)} · '
+            '${swarmBuddyPersonName(reader, agent.machineOwnerId)} can see '
+            'its terminal',
+            key: const ValueKey('swarm-buddy-where'),
+            lines: 2,
+          ),
         if (agent.downSince != null)
           _Line(
             key: const ValueKey('swarm-buddy-offline'),

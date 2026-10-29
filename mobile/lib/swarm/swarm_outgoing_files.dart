@@ -94,6 +94,18 @@ class SwarmOutgoingFiles extends ChangeNotifier {
   }
 }
 
+/// A composer that sends [files] with its next message — the chat's, or a
+/// thread's reply box — and how far each has gone up while it sends.
+abstract interface class SwarmFilesBox {
+  SwarmOutgoingFiles get files;
+
+  /// Whether [file] is still on its way to the backend in a send.
+  bool isUploading(SwarmOutgoingFile file);
+
+  /// How much of [file] has gone up, from 0 to 1, while it is going up.
+  double? uploadProgress(SwarmOutgoingFile file);
+}
+
 /// [name], or `name-2.ext`, `name-3.ext`… — the first not in [taken], which
 /// then holds it.
 String swarmFreeName(String name, Set<String> taken) {

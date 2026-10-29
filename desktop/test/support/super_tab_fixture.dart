@@ -80,6 +80,7 @@ class SwarmPartsBackend {
           'otherProjectsWork',
           'githubApp',
           'readMarks',
+          'teamAccounts',
         }.contains(entry.key))
           entry.key: entry.value,
     };
@@ -156,6 +157,8 @@ class SwarmPartsBackend {
     if (state['otherProjectsWork'] != null)
       'otherProjectsWork': state['otherProjectsWork'],
     if (state['avatars'] != null) 'avatars': state['avatars'],
+    // Only where the server does not try Team accounts (backend read/views.ts).
+    if (state['teamAccounts'] == false) 'teamAccounts': false,
     // The reader's own read marks alone, as backend readMarks.ts sends them.
     if ((state['readMarks'] as Map?)?[reader ?? 'owner'] case final Map marks)
       'readMarks': Map<String, dynamic>.from(marks),
@@ -412,6 +415,10 @@ class ConversationServer {
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
   final posts = <Map<String, dynamic>>[];
+
+  /// Refuses the next lead.start with this code and message, as the backend
+  /// refuses a machine that cannot take the Product Manager (leadStart.ts).
+  Map<String, String>? leadRefusal;
   final receipts = <String, Map<String, dynamic>>{};
   final messages = <Map<String, dynamic>>[];
   // Route decisions by id, answered by GET .../route-decisions/:id.
@@ -605,8 +612,8 @@ class ConversationServer {
     };
   }
 
-  /// A person's own status or avatar, or an agent's avatar, as the backend
-  /// stores it (profile.ts).
+  /// A person's own status, username or avatar, or an agent's avatar, as the
+  /// backend stores it (profile.ts, usernames.ts).
   void _profile(Map command, String reader) {
     final (key, id) = command['type'] == 'agent.avatar'
         ? ('agents', command['agentId'])
@@ -629,6 +636,8 @@ class ConversationServer {
             ...row,
             if (command['type'] == 'member.status')
               'status': command['status']
+            else if (command['type'] == 'member.username')
+              'username': (command['username'] as String?)?.toLowerCase()
             else
               'avatar': command['avatar'] == null
                   ? null
@@ -766,6 +775,7 @@ class ConversationServer {
         }
         output['messageId'] = 'message-$revision';
       } else if (command['type'] == 'member.status' ||
+          command['type'] == 'member.username' ||
           command['type'] == 'member.avatar' ||
           command['type'] == 'agent.avatar') {
         _profile(command, reader ?? 'owner');
@@ -960,6 +970,31 @@ class ConversationServer {
             },
         });
         output['conversationId'] = id;
+      } else if (command['type'] == 'lead.start') {
+        if (leadRefusal case final refusal?) {
+          leadRefusal = null;
+          throw SuperTabFailure(
+            refusal['code']!,
+            refusal['message']!,
+            statusCode: 409,
+          );
+        }
+        revision++;
+        final machineId = command['machineId'] as String?;
+        output.addAll(
+          machineId == null
+              ? {'waiting': true}
+              : {'startId': 'lead-start-$revision', 'machineId': machineId},
+        );
+        final project = (state['projects'] as List?)
+            ?.cast<Map<String, dynamic>>()
+            .where((p) => p['id'] == command['projectId'])
+            .firstOrNull;
+        project?['lead'] = {
+          'status': machineId == null ? 'waiting' : 'starting',
+          'machineId': ?machineId,
+          'requestedAt': revision,
+        };
       } else if (command['type'] == 'project.create') {
         revision++;
         final projects = state['projects'] ??= <dynamic>[

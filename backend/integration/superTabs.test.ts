@@ -1999,6 +1999,23 @@ describe('Super Tabs on a real Mongo replica set', () => {
     }
   })
 
+  it('judges a review verdict\'s step up by the tab\'s own ratings', async () => {
+    const { tab } = await fixture()
+    const group = (await run(tab, { type: 'conversation.create', title: 'Docs', brief: 'Fix the docs.', checks: [{ description: 'Reviewed', independent: true }] })).result.conversationId as string
+    const sonnet = (await run(tab, { type: 'agent.add', conversationId: group, machineId: 'test-host', harnessId: randomUUID(), name: 'Sonnet',
+      configuration: { ...config, engine: 'claude', model: 'claude-sonnet-4-5' }, lead: false })).result.agentId as string
+    const assignmentId = (await run(tab, { type: 'work.assign', conversationId: group, agentId: sonnet })).result.assignmentId as string
+    // The task stepped up to Sonnet before; this tab's owner rates Sonnet at the top tier, so its failed review steps nothing up.
+    const part = await db.swarmGroup.findFirstOrThrow({ where: { tabId: tab, key: group } })
+    await db.swarmGroup.update({ where: { id: part.id }, data: { version: part.version + 1,
+      data: { ...part.data as object, stepUp: { attempt: 2, floor: 2, reason: 'Its first review said Ready no.', at: 1, carry: '' } } } })
+    await run(tab, { type: 'tab.routingPolicy', policy: { models: DEFAULT_ROUTING_POLICY.models.map(m => m.model === 'sonnet' ? { ...m, quality: 3 } : m) } })
+    const checkId = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!.checks[0]!.id
+    await run(tab, { type: 'work.check', conversationId: group, assignmentId, checkId, passed: false, evidence: 'Ready: no.' })
+    const after = (await store.read(owner, tab)).state.conversations.find(c => c.id === group)!
+    expect(after.assignment).toMatchObject({ id: assignmentId, status: 'working' })
+  })
+
   it('stores the account routing policy with revisions and merges the owner policy into each tab', async () => {
     const initial = await store.accountPolicy(owner)
     expect(initial).toEqual({ policy: DEFAULT_ROUTING_POLICY, revision: 0, isDefault: true })
@@ -3130,6 +3147,16 @@ describe('Lead mentions', () => {
     expect((await waiting(tab, owner)).mentionsWaiting).toBe(0)
     expect((await store.read(host, tab, lead)).state).not.toHaveProperty('mentionsWaiting')
     expect((await store.messages(owner, tab, group, {})).messages.find(m => m.id === messageId)!.mentions).toEqual([peer.sub])
+  })
+
+  it('lists a person’s tag of another person under the author’s username, never their email', async () => {
+    const { tab, group } = await tagged()
+    await run(tab, { type: 'member.username', username: 'boss' })
+    const messageId = (await run(tab, { type: 'message.send', conversationId: group, text: 'Peer, see above.', replyTo: null, recipientIds: [],
+      mentions: [peer.sub] })).result.messageId as string
+    const mention = (await list(tab, peer, 'waiting')).find(m => m.messageId === messageId)
+    expect(mention).toEqual(expect.objectContaining({ leadId: owner.sub, leadName: 'boss', text: 'Peer, see above.' }))
+    expect(JSON.stringify(mention)).not.toContain(owner.email)
   })
 
   it('resolves on the person’s later post in that conversation, not on anyone else’s', async () => {

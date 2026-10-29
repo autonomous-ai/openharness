@@ -12,6 +12,7 @@ import type { CoreApi } from '../core/api.js'
 import { swarmGitHubRoot, swarmGitHubSessionDir, writeSessionGitHub } from '../lib/swarmGitHub.js'
 import { backend, identifier, object, SuperTabHostError } from './wire.js'
 import type { SwarmSources } from './host.js'
+import type { HostRead } from './hostFeed.js'
 
 type Json = Record<string, unknown>
 type Session = NonNullable<ReturnType<CoreApi['agents']['byAgent']>>
@@ -90,6 +91,9 @@ export class GitHubTokenRefresher {
   private timer: NodeJS.Timeout | null = null
   private running: Promise<void> | null = null
   private readonly primed = new Map<string, { assignmentId: string; expiresAt: number }>()
+  /** The assignment each session was last looked at for as soon as it arrived ([assigned]): one look per task, however
+   *  often the host reads, even while its token cannot be had. */
+  private readonly asked = new Map<string, string>()
   private readonly now: () => number
   private readonly intervalMs: number
 
@@ -109,6 +113,27 @@ export class GitHubTokenRefresher {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.primed.clear()
+    this.asked.clear()
+  }
+
+  /**
+   * The host read its Swarms' rows: a session started to use the app that has a task it holds no token for is looked at
+   * now, not at the next minute's pass. Its gh login was empty for up to a minute after the task arrived, so a Builder's
+   * first `gh auth status` said "You are not logged into any GitHub hosts" and it stopped (Mac Auto, 2026-10-29). Once per
+   * task: a token that cannot be had is asked for again at the minute's pass, as before. Only while the refresher runs.
+   */
+  assigned(read: HostRead): void {
+    if (!this.timer) return
+    let due = false
+    for (const session of this.core.agents.live()) {
+      const id = session.agentId
+      const task = read.assignments.find(row => row.harnessId === id && identifier(row.assignmentId))
+      if (!task || this.primed.get(id)?.assignmentId === task.assignmentId || this.asked.get(id) === task.assignmentId) continue
+      if (!githubDir(this.core, session)) continue
+      this.asked.set(id, String(task.assignmentId))
+      due = true
+    }
+    if (due) void this.tick()
   }
 
   /** One look; a look still running is not started twice. */
