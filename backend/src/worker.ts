@@ -14,6 +14,7 @@ import {
 } from './lib/db/migrate.js'
 import { ensurePlans } from './lib/db/seed.js'
 import { prisma } from './lib/prisma.js'
+import { startQueryStats } from './lib/queryStats.js'
 import { releaseSchema } from './lib/db/schemaRelease.js'
 import { startSwarmSweeps } from './superTabs/sweeps.js'
 import { startDeliverySettle } from './superTabs/deliverySettle.js'
@@ -32,6 +33,9 @@ import { logger } from './utils/logger.js'
 // Singleton background process. HTTP/WS server.ts runs as a PM2 cluster and must never own schema
 // writes, catalog syncs, migrations or periodic jobs; otherwise every live server worker races them.
 async function start(): Promise<void> {
+  // Every minute, this process's queries by model.action and filter shape (lib/queryStats.ts, DB roadmap Phase 1); its
+  // jobs and startup migrations count as background.
+  const stopQueryStats = startQueryStats()
   // Existing production data was created against staging upstreams. Stamp it before Prisma swaps
   // the old global unique indexes for their per-environment replacements.
   await migrateAutonomousEnvironment()
@@ -67,6 +71,8 @@ async function start(): Promise<void> {
     stopArchive()
     stopDeliveries()
     stopReceiptSweep()
+    // The last partial minute, before the database closes.
+    stopQueryStats()
     void Promise.allSettled([prisma.$disconnect(), closeBus()]).finally(() => process.exit(0))
   }
   process.on('SIGINT', () => shutdown('SIGINT'))

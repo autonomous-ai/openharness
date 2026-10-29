@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest'
 import { MongoMemoryReplSet } from 'mongodb-memory-server-core'
 import { PrismaClient } from '@prisma/client'
-import { createQueryStats, runWork, withQueryStats, type QueryStats } from '../src/lib/queryStats.js'
+import { createQueryStats, runWork, startQueryStats, withQueryStats, type QueryStats } from '../src/lib/queryStats.js'
 
 // The query hook on a real client (DB roadmap Phase 1). A fresh loopback replica set; never DATABASE_URL.
 let replica: MongoMemoryReplSet
@@ -115,4 +115,21 @@ it('never fails a query because its stats failed, and says so once', async () =>
   await expect(guarded.user.findUnique({ where: { email: someone.email } })).resolves.toMatchObject({ email: someone.email })
   await expect(guarded.user.create({ data: someone })).rejects.toThrow(/Unique constraint/)
   expect(problems).toEqual(['query stats failed stats bug'])
+})
+
+it('logs every interval once started, flushes the last window on stop, and records nothing after it', async () => {
+  // The default getter: what server.ts and worker.ts get from startQueryStats.
+  const hooked = withQueryStats(base)
+  const lines: Record<string, unknown>[] = []
+  const stop = startQueryStats({ reportMs: 50, log: (_m, c) => lines.push(c), warn: () => {} })
+  await runWork('job sweepSwarms', async () => await hooked.user.count())
+  while (!lines.some(l => (l.top as Row[]).some(r => r.op === 'User.count' && r.route === 'job sweepSwarms'))) await new Promise(resolve => setTimeout(resolve, 10))
+  await hooked.user.count({ where: { role: 'admin' } })
+  stop()
+  const last = lines.at(-1)!.top as Row[]
+  expect(last.find(r => r.op === 'User.count')).toMatchObject({ shape: '{"role":"?"}', route: 'background', n: 1 })
+  const after = lines.length
+  await hooked.user.count()
+  await new Promise(resolve => setTimeout(resolve, 120))
+  expect(lines).toHaveLength(after)
 })
