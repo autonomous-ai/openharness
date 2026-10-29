@@ -10,6 +10,7 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
+import 'message_link.dart';
 import 'model.dart';
 import 'buddy_chat.dart';
 import 'project_github.dart';
@@ -72,9 +73,18 @@ class SuperTabOutgoing {
     required this.state,
     this.operationId,
     this.replyTo,
+    this.thread,
+    this.alsoSend = false,
     this.error,
   });
   final String conversationId, text;
+
+  /// The thread root a reply goes to, null for a top-level or inline reply.
+  final String? thread;
+
+  /// A thread reply also sent to the main stream.
+  final bool alsoSend;
+  bool get inMainStream => thread == null || alsoSend;
 
   /// The send's receipt id, while it is not confirmed.
   final String? operationId;
@@ -150,6 +160,11 @@ class SuperTabController extends ChangeNotifier {
           if (entry.key is String && entry.value is num) {
             _readAt[entry.key as String] = (entry.value as num).toInt();
           }
+        }
+      }
+      if (initial['threadSeen'] case final Map seen) {
+        for (final MapEntry(:key, :value) in seen.entries) {
+          if (key is String && value is num) _threadSeen[key] = value.toInt();
         }
       }
       final refused = initial['refused'];
@@ -342,6 +357,22 @@ class SuperTabController extends ChangeNotifier {
   final _terminals = <String, String>{};
   final _mentions = <String, Map<String, String>>{};
   final _readAt = <String, int>{};
+
+  /// Per conversation, each thread's summary as the newest page said it.
+  final _threads = <String, Map<String, SuperTabThread>>{};
+
+  /// Per thread root, the newest reply the reader has seen.
+  final _threadSeen = <String, int>{};
+
+  /// Each thread's rows as its own read brought them.
+  final _threadRows = <String, List<SuperTabMessage>>{};
+
+  /// Where each thread's earlier replies continue, while there are more.
+  final _threadBefore = <String, Map<String, dynamic>>{};
+  final _threadDrafts = <String, String>{};
+
+  /// The thread open beside the chat.
+  ({String conversationId, String root})? openedThread;
   final _attachments = <String, HarnessAttachments>{};
   // Files already uploaded for the message being sent, so a retry sends their
   // ids rather than uploading them again.
@@ -353,9 +384,14 @@ class SuperTabController extends ChangeNotifier {
   final _messages = <String, List<SuperTabMessage>>{};
 
   /// Originals of replies quoted from outside the pages read, one message
-  /// each, never part of the list: null when it is gone. Asked for once.
+  /// each, never part of the list: null when it is gone or refused.
   final _quoted = <String, Map<String, SuperTabMessage?>>{};
-  final _quoting = <String, Set<String>>{};
+
+  /// The originals asked for, with how many reads of each failed (not refused).
+  final _quoting = <String, Map<String, int>>{};
+  final _quoteRetries = <Timer>{};
+  static const _quoteTries = 3;
+  static const _quoteRetryAfter = Duration(seconds: 3);
 
   /// Where each conversation's older history continues: the oldest message
   /// read, as the backend's page cursor names it (section 4.6). Null at the
@@ -569,11 +605,17 @@ class SuperTabController extends ChangeNotifier {
     if (known != null && known.containsKey(messageId)) {
       return (message: known[messageId]);
     }
-    if ((_quoting[id] ??= {}).add(messageId)) {
+    if (!(_quoting[id] ??= {}).containsKey(messageId)) {
+      _quoting[id]![messageId] = 0;
       scheduleMicrotask(() => _readQuoted(id, messageId));
     }
     return null;
   }
+
+  /// Whether the original [messageId] of [id] could not be read after every
+  /// try, so it is told apart from one still being read.
+  bool quoteGaveUp(String id, String messageId) =>
+      (_quoting[id]?[messageId] ?? 0) >= _quoteTries;
 
   /// What the backend last said of each project's GitHub access (backend github/projectAccess.ts), and when.
   final Map<String, ({SuperTabProjectGitHub value, DateTime at})> _github = {};
@@ -660,10 +702,14 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Reads one message of [id] only: the backend checks the reader may read
-  /// that conversation, as for its pages. A failed read leaves the quote
-  /// saying the original isn't loaded.
+  /// that conversation, as for its pages. A refusal is recorded as the message
+  /// being gone; any other failure is read again after 3 s and 6 s, then left
+  /// ([quoteGaveUp]).
   Future<void> _readQuoted(String id, String messageId) async {
-    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+    if (_disposed ||
+        accessRevoked ||
+        snapshot?.conversation(id) == null ||
+        _quoting[id]?.containsKey(messageId) != true) {
       return;
     }
     try {
@@ -674,7 +720,7 @@ class SuperTabController extends ChangeNotifier {
       if (_disposed ||
           accessRevoked ||
           snapshot?.conversation(id) == null ||
-          _quoting[id]?.contains(messageId) != true) {
+          _quoting[id]?.containsKey(messageId) != true) {
         return;
       }
       final rows = (answer['messages'] as List)
@@ -687,7 +733,251 @@ class SuperTabController extends ChangeNotifier {
       // A row the list never lists is no original to quote either.
       (_quoted[id] ??= {})[messageId] = rows.where(_listed).firstOrNull;
       _changed();
-    } catch (_) {}
+    } catch (failure) {
+      _quoteFailed(id, messageId, failure);
+    }
+  }
+
+  void _quoteFailed(String id, String messageId, Object failure) {
+    final asked = _quoting[id];
+    if (_disposed || asked == null || !asked.containsKey(messageId)) return;
+    if (failure is SuperTabFailure &&
+        const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+      (_quoted[id] ??= {})[messageId] = null;
+      _changed();
+      return;
+    }
+    final tries = asked[messageId] = asked[messageId]! + 1;
+    if (tries >= _quoteTries) {
+      _changed();
+      return;
+    }
+    late final Timer retry;
+    retry = Timer(_quoteRetryAfter * tries, () {
+      _quoteRetries.remove(retry);
+      unawaited(_readQuoted(id, messageId));
+    });
+    _quoteRetries.add(retry);
+  }
+
+  /// [root]'s thread summary in conversation [id], once a page named it.
+  SuperTabThread? thread(String id, String root) => _threads[id]?[root];
+
+  /// Whether [thread] has a reply the reader has not seen, from someone else,
+  /// in a thread they wrote in or were tagged in.
+  bool threadUnread(SuperTabThread thread) {
+    final last = thread.authors.firstOrNull;
+    return thread.people.contains(accountId) &&
+        thread.lastSequence > (_threadSeen[thread.id] ?? 0) &&
+        !(last?['kind'] == 'person' && last?['id'] == accountId);
+  }
+
+  void _keepThreads(String id, Object? rows) {
+    if (rows is! List) return;
+    final held = _threads[id] ??= {};
+    for (final row in rows) {
+      final thread = SuperTabThread.fromJson(superTabMap(row));
+      if ((held[thread.id]?.lastSequence ?? -1) > thread.lastSequence) continue;
+      held[thread.id] = thread;
+      // A thread first seen here is read as far as the conversation is:
+      // replies the reader passed before threads were counted stay read.
+      _threadSeen.putIfAbsent(
+        thread.id,
+        () => min(_readAt[id] ?? 0, thread.lastSequence),
+      );
+      if (openedThread?.root == thread.id) _seeThread(thread.id);
+    }
+  }
+
+  void _seeThread(String root) {
+    final open = openedThread;
+    final last = max(
+      (open == null ? null : _threads[open.conversationId]?[root])
+              ?.lastSequence ??
+          0,
+      threadMessages(root).lastOrNull?.sequence ?? 0,
+    );
+    if ((_threadSeen[root] ?? 0) >= last) return;
+    // Moved to the end: the newest marks are the ones a save keeps.
+    _threadSeen.remove(root);
+    _threadSeen[root] = last;
+    _saveSoon();
+  }
+
+  /// The root and replies of [root]'s thread in the selected conversation,
+  /// oldest first: what its own read brought, and replies polled since.
+  List<SuperTabMessage> threadMessages(String root) {
+    final id = openedThread?.conversationId ?? selectedId;
+    final rows = {
+      for (final m in _threadRows[root] ?? const <SuperTabMessage>[]) m.id: m,
+      for (final m in _messages[id] ?? const <SuperTabMessage>[])
+        if (m.thread == root) m.id: m,
+    };
+    return rows.values.toList()..sort(superTabMessageOrder);
+  }
+
+  /// The thread [messageId] is in, from the rows held of [id].
+  String? _threadOf(String id, String? messageId) {
+    if (messageId == null) return null;
+    for (final m in [
+      ..._messages[id] ?? const <SuperTabMessage>[],
+      for (final rows in _threadRows.values) ...rows,
+    ]) {
+      if (m.id == messageId) return m.thread;
+    }
+    return null;
+  }
+
+  /// Forgets what was read of threads in conversations [keep] refuses (all,
+  /// without it), as the transcript is forgotten when access goes.
+  void _forgetThreads([bool Function(String conversationId)? keep]) {
+    bool gone(String id) => keep == null || !keep(id);
+    _threads.removeWhere((id, _) => gone(id));
+    final roots = {
+      for (final MapEntry(key: root, value: rows) in _threadRows.entries)
+        if (rows.any((m) => gone(m.conversationId))) root,
+    };
+    _threadRows.removeWhere((root, _) => roots.contains(root));
+    _threadBefore.removeWhere((root, _) => roots.contains(root));
+    if (openedThread case final open? when gone(open.conversationId)) {
+      openedThread = null;
+    }
+  }
+
+  /// Whether [root]'s thread has replies before those read.
+  bool hasEarlierReplies(String root) => _threadBefore.containsKey(root);
+  bool readingEarlierReplies = false;
+
+  /// Opens [root]'s thread of the selected conversation beside the chat.
+  void openThread(String root) {
+    if (accessRevoked) return;
+    openedThread = (conversationId: selectedId, root: root);
+    _seeThread(root);
+    _changed();
+    unawaited(loadThread());
+  }
+
+  void closeThread() {
+    if (openedThread == null) return;
+    openedThread = null;
+    _changed();
+  }
+
+  String threadDraft(String root) => _threadDrafts[root] ?? '';
+  void setThreadDraft(String root, String text) => _threadDrafts[root] = text;
+
+  /// How many pages a thread reads when it opens; past them "Show earlier
+  /// replies" reads on, a page at a time.
+  static const threadPagesOnOpen = 5;
+
+  /// Reads the open thread: from its newest reply back through
+  /// [threadPagesOnOpen] pages, or with [earlier] the page before those read,
+  /// and its root when no page brought it.
+  Future<void> loadThread({bool earlier = false}) async {
+    final open = openedThread;
+    if (open == null || _disposed || accessRevoked) return;
+    if (earlier && (!hasEarlierReplies(open.root) || readingEarlierReplies)) {
+      return;
+    }
+    final path = _messagesPath(open.conversationId);
+    final thread = Uri.encodeQueryComponent(open.root);
+    // Still open, still readable: an answer that comes back after access went
+    // or the thread closed is not kept.
+    bool current() =>
+        !_disposed &&
+        !accessRevoked &&
+        openedThread == open &&
+        snapshot?.conversation(open.conversationId) != null;
+    List<SuperTabMessage> rowsOf(Map<String, dynamic> page) => [
+      for (final row in page['messages'] as List)
+        if (SuperTabMessage.fromJson(superTabMap(row)) case final m
+            when m.conversationId == open.conversationId &&
+                m.thread == open.root)
+          m,
+    ];
+    readingEarlierReplies = earlier;
+    try {
+      final rows = {
+        if (earlier)
+          for (final m in _threadRows[open.root] ?? const <SuperTabMessage>[])
+            m.id: m,
+      };
+      Map<String, dynamic>? from = earlier ? _threadBefore[open.root] : null;
+      Object? threads;
+      for (var page = 0; page < (earlier ? 1 : threadPagesOnOpen); page++) {
+        final answer = await request(
+          'GET',
+          from == null
+              ? '$path?thread=$thread'
+              : '$path?thread=$thread&before=${from['sequence']}&beforeId=${Uri.encodeQueryComponent(from['id'] as String)}',
+        );
+        if (!current()) return;
+        threads ??= answer['threads'];
+        for (final m in rowsOf(answer)) {
+          rows[m.id] = m;
+        }
+        from = answer['next'] is Map ? superTabMap(answer['next']) : null;
+        if (from == null) break;
+      }
+      // A long thread's pages read so far start after its root.
+      if (!rows.containsKey(open.root) &&
+          !(_messages[open.conversationId] ?? const []).any(
+            (m) => m.id == open.root,
+          )) {
+        final root = await request(
+          'GET',
+          '$path?messageId=${Uri.encodeQueryComponent(open.root)}',
+        );
+        if (!current()) return;
+        for (final m in rowsOf(root)) {
+          if (m.id == open.root) rows[m.id] = m;
+        }
+      }
+      _threadRows[open.root] = rows.values.toList();
+      if (from == null) {
+        _threadBefore.remove(open.root);
+      } else {
+        _threadBefore[open.root] = from;
+      }
+      _keepThreads(open.conversationId, threads);
+      _seeThread(open.root);
+      _changed();
+    } catch (failure) {
+      if (!current()) return;
+      _readFailure(failure, revokeTab: false);
+      _changed();
+    } finally {
+      if (earlier) readingEarlierReplies = false;
+    }
+  }
+
+  /// Sends the open thread's draft to its root; [alsoSend] shows it in the
+  /// main stream too.
+  Future<Map<String, dynamic>?> sendThreadReply({bool alsoSend = false}) async {
+    final open = openedThread;
+    final text = threadDraft(open?.root ?? '').trim();
+    if (open == null ||
+        text.isEmpty ||
+        selected == null ||
+        selected!.archived ||
+        !canWrite ||
+        saving ||
+        _pending != null) {
+      return null;
+    }
+    final sending = command({
+      'type': 'message.send',
+      'conversationId': open.conversationId,
+      'text': text,
+      'replyTo': open.root,
+      'recipientIds': const <String>[],
+      if (alsoSend) 'alsoSend': true,
+    });
+    if (_pending != null) {
+      _threadDrafts.remove(open.root);
+      _changed();
+    }
+    return await sending;
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -786,8 +1076,20 @@ class SuperTabController extends ChangeNotifier {
           .firstOrNull
           ?.sequence ??
       0;
+
+  /// A reply only in its thread leaves the chat as it was: it lights its
+  /// thread's reply line instead ([threadUnread]).
   bool unread(SuperTabConversation group) =>
-      max(group.lastMessageSequence, _loadedMessageSequence(group.id)) >
+      max(
+        group.lastMainSequence ?? group.lastMessageSequence,
+        _messages[group.id]?.reversed
+                .where(
+                  (m) => m.source['kind'] != 'update-request' && m.inMainStream,
+                )
+                .firstOrNull
+                ?.sequence ??
+            0,
+      ) >
       (_readAt[group.id] ?? 0);
 
   void start() {
@@ -973,6 +1275,7 @@ class SuperTabController extends ChangeNotifier {
     _messages.clear();
     _quoted.clear();
     _quoting.clear();
+    _forgetThreads();
     _rows.clear();
     _before.clear();
   }
@@ -1006,6 +1309,7 @@ class SuperTabController extends ChangeNotifier {
     _forgetNewer();
     _quoted.clear();
     _quoting.clear();
+    _forgetThreads();
     _sent.clear();
     _refused.clear();
     _poll?.cancel();
@@ -1031,6 +1335,11 @@ class SuperTabController extends ChangeNotifier {
         entry.key: Map<String, String>.of(entry.value),
     },
     'readAt': Map<String, int>.of(_readAt),
+    // ponytail: the newest 500 threads' marks; an older one forgotten shows
+    // read again through the conversation's read mark ([_keepThreads]).
+    'threadSeen': Map<String, int>.fromEntries(
+      _threadSeen.entries.skip(max(0, _threadSeen.length - 500)),
+    ),
     if (_pending != null) 'pending': _pending,
     if (_refused.isNotEmpty)
       'refused': {
@@ -1102,6 +1411,8 @@ class SuperTabController extends ChangeNotifier {
       conversationId: id,
       text: command['text'] as String? ?? '',
       replyTo: command['replyTo'] as String?,
+      thread: _threadOf(id, command['replyTo'] as String?),
+      alsoSend: command['alsoSend'] == true,
       state: state,
       operationId: operationId,
       error: error,
@@ -1298,6 +1609,9 @@ class SuperTabController extends ChangeNotifier {
   bool hiddenByBuddies(SuperTabConversation group) =>
       group.audience != null && !group.isBuddyChat;
 
+  /// Where opening conversation [id] lands: itself, unless the app hides it.
+  String landsOn(String id) => _shownFor(id);
+
   /// Where conversation [id] opens: a chat [hiddenByBuddies] opens its
   /// project's chat, where the PM is talked to; any other opens itself.
   String _shownFor(String id) {
@@ -1318,7 +1632,7 @@ class SuperTabController extends ChangeNotifier {
     if (!unread(group)) return 0;
     final readAt = _readAt[group.id] ?? 0;
     final count = messages(group.id)
-        .where((m) => m.sequence > readAt && !_ownMessage(m))
+        .where((m) => m.sequence > readAt && !_ownMessage(m) && m.inMainStream)
         .length;
     return _heldSinceRead(group) ? count : max(count, 1);
   }
@@ -1415,6 +1729,70 @@ class SuperTabController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// A message the reader asked to open by its link ([openMessageLink]), until
+  /// the Swarm view on screen takes it.
+  ({String conversationId, String messageId})? messageRequest;
+
+  /// Asks the Swarm view to open [link]'s message, in the view on screen or
+  /// the one shown next. A link to another Swarm is not this one's to open.
+  bool openMessageLink(SwarmMessageLink link) {
+    if (link.tabId != tabId) return false;
+    messageRequest = (
+      conversationId: link.conversationId,
+      messageId: link.messageId,
+    );
+    notifyListeners();
+    return true;
+  }
+
+  /// Conversations a link named that the Swarm did not hold, when each was
+  /// last asked for by id (the backend decides who may read it) and which are
+  /// being asked for now. A refusal is asked again after a minute, in case the
+  /// reader has since been let in.
+  final _linkGroupAsked = <String, DateTime>{};
+  final _linkGroupReading = <String>{};
+  static const _linkGroupRetry = Duration(minutes: 1);
+
+  /// What [link] points at for this reader: null when it is not a message they
+  /// may read (another Swarm, a conversation the backend will not give them, a
+  /// message gone); `message` null while it is being read. A conversation the
+  /// Swarm does not hold (a closed one) is asked for by id, once a minute at
+  /// most, so a link reveals nothing the backend does not already let them read.
+  ({SuperTabMessage? message})? linkTarget(SwarmMessageLink link) {
+    final id = link.conversationId;
+    if (link.tabId != tabId || accessRevoked || snapshot == null) return null;
+    if (snapshot!.conversation(id) == null) {
+      if (_linkGroupReading.contains(id)) return (message: null);
+      final asked = _linkGroupAsked[id];
+      if (asked != null && clock.now().difference(asked) < _linkGroupRetry) {
+        return null;
+      }
+      _linkGroupAsked[id] = clock.now();
+      _linkGroupReading.add(id);
+      unawaited(
+        loadGroup(id).whenComplete(() {
+          _linkGroupReading.remove(id);
+          _changed();
+        }),
+      );
+      return (message: null);
+    }
+    // A chat the app hides (an old Chat with PM, with Buddies on) is not one
+    // a link can open, so it is not previewed either.
+    if (landsOn(id) != id) return null;
+    final held = messages(id).where((m) => m.id == link.messageId).firstOrNull;
+    final read = held != null ? (message: held) : quoted(id, link.messageId);
+    // Still being read, unless every try failed.
+    if (read == null) {
+      return quoteGaveUp(id, link.messageId) ? null : (message: null);
+    }
+    final message = read.message;
+    // A waiting notice is never announced, so it is not previewed either.
+    return message == null || message.source['kind'] == 'delivery-hold'
+        ? null
+        : (message: message);
+  }
+
   /// Set by the Swarm view on screen: opens a project's Buddy chat in front
   /// of whatever covers the conversation, Notifications or a terminal.
   Future<bool> Function(String projectId)? buddyChatOpener;
@@ -1471,6 +1849,7 @@ class SuperTabController extends ChangeNotifier {
       if (group.closed) closedOpenProjects.add(group.projectId);
     }
     _moveView(to: id);
+    openedThread = null;
     _viewVersion++;
     operationNotice = null;
     _saveSoon();
@@ -1581,6 +1960,7 @@ class SuperTabController extends ChangeNotifier {
         _messages.removeWhere((id, _) => !allowed.contains(id));
         _quoted.removeWhere((id, _) => !allowed.contains(id));
         _quoting.removeWhere((id, _) => !allowed.contains(id));
+        _forgetThreads(allowed.contains);
         _rows.removeWhere((id, _) => !allowed.contains(id));
         _drafts.removeWhere((id, _) => removed.contains(id));
         _attachments.removeWhere((id, files) {
@@ -1961,6 +2341,7 @@ class SuperTabController extends ChangeNotifier {
       _forgetNewer();
       _quoted.clear();
       _quoting.clear();
+      _forgetThreads();
       _poll?.cancel();
     }
   }
@@ -2092,6 +2473,7 @@ class SuperTabController extends ChangeNotifier {
           (_showingSaved || latest || (skipped && !keepPlace)) && !older;
       if (replacing) _rows.remove(id);
       _keepRows(id, answer['messages'] as List);
+      _keepThreads(id, answer['threads']);
       final combined = {
         if (!replacing)
           for (final m in _messages[id] ?? <SuperTabMessage>[]) m.id: m,
@@ -2554,6 +2936,9 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();
+    for (final retry in _quoteRetries) {
+      retry.cancel();
+    }
     for (final files in _attachments.values) {
       files.dispose();
     }

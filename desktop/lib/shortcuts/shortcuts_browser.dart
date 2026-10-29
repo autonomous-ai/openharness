@@ -11,6 +11,7 @@ import '../widgets/key_hints.dart';
 import 'app_keymap.dart';
 import 'key_cap.dart';
 import 'keymap_commands.dart';
+import 'keymap.dart';
 import 'keymap_settings.dart';
 import 'keyboard_practice.dart';
 import 'shortcut_recorder.dart';
@@ -498,7 +499,8 @@ class _ShortcutBrowserRow extends StatelessWidget {
       child: Semantics(
         button: true,
         selected: selected,
-        label: '${lesson.label}, $spokenKeys. Practice shortcut',
+        label:
+            '${lesson.label}, $spokenKeys${lesson.context == KeymapContext.swarmChat ? ', in a Swarm tab, outside a terminal' : ''}. Practice shortcut',
         child: TextButton(
           onPressed: onTap,
           style:
@@ -582,9 +584,16 @@ class _ShortcutBrowserRow extends StatelessWidget {
                             ),
                         ],
                       );
-                final label = Text(
-                  lesson.label,
-                  style: DesktopChrome.control(),
+                final label = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(lesson.label, style: DesktopChrome.control()),
+                    if (lesson.context == KeymapContext.swarmChat)
+                      Text(
+                        'In a Swarm tab, outside a terminal',
+                        style: DesktopChrome.metadata(),
+                      ),
+                  ],
                 );
                 if (constraints.maxWidth < 330 * grid.appTextScaleOf(context)) {
                   return Column(
