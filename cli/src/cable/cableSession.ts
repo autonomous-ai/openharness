@@ -2975,7 +2975,7 @@ export class CableSession {
     // that had emptied its face on the resting pet until its own 5 s retry (Diego, 2026-10-29).
     // Only while the Lead is still in the cards: one whose access went is read again, and the host refuses it.
     const asked = `${tab}/${lead}`, now = Date.now()
-    const listed = this.host.swarmCards?.().find((c) => c.id === tab)?.leads.some((l) => l.id === lead) ?? false
+    const listed = this.host.swarmCards?.()?.find((c) => c.id === tab)?.leads.some((l) => l.id === lead) ?? false
     if (this.lastRecapGet?.key !== asked || now - this.lastRecapGet.at >= RECAP_REPEAT_MS || !listed) {
       const read = Promise.resolve()
         .then(() => this.host.swarmCardRecap?.(tab, lead, ...this.chatFlag()) ?? null)
