@@ -23,7 +23,8 @@ class SuperTabLeaderboard {
       agents = _list(json['agents']).map(SuperTabAgentScore.fromJson).toList(),
       byModel = _list(json['byModel'])
           .map(SuperTabModelScore.fromJson)
-          .toList();
+          .toList(),
+      weeks = _list(json['weeks']).map(SuperTabTeamWeek.fromJson).toList();
 
   final String projectId;
 
@@ -41,6 +42,36 @@ class SuperTabLeaderboard {
   /// Every model that worked the week, most points first; empty from a
   /// server before them.
   final List<SuperTabModelScore> byModel;
+
+  /// The board's week and the three before it, newest first; empty from a
+  /// server before them.
+  final List<SuperTabTeamWeek> weeks;
+}
+
+/// The team's week for This week (Dee, 2026-10-29).
+class SuperTabTeamWeek {
+  SuperTabTeamWeek.fromJson(Map<String, dynamic> json)
+    : week = _int(json['week']),
+      shipped = _int(json['shipped']),
+      medianRequestMs = _optional(json['medianRequestMs']),
+      reviewed = _int(_map(json['firstReview'])['reviewed']),
+      passed = _int(_map(json['firstReview'])['passed']);
+
+  /// Its Monday 00:00 UTC, in epoch milliseconds.
+  final int week;
+
+  /// Requests shipped with a PR, and their median time from first assignment
+  /// to shipping.
+  final int shipped;
+  final int? medianRequestMs;
+
+  /// Its attempts with a first review on record, and how many passed it.
+  final int reviewed, passed;
+
+  /// The share that passed first time, as a whole percent; null with none
+  /// reviewed.
+  int? get passedPercent =>
+      reviewed == 0 ? null : (passed * 100 / reviewed).round();
 }
 
 /// A permanent agent, the PM or a Buddy, scored by name like a person
