@@ -187,6 +187,46 @@ void main() {
     },
   );
 
+  // The phone has no thread view yet: a reply only in its thread is read
+  // and shown in the chat, though it leaves the chat's main stream where it
+  // was (PM, 10-29; desktop_parity_test).
+  test('a reply only in its thread is read and shown in the chat, so nothing '
+      'is lost', () async {
+    final r = rig(sequence: 2);
+    r.swarm.routes[messages] = (_) => {
+      'messages': [message('m2', 2)],
+      'next': null,
+    };
+    r.swarm.routes['$messages?after=2'] = (_) => {
+      'messages': [
+        {...message('m3', 3, text: 'in the thread'), 'thread': 'm2'},
+      ],
+      'next': null,
+    };
+    final c = await open(r.reader);
+
+    r.swarm.routes['/api/super-tabs/$tab/changes'] = (_) => changes(
+      cursor: 'c3',
+      groups: [
+        part('g1', 30, {
+          ...groupData(
+            'g1',
+            title: 'Fix login',
+            agentIds: ['agent-lead', 'agent-builder'],
+            lastMessageSequence: 3,
+          ),
+          'lastMainSequence': 2,
+        }),
+      ],
+    );
+    await r.reader.refresh();
+    await settle();
+
+    expect([for (final m in c.messages) m.text], ['hello', 'in the thread']);
+    expect(c.messages.last.threadReply, isTrue);
+    expect(r.reader.snapshot!.conversation('g1')!.mainSequence, 2);
+  });
+
   test(
     'a post goes to the agents mentioned in it, and clears the draft',
     () async {

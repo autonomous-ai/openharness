@@ -28,6 +28,9 @@ import 'dialog_scope.dart';
 import 'folder_zip.dart';
 import 'model.dart';
 import 'workgroup_name.dart';
+import 'message_link.dart';
+import 'message_link_swarms.dart';
+import 'message_link_preview.dart';
 import 'message_row.dart';
 import 'message_receipt.dart';
 import 'notifications.dart';
@@ -37,6 +40,7 @@ import 'decisions_view.dart';
 import 'route_row.dart';
 import 'ship_row.dart';
 import 'terminal_row.dart';
+import 'thread_panel.dart';
 import 'work_details.dart';
 import 'project_sidebar.dart';
 import 'project_options.dart';
@@ -63,6 +67,7 @@ class SuperTabView extends StatefulWidget {
     this.app,
     this.onNewProject,
     this.onChooseAgentTerminal,
+    this.linkSwarms,
   });
   final SuperTabController controller;
   final VoidCallback onInvite;
@@ -79,6 +84,10 @@ class SuperTabView extends StatefulWidget {
   final AppNotifier? app;
   final VoidCallback? onNewProject;
   final ValueChanged<SuperTabAgent>? onChooseAgentTerminal;
+
+  /// How a message link reaches the account's other Swarms. Without it, and
+  /// without an [app], a link into another Swarm is not followed.
+  final SwarmLinkSwarms? linkSwarms;
 
   @override
   State<SuperTabView> createState() => _SuperTabViewState();
@@ -169,7 +178,9 @@ class _SuperTabViewState extends State<SuperTabView>
   /// you": the PM writes there but cannot read it (Lead, 10-29).
   String _shownAuthor(SuperTabController c, SuperTabMessage message) {
     if (message.authorId == c.accountId && !message.fromAgent) return 'You';
-    final name = _authorName(message);
+    // The controller's own snapshot names the author: a preview may be of
+    // another Swarm's message.
+    final name = c.snapshot?.authorName(message) ?? message.authorName;
     final snapshot = c.snapshot;
     final project = snapshot?.projectFor(message.conversationId);
     final chat = project == null ? null : c.buddyChat(project.id);
@@ -245,6 +256,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void _changed() {
     if (!mounted) return;
     _takeNotice();
+    _takeMessageRequest();
     if (c.accessRevoked) {
       _replies.clear();
       _newAfter.clear();
@@ -416,6 +428,9 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     c.removeListener(_changed);
+    for (final source in _linkSources) {
+      source.removeListener(_linkSourceChanged);
+    }
     if (c.buddyChatOpener == _openBuddyChat) c.buddyChatOpener = null;
     _unregisterDial?.call();
     _dial.cancel();
@@ -1167,6 +1182,157 @@ class _SuperTabViewState extends State<SuperTabView>
   bool get _notificationsVisible =>
       _showNotifications && !_devicesVisible && !c.accessRevoked;
 
+  /// [messageId] of [id], read from the pages held, then what arrived after
+  /// them, then older pages, up to 50 (5,000 messages); null when it is not
+  /// among them. A message newer than what was read earlier is after it, so
+  /// the first read is up to the latest, its own even with a poll's read under
+  /// way (that one may hold rows below a reader scrolled up); the rest go back.
+  Future<SuperTabMessage?> _findMessage(String id, String messageId) async {
+    SuperTabMessage? held() =>
+        c.messages(id).where((m) => m.id == messageId).firstOrNull;
+    var message = held();
+    for (var page = 0; message == null && page < 50; page++) {
+      final older = page > 0;
+      if (older && !c.hasOlder(id)) break;
+      await (older ? c.loadMessages(id, older: true) : c.showLatest(id));
+      if (!mounted) return null;
+      message = held();
+    }
+    return message;
+  }
+
+  /// What the reader asked to open by a message link ([SuperTabController.openMessageLink]).
+  void _takeMessageRequest() {
+    final request = c.messageRequest;
+    if (request == null || c.snapshot == null) return;
+    c.messageRequest = null;
+    unawaited(_openMessage(request.conversationId, request.messageId));
+  }
+
+  /// Opens [id] at [messageId], lit. The backend decides what this reader may
+  /// read, so a message they may not read and one that is gone are both
+  /// "unavailable", with nothing of the conversation shown.
+  Future<void> _openMessage(String id, String messageId) async {
+    void say(String text) =>
+        ScaffoldMessenger.maybeOf(context)
+            ?.showSnackBar(SnackBar(content: Text(text)));
+    final request = ++_jumpRequest;
+    // A closed conversation is asked for by id: the backend says whether this
+    // reader may read it, and a refusal looks like a message that is gone.
+    final readable = await c.loadGroup(id);
+    if (!mounted || request != _jumpRequest || c.accessRevoked) return;
+    // The app may open another chat for it (an old Chat with PM, with Buddies
+    // on): that is not this message, so the reader stays where they are.
+    if (!readable || c.landsOn(id) != id) {
+      say('Message unavailable');
+      return;
+    }
+    final message = await _findMessage(id, messageId);
+    if (!mounted ||
+        request != _jumpRequest ||
+        c.accessRevoked ||
+        c.snapshot?.conversation(id) == null) {
+      return;
+    }
+    if (message == null) {
+      say(
+        c.hasOlder(id)
+            ? 'This message is too far back to open.'
+            : 'Message unavailable',
+      );
+      return;
+    }
+    widget.onCloseTerminal?.call();
+    _closeSidebar();
+    c.select(id);
+    // A thread reply opens its thread; one shown only there has no row in the
+    // chat to scroll to.
+    if (message.threadReply) {
+      c.openThread(message.thread!);
+      if (!message.inMainStream) return;
+    }
+    final shownBy = _rowShowing(id, messageId) ?? messageId;
+    setState(() {
+      _showNotifications = false;
+      _showPullRequests = false;
+      _back = null;
+      _target = shownBy;
+      // Stop following the end: the linked message is what to see.
+      _scrollRequest++;
+      _jumpingToEnd = false;
+      _follow(id, false);
+    });
+    _revealTarget(
+      id,
+      0,
+      arrived: (row) {
+        unawaited(Scrollable.ensureVisible(row, alignment: .3));
+        _light(messageId);
+      },
+    );
+    _focus.requestFocus();
+  }
+
+  /// The Swarms of the account a link may point into, besides this one.
+  late final SwarmLinkSwarms? _linkSwarms =
+      widget.linkSwarms ??
+      (widget.app == null ? null : AppLinkSwarms(widget.app!));
+
+  /// The other Swarms' controllers this view hears from, for their previews.
+  final _linkSources = <SuperTabController>{};
+
+  void _linkSourceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// The controller that reads [tabId] for a preview: this Swarm's, or one
+  /// already loaded here. None is loaded for a preview, so a Swarm the account
+  /// closed is never left polling.
+  SuperTabController? _linkSource(String tabId) {
+    if (tabId == c.tabId) return c;
+    final other = _linkSwarms?.loaded(tabId);
+    if (other != null && _linkSources.add(other)) {
+      other.addListener(_linkSourceChanged);
+    }
+    return other;
+  }
+
+  /// What [link] points at for the preview under a message that says it. The
+  /// Swarm it names reads it with its own session, so the server decides.
+  SuperTabLinkTarget _linkTarget(SwarmMessageLink link) {
+    final controller = _linkSource(link.tabId);
+    if (controller == null) {
+      return _linkSwarms?.read(link, _linkSourceChanged) ??
+          const SuperTabLinkTarget.unavailable();
+    }
+    final target = controller.linkTarget(link);
+    if (target == null) return const SuperTabLinkTarget.unavailable();
+    final message = target.message;
+    if (message == null) return const SuperTabLinkTarget.loading();
+    return SuperTabLinkTarget.message(
+      message,
+      author: _shownAuthor(controller, message),
+    );
+  }
+
+  /// Opens [link]: here, or in the other Swarm of the account it names.
+  void _openLink(SwarmMessageLink link) {
+    if (link.tabId == c.tabId) {
+      c.openMessageLink(link);
+      return;
+    }
+    final swarms = _linkSwarms;
+    final opened = swarms?.open(link) ?? Future.value(false);
+    unawaited(
+      opened.then((ok) {
+        if (ok || !mounted) return;
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(const SnackBar(content: Text('Message unavailable')));
+      }),
+    );
+  }
+
   /// Opens the conversation a tag is in, at its message, replying to it. What
   /// is held is looked in first, then what arrived after it, then older pages,
   /// until the message is among them; one that is not found says so, and the
@@ -1174,20 +1340,8 @@ class _SuperTabViewState extends State<SuperTabView>
   Future<void> _openMention(SuperTabMention mention) async {
     final id = mention.conversationId;
     if (c.snapshot?.conversation(id) == null) return;
-    SuperTabMessage? held() =>
-        c.messages(id).where((m) => m.id == mention.messageId).firstOrNull;
-    var message = held();
-    // Up to 50 pages (5,000 messages). A tag newer than what was read earlier
-    // is after it, so the first read is up to the latest, its own even with
-    // a poll's read under way (that one may hold rows below a reader scrolled
-    // up); the rest go back.
-    for (var page = 0; message == null && page < 50; page++) {
-      final older = page > 0;
-      if (older && !c.hasOlder(id)) break;
-      await (older ? c.loadMessages(id, older: true) : c.showLatest(id));
-      if (!mounted) return;
-      message = held();
-    }
+    final message = await _findMessage(id, mention.messageId);
+    if (!mounted) return;
     if (message == null) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
@@ -1203,9 +1357,19 @@ class _SuperTabViewState extends State<SuperTabView>
     if (!_showNotifications) return;
     _showNotifications = false;
     c.select(id);
+    // A tag in a thread opens the thread; one in a thread reply shown only
+    // there is not in the chat to scroll to.
+    if (message.thread case final root?) {
+      c.openThread(root);
+      if (!message.inMainStream) return;
+    }
     setState(() {
-      if (c.canWrite && c.selected?.archived == false) _replies[id] = message!;
-      _target = message!.id;
+      if (c.canWrite &&
+          c.selected?.archived == false &&
+          message.thread == null) {
+        _replies[id] = message;
+      }
+      _target = message.id;
       // Stop following the end: the tagged message is what to see.
       _scrollRequest++;
       _jumpingToEnd = false;
@@ -1245,8 +1409,9 @@ class _SuperTabViewState extends State<SuperTabView>
   }
 
   /// The messages [id]'s list shows, in order.
+  /// A thread reply shows in its thread, and here only when also sent.
   List<SuperTabMessage> _shownMessages(String id) =>
-      c.messages(id).where(_shown).toList();
+      c.messages(id).where((m) => _shown(m) && m.inMainStream).toList();
 
   /// A message waiting for an agent is never announced; notices older
   /// backends stored stay hidden, in the list and as a reply's quote.
@@ -1901,17 +2066,22 @@ class _SuperTabViewState extends State<SuperTabView>
     bool grouped,
     Map<String, SuperTabMessage> byId, {
     bool showReceipt = false,
+    bool inThread = false,
   }) {
     _index();
     if (message.terminalEvent || message.source['kind'] == 'overlap') {
       return SuperTabTerminalRow(
-        key: ValueKey('super-message-${message.id}'),
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
         message: message,
       );
     }
     if (SuperTabShipRow.shows(message)) {
       return SuperTabShipRow(
-        key: ValueKey('super-message-${message.id}'),
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
         message: message,
         controller: c,
       );
@@ -1919,7 +2089,9 @@ class _SuperTabViewState extends State<SuperTabView>
     final route = message.route;
     if (route != null) {
       return SuperTabRouteRow(
-        key: ValueKey('super-message-${message.id}'),
+        key: ValueKey(
+          '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+        ),
         message: message,
         route: route,
         controller: c,
@@ -1936,8 +2108,15 @@ class _SuperTabViewState extends State<SuperTabView>
     final reply =
         byId[message.replyTo] ??
         (fetched != null && _shown(fetched) ? fetched : null);
+    final writable = c.canWrite && c.selected?.archived == false;
+    final root = message.thread;
+    final thread = inThread || root != message.id
+        ? null
+        : c.thread(message.conversationId, message.id);
     return SuperTabMessageRow(
-      key: ValueKey('super-message-${message.id}'),
+      key: ValueKey(
+        '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
+      ),
       message: message,
       author: _shownAuthor(c, message),
       proposalOwner: _proposalOwner(message),
@@ -1961,11 +2140,28 @@ class _SuperTabViewState extends State<SuperTabView>
       replyAuthor: reply == null ? null : _shownAuthor(c, reply),
       replyGone: quoted != null && reply == null,
       onOpenReply: (row) => unawaited(_openOriginal(message, row)),
-      onReply: c.canWrite && c.selected?.archived == false
-          ? () {
+      link: SwarmMessageLink(
+        tabId: c.tabId,
+        conversationId: message.conversationId,
+        messageId: message.id,
+      ),
+      linkTarget: _linkTarget,
+      onOpenLink: _openLink,
+      // A message with a thread is answered there; one from before threads
+      // keeps the inline reply.
+      onReply: !writable || inThread
+          ? null
+          : root != null
+          ? () => c.openThread(root)
+          : () {
               setState(() => _replies[c.selectedId] = message);
               _focus.requestFocus();
-            }
+            },
+      thread: thread,
+      threadUnread: thread != null && c.threadUnread(thread),
+      onOpenThread:
+          !inThread && root != null && (thread != null || message.threadReply)
+          ? () => c.openThread(root)
           : null,
       onReturnToComposer: _focus.requestFocus,
       readerId: c.accountId,
@@ -2004,6 +2200,21 @@ class _SuperTabViewState extends State<SuperTabView>
             },
           ),
       ],
+    );
+  }
+
+  /// The open thread of the selected conversation, beside the chat.
+  Widget? _threadPanel() {
+    final open = c.openedThread;
+    if (open == null || open.conversationId != c.selectedId) return null;
+    final rows = c.threadMessages(open.root);
+    final byId = {for (final m in rows) m.id: m};
+    return SuperTabThreadPanel(
+      controller: c,
+      root: open.root,
+      row: (message, grouped) =>
+          _message(message, grouped, byId, inThread: true),
+      outgoing: (sent) => _outgoingRow(sent, rows, byId),
     );
   }
 
@@ -2313,7 +2524,10 @@ class _SuperTabViewState extends State<SuperTabView>
     // More came than were read: the count is a floor.
     final moreNew = c.hasNewer(c.selectedId);
     final reply = _replies[c.selectedId];
-    final outgoing = c.outgoing(c.selectedId);
+    final outgoing = c
+        .outgoing(c.selectedId)
+        .where((sent) => sent.inMainStream)
+        .toList();
     // A failed message says so in its own row, with what can be done.
     final errorInRow = outgoing.any(
       (sent) => switch (sent.state) {
@@ -3004,8 +3218,12 @@ class _SuperTabViewState extends State<SuperTabView>
           constraints.maxWidth < MediaQuery.textScalerOf(context).scale(720);
       final showRoster =
           constraints.maxWidth >= MediaQuery.textScalerOf(context).scale(1080);
+      final thread = _threadPanel();
+      final threadDrawer = thread != null && !showRoster;
       final chatCovered =
-          (narrow && _sidebarOpen) || (!showRoster && _rosterOpen);
+          (narrow && _sidebarOpen) ||
+          (!showRoster && _rosterOpen) ||
+          threadDrawer;
       if (_chatCovered && !chatCovered) {
         // Both dismissing a drawer and widening the window reveal the cached
         // transcript without loading another message.
@@ -3043,7 +3261,8 @@ class _SuperTabViewState extends State<SuperTabView>
               storage: widget.app?.localStore,
               onLeave: _leaveResize,
               left: narrow ? null : _sidebar(),
-              right: showRoster ? roster : null,
+              // An open thread takes the roster's side, as in Slack.
+              right: !showRoster ? null : thread ?? roster,
               center: Column(
                 children: [
                   _header(c.selected, narrow, showRoster),
@@ -3087,7 +3306,31 @@ class _SuperTabViewState extends State<SuperTabView>
               ),
             ),
           ),
-          if (!showRoster && _rosterOpen)
+          if (threadDrawer)
+            Positioned.fill(
+              child: BlockSemantics(
+                child: GestureDetector(
+                  onTap: c.closeThread,
+                  child: ColoredBox(
+                    color: grid.AppDesktop.veil(Theme.of(context).brightness),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: GestureDetector(
+                        // A click inside the thread stays there.
+                        onTap: () {},
+                        child: SizedBox(
+                          width: SuperTabPaneLayout.drawerWidth(
+                            constraints.maxWidth,
+                          ),
+                          child: thread,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          if (!showRoster && _rosterOpen && !threadDrawer)
             Positioned.fill(
               child: BlockSemantics(
                 child: FocusScope(

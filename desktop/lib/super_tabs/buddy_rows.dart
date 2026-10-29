@@ -43,6 +43,8 @@ class SuperTabBuddyRow extends StatelessWidget {
     this.selected = false,
     this.unread = false,
     this.note,
+    this.detail,
+    this.status,
   });
 
   /// The Buddy, for its avatar; null while none runs.
@@ -59,6 +61,11 @@ class SuperTabBuddyRow extends StatelessWidget {
 
   /// A quiet word after the name, such as a Buddy's "offline".
   final String? note;
+
+  /// A line under the name, such as where a Buddy runs, with [status], its
+  /// activity mark, before it.
+  final String? detail;
+  final Widget? status;
 
   static const _column = SuperTabSectionHeading.actionWidth;
 
@@ -105,48 +112,71 @@ class SuperTabBuddyRow extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(
                           vertical: grid.AppDesktop.controlGap,
                         ),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            Flexible(
-                              child: Text(
-                                name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                // Unread is the name in bold, no dot (Dee, 2026-10-29).
-                                style:
-                                    DesktopChrome.control(
-                                      medium: selected,
-                                      color: color,
-                                    ).copyWith(
-                                      fontWeight: unread
-                                          ? grid.AppFont.semibold
-                                          : null,
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    // Unread is the name in bold, no dot (Dee, 2026-10-29).
+                                    style:
+                                        DesktopChrome.control(
+                                          medium: selected,
+                                          color: color,
+                                        ).copyWith(
+                                          fontWeight: unread
+                                              ? grid.AppFont.semibold
+                                              : null,
+                                        ),
+                                  ),
+                                ),
+                                if (project case final project?) ...[
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      '($project)',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: DesktopChrome.metadata(),
                                     ),
-                              ),
+                                  ),
+                                ],
+                                // A quiet note yields first at large text sizes.
+                                if (note case final note?) ...[
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      note,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
-                            if (project case final project?) ...[
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: Text(
-                                  '($project)',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: DesktopChrome.metadata(),
-                                ),
+                            if (detail case final detail?)
+                              Row(
+                                children: [
+                                  if (status case final status?) ...[
+                                    status,
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Flexible(
+                                    child: Text(
+                                      detail,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: DesktopChrome.metadata(),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ],
-                            // A quiet note yields first at large text sizes.
-                            if (note case final note?) ...[
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: Text(
-                                  note,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: DesktopChrome.metadata(),
-                                ),
-                              ),
-                            ],
                           ],
                         ),
                       ),
