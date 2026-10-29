@@ -127,6 +127,30 @@ class LeaderboardWeekSummary extends StatelessWidget {
         history: 'Spend per shipped change shows once a full week of it is recorded.',
       ),
     ];
+    // One trend column and one value column, each as wide as its widest
+    // entry at the current text size, so the figures line up row under row.
+    final scaler = MediaQuery.textScalerOf(context);
+    double width(String text, TextStyle style) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout();
+      final width = painter.width;
+      painter.dispose();
+      return width;
+    }
+
+    TextStyle valueStyle(String key) =>
+        key == 'cheaper' ? DesktopChrome.metadata() : leaderboardPointsStyle();
+    final trendWidth = [
+      for (final row in rows)
+        if (row.trend case final trend?)
+          AppIcons.metadataSize + width(trend.figure, _TrendMark.style()),
+    ].fold(0.0, (a, b) => a > b ? a : b);
+    final valueWidth = [
+      for (final row in rows) width(row.value, valueStyle(row.key)),
+    ].fold(0.0, (a, b) => a > b ? a : b);
     return Column(
       key: const ValueKey('week-summary'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -169,14 +193,25 @@ class LeaderboardWeekSummary extends StatelessWidget {
                         ],
                       ),
                     ),
-                    if (row.trend case final trend?) _TrendMark(trend),
+                    if (trendWidth > 0)
+                      SizedBox(
+                        width: trendWidth,
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: row.trend == null
+                              ? null
+                              : _TrendMark(row.trend!),
+                        ),
+                      ),
                     const SizedBox(width: _gap),
-                    Text(
-                      row.value,
-                      maxLines: 1,
-                      style: row.trend == null && row.key == 'cheaper'
-                          ? DesktopChrome.metadata()
-                          : leaderboardPointsStyle(),
+                    SizedBox(
+                      width: valueWidth,
+                      child: Text(
+                        row.value,
+                        maxLines: 1,
+                        textAlign: TextAlign.right,
+                        style: valueStyle(row.key),
+                      ),
                     ),
                   ],
                 ),
@@ -193,6 +228,11 @@ class _TrendMark extends StatelessWidget {
   const _TrendMark(this.trend);
   final _Trend trend;
 
+  /// The change's figure: caption size, tabular, in the trend's colour.
+  static TextStyle style([Color? color]) =>
+      DesktopChrome.metadata(color: color)
+          .copyWith(fontFeatures: grid.AppFont.tabularFigures);
+
   @override
   Widget build(BuildContext context) {
     final color = trend.better
@@ -206,11 +246,7 @@ class _TrendMark extends StatelessWidget {
           size: AppIcons.metadataSize,
           color: color,
         ),
-        Text(
-          trend.figure,
-          style: DesktopChrome.metadata(color: color)
-              .copyWith(fontFeatures: grid.AppFont.tabularFigures),
-        ),
+        Text(trend.figure, style: style(color)),
       ],
     );
   }
