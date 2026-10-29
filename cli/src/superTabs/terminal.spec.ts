@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { CoreApi, SuperTabScreen } from '../core/api.js'
 import { fakeCore } from '../testing/fakeCore.js'
+import { CODEX_MODEL_MIGRATION, CODEX_SIGN_IN, CODEX_TRUST_PROMPT, CODEX_UPDATE_PROMPT } from '../lib/__fixtures__/takeoverScreens.js'
 import { capScreen, limitOf, modelFailing, TerminalHost, typedKeys } from './terminal.js'
 
 const row = (agentId = 'a1', harnessId = 'h1', over: Record<string, unknown> = {}) => ({ tabId: 'tab', agent: { id: agentId, harnessId, machineId: 'm1' }, ...over })
@@ -243,6 +244,74 @@ describe('the stuck and usage-limit alerts', () => {
     await t.host.tick([row()])
     t.wait(15_000); await t.host.tick([row()])
     expect(t.alerts()).toHaveLength(1)
+  })
+})
+
+describe('answering Codex\'s update screen for a Swarm agent', () => {
+  const update = (): SuperTabScreen => ({ ok: true, text: CODEX_UPDATE_PROMPT, hold: 'update_prompt_open' })
+  const idle = (): SuperTabScreen => ({ ok: true, text: '> ', hold: null })
+  const typed = (t: ReturnType<typeof setup>) => vi.mocked(t.core.superTabs!.input).mock.calls
+
+  it('types 2 and Enter on the screen (Skip, never Update now) and raises no alert for it', async () => {
+    const t = setup({ screen: update })
+    await t.host.tick([row()])
+    expect(typed(t)).toEqual([['h1', '', ['2', 'Enter']]])
+    t.showing(idle)
+    for (let i = 0; i < 14; i++) { t.wait(15_000); await t.host.tick([row()]) }
+    expect(typed(t)).toHaveLength(1)
+    expect(t.alerts()).toEqual([])
+  })
+
+  it('answers only the agent whose screen shows it, and only a Swarm agent of this machine', async () => {
+    const t = setup({ screen: harnessId => harnessId === 'h2' ? update() : idle(), live: ['h1', 'h2', 'h3'] })
+    await t.host.tick([row('a1', 'h1'), row('a2', 'h2'), { tabId: 'tab', agent: { id: 'a3', harnessId: 'h3', machineId: 'other' } }])
+    expect(typed(t)).toEqual([['h2', '', ['2', 'Enter']]])
+  })
+
+  it.each([['trust', CODEX_TRUST_PROMPT, 'trust_open'], ['model', CODEX_MODEL_MIGRATION, 'model_prompt_open'],
+    ['sign-in', CODEX_SIGN_IN, 'sign_in_open'], ['permission', 'Allow? 1. Yes', 'permission_open']] as const)('types nothing on the %s screen', async (_name, text, hold) => {
+    const t = setup({ screen: () => ({ ok: true, text, hold }) })
+    await t.host.tick([row()])
+    expect(typed(t)).toEqual([])
+  })
+
+  it('types nothing when the screen is the update screen but has no plain Skip row, and alerts as before after 3 minutes', async () => {
+    const t = setup({ screen: () => ({ ok: true, text: CODEX_UPDATE_PROMPT.replace('  2. Skip\n', ''), hold: 'update_prompt_open' }) })
+    await t.host.tick([row()])
+    t.wait(180_000); await t.host.tick([row()])
+    expect(typed(t)).toEqual([])
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'prompt', active: true }])
+  })
+
+  it('types nothing when the screen moved on between the read and the answer', async () => {
+    const reads = [update(), idle()]
+    const t = setup({ screen: () => reads.shift() ?? idle() })
+    await t.host.tick([row()])
+    expect(typed(t)).toEqual([])
+  })
+
+  it('tries three times at most when the screen stays, then leaves it to the 3-minute alert', async () => {
+    const t = setup({ screen: update })
+    for (let i = 0; i < 12; i++) { await t.host.tick([row()]); t.wait(15_000) }
+    await t.host.tick([row()])
+    expect(typed(t)).toHaveLength(3)
+    expect(t.alerts()).toEqual([{ type: 'agent.alert', agentId: 'a1', alert: 'prompt', active: true }])
+  })
+
+  it('starts the tries again for a new update screen once the old one is gone', async () => {
+    const t = setup({ screen: update })
+    await t.host.tick([row()])
+    t.showing(idle); t.wait(15_000); await t.host.tick([row()])
+    t.showing(update); t.wait(15_000); await t.host.tick([row()])
+    expect(typed(t)).toHaveLength(2)
+  })
+
+  it('goes on watching when the terminal does not take the keys', async () => {
+    const t = setup({ screen: update })
+    vi.mocked(t.core.superTabs!.input).mockResolvedValueOnce({ ok: false, error: 'The terminal did not take the key Enter.' })
+    await t.host.tick([row()])
+    t.wait(15_000); await t.host.tick([row()])
+    expect(typed(t)).toHaveLength(2)
   })
 })
 
