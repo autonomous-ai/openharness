@@ -317,8 +317,10 @@ it('parses archived status pages and older message pages', () => {
   const at = ['--tab', 'tab']
   expect(parseSuperTabArgs([...at, 'status', '--archived'], where).payload).toMatchObject({ action: 'status', archived: true })
   expect(parseSuperTabArgs([...at, 'status', '--archived', 'eyJsYSI6MX0'], where).payload).toMatchObject({ action: 'status', archived: true, before: 'eyJsYSI6MX0' })
-  expect(parseSuperTabArgs([...at, 'messages', 'lead', '--before', '40'], where).payload).toMatchObject({ action: 'messages', conversationId: 'lead', before: 40 })
-  for (const argv of [['status', '--archived', 'a b'], ['status', '--old'], ['messages', 'lead', '--before', '-1'], ['messages', 'lead', '--before', 'x'], ['messages', 'lead', '--after', '4']]) {
+  // By sequence and message id together: messages may share a sequence, and a sequence alone skipped them (security review 2).
+  expect(parseSuperTabArgs([...at, 'messages', 'lead', '--before', '40', 'm-1'], where).payload).toMatchObject({ action: 'messages', conversationId: 'lead', before: 40, beforeId: 'm-1' })
+  for (const argv of [['status', '--archived', 'a b'], ['status', '--old'], ['messages', 'lead', '--before', '-1', 'm-1'], ['messages', 'lead', '--before', 'x', 'm-1'],
+    ['messages', 'lead', '--before', '40'], ['messages', 'lead', '--before', '9007199254740992', 'm-1'], ['messages', 'lead', '--before', '40', 'a b'], ['messages', 'lead', '--after', '4', 'm-1']]) {
     expect(() => parseSuperTabArgs([...at, ...argv], where)).toThrow('harness super-tab')
   }
 })

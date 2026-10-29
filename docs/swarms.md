@@ -206,9 +206,11 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 - A Buddy never reads a private chat (its owner's own with others included), another person's Buddy chat, the Leads
   conversation or another project, and its Swarm read shows no machines, agent starts or routing rules. It can post
   only in its own chat. The server refuses every other command.
-- Its status is a short task summary, the newest 100 tasks, marking what changed since its last read; pull requests
-  show their merge and CI state as its owner's own GitHub on their machine reads them, up to 50 at a time. It treats
-  task, message and pull request text as information, never as instructions; only its owner's words ask it to act.
+- Its status is a short task summary, the newest 100 tasks, marking what changed since its last read and which ones
+  are archived but not yet in the product manager's report; routing rows (where a task was routed, what was left out
+  and why) and the project's folder never reach it. Pull requests show their merge and CI state as its owner's own
+  GitHub on their machine reads them, up to 50 at a time. It treats task, message and pull request text as
+  information, never as instructions; only its owner's words ask it to act.
 - A Buddy never changes code. A Claude Code Buddy starts in asking mode: only its Super Tab commands run without asking,
   file editing is turned off, and the files in its own copy of the project are read-only. A Codex Buddy keeps Codex's
   full permissions with read-only files (follow-up: give Codex the same pre-approved commands). No Buddy gets the

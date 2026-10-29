@@ -51,7 +51,7 @@ describe('a Buddy\'s status', () => {
       decisions: decisions([{ id: 'd1', conversationId: 'offline', question: 'Ship it behind a flag?', options: ['Behind a flag', 'To everyone'], recommended: 0, unblocks: 'The release' }]) })
     expect(status).toEqual({
       project: { name: 'App', chat: 'app-chat' }, chat: 'buddy-chat', since: null, more: 0,
-      archived: 'Archived tasks are left out: read them with status --archived.',
+      archived: 'Archived tasks the PM has reported on are left out: read them with status --archived.',
       tasks: [{ conversationId: 'offline', number: 12, title: 'Offline sync', status: 'needs_human', note: 'Ship it behind a flag?', owns: ['desktop/lib/sync'],
         agents: [{ name: 'Ada', role: 'Product Manager', state: 'present' }, { name: 'Echo', role: 'Engineer', state: 'needs_human' },
           { name: 'Reviewer', role: 'Reviewer', state: 'down' }],
@@ -64,12 +64,14 @@ describe('a Buddy\'s status', () => {
     expect(prs.asked).toEqual([[pr(12)]])
   })
 
-  it('marks the tasks that changed since its last read, newest first, and leaves out archived and dormant ones', async () => {
+  it('marks the tasks that changed since its last read, newest first; shows one archived until its report, and leaves out dormant ones', async () => {
     const groups = [{ ...offline, id: 'a', number: 1, pullRequestUrls: [] }, { ...offline, id: 'b', number: 2, pullRequestUrls: [] },
       { ...offline, id: 'c', number: 3, archived: true, pullRequestUrls: [] }, { ...offline, id: 'd', number: 4, dormant: true, pullRequestUrls: [] }]
     const status = await buddyStatus(input(swarm(groups), { a: 1000, b: 3000, c: 4000, d: 4000 }, 2000), { pullRequests: reader().read, decisions: decisions() })
     const tasks = status.tasks as Array<{ number: number; changed: boolean }>
-    expect(tasks.map(t => [t.number, t.changed])).toEqual([[2, true], [1, false]])
+    // An archived task stays active until the PM's report covers it (backend commands.ts), and the archived list has only
+    // dormant ones: the summary shows it, marked, so it is in one of the two (security review 1 of #2115).
+    expect(tasks.map(t => [t.number, t.changed, (t as { archived?: boolean }).archived ?? false])).toEqual([[3, true, true], [2, true, false], [1, false, false]])
     expect(status.since).toBe(new Date(2000).toISOString())
   })
 
@@ -83,6 +85,14 @@ describe('a Buddy\'s status', () => {
     expect(tasks[0]!.number).toBe(BUDDY_TASKS_MAX + 5)
     expect(prs.asked).toEqual([tasks.slice(0, 50).map(t => pr(t.number))])
     expect(tasks[50]!.pullRequests).toEqual([{ url: pr(tasks[50]!.number), state: 'not checked' }])
+  })
+
+  it('checks only valid pull request links, so one malformed link never fails the rest', async () => {
+    const prs = reader(urls => urls.map(url => found(url)))
+    const status = await buddyStatus(input(swarm([{ ...offline, pullRequestUrls: [pr(12), 'https://github.com/acme/app/pull/0', 'https://github.com/acme/app/pull/12/files'] }])),
+      { pullRequests: prs.read, decisions: decisions() })
+    expect(prs.asked).toEqual([[pr(12)]])
+    expect((status.tasks as Array<{ pullRequests: Array<{ url: string; state: string }> }>)[0]!.pullRequests.map(p => p.state)).toEqual(['Open'])
   })
 
   it('still lists its tasks when GitHub cannot be read, saying why', async () => {

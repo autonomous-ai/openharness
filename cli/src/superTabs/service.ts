@@ -509,7 +509,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           return { ok: true, value: await backend(core, 'GET', `${path}/decisions?state=${payload.state}&${identity}`) }
         }
         if (payload.action === 'messages' && identifier(payload.conversationId)) {
-          const before = Number.isSafeInteger(payload.before) && Number(payload.before) >= 0 ? `&before=${payload.before}` : ''
+          // An older page's cursor is its sequence and message id together, or it is refused: never read as the newest page.
+          const paged = payload.before !== undefined || payload.beforeId !== undefined
+          if (paged && !(Number.isSafeInteger(payload.before) && Number(payload.before) >= 0 && identifier(payload.beforeId))) return { error: 'INVALID_REQUEST' }
+          const before = paged ? `&before=${payload.before}&beforeId=${payload.beforeId}` : ''
           const page = await backend(core, 'GET', `${path}/conversations/${payload.conversationId}/messages?${identity}${before}`)
           return { ok: true, value: markAnswered(page, [], agentId) }
         }

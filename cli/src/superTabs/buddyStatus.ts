@@ -6,6 +6,7 @@
  * requests read with the person's own GitHub (a Buddy runs only on its person's own machine) up to the reader's limit.
  */
 import { PULL_REQUESTS_MAX, type PullRequestsResult } from '../lib/pullRequestsStatus.js'
+import { validPullRequestUrl } from '../lib/sessionWorkWire.js'
 
 type Json = Record<string, unknown>
 const object = (value: unknown): Json => value && typeof value === 'object' && !Array.isArray(value) ? value as Json : {}
@@ -14,7 +15,7 @@ const text = (value: unknown, max: number): string | undefined => typeof value =
 
 /** The newest tasks a summary lists; `more` counts the rest. One of the largest projects holds about 60 open groups. */
 export const BUDDY_TASKS_MAX = 100
-const ARCHIVED = 'Archived tasks are left out: read them with status --archived.'
+const ARCHIVED = 'Archived tasks the PM has reported on are left out: read them with status --archived.'
 const ROLES: Record<string, string> = { builder: 'Engineer', reviewer: 'Reviewer' }
 
 export interface BuddyStatusDeps {
@@ -41,7 +42,9 @@ export async function buddyStatus(input: BuddyStatusInput, deps: BuddyStatusDeps
   const project = list(state.projects).find(p => p.id === self?.projectId) ?? { name: null, leadConversationId: 'lead' }
   const changedAt = (id: unknown) => input.groupChangedAt.get(String(id)) ?? 0
   const open = list(state.conversations)
-    .filter(c => c.id !== project.leadConversationId && c.kind !== 'buddy' && c.kind !== 'leads' && c.archived !== true && c.dormant !== true)
+    // An archived task stays in the active set until the PM's report covers it (backend commands.ts conversation.archive),
+    // and the archived list holds only dormant ones: it is shown here, marked, so it is never in neither (review 1 of #2115).
+    .filter(c => c.id !== project.leadConversationId && c.kind !== 'buddy' && c.kind !== 'leads' && c.dormant !== true)
     .sort((a, b) => changedAt(b.id) - changedAt(a.id))
   const groups = open.slice(0, BUDDY_TASKS_MAX)
   const rows = await taskRows(groups, state, deps, id => {
@@ -70,7 +73,8 @@ export async function buddyArchived(page: unknown, state: Json, _agentId: string
 }
 
 async function taskRows(groups: Json[], state: Json, deps: BuddyStatusDeps, activity: (id: unknown) => Json): Promise<Json> {
-  const urls = (group: Json) => (Array.isArray(group.pullRequestUrls) ? group.pullRequestUrls : []).filter((u): u is string => typeof u === 'string')
+  // Only links the reader takes: it refuses a whole batch for one it does not (security review 2 of #2115).
+  const urls = (group: Json) => (Array.isArray(group.pullRequestUrls) ? group.pullRequestUrls : []).filter(validPullRequestUrl)
   // Newest tasks first, so the reader's limit leaves out the oldest pull requests, never the ones being worked on.
   const checked = [...new Set(groups.flatMap(urls))].slice(0, PULL_REQUESTS_MAX)
   const [read, asked] = await Promise.all([
@@ -83,7 +87,7 @@ async function taskRows(groups: Json[], state: Json, deps: BuddyStatusDeps, acti
   const tasks = groups.map(group => {
     const assignment = object(group.assignment), status = typeof assignment.status === 'string' ? assignment.status : 'open'
     return {
-      conversationId: group.id, number: group.number ?? null, title: group.title,
+      conversationId: group.id, number: group.number ?? null, title: group.title, ...(group.archived === true ? { archived: true } : {}),
       ...(group.reviewOf ? { reviewOf: group.reviewOf } : {}),
       status, ...(text(assignment.result, 500) ? { note: text(assignment.result, 500) } : {}),
       owns: Array.isArray(object(group.task).owns) ? (object(group.task).owns as unknown[]).filter(o => typeof o === 'string').slice(0, 40) : [],

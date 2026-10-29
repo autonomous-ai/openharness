@@ -10,7 +10,7 @@ import { uploadAttachments } from './attach.js'
 import { keyName } from './terminal.js'
 import { randomUUID } from 'node:crypto'
 
-const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE] | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
+const USAGE = 'harness super-tab --tab ID [--agent ID] [--port N --machine ID] status [--archived [PAGE]] | messages GROUP [--before SEQUENCE MESSAGE_ID] | message GROUP MESSAGE_ID | decisions [--answered] | post GROUP TEXT OPERATION_ID [--reply-to MESSAGE_ID] [--attach PATH]... [--mention PERSON]... | command OPERATION_ID JSON | propose OPERATION_ID JSON | start OPERATION_ID JSON | resume START_ID | capacity MACHINE_ID JSON | route GROUP JSON | plan [JSON] | remove-machine MACHINE_ID [--yes] | set-agents MACHINE_ID COUNT | screen AGENT [--scrollback N] | type AGENT [TEXT] [--key K]... | help'
 export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   const positional: string[] = []
   let tabId = '', agentId = ''
@@ -28,9 +28,11 @@ export function parseSuperTabArgs(argv: readonly string[], where: Where) {
   if (action !== 'help' && (!identifier(tabId) || (agentId && !identifier(agentId)))) throw new Error(USAGE)
   const payload: Record<string, unknown> = { action, tabId, agentId }
   if (action === 'messages' && identifier(first) && positional.length === 2) payload.conversationId = first
-  // Older messages, a page before the sequence the last page started at (a Buddy reads a task's history this way).
-  else if (action === 'messages' && identifier(first) && positional.length === 4 && second === '--before' && /^(0|[1-9][0-9]{0,15})$/.test(third ?? '')) {
-    Object.assign(payload, { conversationId: first, before: Number(third) })
+  // Older messages, a page before the cursor the last page named: its sequence and message id together, as messages may
+  // share a sequence and a sequence alone skipped them (security review 2 of #2115). A Buddy reads a task's history this way.
+  else if (action === 'messages' && identifier(first) && positional.length === 5 && second === '--before' && /^(0|[1-9][0-9]{0,15})$/.test(third ?? '')
+    && Number.isSafeInteger(Number(third)) && identifier(positional[4])) {
+    Object.assign(payload, { conversationId: first, before: Number(third), beforeId: positional[4] })
   }
   // A Buddy's archived tasks, a page at a time from the page the last one named (cli/src/superTabs/buddyStatus.ts).
   else if (action === 'status' && first === '--archived' && (positional.length === 2 || positional.length === 3 && /^[A-Za-z0-9_-]{1,512}$/.test(second ?? ''))) {
