@@ -1880,17 +1880,21 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Adds the reader's Buddy in [projectId] on [machineId] with [engine], and
-  /// opens its chat. False when refused: [operationError] says why.
+  /// opens its chat. [setup] is sent for one of their own machines outside the
+  /// Swarm (prepareBuddyMachine). False when refused: [operationError] says
+  /// why.
   Future<bool> addBuddy({
     required String projectId,
     required String machineId,
     required String engine,
+    Map<String, dynamic>? setup,
   }) async {
     final result = await command({
       'type': 'buddy.create',
       'projectId': projectId,
       'machineId': machineId,
       'engine': engine,
+      'setup': ?setup,
     });
     if (result == null) return false;
     final id = result['conversationId'];

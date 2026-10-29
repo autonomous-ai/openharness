@@ -136,7 +136,7 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
       _busy = true;
       _error = null;
     });
-    final (:id, error: addError) = await _adder.resolve(
+    final (:id, :setup, error: addError) = await _adder.resolve(
       machine,
       alive: () => mounted,
     );
@@ -152,7 +152,10 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
       projectId: project,
       machineId: id,
       engine: _engine,
+      setup: setup,
     );
+    // Its host reads the Swarm now rather than on its next pass.
+    if (added && setup != null) unawaited(widget.app?.wakeSuperTabHost(id));
     if (!mounted) return;
     if (added) {
       Navigator.pop(context);
@@ -224,12 +227,12 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   label('Machine'),
                   Expanded(
                     child: machines.isEmpty
-                        ? BuddyNoMachine(controller: c, app: widget.app)
+                        ? BuddyNoMachine(machines: machines)
                         : BuddyMachineField(
                             key: const ValueKey('super-buddy-machine'),
                             machines: machines,
-                            value: _picked!.id,
-                            action: 'Add Buddy',
+                            value: _picked?.id,
+                            busy: _busy,
                             onChanged: (value) {
                               if (!_busy) setState(() => _machine = value);
                             },
@@ -237,15 +240,11 @@ class _AddBuddyDialogState extends State<_AddBuddyDialog> {
                   ),
                 ],
               ),
-              if (_picked?.joins == true) ...[
+              if (machines.isNotEmpty && _picked == null) ...[
                 const SizedBox(height: 4),
                 Padding(
                   padding: const EdgeInsets.only(left: _labelWidth),
-                  child: Text(
-                    buddyJoinsNote('Add Buddy'),
-                    key: const ValueKey('super-buddy-joins'),
-                    style: DesktopChrome.control(color: DesktopChrome.muted),
-                  ),
+                  child: BuddyNoMachine(machines: machines),
                 ),
               ],
               const SizedBox(height: 12),
@@ -508,23 +507,38 @@ class _BuddyStartState extends State<_BuddyStart> {
   String _engine = 'claude';
   bool _adding = false;
 
-  /// Starts the Buddy on [machine], first adding it to the Swarm when it is
-  /// this Mac and not in it yet. A failed add says why and starts nothing.
+  /// Starts the Buddy on [machine], first preparing it when it is one of the
+  /// reader's machines outside the Swarm. A failed setup says why and starts
+  /// nothing.
   Future<void> _start(BuddyMachine machine) async {
     if (_adding) return;
     setState(() {
       _adding = true;
       _error = null;
     });
-    final (:id, :error) = await _adder.resolve(machine, alive: () => mounted);
+    final (:id, :setup, :error) = await _adder.resolve(
+      machine,
+      alive: () => mounted,
+    );
     if (!mounted) return;
     setState(() {
       _adding = false;
       _error = error;
     });
     if (id == null) return;
+    final app = widget.app;
     unawaited(
-      c.addBuddy(projectId: widget.projectId, machineId: id, engine: _engine),
+      c
+          .addBuddy(
+            projectId: widget.projectId,
+            machineId: id,
+            engine: _engine,
+            setup: setup,
+          )
+          .then((added) {
+            // Its host reads the Swarm now rather than on its next pass.
+            if (added && setup != null) unawaited(app?.wakeSuperTabHost(id));
+          }),
     );
   }
 
@@ -546,16 +560,16 @@ class _BuddyStartState extends State<_BuddyStart> {
             style: DesktopChrome.control(medium: true),
           ),
           const SizedBox(height: 8),
-          if (machine == null)
-            BuddyNoMachine(controller: c, app: widget.app)
+          if (machines.isEmpty)
+            BuddyNoMachine(machines: machines)
           else
             Row(
               children: [
                 BuddyMachineField(
                   key: const ValueKey('super-buddy-start-machine'),
                   machines: machines,
-                  value: machine.id,
-                  action: 'Start',
+                  value: machine?.id,
+                  busy: busy,
                   fitNames: true,
                   onChanged: (value) {
                     if (!busy) setState(() => _machine = value);
@@ -584,18 +598,16 @@ class _BuddyStartState extends State<_BuddyStart> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: busy ? null : () => unawaited(_start(machine)),
+                  onPressed: busy || machine == null
+                      ? null
+                      : () => unawaited(_start(machine)),
                   child: const Text('Start'),
                 ),
               ],
             ),
-          if (machine?.joins == true) ...[
+          if (machines.isNotEmpty && machine == null) ...[
             const SizedBox(height: 4),
-            Text(
-              buddyJoinsNote('Start'),
-              key: const ValueKey('super-buddy-start-joins'),
-              style: DesktopChrome.control(color: DesktopChrome.muted),
-            ),
+            BuddyNoMachine(machines: machines),
           ],
           if (_error case final error?) ...[
             const SizedBox(height: 4),
