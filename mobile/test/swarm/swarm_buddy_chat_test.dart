@@ -11,6 +11,12 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart';
+
+import 'package:harness_mobile/swarm/swarm_buddy.dart'
+    show swarmBuddyMachineOffline, swarmBuddyOwnMachines;
+import 'package:harness_mobile/swarm/swarm_start.dart' show SwarmComputers;
+
+import 'swarm_computers_fake.dart';
 import 'swarm_fixture.dart';
 
 /// The person's own Buddy chat on the phone (#2090; Desktop's Buddy chat,
@@ -66,6 +72,8 @@ void main() {
     'name': name,
     'contributorId': owner,
     'engines': ['claude', 'codex'],
+    // Reporting now: in no account list here, so only this says it is up.
+    'observation': {'receivedAt': DateTime.now().millisecondsSinceEpoch},
   };
 
   Map<String, dynamic> wren({String? downSince}) => {
@@ -129,7 +137,11 @@ void main() {
     return fake;
   }
 
-  Future<SwarmHost> pump(WidgetTester tester, FakeSwarm fake) async {
+  Future<SwarmHost> pump(
+    WidgetTester tester,
+    FakeSwarm fake, {
+    SwarmComputers? computers,
+  }) async {
     final features = ExperimentalFeaturesStore(storage: MemoryKeyValueStore())
       ..value = {PhoneExperiment.swarm};
     final account = ValueNotifier<String?>(me);
@@ -140,6 +152,7 @@ void main() {
       upload: refuseSwarmUpload,
       notices: SilentSystemNotices(),
       features: features,
+      computers: computers,
     )..foreground = false;
     addTearDown(host.dispose);
     await tester.pumpWidget(
@@ -599,7 +612,7 @@ void main() {
 
       await tester.tap(key('swarm-buddy-machine'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Mac Studio'));
+      await tester.tap(find.text('Tonys-MacBook-Pro').last);
       await tester.pumpAndSettle();
       await tester.tap(key('swarm-buddy-start-button'));
       await tester.pumpAndSettle();
@@ -608,8 +621,71 @@ void main() {
         {
           'type': 'buddy.create',
           'projectId': project,
-          'machineId': 'mac-4',
+          'machineId': 'mac-1',
           'engine': 'claude',
+        },
+      ]);
+    });
+
+    // Dee, 10-29: every computer of the person's own, under one heading,
+    // each by its name; an offline one says so and cannot be picked; one
+    // outside the Swarm is prepared there and never added to it.
+    testWidgets('the sheet lists every computer of their own under one '
+        'heading, an offline one turned off, and one outside the Swarm starts '
+        'with its setup', (tester) async {
+      final fake = backend(machines: [machine('mac-1', 'Tonys-MacBook-Pro')]);
+      final computers = FakeComputers(const [])
+        ..own = [
+          (id: 'mac-1', name: 'tropic', away: false),
+          (id: 'studio', name: 'Studio', away: false),
+          (id: 'air', name: 'MacBook Air', away: true),
+        ]
+        ..answer = (_, _) => {
+          'ok': true,
+          'state': 'ready',
+          'scope': 'swarm',
+          'cwd': '/home/me/swarm',
+          'engines': ['claude', 'codex'],
+        };
+      await pump(tester, fake, computers: computers);
+
+      // Online ones by name, none started on before: Studio first.
+      expect(
+        find.descendant(
+          of: key('swarm-buddy-machine'),
+          matching: find.text('Studio'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-buddy-machine'));
+      await tester.pumpAndSettle();
+      expect(find.text(swarmBuddyOwnMachines.toLowerCase()), findsOneWidget);
+      expect(find.text(swarmBuddyMachineOffline), findsOneWidget);
+      expect(find.textContaining('Swarm'), findsNothing);
+      await tester.tap(find.text('MacBook Air'), warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(swarmBuddyOwnMachines.toLowerCase()),
+        findsOneWidget,
+        reason: 'not picked: the sheet stays',
+      );
+      await tester.tap(find.text('Studio').last);
+      await tester.pumpAndSettle();
+      await tester.tap(key('swarm-buddy-start-button'));
+      await tester.pumpAndSettle();
+
+      expect(computers.asked.single.$1, 'studio');
+      expect(fake.commands, [
+        {
+          'type': 'buddy.create',
+          'projectId': project,
+          'machineId': 'studio',
+          'engine': 'claude',
+          'setup': {
+            'name': 'Studio',
+            'cwd': '/home/me/swarm',
+            'engines': ['claude', 'codex'],
+          },
         },
       ]);
     });
