@@ -127,6 +127,20 @@ void main() {
     expect(panel(), findsNothing);
   });
 
+  testWidgets('in a window too narrow for the side, the thread opens over '
+      'the chat and a click beside it closes it', (tester) async {
+    await show(tester, threaded());
+    await tester.binding.setSurfaceSize(const Size(1000, 800));
+    await tester.pumpAndSettle();
+    await tester.tap(line('message-1'));
+    await tester.pumpAndSettle();
+    expect(panel(), findsOneWidget);
+    expect(inPanel(find.text('Agreed.')), findsOneWidget);
+    await tester.tapAt(const Offset(40, 400));
+    await tester.pumpAndSettle();
+    expect(panel(), findsNothing);
+  });
+
   testWidgets('a reply from the thread composer goes to the root, and '
       '"Also send to the project chat" sends it to both', (tester) async {
     final server = threaded();
