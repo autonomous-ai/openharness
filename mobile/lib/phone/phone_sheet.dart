@@ -408,9 +408,7 @@ class _PhoneSheetRoute<T> extends ModalBottomSheetRoute<T> {
     required super.showDragHandle,
     required super.isScrollControlled,
   }) : super(
-         shape: const RoundedRectangleBorder(
-           borderRadius: BorderRadius.vertical(top: Radius.circular(10)),
-         ),
+         shape: AppControl.sheetShape,
          modalBarrierColor: Colors.black.withValues(alpha: kSheetVeilOpacity),
        );
 
