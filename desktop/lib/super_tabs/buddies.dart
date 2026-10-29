@@ -395,34 +395,40 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
       title: const Text('Rename your Buddy'),
       content: SizedBox(
         width: 440,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Everyone in this Swarm sees this name.',
-              style: DesktopChrome.text(),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              key: const ValueKey('super-buddy-name'),
-              controller: _name,
-              autofocus: true,
-              enabled: !_busy,
-              maxLength: _maxLength,
-              decoration: InputDecoration(hintText: fallback, counterText: ''),
-              onSubmitted: (_) => _submit(),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Leave it empty to go back to "$fallback".',
-              style: DesktopChrome.control(color: DesktopChrome.muted),
-            ),
-            if (_error case final error?) ...[
+        // Scrolls in a short window or at large text, as Add a Buddy does.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Everyone in this Swarm sees this name.',
+                style: DesktopChrome.text(),
+              ),
               const SizedBox(height: 12),
-              Text(error, style: DesktopChrome.control()),
+              TextField(
+                key: const ValueKey('super-buddy-name'),
+                controller: _name,
+                autofocus: true,
+                enabled: !_busy,
+                maxLength: _maxLength,
+                decoration: InputDecoration(
+                  hintText: fallback,
+                  counterText: '',
+                ),
+                onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Leave it empty to go back to "$fallback".',
+                style: DesktopChrome.control(color: DesktopChrome.muted),
+              ),
+              if (_error case final error?) ...[
+                const SizedBox(height: 12),
+                Text(error, style: DesktopChrome.control()),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -432,7 +438,7 @@ class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
         ),
         FilledButton(
           onPressed: _busy ? null : _submit,
-          child: const Text('Save'),
+          child: Text(_busy ? 'Saving…' : 'Save'),
         ),
       ],
     );

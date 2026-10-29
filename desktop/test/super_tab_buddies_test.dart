@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
@@ -1050,6 +1052,67 @@ void main() {
         expect(tester.widget<TextField>(nameField).controller!.text, 'Lead');
         expect(find.text('Wren · Your Buddy'), findsOneWidget);
         server.refuse = null;
+        await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+        await tester.pumpAndSettle();
+        await close(tester, c);
+      });
+
+      testWidgets(
+        'says Saving… while the server answers, and takes no second Save',
+        (tester) async {
+          final server = buddySwarm();
+          giveBuddy(server);
+          final c = await show(tester, server);
+          await openRename(tester);
+          await tester.enterText(nameField, 'Sparky');
+          final hold = server.holdCommands = Completer<void>();
+          await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+          await tester.pump();
+
+          expect(find.widgetWithText(FilledButton, 'Saving…'), findsOneWidget);
+          await tester.tap(find.widgetWithText(FilledButton, 'Saving…'));
+          await tester.pump();
+          expect(commands(server, 'buddy.rename'), hasLength(1));
+          hold.complete();
+          server.holdCommands = null;
+          await tester.pumpAndSettle();
+          expect(find.text('Rename your Buddy'), findsNothing);
+          await close(tester, c);
+        },
+      );
+
+      testWidgets('scrolls in a short window, as Add a Buddy does', (
+        tester,
+      ) async {
+        final server = buddySwarm();
+        giveBuddy(server);
+        final c = await show(tester, server);
+        await openRename(tester);
+        server.refuse = {
+          'code': 'BUDDY_NAME_TAKEN',
+          'message': 'Lead is taken in this Swarm. Choose another.',
+        };
+        await tester.enterText(nameField, 'Lead');
+        await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+        await tester.pumpAndSettle();
+        server.refuse = null;
+        await tester.binding.setSurfaceSize(const Size(1280, 330));
+        await tester.pumpAndSettle();
+
+        final dialog = find.byType(AlertDialog);
+        expect(
+          find.descendant(of: dialog, matching: find.byType(Scrollable)),
+          findsWidgets,
+        );
+        await tester.dragUntilVisible(
+          find.descendant(
+            of: dialog,
+            matching: find.text('Lead is taken in this Swarm. Choose another.'),
+          ),
+          find.descendant(of: dialog, matching: find.byType(Scrollable)).first,
+          const Offset(0, -40),
+        );
+        await tester.binding.setSurfaceSize(const Size(1280, 800));
         await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
         await tester.pumpAndSettle();
         await close(tester, c);

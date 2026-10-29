@@ -178,6 +178,29 @@ describe('naming a Buddy through the store (Diego, 10-29)', () => {
     expect(await shown(f, owner, agentId)).toBe('peer\'s Buddy')
   })
 
+  it('renamed while it starts, it joins and says it is ready under the new name', async () => {
+    const f = await swarm()
+    const added = await f.execute({ type: 'buddy.create', projectId: 'lead', machineId: 'peer-mac', engine: 'claude' }, peer)
+    const startId = String(added.result.startId), chat = String(added.result.conversationId)
+    await rename(f, chat, 'Later')
+    const host = (command: Command) => f.execute(command, peer, undefined, 'peer-mac')
+    await host({ type: 'agent.startDispatch', startId })
+    const agentId = String((await host({ type: 'agent.started', startId, harnessId: randomUUID(), configuration: config })).result.agentId)
+    await host({ type: 'agent.startSettled', startId, warning: null })
+    expect(await shown(f, owner, agentId)).toBe('Later')
+    expect((await f.store.messages(peer, f.tab, chat, {})).messages.map(m => m.text)).toEqual(['Later is ready. Tell it what you have in mind.'])
+  })
+
+  it('refuses a name chosen in another person\'s Buddy chat that went quiet', async () => {
+    const f = await swarm()
+    const theirs = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, owner)).result.conversationId)
+    await rename(f, theirs, 'Fern', owner)
+    await db.swarmGroup.updateMany({ where: { tabId: f.tab, key: theirs }, data: { dormant: true } })
+    const mine = String((await f.execute({ type: 'buddy.chat', projectId: 'lead' }, peer)).result.conversationId)
+    await expect(rename(f, mine, 'fern')).rejects.toThrow('taken')
+    await rename(f, mine, 'Fennel')
+  })
+
   it('goes back to the default when cleared, and is kept when the Buddy is removed and added again', async () => {
     const f = await swarm()
     const first = await buddy(f)

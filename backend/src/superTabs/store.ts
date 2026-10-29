@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto'
 import type { Readable } from 'node:stream'
 import { logger } from '../utils/logger.js'
 import { retryTransient } from './retry.js'
-import { buddyChatId } from './buddies.js'
+import { buddyChatId, type ChosenBuddyName } from './buddies.js'
 import { canReadAgent, canReadGroup, canWatchAgent, groupProject, ledProject, projectOf, projectsOf, agentProjectId, readConversation, roleVersion, skillModeOf, type ProjectVisibility } from './projects.js'
 import { bindSession, makeProjectPrivate } from './sessionScope.js'
 import { confidentialSessions, otherRegistrations, recordConfidential } from './confidential.js'
@@ -1007,6 +1007,7 @@ export class SuperTabStore {
       if (command.type === 'machine.contribute') context.abandonedStartIds = await abandonedStarts(tx, tabId, original, command.machineId, context.now)
       if (command.type === 'agent.start') context.contribution = await this.contribution(tx, original, actor, command.request, true)
       if (command.type === 'buddy.create') context.contribution = await this.contribution(tx, original, actor, command, true)
+      if (command.type === 'buddy.rename' || command.type === 'buddy.create') context.buddyNames = await buddyNames(tx, tabId, original)
       if (command.type === 'agent.started' || command.type === 'agent.startDispatch') {
         const start = original.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
         context.contribution = await this.contribution(tx, original, actor, start.request, true)
@@ -2420,4 +2421,17 @@ export class SuperTabStore {
     this.endWork(tabId, ended)
     return done
   }
+}
+
+/** The names chosen in [state]'s Buddy chats, quiet ones included (buddies.ts chosenBuddyName). A chat's id is fixed per
+ *  project and person (buddyChatId), so they are read by key on the unique index, the name alone: a few short strings per
+ *  person and project, and only for a rename or an add. */
+async function buddyNames(tx: Transaction, tabId: string, state: SuperTabState): Promise<ChosenBuddyName[]> {
+  const keys = projectsOf(state).flatMap(project => state.people.map(person => buddyChatId(project.id, person)))
+  if (!keys.length) return []
+  const rows = await tx.swarmGroup.aggregateRaw({ pipeline: [
+    { $match: { tabId, key: { $in: keys }, deleted: false, 'data.buddyName': { $type: 'string' } } },
+    { $project: { _id: 0, key: 1, name: '$data.buddyName' } },
+  ] }) as unknown as Array<{ key: string; name: string }>
+  return rows.map(row => ({ conversationId: row.key, name: row.name }))
 }

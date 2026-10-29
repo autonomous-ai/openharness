@@ -4,6 +4,7 @@ import { createSuperTab, visibleState, type Actor, type Conversation } from './m
 import { canReadGroup, canWatchAgent, isConfidential } from './projects.js'
 import { CLOSED_CHAT_ANSWERED_NOTICE } from './decisions.js'
 import { buddyChatId } from './buddies.js'
+import { isRoleName } from './agentNames.js'
 import { sweepLiveness } from './liveness.js'
 import { hostTab } from './read/hostRows.js'
 import { groupView } from './read/views.js'
@@ -739,5 +740,62 @@ describe('naming a Buddy (Diego, 10-29)', () => {
       expect(() => rename(name)).toThrow(/taken|role/)
     }
     expect(shown(f, owner, agentId)).toBe('Bé Na')
+  })
+
+  it('refuses invisible characters, and compares and counts names after NFKC (review of #2094)', () => {
+    const { f, agentId, rename } = named()
+    const pmName = shown(f, owner, f.pm)!
+    for (const name of [`${pmName}\uFE0F`, 'Lead\uFE0F', '\u3164\u3164', 'Sp\u200Barky', 'Sparky\u00AD']) expect(() => rename(name)).toThrow()
+    // Fullwidth letters are the same name after NFKC: a role, or the PM's name.
+    expect(() => rename('Ｌｅａｄ')).toThrow('role')
+    expect(() => rename([...pmName].map(ch => String.fromCodePoint(ch.codePointAt(0)! + 0xFEE0)).join(''))).toThrow('taken')
+    // The ligature ﬃ is three letters after NFKC: 31 + 3 is too long, while 29 + 3 fits.
+    expect(() => rename(`${'x'.repeat(31)}ﬃ`)).toThrow('Use 2 to 32')
+    rename(`${'x'.repeat(29)}ﬃ`)
+    expect(shown(f, owner, agentId)).toBe(`${'x'.repeat(29)}ffi`)
+    rename('Ｓｐａｒｋｙ')
+    expect(shown(f, owner, agentId)).toBe('Sparky')
+  })
+
+  it('refuses another person\'s default Buddy name and a name chosen in another Buddy chat, quiet ones included', () => {
+    const { f, rename } = named()
+    expect(() => rename('owner\'s Buddy')).toThrow('taken')
+    const theirs = f.run({ type: 'buddy.chat', projectId: f.web.projectId }, owner).result.conversationId as string
+    f.run({ type: 'buddy.rename', conversationId: theirs, name: 'Moss' }, owner)
+    expect(() => rename('moss')).toThrow('taken')
+    // A chat the command did not load (gone quiet) is named by the store.
+    const quiet = { buddyNames: [{ conversationId: 'quiet-chat', name: 'Fern' }] }
+    expect(() => f.run({ type: 'buddy.rename', conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), name: 'FERN' }, peer, quiet)).toThrow('taken')
+    // Its own chosen name, also listed by the store, is no clash with itself.
+    rename('Sparky')
+    f.run({ type: 'buddy.rename', conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), name: 'Sparky' }, peer, { buddyNames: [{ conversationId: buddyChatId(f.app.projectId, { id: 'peer', generation: 'first' }), name: 'Sparky' }] })
+  })
+
+  it('reserves Buddy-only names such as Reviewer, without making them roles for other agents', () => {
+    const { rename } = named()
+    for (const name of ['Reviewer', 'reviewer', 'Admin', 'System']) expect(() => rename(name)).toThrow(/role|reserved/)
+    expect(isRoleName('Reviewer')).toBe(false)
+  })
+
+  it('falls back to the default when its chosen name was taken by the time a Buddy is added again', () => {
+    const { f, chat, rename } = named()
+    rename('Sparky')
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    f.state.agents.push({ id: 'later', projectId: f.web.projectId, machineId: 'machine', harnessId: 'later-harness', machineOwnerId: 'host',
+      contributorId: 'owner', membershipGeneration: 'test', name: 'Sparky', configuration })
+    const again = addBuddy(f, peer, f.app.projectId)
+    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
+    expect(group(f, chat)).toMatchObject({ title: 'peer\'s Buddy' })
+    expect(group(f, chat).buddyName).toBeUndefined()
+  })
+
+  it('also falls back when another Buddy chat, quiet or loaded, chose the name meanwhile', () => {
+    const { f, chat, rename } = named()
+    rename('Sparky')
+    f.run({ type: 'buddy.remove', projectId: f.app.projectId }, peer)
+    const again = f.run({ type: 'buddy.create', projectId: f.app.projectId, machineId: 'peer-mac', engine: 'claude' }, peer,
+      { contribution: { machineOwnerId: 'peer', contributorId: 'peer' }, buddyNames: [{ conversationId: 'quiet-chat', name: 'sparky' }] })
+    expect(f.state.starts!.find(s => s.id === again.result.startId)!.request.name).toBe('peer\'s Buddy')
+    expect(group(f, chat).buddyName).toBeUndefined()
   })
 })

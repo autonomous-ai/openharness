@@ -26,7 +26,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, markConfidential, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, defaultBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, chosenBuddyName, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, renameBuddy, requireBuddyCommand } from './buddies.js'
 
 const id = z.string().min(1).max(160).regex(/^[A-Za-z0-9_-]+$/)
 const title = z.string().trim().min(1).max(160)
@@ -210,6 +210,7 @@ const WORDS: Partial<Record<Command['type'], readonly string[]>> = {
   'agent.startSettled': ['warning'],
   'conversation.create': ['title', 'brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
   'conversation.rename': ['title'],
+  'buddy.rename': ['name'],
   'work.define': ['brief', 'task.goal', 'task.changes', 'task.constraints', 'task.owns[]', 'checks[].description'],
   'work.assign': ['overrideReason'],
   'work.status': ['result'],
@@ -268,6 +269,9 @@ export interface CommandContext {
   reply?: { id: string; conversationId: string; author: Author; createdAt: number }
   /** For a person's `message.send`: the tags waiting on them in that conversation, read by the store (leaderboard/record.ts). */
   openTags?: Array<{ messageId: string; createdAt: number }>
+  /** For `buddy.rename` and `buddy.create`: the names chosen in this Swarm's Buddy chats, quiet ones included, read by the
+   *  store (buddies.ts chosenBuddyName): a command loads only the chats it names. */
+  buddyNames?: import('./buddies.js').ChosenBuddyName[]
   /** The message a Buddy's proposal names as its owner's request, loaded from this tab by the store. */
   proposalAsk?: { id: string; conversationId: string; author: Author; source: boolean; createdAt: number
     /** The owner's newest message in that chat, which may always be named. */
@@ -1356,7 +1360,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
     case 'buddy.rename':
-      renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name)
+      renameBuddy(state, actor, readConversation(state, actor, command.conversationId), command.name, context.buddyNames)
       break
     case 'person.tell': {
       const project = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
@@ -1391,7 +1395,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const chat = openBuddyChat(state, project.id, me)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
-        ...(command.model ? { model: command.model } : {}), name: chat.buddyName ?? defaultBuddyName(me), cwd: projectFolder(pool, project), worktree: true,
+        ...(command.model ? { model: command.model } : {}), name: chosenBuddyName(state, chat, me, context.buddyNames), cwd: projectFolder(pool, project), worktree: true,
         requirements: BUDDY_REQUIREMENTS, buddyOf: { personId: me.id, generation: me.generation } }
       const admitted = admitMachineStart(state, request, context.now, undefined, context.teamMachines, context.otherWorkspaceMachines)!
       state.starts ??= []

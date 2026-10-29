@@ -392,6 +392,8 @@ class ConversationServer {
   Completer<void>? holdReads;
   // Makes every command answer with this refusal: {code, message}.
   Map<String, String>? refuse;
+  // While set, every command waits for it before it answers: a slow server.
+  Completer<void>? holdCommands;
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
@@ -608,6 +610,7 @@ class ConversationServer {
     final reader = Zone.current[_reader] as String?;
     if (method == 'POST') {
       posts.add(Map<String, dynamic>.from(body!));
+      if (holdCommands case final hold?) await hold.future;
       if (reject) {
         throw const SuperTabFailure(
           'INVALID_RECIPIENT',

@@ -2795,7 +2795,9 @@ describe('credentials in Swarm chat', () => {
     expect(route).toMatchObject({ decision: { assessment: { why: `needs ${CREDENTIAL_MARKER}` }, excluded: [{ reason: `asked for ${CREDENTIAL_MARKER}` }] } })
     const owns = withoutCredentials({ type: 'work.define', conversationId: 'g', checks: [], task: { goal: 'g', changes: 'c', constraints: 'n', owns: ['src', github] } } as unknown as Command, removed)
     expect(owns).toMatchObject({ task: { owns: ['src', CREDENTIAL_MARKER] } })
-    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github'])
+    const rename = withoutCredentials({ type: 'buddy.rename', conversationId: 'chat', name: github } as Command, removed)
+    expect(rename).toMatchObject({ name: CREDENTIAL_MARKER })
+    expect(removed).toEqual(['github', 'github', 'jwt', 'github', 'github', 'github'])
     // Commands with no words of their own are passed through untouched.
     const pause: Command = { type: 'tab.pause', paused: true }
     expect(withoutCredentials(pause, removed)).toBe(pause)
