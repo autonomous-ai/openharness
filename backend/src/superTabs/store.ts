@@ -548,11 +548,16 @@ export class SuperTabStore {
       const actor = await this.actor(tx, user, state, asAgentId)
       author(state, actor)
       refuseBuddyRouting(state, actor)
-      const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
-      // The owner's account policy alone, so a field reset to "use account default" can show its value.
-      return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
-        account: effectivePolicy(account?.policy ?? null, null).policy }
+      return this.policyOf(tx, state)
     })
+  }
+
+  /** The tab's effective policy: its owner's account policy with the tab's override. */
+  private async policyOf(tx: Transaction, state: SuperTabState) {
+    const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
+    // The owner's account policy alone, so a field reset to "use account default" can show its value.
+    return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
+      account: effectivePolicy(account?.policy ?? null, null).policy }
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
@@ -1153,6 +1158,10 @@ export class SuperTabStore {
         const member = await activeMember(tx, original.workspaceId, actor.userId)
         if (member) context.workspaceRole = member.role as WorkspaceRole
       }
+      // Who may review, and whether a verdict steps a task up, is judged by the tab's policy (rules.ts,
+      // stepUp.ts).
+      if (TEAM_WORK_COMMANDS.has(command.type) || command.type === 'work.check'
+        || (command.type === 'work.status' && command.status === 'review')) context.routingPolicy = (await this.policyOf(tx, original)).policy
       // A Ready for review may assign a Reviewer by itself (autoReview.ts), as work.assign does.
       if (TEAM_WORK_COMMANDS.has(command.type) || (command.type === 'work.status' && command.status === 'review')) {
         context.teamMachines = await this.teamMachines(tx, original)

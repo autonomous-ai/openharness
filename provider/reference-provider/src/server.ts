@@ -313,7 +313,14 @@ function sendError(res: ServerResponse, id: RpcRequest['id'], code: ErrorCode, m
 export async function start(port = 0): Promise<ProviderServer> {
   const store = new Store()
   const server = createProviderServer(store)
-  await new Promise<void>((r) => server.listen(port, '127.0.0.1', r))
+  await new Promise<void>((resolve, reject) => {
+    // An occupied port must reject startup rather than escape as an uncaught server error.
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject)
+      resolve()
+    })
+  })
   const addr = server.address()
   const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : port}`
   return { server, store, url, close: () => new Promise<void>((r) => server.close(() => r())) }
