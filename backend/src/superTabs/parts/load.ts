@@ -3,7 +3,7 @@ import { delegate, extracted, partId, type PartRow } from './write.js'
 import type { GroupData, HeadData, MachineData, Part, PartKind, SwarmParts } from './types.js'
 import { PART_KINDS } from './types.js'
 import { noteChange } from '../cache.js'
-import { stableId } from '../model.js'
+import { stableId, type AgentStart } from '../model.js'
 import { ms } from './light.js'
 import { groupsBy, readBy, type GroupIndex, type NamedCollection } from './indexed.js'
 
@@ -148,6 +148,16 @@ export async function loadChanged(tx: Transaction, tabIds: string[], since: Date
     }
   }
   return changed
+}
+
+/** The live starts of these agents (an agent is its machine and harness: write.ts extracted), whole, by the (tabId, agentId)
+ *  index: a change poll reads the finished starts whose harness a machine record still lists, and no other (read/service.ts).
+ *  A plain match: through Prisma, `agentId: { in }` was $expr, which no index bounds. */
+export async function loadStartsOfAgents(tx: Transaction, tabId: string, agentIds: string[]): Promise<Part<AgentStart>[]> {
+  if (!agentIds.length) return []
+  const rows = await tx.swarmStart.aggregateRaw({ pipeline: [{ $match: { tabId, agentId: { $in: agentIds }, deleted: false } }] }) as unknown as
+    Array<Record<string, unknown>>
+  return rows.map(row => toPart<AgentStart>('start', rawPartRow(row)))
 }
 
 const COLLECTION = { head: 'SwarmHead', member: 'SwarmMember', agent: 'SwarmAgent', group: 'SwarmGroup', machine: 'SwarmMachine', start: 'SwarmStart',

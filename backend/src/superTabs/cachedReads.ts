@@ -61,7 +61,7 @@ export async function readParts(db: Db, view: CacheView, tabId: string, named: R
 
 /** The parts loadLight gives for `opts`, held whole by what it selects. */
 export async function readLight(db: Db, view: CacheView, tabId: string, opts: Omit<LightOptions, 'machines'>): Promise<SwarmParts> {
-  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, ...(['groupIds', 'agentIds', 'projectIds'] as const)
+  const name = `light:${JSON.stringify([opts.groups ?? 'active', !!opts.includeRecentStarts, !!opts.recentStartGroups, ...(['groupIds', 'agentIds', 'projectIds'] as const)
     .map(key => [...opts[key] ?? []].sort())])}`
   const [light, machines] = await Promise.all([
     view.get(tabId, name, 'main', () => retryTransient(() => retryStaleIndex(() => db.$transaction(tx => store.loadLight(tx, tabId, { ...opts, machines: false }))))),
