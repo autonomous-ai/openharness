@@ -1664,7 +1664,14 @@ static void swarm_pane_checks(const char *dir) {
         // The person on TABS already, browsing: a Swarm coming back does not pull the dial off it.
         swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
         ui_supertabs_ids(none, 0); habitat_touch(true, 233, 233, fake_ms); habitat_touch_cancel();
-        ui_supertabs_ids(ids, 3); card_send(); assert(!swarm_mode() && s.view == TABS);
+        ui_supertabs_ids(ids, 3); openharness_card(); card_send(); assert(!swarm_mode() && s.view == TABS);
+        // The person touched TABS, chose a plain tab with Done and went HOME: the Swarm back within 10 s stays off the face.
+        swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+        ui_supertabs_ids(none, 0); habitat_touch(true, 233, 233, fake_ms); habitat_touch_cancel();
+        ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_of("t2")); dispatch((action_t){.kind = A_TAB_DONE});
+        dispatch((action_t){.kind = A_HOME}); assert(s.view == HOME);
+        fake_ms += 2000; ui_supertabs_ids(ids, 3); openharness_card(); card_send();
+        ui_supertab_focus("s1", "L2"); assert(!swarm_mode() && s.view == HOME);
     }
     // Diego's dial, 2026-10-28: the window on a Swarm tab with no project open (its Chat with PM, a DM) names no Lead.
     // The dial still goes into that Swarm, on the Lead the desktop last showed there, else the first by order; a dial
