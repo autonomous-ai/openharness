@@ -1,4 +1,5 @@
 import 'identity.dart' show superTabPersonName;
+import 'live_card_model.dart';
 import 'profile_model.dart';
 
 export 'profile_model.dart';
@@ -34,8 +35,28 @@ class SuperTabPerson {
       role = _text(row, 'role'),
       generation = row['generation'] as String?,
       avatar = SuperTabAvatarPicture.fromJson(row['avatar']),
-      status = SuperTabPersonStatus.fromJson(row['status']);
+      status = SuperTabPersonStatus.fromJson(row['status']),
+      chosenUsername = row['username'] as String?,
+      username =
+          row['username'] as String? ??
+          superTabDefaultUsername(_text(row, 'email'));
+  SuperTabPerson._named(SuperTabPerson person, this.username)
+    : id = person.id,
+      email = person.email,
+      role = person.role,
+      generation = person.generation,
+      avatar = person.avatar,
+      status = person.status,
+      chosenUsername = person.chosenUsername;
   final String id, email, role;
+
+  /// How the Swarm shows and tags them, as the server sends it, worked out in
+  /// its join order. From an older server, their default
+  /// ([superTabUsernames]). Their email is never shown in its place.
+  final String username;
+
+  /// The name the server sent; null from a server without usernames.
+  final String? chosenUsername;
   final SuperTabAvatarPicture? avatar;
   final SuperTabPersonStatus? status;
 
@@ -47,6 +68,44 @@ class SuperTabPerson {
   /// from a backend that does not send it.
   final String? generation;
   bool get canWrite => role == 'owner' || role == 'collaborator';
+}
+
+/// The name an email's prefix makes: lowercased, only the characters a
+/// username takes, never too short. Unnumbered; [superTabUsernames] numbers it.
+String superTabDefaultUsername(String email) {
+  var prefix = email
+      .split('@')
+      .first
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9._-]'), '')
+      .replaceFirst(RegExp(r'^[._-]+'), '');
+  if (prefix.length > 30) prefix = prefix.substring(0, 30);
+  if (prefix.isEmpty) return 'user';
+  return prefix.length < 2 ? '${prefix}1' : prefix;
+}
+
+/// [people], each with their username: the one the server sent, else (an older
+/// server, which sends none) their email prefix numbered (`ken2`) after the
+/// people before them. The server works out names in its own join order and
+/// sends them (backend/src/superTabs/usernames.ts), since members can arrive
+/// in any order.
+List<SuperTabPerson> superTabUsernames(List<SuperTabPerson> people) {
+  final taken = {for (final p in people) ?p.chosenUsername};
+  return [
+    for (final person in people)
+      if (person.chosenUsername != null)
+        person
+      else
+        SuperTabPerson._named(person, () {
+          final root = superTabDefaultUsername(person.email);
+          var name = root;
+          for (var n = 2; taken.contains(name); n++) {
+            name = '$root$n';
+          }
+          taken.add(name);
+          return name;
+        }()),
+  ];
 }
 
 class SuperTabAgent {
@@ -162,6 +221,8 @@ class SuperTabConversation {
         (row['pullRequestUrls'] as List?)?.whereType<String>() ??
             const <String>[],
       ),
+      cards = SuperTabCards.fromJson(row['cards']),
+      reviewOf = row['reviewOf'] as String?,
       brief = _text(row, 'brief'),
       task = row['task'] is Map
           ? SuperTabTask.fromJson(superTabMap(row['task']))
@@ -207,6 +268,13 @@ class SuperTabConversation {
 
   /// Persisted links may be absent on older backends; loaded messages still supply links.
   final List<String> pullRequestUrls;
+
+  /// Its messages drawn as live cards (live_card.dart); none from an older
+  /// backend.
+  final SuperTabCards cards;
+
+  /// A review group's reviewed group; null for any other conversation.
+  final String? reviewOf;
   final int lastMessageSequence;
 
   /// Its newest message in the main stream: a reply only in its thread
@@ -278,7 +346,7 @@ class SuperTabSnapshot {
       project = row['project'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['project'])),
-      people = _list(row['people'], SuperTabPerson.fromJson),
+      people = superTabUsernames(_list(row['people'], SuperTabPerson.fromJson)),
       agents = _list(row['agents'], SuperTabAgent.fromJson),
       machines = _list(
         row['machines'] ?? const [],
@@ -303,6 +371,7 @@ class SuperTabSnapshot {
             harness: effort,
       }),
       localModels = SuperTabLocalModels.read(row['localModels']),
+      teamAccounts = row['teamAccounts'] != false,
       mentionsWaiting = (row['mentionsWaiting'] as num?)?.toInt() ?? 0,
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
@@ -372,6 +441,9 @@ class SuperTabSnapshot {
 
   /// The reader's tags still waiting for them, Swarm-wide; 0 from a backend
   /// before tags (spec 2026-10-24-lead-mentions.md).
+  /// Whether this Swarm's server uses Harness Team accounts: false only where
+  /// it says it does not try them yet (backend read/contract.ts `teamAccounts`).
+  final bool teamAccounts;
   final int mentionsWaiting;
 
   /// Which tags wait, as a digest that moves when they change though the
@@ -509,7 +581,8 @@ class SuperTabSnapshot {
   // Recorded labels remain the fallback for agents no longer in the Swarm.
   String authorName(SuperTabMessage message) => message.fromAgent
       ? agentName(message.authorId, fallback: message.authorName)
-      : superTabPersonName(message.authorName);
+      : people.where((p) => p.id == message.authorId).firstOrNull?.username ??
+            superTabPersonName(message.authorName);
 }
 
 /// The Swarm's Local models add-on (docs/plans/2026-10-23-swarm-local-models.md): its grid, whether it is on, and what the

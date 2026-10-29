@@ -210,7 +210,10 @@ class SuperTabController extends ChangeNotifier {
         final value = superTabMap(initial['pending']);
         if (value['operationId'] is String && value['command'] is Map) {
           _pending = value;
-          operationError = 'Check the pending action before sending it again.';
+          _failOperation(
+            'Check the pending action before sending it again.',
+            command: superTabMap(value['command']),
+          );
         }
       }
     }
@@ -270,10 +273,36 @@ class SuperTabController extends ChangeNotifier {
   /// from [operationError] so it shows only under its own conversation.
   final _uploadErrors = <String, String>{};
 
+  /// The conversation the last action that set [operationError] was for, or
+  /// null when it was for none (a machine, a member, the Swarm).
+  String? _operationErrorFor;
+
   /// What the composer of [conversationId] says went wrong: the last action's
-  /// [operationError], else its own upload failure.
-  String? composerError(String conversationId) =>
-      operationError ?? _uploadErrors[conversationId];
+  /// [operationError] when it was for this conversation or for none, else its
+  /// own upload failure. An action still unconfirmed blocks every composer's
+  /// send, so its error shows in each, with Retry.
+  String? composerError(String conversationId) {
+    final failure = operationError;
+    if (failure != null &&
+        (_operationErrorFor == null ||
+            _operationErrorFor == conversationId ||
+            _pending != null)) {
+      return failure;
+    }
+    return _uploadErrors[conversationId];
+  }
+
+  /// Sets [operationError] for [command], remembering its conversation.
+  void _failOperation(
+    String message, {
+    required Map<String, dynamic> command,
+    String? code,
+  }) {
+    operationError = message;
+    operationErrorCode = code;
+    final id = command['conversationId'];
+    _operationErrorFor = id is String ? id : null;
+  }
 
   /// One line for the sender after a command succeeds, from the backend: that a
   /// credential was removed from what they sent and should be revoked.
@@ -1113,20 +1142,41 @@ class SuperTabController extends ChangeNotifier {
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
 
-  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
-  /// reviewer of [group] posted in the loaded history. Null without a reviewer.
+  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5". The verdict is the newest
+  /// review group's for [group], as its Reviewer recorded it (its result or
+  /// check evidence), else the newest `Ready:` message a reviewer of [group]
+  /// posted in the loaded history. Null without a reviewer.
   String? reviewLine(SuperTabConversation? group) {
     final state = snapshot;
-    if (group == null) return null;
-    final reviewers = state?.reviewers(group) ?? const <SuperTabAgent>[];
+    if (group == null || state == null) return null;
+    final reviews =
+        state.conversations.where((c) => c.reviewOf == group.id).toList()
+          ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
+    final reviewers = {
+      for (final r in [
+        ...state.reviewers(group),
+        for (final review in reviews) ...state.reviewers(review),
+      ])
+        r.id: r,
+    }.values;
     if (reviewers.isEmpty) return null;
     final ids = {for (final r in reviewers) r.id};
-    final verdict = messages(group.id).reversed
+    final recorded = reviews
+        .expand(
+          (review) => [
+            review.assignment?['result'],
+            for (final check in review.checks) check['evidence'],
+          ],
+        )
+        .whereType<String>();
+    final posted = messages(group.id).reversed
         .where((m) => m.fromAgent && ids.contains(m.authorId))
-        .map((m) => parseSuperTabVerdict(m.text))
-        .nonNulls
-        .firstOrNull;
-    final names = reviewers.map((r) => state!.agentName(r.id)).join(', ');
+        .map((m) => m.text);
+    final verdict = [
+      ...recorded,
+      ...posted,
+    ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
+    final names = reviewers.map((r) => state.agentName(r.id)).join(', ');
     return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
   }
 
@@ -2922,8 +2972,11 @@ class SuperTabController extends ChangeNotifier {
     } catch (failure) {
       if (!_disposed && _isUpdateRequired(failure)) {
         _requireUpdate();
-        operationError = updateMessage;
-        operationErrorCode = 'UPDATE_REQUIRED';
+        _failOperation(
+          updateMessage,
+          command: superTabMap(pending['command']),
+          code: 'UPDATE_REQUIRED',
+        );
         // Refused by the backend: nothing was done, nothing to retry.
         _refuse(pending, operationError!);
         _pending = null;
@@ -2933,10 +2986,13 @@ class SuperTabController extends ChangeNotifier {
           _pending = pending;
         }
       } else if (!_disposed) {
-        operationError = failure is SuperTabFailure
-            ? failure.message
-            : 'The action is not confirmed. Retry to check it.';
-        operationErrorCode = failure is SuperTabFailure ? failure.code : null;
+        _failOperation(
+          failure is SuperTabFailure
+              ? failure.message
+              : 'The action is not confirmed. Retry to check it.',
+          command: superTabMap(pending['command']),
+          code: failure is SuperTabFailure ? failure.code : null,
+        );
         if (failure is SuperTabFailure &&
             failure.statusCode >= 400 &&
             failure.statusCode < 500 &&
@@ -3023,14 +3079,20 @@ class SuperTabController extends ChangeNotifier {
         _pending != null) {
       return null;
     }
+    // A tag the text still says: an agent's is a recipient, a person's a tag.
+    final said = mentions(selectedId).entries
+        .where((entry) => containsMention(text, entry.value))
+        .map((entry) => entry.key);
+    bool isPerson(String id) => snapshot?.people.any((p) => p.id == id) == true;
+    final tagged = said.where(isPerson).toList();
     final addressed = recipients.isEmpty
-        ? mentions(selectedId).entries
-              .where((entry) => containsMention(text, entry.value))
-              .map((entry) => entry.key)
-              .toList()
+        ? said.where((id) => !isPerson(id)).toList()
         : recipients;
     if (addressed.any((id) => !selected!.agentIds.contains(id))) {
-      operationError = 'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.';
+      _failOperation(
+        'A mentioned agent is no longer in this conversation. Remove its mention or choose another agent.',
+        command: {'conversationId': selectedId},
+      );
       _changed();
       return null;
     }
@@ -3045,6 +3107,7 @@ class SuperTabController extends ChangeNotifier {
       'text': text,
       'replyTo': replyTo,
       'recipientIds': addressed,
+      if (tagged.isNotEmpty) 'mentions': tagged,
       if (ids.isNotEmpty) 'attachmentIds': ids,
     });
     // On its way: the message shows in the chat, and the draft is free for

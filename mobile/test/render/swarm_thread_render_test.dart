@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -10,16 +11,18 @@ import 'package:harness_mobile/settings/experimental_features.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart' as grid;
 import 'package:harness_mobile/shared/theme/color_palette.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
+import 'package:harness_mobile/swarm/swarm_file_picker.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
+import 'package:image_picker/image_picker.dart' show XFile;
 
 import '../swarm/swarm_fixture.dart';
 import '../voice_fakes.dart';
 
 /// Renders a phone Swarm chat's threads as Tony's mockup of 10-29 draws them —
 /// the chat with a root's "N replies" line, a reply also sent and Reply in
-/// thread, then the thread itself — in light and dark, at iPhone 14 size in
-/// the system fonts, to PNGs a reviewer can look at without a phone.
-/// Scripted data only.
+/// thread, then the thread itself, and its reply box with files attached and
+/// going up — in light and dark, at iPhone 14 size in the system fonts, to
+/// PNGs a reviewer can look at without a phone. Scripted data only.
 ///
 /// Skipped unless PHONE_RENDER_DIR names a directory to write into:
 ///
@@ -61,9 +64,47 @@ Future<void> _loadFonts() async {
   }
 }
 
+/// A made-up photo: sky, ground and a sun.
+Future<Uint8List> _photo(Color sky, Color ground) async {
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawRect(const Rect.fromLTWH(0, 0, 120, 80), Paint()..color = sky);
+  canvas.drawRect(const Rect.fromLTWH(0, 50, 120, 30), Paint()..color = ground);
+  canvas.drawCircle(const Offset(90, 22), 10, Paint()..color = Colors.amber);
+  final image = await recorder.endRecording().toImage(120, 80);
+  final png = await image.toByteData(format: ui.ImageByteFormat.png);
+  return png!.buffer.asUint8List();
+}
+
 void main() {
   final skip = _outDir == null;
   const messages = '/api/super-tabs/$tab/conversations/g1/messages';
+
+  final original = (
+    photos: pickSwarmPhotos,
+    documents: pickSwarmFiles,
+    copies: swarmPickerCopyFolders,
+  );
+  setUp(() => swarmPickerCopyFolders = () async => const []);
+  tearDown(() {
+    swarmPickerCopyFolders = original.copies;
+    pickSwarmPhotos = original.photos;
+    pickSwarmFiles = original.documents;
+  });
+
+  /// An upload 60% of the way up, that never ends.
+  Future<Map<String, dynamic>> stuck({
+    required String tabId,
+    required String conversationId,
+    required String name,
+    required String mime,
+    required Uint8List bytes,
+    required dynamic cancel,
+    required void Function(double sent) onProgress,
+  }) {
+    onProgress(0.6);
+    return Completer<Map<String, dynamic>>().future;
+  }
 
   FakeSwarm backend() {
     final now = DateTime.now().toUtc();
@@ -211,6 +252,23 @@ void main() {
 
     Future<GlobalKey> chat(WidgetTester tester) async {
       await tester.runAsync(_loadFonts);
+      final photos = (await tester.runAsync(
+        () async => [
+          await _photo(const Color(0xFF7FB2E5), const Color(0xFF5E8C4A)),
+          await _photo(const Color(0xFFE9A86B), const Color(0xFF3F5B73)),
+        ],
+      ))!;
+      pickSwarmPhotos = (limit) async => [
+        XFile.fromData(photos[0], path: '/copies/IMG_2041.jpg'),
+        XFile.fromData(photos[1], path: '/copies/IMG_2050.jpg'),
+      ];
+      pickSwarmFiles = () async => [
+        XFile.fromData(
+          Uint8List(640 * 1024),
+          path: '/copies/report.pdf',
+          length: 640 * 1024,
+        ),
+      ];
       // A palette carries its brightness: a light one is how the app goes light.
       final palette = HarnessPalette.values.firstWhere(
         (p) => p.brightness == brightness,
@@ -241,6 +299,7 @@ void main() {
         accountId: () => account.value,
         account: account,
         request: backend().request,
+        upload: stuck,
         notices: SilentSystemNotices(),
         features: features,
       )..foreground = false;
@@ -284,6 +343,47 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('swarm-thread-line-m1')));
       await tester.pumpAndSettle();
       await shoot(tester, key, 'swarm-thread-open-$look');
+    });
+
+    Future<void> pick(WidgetTester tester, String row) async {
+      await tester.tap(find.byKey(const ValueKey('swarm-thread-attach')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(ValueKey(row)));
+      await tester.pumpAndSettle();
+      // Thumbnails decode on the real clock, not the test's.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 300)),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the thread, files in the reply box ($look)', skip: skip, (
+      tester,
+    ) async {
+      final key = await chat(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-thread-line-m1')));
+      await tester.pumpAndSettle();
+      await pick(tester, 'swarm-attach-library');
+      await pick(tester, 'swarm-attach-files');
+      await tester.enterText(
+        find.byKey(const ValueKey('swarm-thread-field')),
+        'Here are the shots',
+      );
+      await tester.pumpAndSettle();
+      await shoot(tester, key, 'swarm-thread-files-$look');
+    });
+
+    testWidgets('the thread, files going up ($look)', skip: skip, (
+      tester,
+    ) async {
+      final key = await chat(tester);
+      await tester.tap(find.byKey(const ValueKey('swarm-thread-line-m1')));
+      await tester.pumpAndSettle();
+      await pick(tester, 'swarm-attach-library');
+      await tester.tap(find.byKey(const ValueKey('swarm-thread-send')));
+      await tester.pump();
+      await tester.pump();
+      await shoot(tester, key, 'swarm-thread-uploading-$look');
     });
   }
 }

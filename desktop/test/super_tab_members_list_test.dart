@@ -129,7 +129,8 @@ void main() {
             .getTopLeft(
               find.descendant(
                 of: find.byKey(const ValueKey('super-person-peer')),
-                matching: find.textContaining('Dee'),
+                // The row names the person by username (dee) or, before usernames, by email prefix (Dee).
+                matching: find.textContaining(RegExp('dee', caseSensitive: false)),
               ),
             )
             .dx,

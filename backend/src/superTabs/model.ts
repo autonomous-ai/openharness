@@ -3,6 +3,7 @@ import { lostReasonWithoutMachine } from './lostReason.js'
 import type { RouteDecisionEffect } from './routeRecord.js'
 import { agentDisplayName, assignAgentDisplayNames } from './agentNames.js'
 import { withAvatarView } from './profile.js'
+import { swarmUsernames } from './usernames.js'
 import { downSince, expireRemovals, startPreparing } from './machines.js'
 import { publicReason, readsRawReason } from './startFailure.js'
 import { agentProjectId, agentSetRole, canReadAgent, canReadGroup, canReadProject, groupProject, ledProject, placeRules, projectsOf, sharedWithLeads, skillSetOf, type ProjectVisibility, type SwarmProject } from './projects.js'
@@ -17,6 +18,8 @@ export interface Person {
   status?: import('./profile.js').PersonStatus
   /** Their own avatar (profile.ts); only Swarm members read it. */
   avatar?: import('./profile.js').Avatar
+  /** The name they chose (usernames.ts), or one kept for them; absent, readers work out their default. Only members read it. */
+  username?: string
 }
 export interface AgentConfiguration {
   engine: string
@@ -54,6 +57,9 @@ export interface Agent {
   /** The model on the Swarm's grid its start named, which its engine never reports. Kept here because a command does not
    *  load a finished start (parts/load.ts loadActive), and the leaderboard counts every assignment by it (review of #1808). */
   gridModel?: string
+  /** Its start named no model, so it runs its engine's own: rated by the policy's `default` row for life (rules.ts
+   *  agentTarget). Kept here for the same reason as [gridModel]: a command never sees the finished start (live bug 10-29). */
+  launchedDefault?: true
   configuration: AgentConfiguration
   /** The last configuration operation fences delayed observations, including re-contribution. */
   configurationVersion?: string
@@ -217,6 +223,8 @@ export interface Conversation {
   lastMainSequence?: number
   /** Linked GitHub pull requests, including links older than the latest message page. Absent in older snapshots. */
   pullRequestUrls?: string[]
+  /** Its messages drawn as live cards: its task and each linked pull request (cards.ts). Absent until its first card. */
+  cards?: import('./cards.js').GroupCards
   /** The last sequence given to a message here. Each conversation numbers its own messages (store by parts). */
   messageSeq?: number
   /** The sequence of its last message that counts toward its project's reports (projectUpdates.ts). */
@@ -256,14 +264,13 @@ export interface TaskLiveness {
   personId?: string
 }
 
+/** The GitHub pull request links in [text], each once, in order. */
+export const pullRequestLinks = (text: string): string[] => [...new Set([...text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)]
+  .filter(match => Number(match[1]) <= Number.MAX_SAFE_INTEGER).map(match => match[0]))]
+
 export function appendPullRequestUrls(group: Conversation, texts: Iterable<string | null | undefined>): void {
   const urls = new Set(group.pullRequestUrls ?? [])
-  for (const text of texts) {
-    if (!text) continue
-    for (const match of text.matchAll(/https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z0-9_.-]+\/pull\/([1-9][0-9]*)\b/g)) {
-      if (Number(match[1]) <= Number.MAX_SAFE_INTEGER) urls.add(match[0])
-    }
-  }
+  for (const text of texts) if (text) for (const url of pullRequestLinks(text)) urls.add(url)
   group.pullRequestUrls = [...urls]
 }
 export interface Invitation {
@@ -373,7 +380,21 @@ export interface MessageDraft {
 }
 /** A notice for one agent alone (a skill update): delivered to it like any message, never shown to people or other agents. */
 export const AGENT_ONLY = { kind: 'agent-only' }
-export const agentOnly = (source: unknown): boolean => (source as { kind?: unknown } | null | undefined)?.kind === AGENT_ONLY.kind
+/** Notices written for the Lead or an agent, read only by their recipients like an agent-only notice, under their own kind
+ *  so their recipients receive them as before: the Lead's wake for a stalled, lost or resumed task, the old agent's moved
+ *  notice, and the Lead's scheduled report and digest requests. People read the task's state on its status line (Ken,
+ *  2026-10-29: shown under the Lead's name in the project chat, they read as requests to act). By kind, so the ones already
+ *  stored are hidden as well; but only one that reaches an agent: with no Lead to hear it, a person is the only one who can
+ *  act, so people read it (review of #2177). */
+const RECIPIENT_NOTICES = new Set<unknown>(['work-stalled', 'work-lost', 'work-resumed', 'update-request', 'digest-request'])
+/** Marks a notice of a kind people also read (a cancel to its worker), or a copy for no one of a notice its recipient hears
+ *  elsewhere, as its recipients' alone. */
+export const forRecipients = (source: Record<string, unknown>) => ({ ...source, recipientsOnly: true as const })
+/** Whether only the message's recipients read it: never people, nor other agents. */
+export const agentOnly = (source: unknown, recipients: readonly string[]): boolean => {
+  const notice = source as { kind?: unknown; recipientsOnly?: unknown } | null | undefined
+  return notice?.kind === AGENT_ONLY.kind || notice?.recipientsOnly === true || (RECIPIENT_NOTICES.has(notice?.kind) && recipients.length > 0)
+}
 /** What a Buddy reads of an agent and of a task: no machine or terminal ids (review 1 of #2115: no machines means none). */
 /** A lost task's reason without the machine it ran on (lostReason.ts). */
 export const agentWithoutMachine = <T extends Pick<Agent, 'machineId' | 'harnessId' | 'replacement' | 'lostTask'>>(target: T): T => {
@@ -628,7 +649,9 @@ export function visibleState(state: SuperTabState, actor: Actor, now = Date.now(
   for (const project of projectsOf(visible)) for (const target of awaitingWorkers(visible, project.id)) target.workDecision = 'awaiting'
   for (const project of visible.projects ?? []) project.skillSet = skillSetOf(project)
   // An uploaded avatar's stored key stays on the server; readers get a link with each parts read (avatarLinks.ts).
-  visible.people = visible.people.map(withAvatarView) as Person[]
+  // Each person as the Swarm names them (usernames.ts), their default included.
+  const names = swarmUsernames(state)
+  visible.people = visible.people.map(p => ({ ...withAvatarView(p), username: names.get(p.id) })) as Person[]
   visible.agents = visible.agents.map(withAvatarView) as Agent[]
   // On Custom every agent shows the role it runs, null when its kind has none; elsewhere a role id means nothing yet.
   for (const target of visible.agents) {

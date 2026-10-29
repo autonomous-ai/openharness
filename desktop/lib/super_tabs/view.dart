@@ -20,16 +20,19 @@ import '../state/harness_attachments.dart';
 import '../state/workspace_chrome.dart';
 import 'chat_scroll.dart';
 import 'leaderboard/reader.dart';
+import 'jump_to_latest.dart';
 import 'unread_line.dart';
 import 'roster.dart';
 import 'recording_notice.dart';
-import 'identity.dart' show superTabPersonName;
 import 'profile_actions.dart';
+import 'live_card.dart';
+import 'pull_request_facts.dart';
 import 'pull_requests.dart';
 import 'composer_newline.dart';
 import 'controller.dart';
 import 'dialog_scope.dart';
 import 'folder_zip.dart';
+import 'identity.dart';
 import 'model.dart';
 import 'prompt_alerts.dart';
 import 'workgroup_name.dart';
@@ -52,7 +55,15 @@ import 'project_options.dart';
 import 'pane_layout.dart';
 import '../widgets/dial_list_scroll.dart';
 
-typedef _ComposerChoice = ({String label, String? detail, VoidCallback choose});
+/// A completion row: a workgroup, or someone to tag with their face and
+/// whether they are a person or an agent ([kind]).
+typedef _ComposerChoice = ({
+  String label,
+  String? detail,
+  VoidCallback choose,
+  Widget? leading,
+  String? kind,
+});
 
 /// The contents of one app tab. Its title stays in the app's existing tab bar.
 /// [terminal] is the existing native pane, with its own controls and input.
@@ -107,6 +118,8 @@ class _SuperTabViewState extends State<SuperTabView>
   final _latest = <String, int>{};
   final _following = <String, bool>{};
   final _newAfter = <String, int>{};
+  // Conversations whose list is scrolled away from its newest message.
+  final _awayFromEnd = <String>{};
   final _unread = SuperTabUnreadLines();
   final _replies = <String, SuperTabMessage>{};
   String? _selected;
@@ -163,6 +176,11 @@ class _SuperTabViewState extends State<SuperTabView>
   /// The open project's week board, read once for the right pane's members
   /// and the left sidebar's Models, so both show one week.
   late SuperTabProjectBoard _board = SuperTabProjectBoard(c);
+
+  /// What this computer's GitHub says of the pull requests on live cards.
+  late SuperTabPullRequestFacts _facts = SuperTabPullRequestFacts(
+    widget.app?.readPullRequestsStatus,
+  );
 
   /// A device with a Lead of this Swarm open scrolls the chat on screen.
   late final _dial = DialListScroll(() => _scroll[c.selectedId]);
@@ -233,6 +251,8 @@ class _SuperTabViewState extends State<SuperTabView>
     if (oldWidget.controller != c || oldWidget.app != widget.app) {
       _dial.cancel();
       _registerDial();
+      _facts.dispose();
+      _facts = SuperTabPullRequestFacts(widget.app?.readPullRequestsStatus);
     }
     if (oldWidget.controller != c) {
       _board.dispose();
@@ -273,6 +293,7 @@ class _SuperTabViewState extends State<SuperTabView>
     if (c.accessRevoked) {
       _replies.clear();
       _newAfter.clear();
+      _awayFromEnd.clear();
       _unread.reset();
     }
     final visible =
@@ -487,7 +508,8 @@ class _SuperTabViewState extends State<SuperTabView>
     );
   }
 
-  /// Shows the jump pill while the reader is scrolled away from the line.
+  /// Shows the jump pill while the reader is scrolled away from the line, and
+  /// Jump to latest while the list is away from its newest message.
   void _checkUnreadLine() {
     final scroll = _scroll[c.selectedId];
     var away = false;
@@ -498,7 +520,15 @@ class _SuperTabViewState extends State<SuperTabView>
       final top = line == null ? null : _topInList(line);
       away = top == null || top < 0 || top > scroll.position.viewportDimension;
     }
-    if (away == _unread.away || !mounted) return;
+    final id = c.selectedId;
+    final awayFromEnd =
+        scroll != null &&
+        scroll.hasClients &&
+        scroll.position.extentAfter >= 40;
+    if ((away == _unread.away && awayFromEnd == _awayFromEnd.contains(id)) ||
+        !mounted) {
+      return;
+    }
     // A list settling its extent moves the position mid-layout: draw the pill
     // on the next frame then.
     if (SchedulerBinding.instance.schedulerPhase ==
@@ -506,7 +536,14 @@ class _SuperTabViewState extends State<SuperTabView>
       WidgetsBinding.instance.addPostFrameCallback((_) => _checkUnreadLine());
       return;
     }
-    setState(() => _unread.away = away);
+    setState(() {
+      _unread.away = away;
+      if (awayFromEnd) {
+        _awayFromEnd.add(id);
+      } else {
+        _awayFromEnd.remove(id);
+      }
+    });
   }
 
   /// Esc: everything loaded in the open conversation is read, line and all.
@@ -539,6 +576,7 @@ class _SuperTabViewState extends State<SuperTabView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _board.dispose();
+    _facts.dispose();
     c.removeListener(_changed);
     for (final source in _linkSources) {
       source.removeListener(_linkSourceChanged);
@@ -818,18 +856,12 @@ class _SuperTabViewState extends State<SuperTabView>
           label: group.label,
           detail: context.isEmpty ? null : context.join(' — '),
           choose: () => _chooseWorkgroup(group),
+          leading: null,
+          kind: null,
         );
       }).toList();
     }
-    return _mentionChoices
-        .map(
-          (agent) => (
-            label: _agentName(agent),
-            detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
-            choose: () => _chooseMention(agent),
-          ),
-        )
-        .toList();
+    return _mentionChoices;
   }
 
   void _chooseWorkgroup(SuperTabConversation group) {
@@ -896,29 +928,64 @@ class _SuperTabViewState extends State<SuperTabView>
     return (start: start, end: end, query: query.toLowerCase());
   }
 
-  List<SuperTabAgent> get _mentionChoices {
+  /// Who `@` offers: the people who read this conversation, then its agents,
+  /// filtered by what follows the `@`. Never the reader; nobody is tagged in
+  /// the Leads conversation, so it offers agents alone.
+  List<_ComposerChoice> get _mentionChoices {
     final mention = _mentionAtCursor;
-    if (mention == null) return const [];
-    return c.snapshot?.agents
-            .where(
-              (agent) =>
-                  c.selected?.agentIds.contains(agent.id) == true &&
-                  '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
-                    mention.query,
-                  ),
-            )
-            .take(6)
-            .toList() ??
-        const [];
+    final snapshot = c.snapshot, group = c.selected;
+    if (mention == null || snapshot == null || group == null) return const [];
+    final project = snapshot.projectFor(group.id);
+    bool reads(SuperTabPerson person) => switch (group) {
+      _ when group.kind == 'leads' => false,
+      SuperTabConversation(:final audience?) => audience.contains(person.id),
+      _ when group.buddyOwnerId != null => person.id == group.buddyOwnerId,
+      _ =>
+        project == null ||
+            !project.isPrivate ||
+            project.ownerId == person.id ||
+            project.memberIds.contains(person.id),
+    };
+    final people = snapshot.people.where(
+      (person) =>
+          person.id != c.accountId &&
+          reads(person) &&
+          person.username.contains(mention.query),
+    );
+    final agents = snapshot.agents.where(
+      (agent) =>
+          group.agentIds.contains(agent.id) &&
+          '${_agentName(agent)} ${agent.engine}'.toLowerCase().contains(
+            mention.query,
+          ),
+    );
+    return [
+      for (final person in people)
+        (
+          label: person.username,
+          detail: null,
+          choose: () => _chooseMention(person.id, person.username),
+          leading: SuperTabAvatar.person(person, size: SuperTabAvatar.rowSize),
+          kind: 'person',
+        ),
+      for (final agent in agents)
+        (
+          label: _agentName(agent),
+          detail: '${agent.engine}  ${widget.machineName(agent.machineId)}',
+          choose: () => _chooseMention(agent.id, _agentName(agent)),
+          leading: SuperTabAvatar.agent(agent, size: SuperTabAvatar.rowSize),
+          kind: 'agent',
+        ),
+    ].take(_completionKeys.length).toList();
   }
 
-  void _chooseMention(SuperTabAgent agent) {
+  void _chooseMention(String id, String name) {
     final at = _mentionAtCursor;
     if (at == null) return;
-    final token = '@${_agentName(agent)}';
+    final token = '@$name';
     final text = _composer.text.replaceRange(at.start, at.end, '$token ');
     c.setDraft(c.selectedId, text);
-    c.mention(c.selectedId, agent.id, token);
+    c.mention(c.selectedId, id, token);
     _composer.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: at.start + token.length + 1),
@@ -2251,17 +2318,29 @@ class _SuperTabViewState extends State<SuperTabView>
     final thread = inThread || root != message.id
         ? null
         : c.thread(message.conversationId, message.id);
+    final group = inThread
+        ? null
+        : c.snapshot?.conversation(message.conversationId);
+    final card = group?.cards.of(message.id);
     return SuperTabMessageRow(
       key: ValueKey(
         '${inThread ? 'super-thread-message' : 'super-message'}-${message.id}',
       ),
       message: message,
+      card: card == null
+          ? null
+          : SuperTabLiveCard(
+              group: group!,
+              card: card,
+              controller: c,
+              facts: _facts,
+            ),
       author: _shownAuthor(c, message),
       proposalOwner: _proposalOwner(message),
-      // A person is named by their address's first part, as people say it.
+      // A person is named by their username, as they are tagged.
       mentions: [
         for (final id in message.mentions)
-          if (_people[id] case final person?) person.email.split('@').first,
+          if (_people[id] case final person?) person.username,
       ],
       references: _references,
       onOpenGroup: (id) {
@@ -2306,7 +2385,7 @@ class _SuperTabViewState extends State<SuperTabView>
       reactorName: (kind, id) => kind == 'agent'
           ? c.snapshot?.agentName(id) ?? 'Agent'
           : switch (_people[id]) {
-              final person? => superTabPersonName(person.email),
+              final person? => person.username,
               null => 'Someone',
             },
       onReact: c.canWrite && c.selected?.archived == false
@@ -2661,17 +2740,22 @@ class _SuperTabViewState extends State<SuperTabView>
         : messages.where((message) => message.sequence > newAfter).length;
     // More came than were read: the count is a floor.
     final moreNew = c.hasNewer(c.selectedId);
+    // Scrolled away from the newest message, or newer pages wait unread.
+    final awayFromEnd = _awayFromEnd.contains(c.selectedId) || moreNew;
     final reply = _replies[c.selectedId];
     final outgoing = c
         .outgoing(c.selectedId)
         .where((sent) => sent.inMainStream)
         .toList();
-    // A failed message says so in its own row, with what can be done.
+    // A failed message says so in its own row, with what can be done. Only
+    // this conversation's own error is said there; another's never hides it.
+    final composerError = c.composerError(c.selectedId);
     final errorInRow = outgoing.any(
       (sent) => switch (sent.state) {
         SuperTabOutgoingState.sending => false,
         SuperTabOutgoingState.unconfirmed => c.hasPendingAction,
-        SuperTabOutgoingState.refused => sent.error == c.operationError,
+        SuperTabOutgoingState.refused =>
+          composerError != null && sent.error == composerError,
       },
     );
     final finding = _finding?.conversationId == c.selectedId ? _finding : null;
@@ -2898,7 +2982,7 @@ class _SuperTabViewState extends State<SuperTabView>
                           ),
                         ),
                       ),
-                    if (newCount > 0 || back)
+                    if (newCount > 0 || back || awayFromEnd)
                       Positioned(
                         bottom: 12,
                         left: 20,
@@ -2919,19 +3003,11 @@ class _SuperTabViewState extends State<SuperTabView>
                                   ),
                                   label: const Text('Back to reply'),
                                 ),
-                              if (newCount > 0)
-                                FilledButton.icon(
-                                  key: const ValueKey('super-new-messages'),
+                              if (newCount > 0 || awayFromEnd)
+                                SuperTabJumpToLatest(
                                   onPressed: _jumpToLatest,
-                                  icon: const Icon(
-                                    AppIcons.chevronDown,
-                                    size: 16,
-                                  ),
-                                  label: Text(
-                                    moreNew
-                                        ? '$newCount+ new messages'
-                                        : '$newCount new ${newCount == 1 ? 'message' : 'messages'}',
-                                  ),
+                                  count: newCount,
+                                  more: moreNew,
                                 ),
                             ],
                           ),
@@ -2940,14 +3016,14 @@ class _SuperTabViewState extends State<SuperTabView>
                   ],
                 ),
         ),
-        if (c.composerError(c.selectedId) != null && !errorInRow)
+        if (composerError != null && !errorInRow)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
-                    c.composerError(c.selectedId)!,
+                    composerError,
                     style: DesktopChrome.control(),
                   ),
                 ),
@@ -3052,6 +3128,13 @@ class _SuperTabViewState extends State<SuperTabView>
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 16,
                           ),
+                          leading: choices[i].leading,
+                          trailing: choices[i].kind == null
+                              ? null
+                              : Text(
+                                  choices[i].kind!,
+                                  style: DesktopChrome.metadata(),
+                                ),
                           title: Text(
                             choices[i].label,
                             maxLines: 1,

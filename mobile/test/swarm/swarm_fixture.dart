@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart' show CancelToken;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:harness_mobile/swarm/swarm_home_cache.dart';
@@ -265,6 +267,76 @@ class FakeSwarm {
       throw SuperTabFailure('NOT_FOUND', 'No route for $path', statusCode: 404);
     }
     return routes[best]!(body);
+  };
+}
+
+/// One upload a chat or a thread asked for: what it sent, and how to answer
+/// it.
+class FakeUpload {
+  FakeUpload(
+    this.name,
+    this.mime,
+    this.bytes,
+    this.conversationId,
+    this.tabId,
+    this.cancel,
+    this.onProgress,
+  );
+  final String name, mime, conversationId, tabId;
+  final Uint8List bytes;
+  final CancelToken cancel;
+  final void Function(double sent) onProgress;
+  final answer = Completer<Map<String, dynamic>>();
+}
+
+/// The backend's attachment upload, answered by the test.
+class FakeUploads {
+  final asked = <FakeUpload>[];
+
+  /// Answers each upload at once with an id made from its name, unless off.
+  bool answersAtOnce = true;
+
+  /// Refuses uploads of these names.
+  final refuse = <String, SuperTabFailure>{};
+
+  List<String> get names => [for (final u in asked) u.name];
+
+  SwarmUpload get upload =>
+      ({
+        required tabId,
+        required conversationId,
+        required name,
+        required mime,
+        required bytes,
+        required cancel,
+        required onProgress,
+      }) {
+        final u = FakeUpload(
+          name,
+          mime,
+          bytes,
+          conversationId,
+          tabId,
+          cancel,
+          onProgress,
+        );
+        asked.add(u);
+        if (refuse[name] case final failure?) {
+          u.answer.completeError(failure);
+        } else if (answersAtOnce) {
+          u.answer.complete(attachment('id-$name'));
+        }
+        return u.answer.future;
+      };
+
+  static Map<String, dynamic> attachment(String id) => {
+    'attachment': {
+      'id': id,
+      'name': 'x',
+      'mime': 'image/jpeg',
+      'size': 1,
+      'url': 'https://cdn.harness.autonomous.ai/x',
+    },
   };
 }
 
