@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { engineUnusable } from './engineHealth.js'
 import { MAX_HARNESSES, tokensByModelSchema } from './costs/tokens.js'
 import { activeWork, fail, person, stableId, type Actor, type Agent, type AgentStart, type AgentStartRequest, type MessageDraft, type SuperTabState } from './model.js'
 import { WORKSPACE_LABEL } from './workspaces.js'
@@ -37,6 +38,10 @@ export interface ContributedMachine {
   teamAccountOnly?: true
   /** Agent-time Swarm agents here spent on other people's tasks, by leaderboard week, kept by its readings (leaderboard/lent.ts). */
   lent?: import('./leaderboard/lent.js').LentWeek[]
+  /** Per engine, its failed starts here in a row, until one runs or they suspend it (engineHealth.ts). */
+  engineFailures?: Record<string, number>
+  /** Per engine, a suspension after failed starts: when, and whether its reading already said signed in with quota then. */
+  engineSuspensions?: Record<string, { at: number; fine: boolean }>
 }
 /** A removed machine whose host never acknowledged in time: its records are gone, its host still cleans up on its next poll.
  *  [requestedAt]: when its removal was asked for; none on one recorded before 2026-10-28. */
@@ -99,7 +104,11 @@ const readiness = z.object({
 export const machineObservationSchema = z.object({ generation: z.string().max(160), resources: resource,
   tools: z.record(z.string().max(80), z.boolean()).refine(v => Object.keys(v).length <= 20),
   toolProbeErrors: z.record(z.string().max(80), z.string().max(200)).refine(v => Object.keys(v).length <= 20).optional(),
-  quotas: z.array(quota).max(32), runningHarnessIds: z.array(z.string().max(160)).max(1000),
+  quotas: z.array(quota).max(32),
+  /** Per engine whose allowance is unknown, why, in plain words naming no account, token or plan (cli superTabs/capacity.ts
+   *  quotaUnknownReason): what the route says of it. Absent from hosts before it. */
+  quotaReasons: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,79}$/), z.string().min(1).max(300)).refine(v => Object.keys(v).length <= 8).optional(),
+  runningHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedHarnessIds: z.array(z.string().max(160)).max(1000),
   stoppedReservations: z.array(z.object({ harnessId: z.string().min(1).max(160), generation: z.string().min(1).max(160) }).strict()).max(1000).optional(),
   /** When each running agent's screen or transcript last changed (epoch ms); its lease renews on recent progress
@@ -564,5 +573,8 @@ export function admitMachineStart(state: SuperTabState, request: AgentStartReque
   }
   if (machineOffline(pool, now)) fail('MACHINE_OFFLINE', 'Wait for a fresh reading from the contributed machine.')
   if (!start && machineSlots(state, pool) >= pool.maxAgents) fail('MACHINE_FULL', 'This machine has reached its contributed agent limit.')
+  // A new start only: a grid model runs without the engine's subscription, and one already asked for is settled by its host.
+  const unusable = !start && !local ? engineUnusable(pool, request.engine, now) : null
+  if (unusable) fail('ENGINE_UNAVAILABLE', unusable)
   return pool
 }

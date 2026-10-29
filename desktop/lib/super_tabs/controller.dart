@@ -1142,20 +1142,41 @@ class SuperTabController extends ChangeNotifier {
   static bool _listed(SuperTabMessage m) =>
       m.source['kind'] != 'update-request';
 
-  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5", from the newest `Ready:` message a
-  /// reviewer of [group] posted in the loaded history. Null without a reviewer.
+  /// "Reviewer: Ada · Ready: yes on 1a2b3c4d5". The verdict is the newest
+  /// review group's for [group], as its Reviewer recorded it (its result or
+  /// check evidence), else the newest `Ready:` message a reviewer of [group]
+  /// posted in the loaded history. Null without a reviewer.
   String? reviewLine(SuperTabConversation? group) {
     final state = snapshot;
-    if (group == null) return null;
-    final reviewers = state?.reviewers(group) ?? const <SuperTabAgent>[];
+    if (group == null || state == null) return null;
+    final reviews =
+        state.conversations.where((c) => c.reviewOf == group.id).toList()
+          ..sort((a, b) => (b.number ?? 0).compareTo(a.number ?? 0));
+    final reviewers = {
+      for (final r in [
+        ...state.reviewers(group),
+        for (final review in reviews) ...state.reviewers(review),
+      ])
+        r.id: r,
+    }.values;
     if (reviewers.isEmpty) return null;
     final ids = {for (final r in reviewers) r.id};
-    final verdict = messages(group.id).reversed
+    final recorded = reviews
+        .expand(
+          (review) => [
+            review.assignment?['result'],
+            for (final check in review.checks) check['evidence'],
+          ],
+        )
+        .whereType<String>();
+    final posted = messages(group.id).reversed
         .where((m) => m.fromAgent && ids.contains(m.authorId))
-        .map((m) => parseSuperTabVerdict(m.text))
-        .nonNulls
-        .firstOrNull;
-    final names = reviewers.map((r) => state!.agentName(r.id)).join(', ');
+        .map((m) => m.text);
+    final verdict = [
+      ...recorded,
+      ...posted,
+    ].map(parseSuperTabVerdict).nonNulls.firstOrNull;
+    final names = reviewers.map((r) => state.agentName(r.id)).join(', ');
     return 'Reviewer: $names · ${verdict?.label ?? 'No verdict yet'}';
   }
 
