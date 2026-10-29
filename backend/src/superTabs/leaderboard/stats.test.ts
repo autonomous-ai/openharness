@@ -443,6 +443,11 @@ describe('the week\'s summary: Faster and Better against the weeks before (Dee, 
     expect(weekOf(view, LAST).firstReview).toEqual({ reviewed: 1, passed: 1 })
   })
 
+  it('never times a week\'s ship as negative, when it merged before its first attempt (review of #2097)', () => {
+    const merged = shipped('dee', WEEK, WEEK + HOUR, { ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, firstAssignedAt: WEEK + 2 * HOUR } })
+    expect(weekOf(board(swarm(), [merged]), WEEK)).toMatchObject({ shipped: 1, medianRequestMs: 0 })
+  })
+
   it('leaves out a private conversation and a review group\'s own attempts', () => {
     const view = board(swarm(), [{ ...landedAfter(WEEK, WEEK + HOUR), audience: { people: [{ id: 'dee', generation: 'g' }] } },
       group({ status: 'working', reviewOf: 'g0', ledger: { runs: [attempt('r1', WEEK, true)] } })])

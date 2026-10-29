@@ -111,7 +111,8 @@ function teamWeek(requests: Conversation[], shippedRequests: Conversation[], sta
   const shipped = shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))
   const requestMs = shipped.flatMap(g => {
     const first = g.ledger!.firstAssignedAt ?? g.ledger!.runs?.[0]?.at
-    return first == null ? [] : [g.ledger!.shippedAt! - first]
+    // Merged before its first attempt: shipped at once, never in negative time.
+    return first == null ? [] : [Math.max(0, g.ledger!.shippedAt! - first)]
   })
   const reviewed = requests.flatMap(g => g.ledger?.runs ?? []).filter(r => inWeek(r.at) && r.firstReview !== undefined)
   return { week: start, shipped: shipped.length, medianRequestMs: median(requestMs),
