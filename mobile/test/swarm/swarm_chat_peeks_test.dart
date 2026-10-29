@@ -226,4 +226,58 @@ void main() {
     await settle();
     expect(reads(fake, 'a'), 2);
   });
+
+  test('says while a chat is being read, and not once it answers', () async {
+    final fake = FakeSwarm();
+    final gate = Completer<void>();
+    fake.routes[path('a')] = (_) async {
+      await gate.future;
+      return page('a', [1]);
+    };
+    final r = reader(fake);
+    final p = peeks();
+
+    p.want(r, 'a', counter: 1);
+    await settle();
+    expect(p.busyAt(r, 'a'), isTrue);
+
+    gate.complete();
+    await settle();
+    expect(p.busyAt(r, 'a'), isFalse);
+  });
+
+  test('Try again reads a chat that failed, past its tries', () async {
+    final fake = FakeSwarm();
+    fake.routes[path('a')] = (_) =>
+        throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
+    final r = reader(fake);
+    final p = peeks();
+    for (var i = 0; i < 3; i++) {
+      p.want(r, 'a', counter: 1);
+      await settle();
+    }
+    expect(reads(fake, 'a'), 3);
+
+    fake.routes[path('a')] = (_) => page('a', [1]);
+    p.retry(r, 'a');
+    await settle();
+
+    expect(reads(fake, 'a'), 4);
+    expect(p.of(r, 'a'), isNotNull);
+    expect(p.failedAt(r, 'a'), isFalse);
+  });
+
+  test('Try again leaves a chat that did not fail alone', () async {
+    final fake = FakeSwarm();
+    fake.routes[path('a')] = (_) => page('a', [1]);
+    final r = reader(fake);
+    final p = peeks();
+    p.want(r, 'a', counter: 1);
+    await settle();
+
+    p.retry(r, 'a');
+    await settle();
+
+    expect(reads(fake, 'a'), 1);
+  });
 }

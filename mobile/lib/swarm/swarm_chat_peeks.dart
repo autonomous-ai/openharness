@@ -90,6 +90,30 @@ class SwarmChatPeeks extends ChangeNotifier {
     _pump();
   }
 
+  /// [chatId] of [reader] is being read, or waits its turn.
+  bool busyAt(SwarmReader reader, String chatId) {
+    final entry = _entries[(reader, chatId)];
+    return entry != null && entry.busy && _current(reader, entry);
+  }
+
+  /// The person's Try again: [chatId] of [reader] is read once more if its
+  /// last read failed, however many times it was tried.
+  void retry(SwarmReader reader, String chatId) {
+    final entry = _entries[(reader, chatId)];
+    if (_disposed ||
+        entry == null ||
+        entry.busy ||
+        entry.failures == 0 ||
+        !_current(reader, entry)) {
+      return;
+    }
+    entry
+      ..failures = 0
+      ..busy = true;
+    _queue.add((reader, chatId));
+    _pump();
+  }
+
   /// Drops everything read of [reader]: it left the list.
   void forget(SwarmReader reader) {
     _entries.removeWhere((key, _) => key.$1 == reader);
