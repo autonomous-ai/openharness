@@ -42,6 +42,14 @@ export const NAMED_INDEX = {
   SwarmMachine: { changes: { tabId: 1, changedAt: 1 }, read: { tabId: 1, readAt: 1 } },
   SwarmStart: { changes: { tabId: 1, changedAt: 1 } },
   SwarmProgress: { changes: { tabId: 1, changedAt: 1 } },
+  SuperTabMessage: {
+    /** A conversation's page in (sequence, id) order. */
+    sequence: { tabId: 1, conversationId: 1, sequence: 1, _id: 1 },
+    /** One thread's page. */
+    thread: { tabId: 1, conversationId: 1, thread: 1, sequence: 1 },
+    /** One message. */
+    id: { _id: 1 },
+  },
   SuperTabDelivery: {
     /** An agent's deliveries by status and age: its open ones, oldest first. */
     agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },

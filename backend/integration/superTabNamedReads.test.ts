@@ -199,3 +199,51 @@ describe('what changed in a set of Swarms since a cursor', () => {
     }
   })
 })
+
+describe('a conversation\'s page of messages', () => {
+  let maker: AuthUser
+  let tabId: string
+  let conversationId: string
+  // One command's rows share a sequence: 10 holds five messages, read by id within it.
+  const ids = [...Array.from({ length: 9 }, (_, i) => `m${String(i + 1).padStart(2, '0')}`), 'm10a', 'm10b', 'm10c', 'm10d', 'm10e',
+    ...Array.from({ length: 20 }, (_, i) => `m${i + 11}`)]
+  const sequenceOf = (id: string) => Number(id.slice(1, 3))
+  beforeAll(async () => {
+    maker = await signedIn('pager')
+    tabId = (await store.create(maker, randomUUID(), 'Pages')).id
+    conversationId = (await db.swarmGroup.findFirstOrThrow({ where: { tabId, deleted: false } })).key
+    await db.superTabMessage.createMany({ data: ids.map(id => ({ id: `${tabId}-${id}`, tabId, conversationId, sequence: sequenceOf(id), text: id,
+      author: { kind: 'person', id: maker.sub, name: maker.email, membershipGeneration: tabId }, recipientIds: [], mentions: [], createdAt: new Date(NOW) })) })
+  })
+
+  const pageReads = (entries: Awaited<ReturnType<typeof profiled>>) => reads(entries, 'SuperTabMessage', ['conversationId', 'sequence'])
+  const boundedPage = (rows: ReturnType<typeof pageReads>) => {
+    expect(rows.length, JSON.stringify(plan(rows))).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(row.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned!)
+      expect(row.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(row.nreturned! + 1)
+      expect(row.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
+    }
+  }
+
+  it('scrolling back from inside a shared sequence reads only the page, by the sequence index', async () => {
+    let page: Awaited<ReturnType<SuperTabStore['messages']>> | undefined
+    const entries = await profiled(db, async () => { page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` }) })
+    expect(page!.messages.map(m => m.text)).toEqual(ids.slice(0, ids.indexOf('m10c')))
+    expect(page!.next).toBeNull()
+    boundedPage(pageReads(entries))
+  })
+
+  it('reading on from inside a shared sequence reads only what follows', async () => {
+    let page: Awaited<ReturnType<SuperTabStore['messages']>> | undefined
+    const entries = await profiled(db, async () => { page = await store.messages(maker, tabId, conversationId, { after: 10, afterId: `${tabId}-m10b` }) })
+    expect(page!.messages.map(m => m.text)).toEqual(ids.slice(ids.indexOf('m10c')))
+    boundedPage(pageReads(entries))
+  })
+
+  it('returns each message as Prisma reads it', async () => {
+    const page = await store.messages(maker, tabId, conversationId, { before: 10, beforeId: `${tabId}-m10c` })
+    const prisma = await db.superTabMessage.findMany({ where: { tabId, conversationId, id: { in: page.messages.map(m => m.id) } }, orderBy: [{ sequence: 'asc' }, { id: 'asc' }] })
+    expect(page.messages.map(({ reactions: _r, deliveries: _d, ...m }) => m)).toEqual(prisma.map(m => ({ ...m, mentions: m.mentions ?? [] })))
+  })
+})

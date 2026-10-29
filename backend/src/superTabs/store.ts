@@ -11,7 +11,7 @@ import { applyCommand, authorizeCommandAccess, operationSchema, PAIR_CHAIN_LIMIT
 import { redactCredentials } from './credentials.js'
 import type { AvatarUpload } from './profile.js'
 import { reactionCounts, type ReactionTarget } from './reactions.js'
-import { agentOpenDeliveries, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
+import { agentOpenDeliveries, messagesPast, type MessageEdge, pageDeliveries, pageReactions, pageThreads } from './pageReads.js'
 import { threadSummaries } from './threads.js'
 import { attachmentMime, attachmentName, AttachmentTooLarge, AVATAR_PURPOSE, AVATAR_TYPES, checkedType, MAX_ATTACHMENT_BYTES, MAX_AVATAR_BYTES, objectKeyFor, peekType, publicUrl, trimPrefix,
   type Attachment, type Attachments, type AttachmentStore, type AvatarStore } from './attachments.js'
@@ -1843,24 +1843,19 @@ export class SuperTabStore {
     const actor = await this.actor(tx, user, state, asAgentId)
     const group = readConversation(state, actor, conversationId)
     const forward = cursor.after !== undefined
-    const past = (sequence: number, id: string | undefined, direction: 'gt' | 'lt') => id === undefined ? { sequence: { [direction]: sequence } }
-      : { OR: [{ sequence: { [direction]: sequence } }, { sequence, id: { [direction]: id } }] }
-    const where = { tabId, conversationId,
-      ...(cursor.messageId ? { id: cursor.messageId } : {}),
-      // One thread: its root (its own thread) and its replies.
-      ...(cursor.thread ? { thread: cursor.thread } : {}),
-      ...(forward ? past(cursor.after!, cursor.afterId, 'gt') : cursor.before !== undefined ? past(cursor.before, cursor.beforeId, 'lt') : {}) }
+    // One thread: its root (its own thread) and its replies.
+    const at = { tabId, conversationId, messageId: cursor.messageId, thread: cursor.thread }
+    const start: MessageEdge | undefined = forward ? { sequence: cursor.after!, id: cursor.afterId }
+      : cursor.before !== undefined ? { sequence: cursor.before, id: cursor.beforeId } : undefined
     // An agent-only notice is listed for its own recipient alone. Hidden rows never shorten a page: Desktop reads on from the
     // last row it shows, so the page reads past them until it has 101 rows this reader may see, or reaches the end.
     // Each batch reads on from the last row of the one before, never by an offset that walks every row before it again.
     const rows: SuperTabMessage[] = []
-    const order = forward ? 'asc' as const : 'desc' as const
-    for (let edge: SuperTabMessage | undefined; rows.length <= 100;) {
-      const batch = await tx.superTabMessage.findMany({ where: edge ? { AND: [where, past(edge.sequence, edge.id, forward ? 'gt' : 'lt')] } : where,
-        orderBy: [{ sequence: order }, { id: order }], take: 101 })
+    for (let edge = start; rows.length <= 100;) {
+      const batch = await messagesPast(tx, at, edge, forward, 101)
       rows.push(...batch.filter(m => !agentOnly(m.source) || (actor.kind === 'agent' && m.recipientIds.includes(actor.agentId))))
       if (batch.length < 101) break
-      edge = batch.at(-1)
+      edge = { sequence: batch.at(-1)!.sequence, id: batch.at(-1)!.id }
     }
     const page = rows.slice(0, 100)
     const next = rows.length > 100 ? { sequence: page.at(-1)!.sequence, id: page.at(-1)!.id } : null
