@@ -18,6 +18,7 @@ import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
 import 'launch_prompt.dart';
+import 'identity.dart' show superTabMachineName;
 
 /// Captures a conversation before opening New Harness. Its journal survives a
 /// closed form or process; a recovered launch only reads the native receipt.
@@ -109,9 +110,12 @@ class SuperTabLaunch {
                       // A start already sent is repeated as it is: the server may
                       // have committed it and taken the machine's last slot, so
                       // its answer decides, not a fresh check.
-                      if (start.machineId case final machine?
-                          when saved['leadStartRequest'] == null) {
-                        await launch.recheckLeadMachine(integration, machine);
+                      if (saved['leadStartRequest'] == null) {
+                        await launch.recheckLeadMachine(
+                          integration,
+                          start.machineId,
+                          engine: start.engine,
+                        );
                       }
                       await launch.startInSwarm(start);
                     } on SuperTabFailure catch (failure) {
@@ -155,9 +159,13 @@ class SuperTabLaunch {
             projectVisibilityLocked:
                 saved['projectPrepared'] == true ||
                 saved['creationRequest'] != null,
-            prepare: (machine, task) async {
+            prepare: (machine, task, engine) async {
               if (integration.leadMachines != null) {
-                await launch.recheckLeadMachine(integration, machine);
+                await launch.recheckLeadMachine(
+                  integration,
+                  machine,
+                  engine: engine,
+                );
               }
               if (integration.roles != null) {
                 final chosen = integration.roles!
@@ -293,10 +301,9 @@ class SuperTabLaunch {
   }
 
   /// The Swarm's machines, one row per computer, then the person's others,
-  /// best first. A new project's Product Manager starts only on one of the
-  /// person's own, connected to this Desktop: it runs on its owner's machine,
-  /// in their account (Ken, 10-28; docs/swarms.md), so teammates' rows only
-  /// say why not.
+  /// best first. A new project's Product Manager starts on any of them (Ken,
+  /// 10-29): a teammate's Mac runs it in its Harness Team account when that
+  /// takes it now, else itself, as its owner (backend leadStart.ts).
   List<LeadMachine> leadMachinesOf(SuperTabSnapshot snapshot, {DateTime? now}) {
     final at = (now ?? DateTime.now()).millisecondsSinceEpoch;
     // A machine reports readiness and resources only once it has them.
@@ -305,32 +312,144 @@ class SuperTabLaunch {
     LeadMachine row(String id, Map<String, dynamic> pool) {
       final reading = snapshot.readingPoolOf(id, accountId) ?? pool;
       final observation = part(reading['observation']);
-      final name = pool['name'] as String? ?? id;
+      // As Add machine and the Buddy picker name it ("Studio", not "Studio.local").
+      final name = superTabMachineName(pool['name'] as String? ?? id);
       final own = pool['contributorId'] == accountId;
       final connected = app.stateOf(id) != null;
       // Its host says it can start a Product Manager (backend leadStart.ts).
       final capable =
           (observation['capabilities'] as List?)?.contains('leadStart') == true;
-      // Another person's Mac runs one only in its Harness Team account.
-      final team =
+      // Another person's Mac runs one in its Harness Team account when that
+      // takes it now, else itself; a Team account listed as its own machine
+      // only in itself.
+      final teamReading =
           !own &&
           (reading['hostMachineId'] != null ||
               observation['sessionKind'] == 'team');
-      final received = observation['receivedAt'];
-      final online =
-          received is num &&
-          at - received < kSuperTabMachineOfflineAfter.inMilliseconds;
-      final running = observation['runningHarnessIds'];
-      final max = reading['maxAgents'];
-      final checkouts = part(observation['readiness'])['checkouts'];
-      final device = part(observation['resources'])['deviceType'];
+      final teamRefusal = !teamReading
+          ? null
+          : switch (reading['teamWork']) {
+              {'allowed': false, 'reason': final String reason} => reason,
+              _ when !capable =>
+                'Update Harness on $name to run a Product Manager there.',
+              _ => null,
+            };
+      bool fresh(Map<String, dynamic> observation) =>
+          switch (observation['receivedAt']) {
+            final num received =>
+              at - received < kSuperTabMachineOfflineAfter.inMilliseconds,
+            _ => false,
+          };
+      final team =
+          teamReading &&
+          teamRefusal == null &&
+          fresh(observation) &&
+          reading['paused'] != true;
+      final mac = part(pool['observation']);
+      // A Mac added as its person joined takes teammates' work only in its
+      // Team account (backend machines.ts teamAccountOnly).
+      final macTakes =
+          pool['teamAccountOnly'] != true &&
+          pool['hostMachineId'] == null &&
+          mac['sessionKind'] != 'team' &&
+          (mac['capabilities'] as List?)?.contains('leadStart') == true;
+      // On a teammate's machine the server decides, by engine, where it runs
+      // (backend leadStart.ts leadChoices), as the start itself does: Desktop
+      // shows that rather than working it out (security reviews 1 and 2 of
+      // #2228). A backend from before sends none.
+      final decided = <String, String>{}, refused = <String, String>{};
+      if (!own && pool['lead'] is Map) {
+        for (final MapEntry(:key, :value) in superTabMap(
+          pool['lead'],
+        ).entries) {
+          switch (value) {
+            case {'machineId': final String machine}:
+              decided[key] = machine;
+            case {'refused': final String why}:
+              // Its line adds its own full stop.
+              refused[key] = why.endsWith('.')
+                  ? why.substring(0, why.length - 1)
+                  : why;
+          }
+        }
+      }
+      final server = decided.isNotEmpty || refused.isNotEmpty;
+      final shownHost = [for (final engine in kLeadEngines) ?decided[engine]]
+          .firstOrNull;
+      // Where it would run: the server's machine for its first engine that
+      // runs; else the Mac itself when its Team account cannot.
+      final host = server
+          ? (shownHost == null
+                ? pool
+                : snapshot.machines
+                          .where((m) => m['machineId'] == shownHost)
+                          .firstOrNull ??
+                      pool)
+          : teamReading && !team
+          ? pool
+          : reading;
+      final hostReading = part(host['observation']);
+      final online = fresh(hostReading);
+      final running = hostReading['runningHarnessIds'];
+      final max = host['maxAgents'];
+      final checkouts = part(hostReading['readiness'])['checkouts'];
+      final device = part(hostReading['resources'])['deviceType'];
+      // The engines it can run there, read where it would run.
+      final engineRefusals = server
+          ? {
+              for (final engine in kLeadEngines)
+                if (refused[engine] ?? (decided[engine] == null ? '' : null)
+                    case final why?)
+                  engine: why.isEmpty ? 'Not offered by this Swarm' : why,
+            }
+          : leadEngineRefusals(
+              offered: switch (host['engines']) {
+                final List engines => engines.whereType<String>().toSet(),
+                _ => null,
+              },
+              readiness: {
+                for (final raw
+                    in part(hostReading['readiness'])['engines'] as List? ??
+                        const [])
+                  if (part(raw)
+                      case {'engine': final String engine} && final row)
+                    engine: (
+                      installed: row['installed'] as bool?,
+                      signedIn: row['signedIn'] as bool?,
+                    ),
+              },
+              usedPercents: {
+                for (final raw in hostReading['quotas'] as List? ?? const [])
+                  if (part(raw) case {
+                    'engine': final String engine,
+                    'known': true,
+                    'windows': final List windows,
+                  })
+                    engine: [
+                      for (final window in windows)
+                        if (part(window)['usedPercent'] case final num used)
+                          used,
+                    ],
+              },
+              // Read by servers with engine health (#2192); absent before.
+              suspended: {
+                for (final source in {pool, host})
+                  if (source['suspendedEngines'] case final Map raw)
+                    for (final MapEntry(:key, :value) in raw.entries)
+                      if ((key, value) case (
+                        final String engine,
+                        final String why,
+                      ))
+                        engine: why,
+              },
+            );
       return LeadMachine(
         id: id,
         name: name,
         online: online,
         // The server's count: it also holds pending starts and the Team
         // account sharing a Mac. A backend without it: slots minus running.
-        freeAgents: switch (reading['availableSlots']) {
+        freeAgents: switch (host['availableSlots']) {
           final num slots => math.max(0, slots.toInt()),
           _ => math.max(
             0,
@@ -368,8 +487,20 @@ class SuperTabLaunch {
             superTabMachineSymbol(device is String ? device : null) ==
             'laptopcomputer',
         own: own,
+        owner: own
+            ? null
+            : snapshot.people
+                  .where((person) => person.id == pool['contributorId'])
+                  .firstOrNull,
         native: own && connected,
-        team: team,
+        team: server ? shownHost != null && shownHost != id : team,
+        teamEngines: server
+            ? {
+                for (final MapEntry(:key, :value) in decided.entries)
+                  if (value != id) key,
+              }
+            : null,
+        engineRefusals: engineRefusals,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused
             : own
@@ -378,15 +509,19 @@ class SuperTabLaunch {
                   : capable
                   ? null
                   : 'Not connected to this computer')
-            : !team
-            ? '$name has no Harness Team account yet, so it runs only its '
-                  'owner’s projects.'
-            : switch (reading['teamWork']) {
-                {'allowed': false, 'reason': final String reason} => reason,
-                _ when !capable =>
-                  'Update Harness on $name to run a Product Manager there.',
-                _ => null,
-              },
+            // The server's reasons are each engine's (engineRefusals).
+            : server
+            ? null
+            : host['paused'] == true
+            ? 'Paused in this Swarm'
+            : team || macTakes
+            ? null
+            : teamRefusal ??
+                  switch (pool['teamWork']) {
+                    {'allowed': false, 'reason': final String reason} => reason,
+                    _ =>
+                      'Update Harness on $name to run a Product Manager there.',
+                  },
       );
     }
 
@@ -405,11 +540,23 @@ class SuperTabLaunch {
             !listed.any((m) => m.id == state.machine.machineId))
           LeadMachine(
             id: state.machine.machineId,
-            name: state.machine.displayName,
+            name: superTabMachineName(state.machine.displayName),
             online: !state.needsLink && !state.isOffline,
             freeAgents: null,
             inSwarm: false,
             unavailable: snapshot.paused ? kLeadSwarmPaused : null,
+            // The Swarm reads nothing of it: this computer's own probe says
+            // which engines are there. One that installs on Create runs.
+            engineRefusals: leadEngineRefusals(
+              readiness: {
+                for (final engine in kLeadEngines)
+                  if (state.engines[engine] case final known?)
+                    engine: (
+                      installed: known.installed || known.installable,
+                      signedIn: known.signedIn,
+                    ),
+              },
+            ),
           ),
     ], null);
   }
@@ -433,8 +580,9 @@ class SuperTabLaunch {
   /// With no fresh read nothing is created, since the machine is unchecked.
   Future<void> recheckLeadMachine(
     HarnessLaunchIntegration integration,
-    String machine,
-  ) async {
+    String machine, {
+    String? engine,
+  }) async {
     final name =
         integration.leadMachines
             ?.where((m) => m.id == machine)
@@ -460,7 +608,7 @@ class SuperTabLaunch {
     }
     checkAccount();
     integration.leadMachines = leadMachinesOf(fresh);
-    checkLeadMachine(integration.leadMachines!, machine);
+    checkLeadMachine(integration.leadMachines!, machine, engine: engine);
   }
 
   /// The upload a Swarm-started Product Manager's files take, in tests.
@@ -470,9 +618,8 @@ class SuperTabLaunch {
   /// New Project's Product Manager started by the Swarm, not this Desktop
   /// (backend leadStart.ts): creates the project, posts the task and files
   /// to its chat, where such a Product Manager reads its request, and asks
-  /// the Swarm to start it on [LeadSwarmStart.machineId], or on the first
-  /// free machine. Each step keeps its receipt in the journal, so a retry
-  /// repeats none of them.
+  /// the Swarm to start it on [LeadSwarmStart.machineId]. Each step keeps
+  /// its receipt in the journal, so a retry repeats none of them.
   Future<void> startInSwarm(LeadSwarmStart start) async {
     checkAccount();
     saved['initialMessage'] = start.task;
@@ -584,7 +731,13 @@ class SuperTabLaunch {
       failure.statusCode != 429;
 
   /// Refuses a machine the list cannot start the Product Manager on now.
-  void checkLeadMachine(List<LeadMachine> machines, String machine) {
+  /// Refuses [machine] when it cannot start the Product Manager now, with
+  /// [engine] when it is known.
+  void checkLeadMachine(
+    List<LeadMachine> machines,
+    String machine, {
+    String? engine,
+  }) {
     final chosen = machines.where((m) => m.id == machine).firstOrNull;
     if (chosen == null) {
       throw const SuperTabFailure(
@@ -592,14 +745,21 @@ class SuperTabLaunch {
         'Choose one of this Swarm’s machines.',
       );
     }
-    if (chosen.startable) return;
+    final refusal = engine == null ? null : chosen.engineRefusals[engine];
+    if (chosen.startable && refusal == null) return;
     throw SuperTabFailure(
       'MACHINE_UNAVAILABLE',
       chosen.unavailable != null
           ? '${chosen.name}: ${chosen.unavailable}. Choose another machine.'
           : !chosen.online
           ? '${chosen.name} is offline. Choose another machine.'
-          : '${chosen.name} has no free agents. Choose another machine.',
+          : chosen.leadEngines.isEmpty
+          ? '${chosen.name}: ${leadMachineDetail(chosen, null)}. '
+                'Choose another machine.'
+          : !chosen.startable
+          ? '${chosen.name} has no free agents. Choose another machine.'
+          : '${chosen.name} can’t run ${leadEngineLabel(engine!)}: $refusal. '
+                'Choose another engine.',
     );
   }
 

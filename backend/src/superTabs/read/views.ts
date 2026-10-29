@@ -3,13 +3,16 @@
  * plus the private-conversation check, each record sent in its part's envelope. Time-based and cross-part values go only
  * in `derived`, so a part never changes without a new version (Lead's ruling).
  */
+import { suspendedEngines } from '../engineHealth.js'
+import { leadChoices } from '../leadStart.js'
 import { isBuddyChat, isBuddyReader } from '../buddies.js'
-import { agentWithoutMachine, groupWithoutMachines, isLeads, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
+import { agentWithoutMachine, groupWithoutMachines, isLeads, machineHiddenFrom, seenMachineIds, visibleState, withSeenRequirement, type Actor, type Agent, type Conversation, type SuperTabState } from '../model.js'
 import { machineSlots, machineTeamWork, teamAccountSwarm, type ContributedMachine } from '../machines.js'
 import * as store from '../parts/index.js'
 import type { Part, SwarmParts } from '../parts/index.js'
 import { canReadGroup } from '../projects.js'
 import { withAvatarView } from '../profile.js'
+import { swarmUsernames } from '../usernames.js'
 import type { AgentView, Derived, GroupView, HeadView, LivePart, MachineView, MemberView, ProgressView, StartView } from './contract.js'
 
 export interface ReaderParts {
@@ -32,6 +35,8 @@ export interface ReadExtras {
   teamMachines: string[]
   /** Machines also contributed to a Swarm of another Workspace (store.ts otherWorkspaceMachines). */
   otherWorkspaceMachines?: string[]
+  /** No Harness GitHub App on this server, so Team accounts take no work (store.ts teamAccountsIdle). */
+  teamAccountsIdle?: boolean
   /** Each contributed machine's CLI version as its daemon last connected (store.ts machineFacts). */
   machineVersions?: Record<string, string>
   /** A person's open mentions, counted by the store. */
@@ -85,14 +90,19 @@ export function readerView(parts: SwarmParts, actor: Actor, now: number, extras:
   const head = Object.fromEntries(HEAD_FIELDS.filter(field => visible[field] !== undefined).map(field => [field, visible[field]])) as HeadView
   if (head.projects) head.projects = head.projects.map(({ progress: _progress, ...project }) => project)
   head.invitations = visible.invitations.filter(i => readable.has(i.conversationId))
-  const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), buddy = isBuddyReader(state, actor)
+  const projects = new Set((visible.projects ?? []).map(p => p.id)), seen = seenMachineIds(visible), names = swarmUsernames(state)
+  const buddy = isBuddyReader(state, actor)
   return {
     state,
     parts: {
       head: envelope(parts.head, head),
-      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, withAvatarView(m.data!) as MemberView)),
-      agents: visible.agents.map(a => envelope(agentPart(a.id), buddy ? agentWithoutMachine(agentView(state.agents.find(s => s.id === a.id)!))
-        : agentView(state.agents.find(s => s.id === a.id)!))),
+      // Each person's username as the Swarm shows it, worked out in join order (the reassembled state's), never the order
+      // member parts happen to load in.
+      members: parts.members.filter(m => !m.deleted).map(m => envelope(m, { ...withAvatarView(m.data!), username: names.get(m.key) } as MemberView)),
+      agents: visible.agents.map(a => {
+        const stored = state.agents.find(s => s.id === a.id)!
+        return envelope(agentPart(a.id), buddy || machineHiddenFrom(state, actor, stored) ? agentWithoutMachine(agentView(stored)) : agentView(stored))
+      }),
       groups: groups.map(g => envelope(groupPart(g.id), groupView(buddy ? groupWithoutMachines(g) : g, seen))),
       machines: (visible.machines ?? []).map(m => envelope(machinePart(m.machineId), m)),
       starts: (visible.starts ?? []).filter(s => readable.has(s.request.conversationId)).map(s => envelope(startPart(s.id), s)),
@@ -106,12 +116,19 @@ export const progressView = (data: NonNullable<SwarmParts['progress'][number]['d
   ({ ...data, requestedAt: data.requestedAt ?? null })
 
 function derive(state: SuperTabState, visible: SuperTabState, actor: Actor, now: number, extras: ReadExtras): Derived {
+  // Where New Project's Product Manager would run on each teammate's machine, decided as its start decides (leadStart.ts).
+  const leads = actor.kind === 'person' && state.people.find(p => p.id === actor.userId)?.role !== 'viewer'
+    ? leadChoices(state, actor.userId, { now, teamMachines: extras.teamMachines, otherWorkspaceMachines: extras.otherWorkspaceMachines ?? [],
+      ...(extras.teamAccountsIdle ? { teamAccountsIdle: true } : {}) })
+    : {}
   const machine = (pool: ContributedMachine) => {
     const stored = state.machines!.find(m => m.machineId === pool.machineId)!
     const refusal = machineTeamWork(state, stored, now, extras.teamMachines, extras.otherWorkspaceMachines ?? [])
     const version = extras.machineVersions?.[pool.machineId]
+    const suspended = suspendedEngines(stored, now)
     return [pool.machineId, { availableSlots: Math.max(0, pool.maxAgents - machineSlots(state, stored)),
-      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}) }] as const
+      teamWork: refusal ? { allowed: false as const, ...refusal } : { allowed: true as const }, ...(version ? { clientVersion: version } : {}),
+      ...(Object.keys(suspended).length ? { suspendedEngines: suspended } : {}), ...(leads[pool.machineId] ? { lead: leads[pool.machineId] } : {}) }] as const
   }
   return {
     agents: Object.fromEntries(visible.agents.map(seen => [seen.id, { downSince: seen.downSince ?? null, limitedUntil: seen.limitedUntil ?? null,

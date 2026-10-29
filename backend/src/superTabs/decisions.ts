@@ -134,6 +134,11 @@ export async function waitingIn(tx: Tx, tabId: string, conversationId: string): 
   return !!await tx.superTabDecision.findFirst({ where: { tabId, conversationId, ...waiting }, select: { id: true } })
 }
 
+/** How many decisions asked of `personId` in this conversation still wait for them (catchUp.ts). */
+export async function waitingFor(tx: Tx, tabId: string, conversationId: string, personId: string): Promise<number> {
+  return tx.superTabDecision.count({ where: { tabId, conversationId, personId, ...waiting } })
+}
+
 /** What makes an ask a repeat: the same asker, task, person, conversation, question, options, recommendation and what it
  *  unblocks. Another asker, another task or other options with the same text is a decision of its own (review of #1753). */
 const repeatKey = (d: Pick<DecisionDraft, 'askerAgentId' | 'assignmentId' | 'personId' | 'conversationId' | 'question' | 'options' | 'recommended' | 'unblocks'>) =>

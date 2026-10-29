@@ -1028,6 +1028,29 @@ describe('routing contributed capacity', () => {
       }
     })
 
+    it('says why an engine\'s allowance is unknown, from the machine\'s reading', async () => {
+      const pool = swarm()
+      pool.observation.quotas = [{ engine: 'claude', known: false, windows: [] }]
+      pool.observation.quotaReasons = { claude: 'Anthropic is limiting how often the allowance can be read.' }
+      const { answer, s } = await runPool(pool, false, {}, project)
+      expect(answer.ok).toBe(true)
+      expect(JSON.stringify(recorded(s).command.decision)).toContain('quota unknown (Anthropic is limiting how often the allowance can be read.)')
+      delete pool.observation.quotaReasons
+      const older = JSON.stringify(recorded((await runPool(pool, false, {}, project)).s).command.decision)
+      expect(older).toContain('quota unknown')
+      expect(older).not.toContain('quota unknown (')
+    })
+
+    it('leaves out an engine the server says is suspended on the machine, with why, and keeps the others', async () => {
+      const pool = swarm()
+      pool.suspendedEngines = { claude: 'Claude Code is suspended on this machine: its last 2 starts there failed.' }
+      const out = await runPool(pool, false, {}, project)
+      expect(out.answer).toMatchObject({ error: 'NO_CANDIDATE' })
+      expect(reasons(out.answer)[0]!.reason).toContain('Claude Code is suspended on this machine: its last 2 starts there failed.')
+      pool.suspendedEngines = { codex: 'Codex is suspended on this machine: its last 2 starts there failed.' }
+      expect((await runPool(pool, false, {}, project)).answer.ok).toBe(true)
+    })
+
     it('still offers a local model on a machine whose engine is signed out, since the grid needs no subscription', async () => {
       const grid = 'swarm-0123456789ab', pool = swarm(undefined, [{ engine: 'claude', installed: true, signedIn: false }])
       pool.observation.localModels = [{ grid, model: 'qwen3' }]

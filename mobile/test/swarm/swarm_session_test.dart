@@ -550,6 +550,15 @@ void main() {
 /// The account's computers, told by hand.
 class _Computers extends ChangeNotifier implements SwarmComputers {
   @override
+  List<SwarmOwnComputer> get own => const [];
+
+  @override
+  Future<Map<String, dynamic>> ask(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) async => throw UnimplementedError();
+
+  @override
   List<SwarmComputer>? computers = const [(name: 'Studio Mac', away: false)];
 
   @override

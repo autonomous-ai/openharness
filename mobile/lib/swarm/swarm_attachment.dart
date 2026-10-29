@@ -50,13 +50,14 @@ class SwarmAttachment extends StatelessWidget {
   }
 }
 
-/// The widest a picture shows in a message.
-const _previewWidth = 240.0;
+/// The most a picture shows in a message, each way (Dee, 10-29: Slack's 360).
+const _maxSide = 360.0;
 
-/// A picture in its message: a skeleton in a fixed 4:3 box while it loads,
-/// then the picture filling the same box, so the chat never moves under the
-/// reader. The backend sends no picture's size, so the box cannot take its
-/// shape; the whole picture is a tap away ([SwarmAttachmentViewer]).
+/// A picture in its message, as Slack shows one: a skeleton in a 4:3 box
+/// while it loads (the backend sends no picture's size), then the picture at
+/// its own shape, up to [_maxSide] each way and never wider than the message.
+/// The chat is held at its foot, so the newest messages stay put as it takes
+/// that shape; the whole picture is a tap away ([SwarmAttachmentViewer]).
 class _Preview extends StatefulWidget {
   const _Preview({
     required this.file,
@@ -129,8 +130,9 @@ class _PreviewState extends State<_Preview> {
     if (_failed) return widget.chip;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = math.min(constraints.maxWidth, _previewWidth);
+        final width = math.min(constraints.maxWidth, _maxSide);
         final height = width * 3 / 4;
+        final ratio = MediaQuery.devicePixelRatioOf(context);
         final skeleton = Skeleton(
           width: width,
           height: height,
@@ -159,9 +161,11 @@ class _PreviewState extends State<_Preview> {
                 child: GestureDetector(
                   key: ValueKey('swarm-attachment-preview-${widget.file.id}'),
                   onTap: file == null ? null : () => _open(context, file),
-                  child: SizedBox(
-                    width: width,
-                    height: height,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxWidth: width,
+                      maxHeight: _maxSide,
+                    ),
                     child: file == null
                         ? skeleton
                         : ClipRRect(
@@ -169,17 +173,14 @@ class _PreviewState extends State<_Preview> {
                               AppControl.rowRadius,
                             ),
                             child: Image(
-                              // Decoded at the box's size, not the picture's.
+                              // Decoded no larger than it shows, its shape kept.
                               image: ResizeImage(
                                 FileImage(file),
-                                width:
-                                    (width *
-                                            MediaQuery.devicePixelRatioOf(
-                                              context,
-                                            ))
-                                        .round(),
+                                width: (width * ratio).round(),
+                                height: (_maxSide * ratio).round(),
+                                policy: ResizeImagePolicy.fit,
                               ),
-                              fit: BoxFit.cover,
+                              fit: BoxFit.contain,
                               gaplessPlayback: true,
                               frameBuilder: (_, image, frame, synchronous) =>
                                   frame == null && !synchronous

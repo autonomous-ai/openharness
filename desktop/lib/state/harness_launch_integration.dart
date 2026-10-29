@@ -2,7 +2,7 @@ import 'harness_attachments.dart';
 import 'lead_placement.dart';
 
 /// A new project's Product Manager the Swarm starts rather than this
-/// Desktop: on [machineId], or with none the first free machine.
+/// Desktop, on [machineId].
 class LeadSwarmStart {
   const LeadSwarmStart({
     required this.machineId,
@@ -12,8 +12,8 @@ class LeadSwarmStart {
     required this.task,
     this.files = const [],
   });
-  final String? machineId, repositoryUrl, title;
-  final String engine, task;
+  final String? repositoryUrl, title;
+  final String machineId, engine, task;
   final List<HarnessAttachment> files;
 }
 
@@ -86,7 +86,11 @@ class HarnessLaunchIntegration {
 
   /// With [leadMachines]: the Swarm's model list for its engine and model.
   LeadModelList? leadModels;
-  final Future<String> Function(String machineId, String task) prepare;
+
+  /// Before anything is created: the prompt for [task], which a destination
+  /// may refuse for [machineId] and [engine], the engine about to start.
+  final Future<String> Function(String machineId, String task, String engine)
+  prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;
   Future<void> Function()? resume;

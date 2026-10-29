@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../core/machine_resources.dart';
 import '../core/models.dart';
@@ -13,7 +12,6 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../shared/theme/status_line_style.dart';
 import '../shared/widgets/app_dialog.dart';
 import '../shared/widgets/app_icon_button.dart';
-import '../shared/widgets/app_menu.dart';
 import '../state/app_state.dart';
 import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
@@ -23,6 +21,7 @@ import '../widgets/desktop_chrome.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import '../widgets/workspace_subscription_usage.dart';
+import 'add_computers.dart';
 import 'agent_details.dart';
 import 'controller.dart';
 import 'detail_dialog.dart';
@@ -35,6 +34,7 @@ import 'machine_details.dart';
 import 'machine_icon.dart';
 import 'machine_status.dart';
 import 'model.dart';
+import 'join_machine.dart' show superTabSuggestedAgentSlots;
 import 'team_account_setup.dart';
 import 'section_heading.dart';
 
@@ -45,10 +45,9 @@ const _agentSlotsMin = 1;
 const _agentSlotsMax = 1024;
 
 /// Every machine may offer this many, whatever its RAM, and the suggestion
-/// never starts above [_suggestedSlotsMax]: the CLI's own figures
+/// never starts above 16 (superTabSuggestedAgentSlots): the CLI's own figures
 /// (`prepareContribution`, `cli/src/superTabs/contribution.ts`).
 const _agentSlotsFloor = 4;
-const _suggestedSlotsMax = 16;
 
 /// What one more agent needs to start, the CLI's own figure
 /// (`START_REQUIREMENTS.memoryBytes`, `cli/src/superTabs/capacity.ts`).
@@ -70,14 +69,8 @@ int? _maxAgentSlots(MachineResources? resources) {
   );
 }
 
-int? _suggestedAgentSlots(MachineResources? resources) {
-  final total = resources?.memoryTotalBytes;
-  if (total == null) return null;
-  return (total / (2 * _agentMemoryBytes)).floor().clamp(
-    _agentSlotsMin,
-    _suggestedSlotsMax,
-  );
-}
+int? _suggestedAgentSlots(MachineResources? resources) =>
+    superTabSuggestedAgentSlots(resources);
 
 class SuperTabMachines extends StatefulWidget {
   const SuperTabMachines({
@@ -118,99 +111,6 @@ class SuperTabMachines extends StatefulWidget {
 
 /// The engines whose allowance a machine row shows, in this order.
 const _chipEngines = ['claude', 'codex'];
-
-class _MachineChoice {
-  const _MachineChoice({
-    required this.id,
-    required this.label,
-    this.unavailable,
-  });
-
-  final String id, label;
-  final ({IconData icon, String message})? unavailable;
-}
-
-/// "Agent slots" — how many agents this machine offers the Swarm — with the one
-/// thing the number is not: a promise. Each start still checks free memory.
-///
-/// A stepper rather than a number field, so no keystroke can leave the dialog
-/// holding a count the backend would refuse; both buttons go dead at the bounds
-/// rather than staying lit and doing nothing.
-class _AgentSlots extends StatelessWidget {
-  const _AgentSlots({
-    required this.value,
-    required this.maximum,
-    required this.busy,
-    required this.onChanged,
-  });
-
-  final int value;
-  final int maximum;
-  final bool busy;
-  final ValueChanged<int> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final value = this.value;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Expanded(child: Text('Agent slots', style: DesktopChrome.text())),
-            Container(
-              width: 96,
-              constraints: const BoxConstraints(
-                minHeight: grid.AppControl.height,
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              decoration: BoxDecoration(
-                // The same recessed well the picker's control sits in.
-                color: grid.AppSurface.recess,
-                borderRadius: BorderRadius.circular(grid.AppControl.radius),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  AppIconButton(
-                    key: const ValueKey('agent-slots-fewer'),
-                    icon: AppIcons.minus,
-                    size: 16,
-                    tooltip: 'Fewer slots',
-                    onPressed: busy || value <= _agentSlotsMin
-                        ? null
-                        : () =>
-                              onChanged(value > maximum ? maximum : value - 1),
-                  ),
-                  Text(
-                    value.toString(),
-                    key: const ValueKey('agent-slots-value'),
-                    style: DesktopChrome.control(),
-                  ),
-                  AppIconButton(
-                    key: const ValueKey('agent-slots-more'),
-                    icon: AppIcons.plus,
-                    size: 16,
-                    tooltip: 'More slots',
-                    onPressed: busy || value >= maximum
-                        ? null
-                        : () => onChanged(value + 1),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Each new agent still needs free memory when it starts.',
-          style: DesktopChrome.metadata(),
-        ),
-      ],
-    );
-  }
-}
 
 /// A machine's Agents setting in its settings: as many as its memory allows
 /// (the [_maxAgentSlots] figure, stored in the same `maxAgents` every machine
@@ -355,170 +255,6 @@ class _AgentsLimit extends StatelessWidget {
   }
 }
 
-/// Unlike an ordinary choice field, this inventory also explains computers
-/// that cannot be selected. Standard menu buttons own their disabled semantics
-/// and keyboard traversal; the shared menu theme supplies their appearance.
-class _MachinePicker extends StatefulWidget {
-  const _MachinePicker({
-    required this.value,
-    required this.choices,
-    required this.busy,
-    required this.onChanged,
-  });
-
-  final String? value;
-  final List<_MachineChoice> choices;
-  final bool busy;
-  final ValueChanged<String> onChanged;
-
-  @override
-  State<_MachinePicker> createState() => _MachinePickerState();
-}
-
-class _MachinePickerState extends State<_MachinePicker> {
-  final _menu = MenuController();
-  final _focus = FocusNode(debugLabel: 'Machine');
-
-  @override
-  void dispose() {
-    _focus.dispose();
-    super.dispose();
-  }
-
-  void _open() {
-    if (!widget.busy) _menu.open();
-  }
-
-  Widget _status(({IconData icon, String message}) status) => Tooltip(
-    message: status.message,
-    excludeFromSemantics: true,
-    child: Icon(status.icon, size: grid.AppControl.iconSize),
-  );
-
-  @override
-  Widget build(BuildContext context) {
-    grid.AppTheme.watch(context);
-    final current = widget.choices
-        .where((choice) => choice.id == widget.value)
-        .firstOrNull;
-    final firstAvailable = widget.choices
-        .where((choice) => choice.unavailable == null)
-        .firstOrNull;
-    final focusId = current?.unavailable == null && current != null
-        ? current.id
-        : firstAvailable?.id;
-    final label = current?.label ?? 'Choose a machine';
-    return LayoutBuilder(
-      builder: (context, constraints) => MenuAnchor(
-        controller: _menu,
-        childFocusNode: _focus,
-        consumeOutsideTap: true,
-        alignmentOffset: const Offset(0, grid.AppControl.menuGap),
-        style: grid.AppMenu.style(
-          minWidth: constraints.maxWidth,
-          maxWidth: constraints.maxWidth,
-        ),
-        onOpen: () => setState(() {}),
-        onClose: () => setState(() {}),
-        menuChildren: [
-          for (final choice in widget.choices)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              child: SizedBox(
-                width: constraints.maxWidth - 12,
-                child: MenuItemButton(
-                  key: ValueKey('swarm-machine-option-${choice.id}'),
-                  autofocus: choice.id == focusId,
-                  overflowAxis: Axis.vertical,
-                  semanticsLabel: [
-                    choice.label,
-                    ?choice.unavailable?.message,
-                  ].join(', '),
-                  style: ButtonStyle(
-                    side: const WidgetStatePropertyAll(BorderSide.none),
-                    padding: WidgetStatePropertyAll(
-                      AppMenuRowMetrics.roomy.padding,
-                    ),
-                  ),
-                  onPressed: widget.busy || choice.unavailable != null
-                      ? null
-                      : () => widget.onChanged(choice.id),
-                  trailingIcon: choice.unavailable != null
-                      ? _status(choice.unavailable!)
-                      : choice.id == widget.value
-                      ? const Icon(
-                          AppIcons.check,
-                          size: grid.AppControl.iconSize,
-                        )
-                      : null,
-                  child: Tooltip(
-                    message: choice.label,
-                    excludeFromSemantics: true,
-                    child: Text(
-                      choice.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-        builder: (context, menu, _) => CallbackShortcuts(
-          bindings: {
-            const SingleActivator(LogicalKeyboardKey.arrowDown): _open,
-            const SingleActivator(LogicalKeyboardKey.arrowUp): _open,
-          },
-          child: Semantics(
-            label: 'Machine',
-            value: [label, ?current?.unavailable?.message].join(', '),
-            expanded: menu.isOpen,
-            child: TextButton(
-              key: const ValueKey('swarm-machine-picker'),
-              focusNode: _focus,
-              style: TextButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(grid.AppControl.radius),
-                ),
-              ),
-              onPressed: widget.busy
-                  ? null
-                  : () => menu.isOpen ? menu.close() : _open(),
-              child: ExcludeSemantics(
-                child: Row(
-                  children: [
-                    // A long hostname reads whole, over two lines if it must (Ken, 2026-10-28).
-                    Expanded(
-                      child: Tooltip(
-                        message: label,
-                        excludeFromSemantics: true,
-                        child: Text(
-                          label,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                    if (current?.unavailable != null) ...[
-                      const SizedBox(width: 8),
-                      _status(current!.unavailable!),
-                    ],
-                    const SizedBox(width: 8),
-                    const Icon(
-                      AppIcons.chevronDown,
-                      size: grid.AppControl.iconSize,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Sets [machineId]'s project up for the Swarm and asks what it offers
 /// (`prepareContribution`), a second apart for up to five minutes. Null when
 /// [alive] says the asker is gone or the reader can no longer write. [setupId]
@@ -576,6 +312,33 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
   return engines;
 }
 
+/// The setup a Buddy sends for [machineId], one of the reader's own machines
+/// outside the Swarm: prepared there as Add machine prepares one (its folder
+/// and engines), so the server records it for their Buddies alone and never
+/// adds it to the Swarm (Dee, 10-29). Null when [alive] ended first or the
+/// reader can no longer write.
+Future<Map<String, dynamic>?> prepareBuddyMachine(
+  SuperTabController c,
+  AppNotifier app,
+  String machineId, {
+  required String setupId,
+  required bool Function() alive,
+}) async {
+  final prepared = await _prepareContribution(
+    c,
+    app,
+    machineId,
+    setupId: setupId,
+    alive: alive,
+  );
+  if (prepared == null) return null;
+  return {
+    'name': app.stateOf(machineId)?.machine.displayName ?? machineId,
+    'cwd': prepared['cwd'],
+    'engines': _contributedEngines(prepared),
+  };
+}
+
 /// Adds the prepared [machineId] to the Swarm, offering [maxAgents] slots.
 /// False when [alive] says the asker is gone or the reader can no longer
 /// write, in which case nothing was added.
@@ -587,6 +350,7 @@ Future<bool> _sendContribution(
   List<String> engines, {
   required int maxAgents,
   required bool Function() alive,
+  bool teamAccountOnly = false,
 }) async {
   // An earlier lost reply leaves an uncertain attempt holding its own
   // receipt, and only one action may be in flight: check that one first, then
@@ -612,6 +376,7 @@ Future<bool> _sendContribution(
     if (prepared['scope'] != null) 'scope': prepared['scope'],
     'engines': engines,
     'maxAgents': maxAgents,
+    if (teamAccountOnly) 'teamAccountOnly': true,
   });
   if (result == null) {
     throw SuperTabFailure(
@@ -633,13 +398,18 @@ Future<bool> _sendContribution(
 /// suggests, else what preparation offered. Resolves to [machineId], null when
 /// [alive] ended first. Throws a [SuperTabFailure] saying why it could not.
 /// [setupId] is the caller's to keep between tries: a setup still running
-/// answers the next try with the same one.
+/// answers the next try with the same one. With [teamAccountOnly], teammates'
+/// work reaches it only through its Harness Team account once that passes its
+/// privacy check (backend superTabs/machines.ts `teamWorkRefusal`).
+/// [readResources] stands in for [AppNotifier.readMachineResources].
 Future<String?> contributeComputer(
   SuperTabController c,
   AppNotifier app,
   String machineId, {
   required String setupId,
   required bool Function() alive,
+  bool teamAccountOnly = false,
+  Future<MachineResources?> Function(String machineId)? readResources,
 }) async {
   final prepared = await _prepareContribution(
     c,
@@ -652,7 +422,7 @@ Future<String?> contributeComputer(
   final engines = _contributedEngines(prepared);
   MachineResources? resources;
   try {
-    resources = await app.readMachineResources(machineId);
+    resources = await (readResources ?? app.readMachineResources)(machineId);
   } catch (_) {
     // The suggestion only sizes the offer; preparation's own number stands in.
   }
@@ -669,6 +439,7 @@ Future<String?> contributeComputer(
     engines,
     maxAgents: slots,
     alive: alive,
+    teamAccountOnly: teamAccountOnly,
   );
   return added ? machineId : null;
 }
@@ -712,18 +483,17 @@ String? thisComputerRefusal(AppNotifier app, SuperTabController c) {
   return _machineUnavailable(here, inSwarm: inSwarm)?.message;
 }
 
-/// The Add machine form, or with [existing] that machine's settings: one
-/// place for the Machines panel and for Add a Buddy. Resolves to the machine's
-/// id once it was added or saved, null when the person cancelled or it could
-/// not be. The panel's own knowledge comes in as callbacks: [sampleOf] a
-/// reading it already holds, [canRemove], [removeReason] and [remove] for
-/// Remove from this Swarm, and [readLocal] in place of
+/// A machine's settings in this Swarm, its owner's: how many agents it runs,
+/// and Remove from this Swarm. Adding machines is Add your computers
+/// (add_computers.dart). The panel's own knowledge comes in as callbacks:
+/// [sampleOf] a reading it already holds, [canRemove], [removeReason] and
+/// [remove] for Remove from this Swarm, and [readLocal] in place of
 /// [AppNotifier.readMachineResources].
-Future<String?> _contributeDialog(
+Future<void> _machineSettingsDialog(
   BuildContext context,
   SuperTabController c,
   AppNotifier app, {
-  Map<String, dynamic>? existing,
+  required Map<String, dynamic> existing,
   _MachineView? view,
   required MachineResources? Function(String machineId) sampleOf,
   required bool Function(String machineId) canRemove,
@@ -731,51 +501,14 @@ Future<String?> _contributeDialog(
   required void Function(_MachineView view) remove,
   Future<MachineResources?> Function(String machineId)? readLocal,
 }) async {
-  final isConfigure = existing != null;
-  final existingId = existing?['machineId'] as String?;
-  bool isExisting(MachineState m) =>
-      existingId != null && m.machine.machineId == existingId;
-  // "Already in this tab" means already CONTRIBUTED — an agent already
-  // running there (unconfirmed) does not count, or a freshly created tab
-  // whose lead runs on this Mac could never contribute it. `_ids` (agents
-  // too) is for the machine-card panel below, not this dialog.
-  final contributed = {
-    for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
-      m['machineId'] as String,
-  };
-  // Unavailable computers stay inspectable in the picker, but another
-  // account's computers must never be offered for contribution. One choice
-  // per computer: a Mac's Harness Team account in this Swarm is part of its
-  // Mac's row, and joins and leaves with it (SuperTabSnapshot.placeOf).
-  bool ownRow(MachineState m) =>
-      (c.snapshot?.placeOf(m.machine.machineId) ?? m.machine.machineId) ==
-      m.machine.machineId;
-  List<MachineState> ownedMachines() => app.machineStates.values
-      .where((m) => !m.belongsToOtherAccount && ownRow(m))
-      .toList();
-  ({IconData icon, String message})? unavailable(MachineState m) =>
-      _machineUnavailable(
-        m,
-        inSwarm: !isExisting(m) && contributed.contains(m.machine.machineId),
-      );
-
+  final existingId = existing['machineId'] as String;
   bool canSelect(MachineState? m) =>
-      m != null && !m.belongsToOtherAccount && unavailable(m) == null;
-  final addable = ownedMachines().where(canSelect).toList();
-  String labelFor(MachineState m) => m.isLocalMachine
-      ? 'This Mac (${m.machine.displayName})'
-      : m.machine.displayName;
-  String? machineId =
-      existingId ??
-      addable.where((m) => m.isLocalMachine).firstOrNull?.machine.machineId ??
-      addable.firstOrNull?.machine.machineId;
+      m != null &&
+      !m.belongsToOtherAccount &&
+      _machineUnavailable(m, inSwarm: false) == null;
   String? error;
-  String? added;
   var busy = false;
   String? setupId;
-  // The agent slots the owner is choosing. A machine already in this Swarm
-  // starts at the number it has; a new one starts at what its total memory
-  // suggests, worked out here rather than by preparation (below).
   int? storedSlots(String? id) {
     final row = id == null
         ? null
@@ -789,39 +522,19 @@ Future<String?> _contributeDialog(
   final suggestions = <String, int>{};
   final maximums = <String, int>{};
 
-  /// What this machine's own memory says, once a reading has answered. Null
-  /// while one is still coming, or when it failed.
-  int? memorySuggestion(String? id) =>
-      id == null ? null : suggestions[id] ?? _suggestedAgentSlots(sampleOf(id));
-
-  int maximumFor(String? id) => id == null
-      ? _agentSlotsMin
-      : maximums[id] ??
-            _maxAgentSlots(sampleOf(id)) ??
-            _clampAgentSlots(storedSlots(id) ?? _agentSlotsMin);
-
-  int slotsFor(String? id) {
-    final stored = storedSlots(id);
-    if (stored != null) return _clampAgentSlots(stored);
-    return memorySuggestion(id) ?? _agentSlotsMin;
-  }
-
-  var slots = slotsFor(machineId);
-  var slotsEdited = false;
-
   // Machine settings: As memory allows, or At most a number (Dee,
   // 2026-10-29). Memory is known from this dialog's reading, the panel's
   // sample, or what the machine last reported to the Swarm.
   MachineResources? settingsResources() =>
-      (existingId == null ? null : sampleOf(existingId)) ?? view?.resources;
+      sampleOf(existingId) ?? view?.resources;
   int? memoryMaximum() =>
       maximums[existingId] ?? _maxAgentSlots(settingsResources());
 
   // Until the owner touches either, both follow what is known: a stored
   // limit at or above the maximum is as memory allows, and one below it is
   // the owner's own. With the maximum unknown a stored number is kept, and
-  // a machine with no number of its own starts at At most its suggestion,
-  // as Add machine does (review of #2084).
+  // a machine with no number of its own starts at At most its suggestion
+  // (review of #2084).
   bool? memoryEdited;
   int? atMostEdited;
   bool memoryChoice() {
@@ -853,7 +566,7 @@ Future<String?> _contributeDialog(
   /// Why this machine's settings cannot be saved from here, in settings'
   /// own words; null when they can.
   String? settingsUnavailable() {
-    final m = app.stateOf(existingId!);
+    final m = app.stateOf(existingId);
     if (m == null) {
       return 'This computer can’t reach that machine. Sign in to Harness '
           'there with this account to change its settings.';
@@ -889,36 +602,26 @@ Future<String?> _contributeDialog(
   // arrives after it closed has nothing to repaint.
   BuildContext? dialog;
   void Function(void Function())? repaint;
-  final reading = <String>{};
+  var reading = false;
 
-  /// Start the field where this machine's own memory says, without asking
+  /// The machine's memory reading, for the At most limit, without asking
   /// preparation: preparation sets the project up, probes engines and takes
-  /// one of its 32 setup slots, and opening a form the owner may cancel is
-  /// no reason to do that. A configured machine still needs its RAM reading
-  /// for the stepper limit, but its chosen number is never replaced.
-  Future<void> suggestSlots() async {
-    final id = machineId;
-    if (id == null || !canSelect(app.stateOf(id)) || !reading.add(id)) {
-      return;
-    }
+  /// one of its 32 setup slots, and opening settings the owner may cancel is
+  /// no reason to do that. The owner's chosen number is never replaced.
+  Future<void> readMemory() async {
+    if (reading || !canSelect(app.stateOf(existingId))) return;
+    reading = true;
     MachineResources? resources;
     try {
-      resources = await (readLocal ?? app.readMachineResources)(id);
+      resources = await (readLocal ?? app.readMachineResources)(existingId);
     } catch (_) {
       return;
     }
     final suggested = _suggestedAgentSlots(resources);
-    // The picker may have moved on to another machine, whose own reading is
-    // the one that belongs in the field now — or the dialog may have closed.
-    if (suggested == null || machineId != id || dialog?.mounted != true) {
-      return;
-    }
-    suggestions[id] = suggested;
-    maximums[id] = _maxAgentSlots(resources)!;
-    // Repaint the limit, but never replace a number the owner chose.
-    repaint?.call(() {
-      if (!slotsEdited && storedSlots(id) == null) slots = suggested;
-    });
+    if (suggested == null || dialog?.mounted != true) return;
+    suggestions[existingId] = suggested;
+    maximums[existingId] = _maxAgentSlots(resources)!;
+    repaint?.call(() {});
   }
 
   await showAppDialog<void>(
@@ -931,24 +634,19 @@ Future<String?> _contributeDialog(
           builder: (context, update) {
             dialog = context;
             repaint = update;
-            // Not awaited: the form is usable immediately, and the number
-            // only has to be there by the time the owner reads it. Each
+            // Not awaited: the form is usable immediately, and the limit
+            // only has to be there by the time the owner reads it. The
             // machine is read once, so a rebuild does not read again.
-            unawaited(suggestSlots());
+            unawaited(readMemory());
+            final canSave = canSelect(app.stateOf(existingId));
             Future<void> save() async {
-              if (busy ||
-                  !c.canWrite ||
-                  machineId == null ||
-                  !canSelect(app.stateOf(machineId!))) {
+              if (busy || !c.canWrite || !canSelect(app.stateOf(existingId))) {
                 return;
               }
-              final selected = machineId!;
               // Settings save what is on screen now: preparation below may
               // learn a different maximum, and that must not turn the
               // owner's At most into As memory allows (review of #2084).
-              final atMost = isConfigure && !memoryChoice()
-                  ? atMostValue()
-                  : null;
+              final atMost = memoryChoice() ? null : atMostValue();
               update(() {
                 busy = true;
                 error = null;
@@ -958,43 +656,28 @@ Future<String?> _contributeDialog(
                 final prepared = await _prepareContribution(
                   c,
                   app,
-                  selected,
+                  existingId,
                   setupId: setupId!,
                   alive: () => context.mounted,
                 );
                 if (prepared == null) return;
                 if (!context.mounted || !c.canWrite) return;
                 final engines = _contributedEngines(prepared);
-                // A machine with no number of its own whose reading failed,
-                // or had not answered yet, is showing the floor rather than
-                // a suggestion. The owner never chose that, so send what
-                // preparation offered instead — the number the field would
-                // have shown had the reading arrived.
-                final offered = prepared['maxAgents'];
                 final offeredMaximum = prepared['maxAvailableAgents'];
                 if (offeredMaximum is num) {
-                  maximums[selected] = _clampAgentSlots(offeredMaximum);
-                }
-                if (!slotsEdited &&
-                    storedSlots(selected) == null &&
-                    memorySuggestion(selected) == null &&
-                    offered is num) {
-                  slots = _clampAgentSlots(offered);
+                  maximums[existingId] = _clampAgentSlots(offeredMaximum);
                 }
                 if (!await _sendContribution(
                   c,
                   app,
-                  selected,
+                  existingId,
                   prepared,
                   engines,
-                  maxAgents: !isConfigure
-                      ? slots
-                      : atMost ?? memoryLimit(prepared),
+                  maxAgents: atMost ?? memoryLimit(prepared),
                   alive: () => context.mounted,
                 )) {
                   return;
                 }
-                added = selected;
                 if (context.mounted) Navigator.pop(context);
               } catch (failure) {
                 if (context.mounted) {
@@ -1010,160 +693,67 @@ Future<String?> _contributeDialog(
               }
             }
 
-            final own = ownedMachines();
-            final canSave =
-                machineId != null && canSelect(app.stateOf(machineId!));
-            if (isConfigure) {
-              final current = app.stateOf(existingId!);
-              final why = settingsUnavailable();
-              return SuperTabDetailDialog(
-                title: superTabMachineName(
-                  current?.machine.displayName ??
-                      existing['name'] as String? ??
-                      existingId,
-                ),
-                body: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _AgentsLimit(
-                      memory: memoryChoice(),
-                      value: atMostValue(),
-                      maximum: atMostMaximum(),
-                      busy: busy,
-                      onMemory: () => update(() => memoryEdited = true),
-                      onAtMost: (next) => update(() {
-                        memoryEdited = false;
-                        atMostEdited = next;
-                      }),
-                    ),
-                    // Why it cannot be removed, in words rather than a dimmed button alone.
-                    if (view != null && canRemove(view.id))
-                      if (removeReason(view.id) case final reason?) ...[
-                        const SizedBox(height: grid.AppDesktop.controlGap),
-                        Text(reason, style: DesktopChrome.metadata()),
-                      ],
-                    if (!canSave && why != null) ...[
-                      const SizedBox(height: grid.AppDesktop.controlGap),
-                      Text(why, style: DesktopChrome.metadata()),
-                    ],
-                    if (error != null) ...[
-                      const SizedBox(height: grid.AppDesktop.controlGap),
-                      Text(error!, style: DesktopChrome.metadata()),
-                    ],
-                  ],
-                ),
-                // One clear action at the right; the rarer one quiet at the
-                // left, as in the machine's details.
-                leadingActions: [
-                  if (view != null && canRemove(view.id))
-                    TextButton(
-                      style: superTabQuietAction,
-                      onPressed: busy || removeReason(view.id) != null
-                          ? null
-                          : () {
-                              Navigator.pop(context);
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                remove(view);
-                              });
-                            },
-                      child: const Text('Remove from this Swarm'),
-                    ),
-                ],
-                actions: [
-                  FilledButton(
-                    onPressed: busy || !canSave ? null : save,
-                    child: Text(busy ? 'Saving…' : 'Save'),
-                  ),
-                ],
-              );
-            }
+            final current = app.stateOf(existingId);
+            final why = settingsUnavailable();
             return SuperTabDetailDialog(
-              title: 'Add machine',
+              title: superTabMachineName(
+                current?.machine.displayName ??
+                    existing['name'] as String? ??
+                    existingId,
+              ),
               body: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (own.isNotEmpty)
-                    _MachinePicker(
-                      value: machineId,
-                      busy: busy,
-                      choices: [
-                        for (final m in own)
-                          _MachineChoice(
-                            id: m.machine.machineId,
-                            label: labelFor(m),
-                            unavailable: unavailable(m),
-                          ),
-                      ],
-                      onChanged: (id) {
-                        if (busy || !canSelect(app.stateOf(id))) return;
-                        update(() {
-                          machineId = id;
-                          setupId = null;
-                          error = null;
-                          // Another machine has its own number: the one it
-                          // already offers, or its own suggestion.
-                          slots = slotsFor(id);
-                          slotsEdited = false;
-                        });
-                        unawaited(suggestSlots());
-                      },
-                    )
-                  else
-                    Text(
-                      'No computer is connected to this account yet.',
-                      style: DesktopChrome.text(),
-                    ),
-                  const SizedBox(height: 16),
-                  if (own.isNotEmpty) ...[
-                    Text(
-                      "The Swarm's product managers can start agents here with this machine's signed-in accounts. "
-                      'They run without asking for permission, in projects cloned to ~/harnesses/swarms.',
-                      style: DesktopChrome.text(),
-                    ),
-                  ] else ...[
-                    Text(
-                      'To add another computer, install Harness on it and sign in with '
-                      'this account, or approve a device with no screen from Machines.',
-                      style: DesktopChrome.text(),
-                    ),
-                    const SizedBox(height: 4),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          app.requestMachines();
-                        },
-                        child: const Text('Open Machines'),
-                      ),
-                    ),
-                  ],
-                  if (own.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    _AgentSlots(
-                      value: slots,
-                      maximum: maximumFor(machineId),
-                      busy: busy,
-                      onChanged: (next) => update(() {
-                        slots = next;
-                        slotsEdited = true;
-                      }),
-                    ),
+                  _AgentsLimit(
+                    memory: memoryChoice(),
+                    value: atMostValue(),
+                    maximum: atMostMaximum(),
+                    busy: busy,
+                    onMemory: () => update(() => memoryEdited = true),
+                    onAtMost: (next) => update(() {
+                      memoryEdited = false;
+                      atMostEdited = next;
+                    }),
+                  ),
+                  // Why it cannot be removed, in words rather than a dimmed button alone.
+                  if (view != null && canRemove(view.id))
+                    if (removeReason(view.id) case final reason?) ...[
+                      const SizedBox(height: grid.AppDesktop.controlGap),
+                      Text(reason, style: DesktopChrome.metadata()),
+                    ],
+                  if (!canSave && why != null) ...[
+                    const SizedBox(height: grid.AppDesktop.controlGap),
+                    Text(why, style: DesktopChrome.metadata()),
                   ],
                   if (error != null) ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: grid.AppDesktop.controlGap),
                     Text(error!, style: DesktopChrome.metadata()),
                   ],
                 ],
               ),
-              actions: [
-                if (own.isNotEmpty)
-                  FilledButton(
-                    onPressed: busy || !canSave ? null : save,
-                    child: Text(busy ? 'Preparing…' : 'Add machine'),
+              // One clear action at the right; the rarer one quiet at the
+              // left, as in the machine's details.
+              leadingActions: [
+                if (view != null && canRemove(view.id))
+                  TextButton(
+                    style: superTabQuietAction,
+                    onPressed: busy || removeReason(view.id) != null
+                        ? null
+                        : () {
+                            Navigator.pop(context);
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              remove(view);
+                            });
+                          },
+                    child: const Text('Remove from this Swarm'),
                   ),
+              ],
+              actions: [
+                FilledButton(
+                  onPressed: busy || !canSave ? null : save,
+                  child: Text(busy ? 'Saving…' : 'Save'),
+                ),
               ],
             );
           },
@@ -1171,7 +761,6 @@ Future<String?> _contributeDialog(
       ),
     ),
   );
-  return added;
 }
 
 class _SuperTabMachinesState extends State<SuperTabMachines> {
@@ -1193,9 +782,18 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   Timer? _timer;
   bool _reading = false;
   int _revision = 0;
+
+  /// What this Mac's daemon remembers of its Harness Team account setup
+  /// ([AppNotifier.teamSetupStatus]), for its own row's line; null until read
+  /// or when it cannot say.
+  ({String state, String? detail})? _teamSetup;
+  bool _teamSetupReading = false;
   SuperTabController get c => widget.controller;
+  // Team agents only: a Buddy is listed nowhere, and its machine may be its
+  // person's alone, outside the Swarm (backend buddyOnly).
   Set<String> get _ids => {
-    for (final a in c.snapshot?.agents ?? const <SuperTabAgent>[]) a.machineId,
+    for (final a in c.snapshot?.teamAgents ?? const <SuperTabAgent>[])
+      a.machineId,
     for (final m in c.snapshot?.machines ?? const <Map<String, dynamic>>[])
       m['machineId'] as String,
   };
@@ -1210,6 +808,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     if (!kUnderTest) {
       _tick = Timer.periodic(const Duration(seconds: 1), (_) => _changed());
     }
+    unawaited(_readTeamSetup());
     if ((!kUnderTest || widget.readLocal != null) && widget.app != null) {
       _updateUsage();
       widget.app!.foreground.addListener(_foreground);
@@ -1219,6 +818,32 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
 
   void _changed() {
     if (mounted) setState(() {});
+  }
+
+  /// Reads why this Mac has no Harness Team account, only while its person's
+  /// own row offers Set up: asked of this Mac's daemon, never of another's.
+  Future<void> _readTeamSetup() async {
+    final app = widget.app;
+    if (app == null || _teamSetupReading || !app.canSetUpTeamAccount) return;
+    final own = c.snapshot?.machines.any(
+      (m) =>
+          m['contributorId'] == c.accountId &&
+          app.stateOf(m['machineId'] as String)?.isLocalMachine == true &&
+          (m['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED',
+    );
+    if (own != true) {
+      _teamSetup = null;
+      return;
+    }
+    _teamSetupReading = true;
+    try {
+      final read = await app.teamSetupStatus();
+      if (!mounted) return;
+      _teamSetup = read;
+      _changed();
+    } finally {
+      _teamSetupReading = false;
+    }
   }
 
   void _updateUsage() {
@@ -1276,6 +901,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       }
       _samples.removeWhere((id, _) => !_ids.contains(id));
       _awaiting.removeWhere((id) => !_samples.containsKey(id));
+      await _readTeamSetup();
     } finally {
       _reading = false;
       if (mounted && widget.app?.foreground.value == true) {
@@ -1295,14 +921,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     super.dispose();
   }
 
-  /// Add machine, or with [existing] that machine's settings (its owner's).
-  Future<void> _contribute({
-    Map<String, dynamic>? existing,
+  /// [existing]'s settings in this Swarm (its owner's).
+  Future<void> _settings({
+    required Map<String, dynamic> existing,
     _MachineView? view,
   }) async {
     final app = widget.app;
     if (app == null) return;
-    await _contributeDialog(
+    await _machineSettingsDialog(
       context,
       c,
       app,
@@ -1421,10 +1047,20 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       accounts = [for (final quota in quotas.values) _quotaRow(quota, poolId)];
     }
     final reasons = observation['quotaReasons'];
+    // Engines the server suspended here after failed starts, with why (backend superTabs/engineHealth.ts), on the Mac
+    // or its Harness Team account.
+    final suspended = <String, String>{
+      for (final p in [c.snapshot!.pool(id), c.snapshot!.teamPoolOf(id)])
+        if (p?['suspendedEngines'] case final Map raw)
+          for (final entry in raw.entries)
+            if (entry.key is String && entry.value is String)
+              entry.key as String: entry.value as String,
+    };
     final allowances = [
       for (final engine in _chipEngines)
         if (allowed?.contains(engine) ??
             (quotas.containsKey(engine) ||
+                suspended.containsKey(engine) ||
                 accounts.any((row) => row['engine'] == engine)))
           switch (accounts
               .where(
@@ -1432,7 +1068,16 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     row['engine'] == engine && row['remainingPercent'] is num,
               )
               .firstOrNull) {
-            final row? => _figured(engine, row, stale: stale),
+            final row? => _figured(
+              engine,
+              row,
+              stale: stale,
+              struck:
+                  suspended[engine] ??
+                  (!stale && (row['remainingPercent'] as num) <= 0
+                      ? _noQuotaLeft
+                      : null),
+            ),
             null => _unfigured(
               engine,
               poolId,
@@ -1440,6 +1085,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                 quotas[engine],
                 reasons is Map ? reasons[engine] : null,
               ),
+              struck: suspended[engine],
             ),
           },
     ];
@@ -1460,6 +1106,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
     String engine,
     Map<String, Object?> row, {
     required bool stale,
+    String? struck,
   }) {
     final account = WorkspaceSubscriptionUsage.fromRows([row]).accounts.first;
     return _Allowance(
@@ -1468,6 +1115,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       figure: account.figure,
       left: (row['remainingPercent'] as num).toDouble().clamp(0, 100),
       stale: stale,
+      struck: struck,
       note: superMachineAllowanceNote(switch (row['details']) {
         final List lines => lines.whereType<String>(),
         _ => const <String>[],
@@ -1483,7 +1131,12 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
   }
 
   /// [engine]'s card without a figure, saying [reason] instead; named and figured as one with a reading is.
-  _Allowance _unfigured(String engine, String machineId, String reason) {
+  _Allowance _unfigured(
+    String engine,
+    String machineId,
+    String reason, {
+    String? struck,
+  }) {
     final account = WorkspaceSubscriptionUsage.fromRows([
       {'engine': engine, 'accountKey': 'machine:$machineId:$engine'},
     ]).accounts.first;
@@ -1493,6 +1146,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       figure: account.figure,
       left: null,
       note: reason,
+      struck: struck,
       detail: '${account.name}\n$reason',
     );
   }
@@ -1589,7 +1243,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         app?.stateOf(id)?.machine.displayName ??
         // The Swarm knows no name for it, and sharing its own would be new data: it is named by its owner.
         (agentsOnly && person != null
-            ? "${superTabPersonName(person.email)}'s computer"
+            ? "${person.username}'s computer"
             : 'Unavailable machine');
     final subscriptions = _subscriptions(
       id,
@@ -1671,21 +1325,26 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
         }
       }
     }
-    final problem = _teammatesLine(shared, team, contributor);
+    final line = _teammatesLine(shared, team, contributor);
+    final setUpTeam =
+        line != null &&
+        team == null &&
+        (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
+        contributor == c.accountId &&
+        app != null &&
+        app.canSetUpTeamAccount &&
+        app.stateOf(id)?.isLocalMachine == true;
+    // Its own person reads why: they cancelled, or setup failed and why.
+    final problem = setUpTeam
+        ? superTabTeamSetupLine(_teamSetup) ?? line
+        : line;
     return _MachineView(
       apiModels: apiModels,
       localModels: localModels,
       id: id,
       name: name,
       problem: problem,
-      setUpTeam:
-          problem != null &&
-          team == null &&
-          (shared?['teamWork'] as Map?)?['code'] == 'TEAM_ACCOUNT_REQUIRED' &&
-          contributor == c.accountId &&
-          app != null &&
-          app.canSetUpTeamAccount &&
-          app.stateOf(id)?.isLocalMachine == true,
+      setUpTeam: setUpTeam,
       owner: person,
       contributor: contributor,
       shared: shared,
@@ -1706,7 +1365,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       // after its state when that is not online. Never an age. Only current readings are included.
       tip: [
         if (cleaning) 'Cleaning up' else ?superTabMachineTip(status),
-        if (person != null) 'Owned by ${superTabPersonName(person.email)}',
+        if (person != null) 'Owned by ${person.username}',
         if (paused) 'New work paused',
         if (!dim && value?.cpuPercent != null)
           'CPU ${available(value!.cpuPercent!)} free',
@@ -2023,7 +1682,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
               ],
               body: SuperTabMachineDetails(
                 name: name,
-                owner: person?.email,
+                owner: person?.username,
                 status: details,
                 // Details follow the same freshness rule as the row and its disclosure.
                 resources: dim ? null : value,
@@ -2056,7 +1715,7 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
                     onPressed: () {
                       Navigator.pop(context);
                       unawaited(
-                        _contribute(
+                        _settings(
                           existing: shared ?? {'machineId': id},
                           view: v,
                         ),
@@ -2117,7 +1776,10 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
           child: _MachineLine(
             view: view,
             onSetUpTeam: view.setUpTeam
-                ? () => showTeamAccountSetup(context, widget.app!)
+                ? () async {
+                    await showTeamAccountSetup(context, widget.app!);
+                    await _readTeamSetup();
+                  }
                 : null,
           ),
         ),
@@ -2461,7 +2123,14 @@ class _SuperTabMachinesState extends State<SuperTabMachines> {
       SuperTabSectionHeading(
         'Machines',
         onAdd: c.canWrite && widget.app != null
-            ? () => unawaited(_contribute())
+            ? () => unawaited(
+                showAddComputers(
+                  context,
+                  c,
+                  widget.app!,
+                  readResources: widget.readLocal,
+                ),
+              )
             : null,
         addTooltip: 'Add machine',
         // Only a Swarm that can't be read is news; a live one says nothing.
@@ -2672,6 +2341,21 @@ String? superTabTeammatesPaused(Object? code) {
   return why == null ? null : "Teammates' agents paused: $why";
 }
 
+/// This Mac's own row, for its person, when its daemon remembers why it has no Harness Team account
+/// (cli/src/team/autoSetup.ts `status`); null when it does not, and the Swarm's own line stands.
+String? superTabTeamSetupLine(({String state, String? detail})? setup) {
+  final detail = setup?.detail?.trim().replaceFirst(RegExp(r'[.]+$'), '');
+  final why = switch (setup?.state) {
+    'declined' => 'setup was cancelled',
+    'failed' when detail != null && detail.isNotEmpty =>
+      'setup failed: $detail',
+    'failed' => 'setup failed',
+    'running' => 'setting up',
+    _ => null,
+  };
+  return why == null ? null : "Teammates' agents paused: $why";
+}
+
 /// One engine's allowance on a machine: its mark and remaining share on the row, its windows on hover.
 class _Allowance {
   const _Allowance({
@@ -2682,6 +2366,7 @@ class _Allowance {
     required this.detail,
     this.note,
     this.stale = false,
+    this.struck,
   });
 
   final String engine, name, figure, detail;
@@ -2692,6 +2377,10 @@ class _Allowance {
 
   /// The share left, 0–100; null when there is no figure.
   final double? left;
+
+  /// Why new work does not go to this engine here (out of quota, or suspended after failed starts), shown on hover
+  /// with its name struck through; null when it takes work.
+  final String? struck;
 
   /// The last figure an offline machine read: shown muted, never as now.
   final bool stale;
@@ -2714,6 +2403,10 @@ class _Allowance {
     DesktopChrome.surface,
   );
 }
+
+/// What hovering an engine with no quota left on a machine says (the route leaves it out the same way).
+const _noQuotaLeft =
+    'Not used for new work here: no quota left until it resets.';
 
 /// The same leading icon/name and trailing status column as projects.
 class _MachineLine extends StatelessWidget {
@@ -2818,7 +2511,7 @@ class _MachineLine extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(left: 6),
               child: Tooltip(
-                message: 'Owned by ${superTabPersonName(owner.email)}',
+                message: 'Owned by ${owner.username}',
                 child: SuperTabAvatar.person(owner, size: 20),
               ),
             ),
@@ -3103,12 +2796,18 @@ class _MachineReadings extends StatelessWidget {
 
   Widget _allowance(_Allowance allowance) {
     final left = allowance.left;
+    final struck = allowance.struck;
     return Tooltip(
-      message: allowance.detail,
+      message: [
+        ?struck,
+        if (allowance.detail.isNotEmpty) allowance.detail,
+      ].join('\n\n'),
       child: Semantics(
-        label: left == null
-            ? '${allowance.name}: ${allowance.note}'
-            : '${allowance.name} ${allowance.figure} remaining',
+        label:
+            (left == null
+                ? '${allowance.name}: ${allowance.note}'
+                : '${allowance.name} ${allowance.figure} remaining') +
+            (struck == null ? '' : '. $struck'),
         excludeSemantics: true,
         child: Container(
           key: ValueKey(
@@ -3131,7 +2830,11 @@ class _MachineReadings extends StatelessWidget {
                       allowance.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: DesktopChrome.text(size: 12, height: 1.3),
+                      style: DesktopChrome.text(size: 12, height: 1.3).copyWith(
+                        decoration: struck == null
+                            ? null
+                            : TextDecoration.lineThrough,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),

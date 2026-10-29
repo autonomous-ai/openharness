@@ -517,6 +517,8 @@ class NewHarnessController extends ChangeNotifier {
     // its machine, whatever machine this form was opened on.
     if (this.integration case final request? when request.pending) {
       _machineId = request.machineId ?? _machineId;
+      // Its person chose that machine when it was sent.
+      _leadPicked = request.machineId != null;
       if (request.engine case final engine?) {
         _engine = engine;
         _harnessId = null;
@@ -1581,34 +1583,40 @@ class NewHarnessController extends ChangeNotifier {
   /// Desktop: a teammate's Team account, or a machine of the person's this
   /// Desktop is not connected to. The repo stays the one chosen on
   /// [machineId]; that machine clones it. Null when this Desktop starts it on
-  /// [machineId], or when it waits ([leadQueued]).
+  /// [machineId].
   String? _swarmLeadMachine;
   String? get leadSwarmMachine => _swarmLeadMachine;
 
-  /// The machine the Product Manager starts on, as the Swarm lists it.
-  LeadMachine? get leadMachine => integration?.leadMachines
-      ?.where((m) => m.id == (_swarmLeadMachine ?? _machineId))
-      .firstOrNull;
+  /// The person chose the Product Manager's machine: none is chosen for them,
+  /// since only they know which one stays on (Ken, 10-29).
+  bool _leadPicked = false;
+  bool get leadPicked => _leadPicked;
+
+  /// The machine the Product Manager starts on, as the Swarm lists it; null
+  /// until the person chooses one.
+  LeadMachine? get leadMachine => !_leadPicked
+      ? null
+      : integration?.leadMachines
+            ?.where((m) => m.id == (_swarmLeadMachine ?? _machineId))
+            .firstOrNull;
 
   bool _paused(List<LeadMachine> machines) =>
       machines.isNotEmpty &&
       machines.every((m) => m.unavailable == kLeadSwarmPaused);
 
-  /// No machine can take the Product Manager now: New Project asks the
-  /// Swarm to start it on the first one that frees up.
-  bool get leadQueued {
+  /// No machine could start the Product Manager now: each is paused, offline,
+  /// full, another person's that cannot take it, or runs no engine it can
+  /// start with. Its list says why for each.
+  bool get leadNone {
     final machines = integration?.leadMachines;
     return machines != null &&
-        _swarmLeadMachine == null &&
-        leadMachine?.startable != true &&
         !_paused(machines) &&
-        bestLeadMachine(machines, cloudRepository) == null;
+        !machines.any((m) => m.startable);
   }
 
-  /// The Swarm starts the Product Manager, on [leadSwarmMachine] or the first
-  /// free machine; this Desktop does not.
-  bool get leadThroughSwarm =>
-      placesLead && (_swarmLeadMachine != null || leadQueued);
+  /// The Swarm starts the Product Manager, on [leadSwarmMachine]; this
+  /// Desktop does not.
+  bool get leadThroughSwarm => placesLead && _swarmLeadMachine != null;
 
   /// The address the Swarm clones the chosen repo from, or null when it is
   /// not known.
@@ -1625,29 +1633,25 @@ class NewHarnessController extends ChangeNotifier {
         null => null,
       };
 
-  /// The Product Manager line: where it starts, its engine and model, and a
-  /// repo cloned there first.
+  /// The Product Manager line: where it starts, its engine and model.
   String get leadLine {
-    if (leadQueued) {
-      return 'All Swarm machines are busy. The project starts on the first '
-          'one that frees up.';
-    }
     final target = leadMachine;
     final name = target == null
         ? machineLabel
-        : target.team
+        : target.inTeam(_engine)
         ? '${target.name}’s Team account'
         : target.name;
+    return ['Product Manager on $name', agentLabel, leadModelLabel].join(' · ');
+  }
+
+  /// Under [leadLine]: the repo that machine clones first, or null.
+  String? get leadCloneNote {
+    if (_leadRepositoryName == null) return null;
+    final target = leadMachine;
     final clones = leadThroughSwarm
         ? target != null && !target.has(leadRepositoryUrl)
         : _project.repository != null;
-    return [
-      'Product Manager: $name',
-      agentLabel,
-      leadModelLabel,
-      if (clones && _leadRepositoryName != null)
-        '$_leadRepositoryName will be cloned there',
-    ].join(' · ');
+    return clones ? 'Clones $_leadRepositoryName there first' : null;
   }
 
   /// Why New Project cannot start its Product Manager now, or null.
@@ -1657,9 +1661,16 @@ class NewHarnessController extends ChangeNotifier {
     if (_paused(machines)) {
       return '$kLeadSwarmPaused. New Project can start once it resumes.';
     }
-    if (leadMachine?.startable != true && !leadQueued) {
+    if (leadNone) return 'No machine can run the Product Manager now.';
+    if (!_leadPicked) return kLeadChooseMachine;
+    if (leadMachine?.startable != true) {
       final name = leadMachine?.name ?? machineLabel;
       return '$name cannot start the Product Manager. Choose another machine.';
+    }
+    final refusal = leadMachine?.engineRefusals[_engine];
+    if (refusal != null) {
+      return '${leadMachine!.name} can’t run $agentLabel: $refusal. '
+          'Choose another engine.';
     }
     if (leadThroughSwarm) {
       if (leadRepositoryUrl == null) {
@@ -1668,20 +1679,17 @@ class NewHarnessController extends ChangeNotifier {
       }
       if (_model != null) {
         return 'Models on the grid run only where this Desktop starts the '
-            'Product Manager. Choose the default model under Advanced.';
+            'Product Manager. Choose the default model.';
       }
     }
     return _leadModelListRefusal;
   }
 
-  /// Moves the Product Manager to the best machine the Swarm lists, unless
-  /// it is already there; with none free, it waits ([leadQueued]).
-  void placeLead() {
-    final machines = integration?.leadMachines;
-    if (machines == null || locked) return;
-    final best = bestLeadMachine(machines, cloudRepository);
-    if (best == null || best.id == leadMachine?.id) return;
-    chooseLeadMachine(best.id);
+  /// The engine a chosen machine runs, as a choice the person did not make.
+  void _placeLeadEngine(String engine) {
+    final touched = _selectionTouched;
+    _selectEngine(engine);
+    _selectionTouched = touched;
   }
 
   /// Starts the Product Manager on [id], a machine the list can start it on
@@ -1692,9 +1700,14 @@ class NewHarnessController extends ChangeNotifier {
     final listed = integration?.leadMachines
         ?.where((m) => m.id == id)
         .firstOrNull;
+    // The machine chosen last wins over an engine it cannot run.
+    if (listed != null && listed.startable && !listed.runs(_engine)) {
+      _placeLeadEngine(listed.leadEngines.first);
+    }
     if (listed != null && listed.startable && !listed.native) {
       error = null;
       _swarmLeadMachine = id;
+      _leadPicked = true;
       notifyListeners();
       return;
     }
@@ -1712,6 +1725,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     error = null;
     _swarmLeadMachine = null;
+    _leadPicked = true;
     final remote = _remoteOf(_machineId, _project);
     _selectMachine(id);
     if (remote != null) _keepRepository(id, remote, listed.name);
@@ -1741,10 +1755,10 @@ class NewHarnessController extends ChangeNotifier {
     final list = integration?.leadModels;
     if (!placesLead || list == null) return null;
     if (list.engineRefusal(_engine) case final why?) {
-      return '$why Choose another engine under Advanced.';
+      return '$why Choose another engine.';
     }
     final why = _leadModelRefusal(_model?.id, grid: _model != null);
-    return why == null ? null : '$why Choose another model under Advanced.';
+    return why == null ? null : '$why Choose another model.';
   }
 
   /// The remote [project] on [machineId] has, when anything says so: a
@@ -2531,6 +2545,8 @@ class NewHarnessController extends ChangeNotifier {
           if (option.id != codingId) _selectEngine(option.id);
         }
       case NewHarnessField.agent:
+        // A machine that cannot run it says so (leadBlocked); the person
+        // chooses again, nothing moves on its own.
         _selectEngine(option.id);
       case NewHarnessField.model:
         _model = option.model;
@@ -4161,6 +4177,11 @@ class NewHarnessController extends ChangeNotifier {
       );
     }
     if (isCloud) return _createCloud();
+    // Whoever starts it, New Project never starts a Product Manager on a
+    // machine the person did not choose, or one that cannot run it.
+    if (placesLead) {
+      if (leadBlocked case final why?) return _fail(why);
+    }
     if (leadThroughSwarm) return _startInSwarm();
     if (!checking) {
       _syncGitProject();
@@ -4327,7 +4348,7 @@ class NewHarnessController extends ChangeNotifier {
     if (integration case final destination?) {
       try {
         launchMessage = destination.preparedPrompt ??= await destination
-            .prepare(_machineId, firstMessage);
+            .prepare(_machineId, firstMessage, base);
       } catch (failure) {
         return _fail(failure.toString());
       }
@@ -4489,8 +4510,7 @@ class NewHarnessController extends ChangeNotifier {
   /// A cloud harness: made by the cloud service on this machine (CLI
   /// services/cloud.ts), which starts it at its maker; no folder, no install.
   /// New Project's Product Manager the Swarm starts
-  /// ([HarnessLaunchIntegration.startInSwarm]): on [leadSwarmMachine], or on
-  /// the first machine that frees up.
+  /// ([HarnessLaunchIntegration.startInSwarm]) on [leadSwarmMachine].
   Future<NewHarnessOutcome> _startInSwarm() async {
     final start = integration?.startInSwarm;
     if (start == null) {
@@ -4501,14 +4521,13 @@ class NewHarnessController extends ChangeNotifier {
     if (leadBlocked case final why?) return _fail(why);
     busy = true;
     error = null;
-    status = leadQueued
-        ? 'Asking the Swarm to start the Product Manager…'
-        : 'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
+    status =
+        'Asking ${leadMachine?.name ?? 'the machine'} to start the Product Manager…';
     notifyListeners();
     try {
       await start(
         LeadSwarmStart(
-          machineId: _swarmLeadMachine,
+          machineId: _swarmLeadMachine!,
           engine: _engine,
           repositoryUrl: leadRepositoryUrl,
           title: _leadRepositoryName,

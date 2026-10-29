@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -19,20 +18,6 @@ import 'swarm_reader.dart';
 import 'swarm_row.dart';
 import 'swarm_session.dart';
 import 'swarm_style.dart';
-
-/// Opens [projectId]'s leaderboard over [context]'s page.
-void openSwarmLeaderboard(
-  BuildContext context,
-  String swarmId,
-  String projectId,
-) => unawaited(
-  Navigator.of(context).push(
-    phoneRoute(
-      (_) => SwarmLeaderboardPage(swarmId: swarmId, projectId: projectId),
-      listensForItself: true,
-    ),
-  ),
-);
 
 /// One project's leaderboard, built as the design system's Numbers and
 /// rankings at phone sizes, the same structure as the desktop's Humans: the
@@ -51,10 +36,15 @@ class SwarmLeaderboardPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.projectId,
+    this.header = true,
     this.now = DateTime.now,
   });
 
   final String swarmId, projectId;
+
+  /// Its own top bar, back and "Leaderboard"; none in a project's tab,
+  /// under the project's own header.
+  final bool header;
 
   /// What tells this week from the ones before.
   final DateTime Function() now;
@@ -133,6 +123,23 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
     final project = snapshot?.projects
         .where((p) => p.id == widget.projectId)
         .firstOrNull;
+    final board = RefreshIndicator(
+      onRefresh: _board?.refresh ?? () async {},
+      child: ListView(
+        key: const ValueKey('swarm-leaderboard'),
+        physics: const AlwaysScrollableScrollPhysics(),
+        // Rows draw their own inner gap, so their content meets the
+        // screen's side inset.
+        padding: EdgeInsets.fromLTRB(
+          AppSpace.screenInset - AppSpace.s,
+          0,
+          AppSpace.screenInset - AppSpace.s,
+          MediaQuery.paddingOf(context).bottom + AppSpace.xl,
+        ),
+        children: _body(context, snapshot),
+      ),
+    );
+    if (!widget.header) return board;
     return Scaffold(
       backgroundColor: AppPalette.windowBg,
       body: SafeArea(
@@ -147,23 +154,7 @@ class _SwarmLeaderboardPageState extends State<SwarmLeaderboardPage> {
               title: 'Leaderboard',
               subtitle: project?.name,
             ),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _board?.refresh ?? () async {},
-                child: ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  // Rows draw their own inner gap, so their content meets the
-                  // screen's side inset.
-                  padding: EdgeInsets.fromLTRB(
-                    AppSpace.screenInset - AppSpace.s,
-                    0,
-                    AppSpace.screenInset - AppSpace.s,
-                    MediaQuery.paddingOf(context).bottom + AppSpace.xl,
-                  ),
-                  children: _body(context, snapshot),
-                ),
-              ),
-            ),
+            Expanded(child: board),
           ],
         ),
       ),

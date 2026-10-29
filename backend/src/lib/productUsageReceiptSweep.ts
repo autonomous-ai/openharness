@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import type { PrismaClient } from '@prisma/client'
 import { PRODUCT_USAGE_RECEIPT_EXPIRY_DAYS } from '../types/productUsageReceipt.js'
 import { logger } from '../utils/logger.js'
+import { notAuthorized } from './db/indexes.js'
 
 /**
  * Removes, a little at a time, the usage receipts written while a receipt lived 36 days (until 2026-10-29: about 4M of
@@ -21,8 +22,9 @@ import { logger } from '../utils/logger.js'
 const COLLECTION = 'product_usage_receipts'
 const DAY = 86_400_000
 const OLD_EXPIRY_DAYS = 36
-/** About 2,000 a minute, in four deletes with a pause between them: the backlog clears in about a day. */
-export const RECEIPT_SWEEP = { chunk: 500, chunks: 4, pauseMs: 250, everyMs: 60_000 } as const
+/** About 2,000 a minute, in four deletes with a pause between them: the backlog clears in about a day. While the database
+ *  refuses the rule, the worker asks again once an hour. */
+export const RECEIPT_SWEEP = { chunk: 500, chunks: 4, pauseMs: 250, everyMs: 60_000, refusedEveryMs: 3_600_000 } as const
 
 /** Every receipt write must carry its life; old receipts, never written again, are not checked. */
 export const RECEIPT_RULE = { validator: { $jsonSchema: { required: ['life'] } }, validationLevel: 'strict', validationAction: 'error' } as const
@@ -37,6 +39,11 @@ export interface SweepPass {
 const date = (ms: number) => ({ $date: new Date(ms).toISOString() })
 const startOfDay = (now: Date) => Math.floor(now.getTime() / DAY) * DAY
 
+/** The database user may not install [RECEIPT_RULE] (production's app user may not run collMod, 10-29). */
+export class ReceiptRuleRefused extends Error {
+  constructor() { super('The database user is not authorized to install the receipt rule (collMod)') }
+}
+
 /** Installs [RECEIPT_RULE] unless it is there already. collMod locks the collection only for the change itself; a receipt
  * write in flight finishes first, under the old rule, and every later write is checked. */
 export async function ensureReceiptRule(db: PrismaClient): Promise<void> {
@@ -45,7 +52,12 @@ export async function ensureReceiptRule(db: PrismaClient): Promise<void> {
   const options = answer.cursor.firstBatch[0]?.options ?? {}
   if ((Object.keys(RECEIPT_RULE) as Array<keyof typeof RECEIPT_RULE>)
     .every(key => JSON.stringify(options[key]) === JSON.stringify(RECEIPT_RULE[key]))) return
-  await db.$runCommandRaw({ collMod: COLLECTION, ...RECEIPT_RULE } as never)
+  try {
+    await db.$runCommandRaw({ collMod: COLLECTION, ...RECEIPT_RULE } as never)
+  } catch (error) {
+    if (notAuthorized(error)) throw new ReceiptRuleRefused()
+    throw error
+  }
 }
 
 async function anyReceipt(db: PrismaClient, filter: Record<string, unknown>): Promise<boolean> {
@@ -82,13 +94,14 @@ export async function sweepOldReceipts(db: PrismaClient, now = new Date(), optio
   return { removed, done }
 }
 
-/** Runs a pass a minute in the singleton worker until nothing is left to remove, then stops; a restart checks once more. */
-export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptions & { everyMs: number; now: () => Date;
-  log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
-  const { everyMs, now, log, ...options } = { ...RECEIPT_SWEEP, now: () => new Date(), log: logger, ...settings }
-  let running = false, total = 0
+/** Runs a pass a minute in the singleton worker until nothing is left to remove, then stops; a restart checks once more.
+ *  While the database refuses the rule, nothing is removed: it says so once and asks again every [refusedEveryMs]. */
+export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptions & { everyMs: number; refusedEveryMs: number;
+  now: () => Date; log: Pick<typeof logger, 'info' | 'warn'> }> = {}): () => void {
+  const { everyMs, refusedEveryMs, now, log, ...options } = { ...RECEIPT_SWEEP, now: () => new Date(), log: logger, ...settings }
+  let running = false, total = 0, refusedUntil = 0, warned = false
   const run = async () => {
-    if (running) return
+    if (running || now().getTime() < refusedUntil) return
     running = true
     try {
       const pass = await sweepOldReceipts(db, now(), options)
@@ -99,6 +112,12 @@ export function startReceiptSweep(db: PrismaClient, settings: Partial<SweepOptio
         log.info('[usage-receipts] done: no old receipts left', { removedSinceStart: total })
       }
     } catch (error) {
+      if (error instanceof ReceiptRuleRefused) {
+        refusedUntil = now().getTime() + refusedEveryMs
+        if (!warned) log.warn('[usage-receipts] waiting: the database user may not install the receipt rule (collMod); nothing is removed, checking hourly')
+        warned = true
+        return
+      }
       log.warn('[usage-receipts] pass failed; retrying next minute', { error: error instanceof Error ? error.message : String(error) })
     } finally {
       running = false
