@@ -8,8 +8,8 @@ import {
   type Actor, type AgentStartRequest, type WorkTask, type Agent, type Author, type CommandEffects, type Conversation, type SuperTabState,
 } from './model.js'
 import { routeRecordSchema, routeTitle, startedAs, type RouteCandidate, type RouteDecision, type RouteFinal, type RouteOverride } from './routeRecord.js'
-import { routingOverrideSchema } from './routingPolicy.js'
-import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
+import { DEFAULT_ROUTING_POLICY, routingOverrideSchema, type RoutingPolicy } from './routingPolicy.js'
+import { agentTarget, askedInSchema, broken, MAX_RULES, reviewRefusal, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
 import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
@@ -298,6 +298,9 @@ export interface CommandContext {
   /** Route decisions this tab recorded in the last hour, counted by the store. */
   /** The decision a command names, read from SuperTabRouteDecision by the store. */
   routeDecision?: RouteDecision
+  /** The tab's effective routing policy, read by the store for commands that start, assign or route work: who may review
+   *  is judged by it (rules.ts reviewRefusal). The built-in default without it. */
+  routingPolicy?: RoutingPolicy
   /** Starts on the machine being contributed that the store found abandoned: never contributed, never dispatched,
    *  and older than ABANDONED_START_MS by their operation receipt. */
   abandonedStartIds?: string[]
@@ -621,11 +624,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
   }
   /** The owner's rules for the group's project, then the group's own requirement, each with its own code so a caller can tell
    *  an owner's rule from where the task can be done at all. */
+  const policy = context.routingPolicy ?? DEFAULT_ROUTING_POLICY
   const refusal = (target: RunTarget, conversationId: string): { code: string; why: string } | null => {
     const rule = broken(groupRules(conversationId), target, machineName, macOf)
     if (rule) return { code: 'RULE_BROKEN', why: rule }
     const requirement = unmet(conversation(state, conversationId).task?.requires, target, macOf)
-    return requirement ? { code: 'REQUIREMENT_UNMET', why: requirement } : null
+    if (requirement) return { code: 'REQUIREMENT_UNMET', why: requirement }
+    const review = reviewRefusal(state, conversation(state, conversationId).reviewOf, target, policy)
+    return review ? { code: 'REVIEW_REFUSED', why: review } : null
   }
   const ruled = (target: RunTarget, conversationId: string, done: string, personChose = false) => {
     const refused = refusal(target, conversationId)
@@ -1986,7 +1992,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         const opened = pullRequest && openReview(state, group, command.result!, pullRequest, { operationId, now: context.now, engineer: sender,
           // The owner's hard rules hold as for work.assign; the reviewed task's own requirement is its Engineer's, not its Reviewer's.
           mayWork: a => !teamWorkCheck(state, a.machineId, a.contributorId, groupProject(state, group), context.now, context.teamMachines, context.otherWorkspaceMachines)
-            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) })
+            && !broken(groupRules(group.id), agentTarget(state, a), machineName, macOf) && !reviewRefusal(state, group.id, agentTarget(state, a), policy) })
         if (opened) effects.messages.push(...opened.messages)
         // Shipped before this command: the leaderboard marks this Done as shipped just above (recordStatus).
         if (command.status === 'done' && shippedAt(conversation(original, group.id)) == null) {

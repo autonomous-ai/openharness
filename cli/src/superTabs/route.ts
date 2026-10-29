@@ -211,6 +211,18 @@ export function rateFor(policy: Policy, engine: string, model: string | null, ef
   return row ? { quality: row.quality, cost: row.cost } : { quality: 1, cost: 1 }
 }
 
+/** What a reviewed Builder ran: its engine, and the grid model its engine drove. */
+export interface Reviewed { engine: string; gridModel?: string }
+/** A model family: a grid model's own, else its engine's. */
+const familyOf = (t: Reviewed) => t.gridModel ? `grid:${t.gridModel}` : t.engine
+/** Why [p] may not review (Ken, 2026-10-29: a small model never reviews again): a model served on the Swarm's grid, one rated
+ *  below 2, or the reviewed Builder's own model family. The server refuses the same (backend superTabs/rules.ts reviewRefusal). */
+export function reviewRefusals(p: Probe, builder: Reviewed | null): string[] {
+  if (p.gridModel) return ['A review never runs on a model served on the Swarm\'s grid.']
+  if (p.quality < 2) return [`A review needs a model of quality 2 or more, and ${ENGINE[p.engine]} ${p.model} is ${p.quality}.`]
+  return builder && familyOf(builder) === familyOf(p) ? [`A review runs on another engine than the reviewed Builder's, ${ENGINE[p.engine]}.`] : []
+}
+
 export const KIND_WORD = { local: 'local', api: 'API', shared: 'shared' } as const
 const runs = (p: Probe) => p.gridModel ? `${ENGINE[p.engine]} on ${p.gridLabel ?? p.gridModel} (${KIND_WORD[p.gridKind ?? 'local']})` : `${ENGINE[p.engine]} ${p.model} ${p.effort}`
 /** A name's words for matching: lowercase letters and digits, "4.1" read as "41". */

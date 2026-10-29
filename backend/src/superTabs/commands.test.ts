@@ -1174,6 +1174,27 @@ describe('Reviewer role', () => {
     return { f, lead, leadActor, group, reviewer, builder }
   }
 
+  it('refuses an agent\'s review pick on the grid, below quality 2 or on the Builder\'s engine, whatever the soft rules; a person gets a warning', () => {
+    const { f, leadActor, group, reviewer, builder } = reviewed()
+    f.run({ type: 'work.assign', conversationId: group, agentId: builder })
+    f.run({ type: 'rule.set', rule: { kind: 'preferEngine', taskKind: 'review', engine: 'codex' }, text: 'Codex reviews.' } as Command)
+    const review = f.run({ type: 'conversation.create', title: 'Review', brief: 'Review it.', reviewOf: group, checks: [{ description: 'Verdict', independent: false }] },
+      leadActor).result.conversationId as string
+    const route = (pick: Record<string, unknown>) => f.run({ type: 'route.record', conversationId: review, decision: record({ candidates: [candidate('c0', pick)], pick: 'c0' }) } as Command, leadActor)
+    expect(() => route({ model: 'default', effort: 'default', quality: 2, cost: 1, gridModel: 'moonshotai/kimi-k3', gridName: 'swarm-g' }))
+      .toThrow('A review never runs on a model served on the Swarm\'s grid. Route again.')
+    expect(() => route({ model: 'haiku', effort: 'auto', quality: 3 })).toThrow('A review needs a model of quality 2 or more, and Claude haiku is 1. Route again.')
+    // The Builder runs Codex.
+    expect(() => route({ engine: 'codex', model: 'default', effort: 'default' })).toThrow('A review runs on another engine than the reviewed Builder\'s, Codex. Route again.')
+    expect(route({}).result.routeDecisionId).toBeTruthy()
+    // A Claude model the policy cannot name is not judged by strength.
+    expect(route({ model: 'default', effort: 'default' }).result.routeDecisionId).toBeTruthy()
+    // A person assigning a grid Reviewer by hand is told.
+    f.state.agents.find(a => a.id === reviewer)!.gridModel = 'qwen3'
+    const byHand = f.run({ type: 'work.assign', conversationId: review, agentId: reviewer })
+    expect(byHand.result.warnings).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
+  })
+
   it('stores the role chosen at start and reads agents without one as Builders', () => {
     const { f, reviewer, builder } = reviewed()
     expect(f.state.agents.find(a => a.id === reviewer)).toHaveProperty('role', 'reviewer')
@@ -1370,7 +1391,7 @@ describe('Reviewer role', () => {
     })
 
     it('gives a delta review to the Reviewer of the earlier head while it is still free', () => {
-      const { f, group, builderActor, built, reviewer, fresh, markReady, reviews } = ready('codex')
+      const { f, group, builderActor, built, reviewer, fresh, markReady, reviews } = ready()
       markReady(`Ready. ${pr}`)
       const first = reviews()[0]!
       expect(first.assignment!.agentId).toBe(reviewer)
@@ -1380,9 +1401,8 @@ describe('Reviewer role', () => {
         evidence: 'Ready: with fixes — revision d4e5f6, one Important finding.' }, reviewerActor)
       f.run({ type: 'work.status', conversationId: first.id, assignmentId: first.assignment!.id, status: 'done', result: 'Changes needed.' }, reviewerActor)
       f.run({ type: 'work.status', conversationId: group, assignmentId: built, status: 'working', result: null }, builderActor)
-      // Now only `fresh` runs on another engine than the Engineer's; the earlier head's Reviewer is still preferred.
-      f.state.agents.find(a => a.id === reviewer)!.configuration.engine = 'codex'
-      f.state.agents.find(a => a.id === fresh)!.configuration.engine = 'claude'
+      // Now `fresh` comes first among the free Reviewers; the earlier head's Reviewer is still preferred.
+      f.state.agents.sort((x, y) => Number(y.id === fresh) - Number(x.id === fresh))
       markReady(`Fixed: one finding, head 778899. ${pr}`)
       const delta = reviews().find(c => c.id !== first.id)!
       expect(delta.assignment!.agentId).toBe(reviewer)
@@ -1403,17 +1423,40 @@ describe('Reviewer role', () => {
     })
 
     it('passes over a Reviewer the owner\'s rules rule out for one they allow', () => {
-      // On Codex the Engineer's engine would make `reviewer` (Claude) the pick; only `fresh`'s machine is allowed.
-      const { f, fresh, markReady, reviews } = ready('codex')
+      // `reviewer` comes first; only `fresh`'s machine is allowed.
+      const { f, fresh, markReady, reviews } = ready()
       f.state.agents.find(a => a.id === fresh)!.machineId = 'allowed'
       f.run({ type: 'rule.set', rule: { kind: 'machines', machineIds: ['allowed'] }, text: 'Only allowed.' } as Command)
       markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
     })
 
+    it.each([
+      ['on the grid', { gridModel: 'moonshotai/kimi-k3' }],
+      ['below quality 2', { configuration: { ...config, engine: 'claude', model: 'claude-haiku-4-5' } }],
+      ['on the Engineer\'s own engine', { configuration: { ...config, engine: 'codex' } }],
+    ])('never gives the review to a Reviewer %s (Ken, 2026-10-29), and leaves it for the Lead', (_, patch) => {
+      // The Engineer runs Codex; `fresh` is the only free Reviewer.
+      const { f, leadActor, reviewer, fresh, markReady, reviews } = ready()
+      f.run({ type: 'agent.release', agentId: reviewer, decision: 'stop' }, leadActor)
+      Object.assign(f.state.agents.find(a => a.id === fresh)!, patch)
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment).toBeNull()
+    })
+
+    it('gives the review to a strong Reviewer on another engine, and to an Engineer on the grid even a Reviewer on its relay engine', () => {
+      const { f, builder, fresh, reviewer, markReady, reviews } = ready()
+      f.state.agents.find(a => a.id === reviewer)!.gridModel = 'qwen3'
+      f.state.agents.find(a => a.id === fresh)!.configuration.model = 'claude-opus-4-7'
+      // Claude Code drives the Engineer's grid model: its model family is that model, not Claude's.
+      Object.assign(f.state.agents.find(a => a.id === builder)!, { configuration: { ...config, engine: 'claude' }, gridModel: 'deepseek/deepseek-v4.1-flash' })
+      markReady(`Ready. ${pr}`)
+      expect(reviews()[0]!.assignment!.agentId).toBe(fresh)
+    })
+
     it('passes over a Reviewer that is down for one that is up, and waits when none is up', () => {
-      // `reviewer` would be the pick on another engine than the Engineer's, but its session is gone.
-      const { f, leadActor, lead, reviewer, fresh, markReady, reviews } = ready('codex')
+      // `reviewer` would be the pick, but its session is gone.
+      const { f, leadActor, lead, reviewer, fresh, markReady, reviews } = ready()
       f.state.agents.find(a => a.id === reviewer)!.downSince = new Date(500).toISOString()
       markReady(`Ready. ${pr}`)
       expect(reviews()[0]!.assignment!.agentId).toBe(fresh)

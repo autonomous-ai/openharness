@@ -1,6 +1,6 @@
 // cli/src/superTabs/route.spec.ts
 import { describe, expect, it } from 'vitest'
-import { API_BUILDERS, LOCAL_NONE, breaks, choose, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { API_BUILDERS, LOCAL_NONE, breaks, choose, gridQuality, reviewRefusals, decide, floorFor, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type Commitment, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 
 const object = (v: unknown) => v as Record<string, unknown>
 
@@ -615,6 +615,25 @@ describe('local models on the Swarm\'s grid', () => {
       expect(firstOf(choose([codex, local({ machineName: 'mac', engine: 'codex' })], policy, simple, NOW, [], prefer))).toBe('qwen3')
       expect(firstOf(choose([expiring, grid], policy, simple, NOW, [], [{ rule: { kind: 'noGridFirst' }, text: 'Subscriptions first.' }]))).toBe('opus')
     })
+  })
+
+  it('rates a grid model by the policy\'s first named row it matches, else its local quality, else 1', () => {
+    const rows = { ...policy, localModels: { quality: 1, enabled: true, models: [{ model: 'kimi k3', quality: 2 }, { model: 'deepseek v4.1', quality: 3 }] } }
+    expect(gridQuality(rows, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality(rows, 'ds-1017', 'DeepSeek V4.1 Flash')).toBe(3)
+    expect(gridQuality(rows, 'qwen3:4b')).toBe(1)
+    expect(gridQuality({ ...policy, localModels: { quality: 2, enabled: true } }, 'moonshotai/kimi-k3')).toBe(2)
+    expect(gridQuality(policy, 'moonshotai/kimi-k3')).toBe(1)
+  })
+  it('never lets a grid model, a model below quality 2 or the reviewed Builder\'s own family review (Ken, 2026-10-29)', () => {
+    const codex = { engine: 'codex' }
+    expect(reviewRefusals(local({ quality: 2 }), codex)).toEqual(['A review never runs on a model served on the Swarm\'s grid.'])
+    expect(reviewRefusals(probe({ model: 'haiku', quality: 1 }), codex)).toEqual(['A review needs a model of quality 2 or more, and Claude haiku is 1.'])
+    expect(reviewRefusals(probe({ engine: 'codex', model: 'default', quality: 3 }), codex)).toEqual(['A review runs on another engine than the reviewed Builder\'s, Codex.'])
+    // A Builder on a grid model is its own family: Claude reviews it, even though Claude Code drove it.
+    expect(reviewRefusals(probe(), { engine: 'claude', gridModel: 'moonshotai/kimi-k3' })).toEqual([])
+    expect(reviewRefusals(probe(), { engine: 'claude' })).toEqual(['A review runs on another engine than the reviewed Builder\'s, Claude.'])
+    expect(reviewRefusals(probe(), null)).toEqual([])
   })
 
   it('says why a named model the Swarm has is never offered to Builders, rather than to share it', () => {

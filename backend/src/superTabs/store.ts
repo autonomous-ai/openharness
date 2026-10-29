@@ -484,11 +484,16 @@ export class SuperTabStore {
     return transaction(this.db, async tx => {
       const { state } = await this.load(tx, user, tabId)
       author(state, await this.actor(tx, user, state, asAgentId))
-      const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
-      // The owner's account policy alone, so a field reset to "use account default" can show its value.
-      return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
-        account: effectivePolicy(account?.policy ?? null, null).policy }
+      return this.policyOf(tx, state)
     })
+  }
+
+  /** The tab's effective policy: its owner's account policy with the tab's override. */
+  private async policyOf(tx: Transaction, state: SuperTabState) {
+    const account = await tx.routingPolicy.findUnique({ where: { id: stableId('routing-policy', state.ownerId, state.environment) } })
+    // The owner's account policy alone, so a field reset to "use account default" can show its value.
+    return { ...effectivePolicy(account?.policy ?? null, state.routingPolicy ?? null), override: state.routingPolicy ?? null,
+      account: effectivePolicy(account?.policy ?? null, null).policy }
   }
 
   /** Shared with the read API (superTabs/read, design section 7.2). */
@@ -1081,6 +1086,8 @@ export class SuperTabStore {
       }
       // A Ready for review may assign a Reviewer by itself (autoReview.ts), as work.assign does.
       if (TEAM_WORK_COMMANDS.has(command.type) || (command.type === 'work.status' && command.status === 'review')) {
+        // Who may review is judged by the tab's policy (rules.ts reviewRefusal).
+        context.routingPolicy = (await this.policyOf(tx, original)).policy
         context.teamMachines = await this.teamMachines(tx, original)
         context.otherWorkspaceMachines = await this.otherWorkspaceMachines(tx, original)
         if (this.hooks.teamAccountsIdle) context.teamAccountsIdle = true

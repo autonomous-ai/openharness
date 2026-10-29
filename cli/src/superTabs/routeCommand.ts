@@ -7,7 +7,7 @@ import { openDaemon, type Daemon, type Where } from '../agentClient/daemon.js'
 import { requiredToolReason, startRequirements } from './capacity.js'
 import { inspectCapacity, type ScopedRequest } from './start.js'
 import { ENDED_WORK, object, within } from './wire.js'
-import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, type Assessment, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
+import { accountOf, API_BUILDERS, choose, decide, gridQuality, parseAssessment, quotaOf2, rateFor, recordOf, repoMatch, repositoryKey, reviewRefusals, type Assessment, type Reviewed, type RecordShape, type Commitment, type HeldModel, type MemberFrame, type Policy, type Probe, type SwarmRule, type TaskFolder } from './route.js'
 import { stat } from 'node:fs/promises'
 import { describeScmProject } from '../scm/scmProjects.js'
 
@@ -280,8 +280,10 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
     const devices = object(object(start?.request).requirements).devices
     return required.devices.every(d => Array.isArray(devices) && devices.includes(d))
   }
+  const builder = review ? reviewedBuilder(conversations.find(c => c.id === group.reviewOf), agents) : null
   for (const [i, p] of probes.entries()) {
-    const refusals = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : [])]
+    const refusals = [...(outside(p.machineId) ? [ELSEWHERE] : []), ...(p.kind === 'member' && !checked(p.agentId) ? [UNCHECKED_DEVICE] : []),
+      ...(review ? reviewRefusals(p, builder) : [])]
     if (refusals.length) probes[i] = { ...p, refusals: [...p.refusals, ...refusals] }
   }
   // Picks started or assigned and still at work hold part of their account's quota; the log, and so this, is per Swarm.
@@ -326,6 +328,16 @@ export async function routeTask(input: { tabId: string; conversationId: string; 
         ...(verdict.pick.gridModel ? { gridModel: verdict.pick.gridModel, gridName: verdict.pick.gridName } : { model: verdict.pick.model, effort: verdict.pick.effort }),
         ...(typeof routeDecisionId === 'string' ? { routeDecisionId } : {}) })}, then assign the started agent${decision ? ' with the same routeDecisionId' : ''}. It starts from the repository's default branch, fetched first; add "branchRef":"refs/remotes/origin/BRANCH" to start from another branch.`,
   }
+}
+
+/** What the reviewed group's last attempt ran on: its agent's engine and grid model while it is here, else its assignment's
+ *  engine. Null before any attempt. */
+function reviewedBuilder(reviewed: Json | undefined, agents: Json[]): Reviewed | null {
+  const assignment = object(reviewed?.assignment)
+  if (!assignment.id) return null
+  const agent = agents.find(a => a.id === assignment.agentId)
+  const gridModel = text(agent?.gridModel)
+  return { engine: String(object(agent?.configuration ?? assignment.configuration).engine), ...(gridModel ? { gridModel } : {}) }
 }
 
 /** The next two rows, and the best row of every other machine, so the Lead can choose another machine with an overrideReason. */
