@@ -37,7 +37,11 @@ class _Catalog {
       return server.request(method, path, body: body);
     }
     expectSync(method, 'GET');
-    paths.add(path);
+    // These tests are about the pages, not the tags the list also carries.
+    final plain = path
+        .replaceFirst('?mentions=1&', '?')
+        .replaceFirst('?mentions=1', '');
+    paths.add(plain);
     final after = Uri.parse(path).queryParameters['after'];
     final index = after == null
         ? 0
@@ -45,7 +49,7 @@ class _Catalog {
     final rows = index < tabs.length ? [Map.of(tabs[index])] : [];
     final next = index + 1 < tabs.length ? tabs[index]['id'] : null;
     if (hold case final waiting?) await waiting.future;
-    if (fail == path) throw StateError('Connection lost');
+    if (fail == plain) throw StateError('Connection lost');
     return {'tabs': rows, 'next': next};
   }
 }
