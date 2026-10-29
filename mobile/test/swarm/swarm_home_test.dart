@@ -1216,6 +1216,11 @@ void main() {
     ) async {
       final host = await pump(tester, two());
       expect(tester.widget<Text>(key('swarm-title')).data, 'All Swarms');
+      expect(
+        inside('swarm-title-button', find.byType(SwarmProjectTile)),
+        findsNothing,
+        reason: "a tile is one Swarm's",
+      );
       await openSwitcher(tester);
       expect(
         inside('swarm-switch-all', find.byIcon(LucideIcons.check300)),
@@ -1244,6 +1249,10 @@ void main() {
       expect(host.session!.home.swarmId, second);
       expect(key('swarm-switch-join'), findsNothing, reason: 'it closed');
       expect(tester.widget<Text>(key('swarm-title')).data, 'Work Swarm');
+      expect(
+        inside('swarm-title-button', find.byType(SwarmProjectTile)),
+        findsOneWidget,
+      );
       expect(key('swarm-project-$second-$project'), findsOneWidget);
       expect(key('swarm-project-$tab-$project'), findsNothing);
       expect(key('swarm-project-$tab-$web'), findsNothing);

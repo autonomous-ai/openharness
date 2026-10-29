@@ -237,9 +237,11 @@ class _SwarmPageState extends State<SwarmPage> {
     if (session == null) return const SwarmTabHeader('Swarm');
     final swarms = session.inbox.swarms;
     final title = swarmHomeTitle(swarms, session.home.swarmId);
+    // One Swarm shown has its tile; All Swarms has none.
+    final one = _shown(session).length == 1;
     return SwarmTabHeader(
       title,
-      leading: swarms.isEmpty ? null : SwarmProjectTile(title),
+      leading: one ? SwarmProjectTile(title) : null,
       titleLabel: 'Swarm: $title. Switch Swarm',
       subtitle: updating ? 'Updating…' : null,
       onTitle: () => unawaited(showSwarmSwitcher(context, session)),
