@@ -27,10 +27,10 @@ TextStyle leaderboardPointsStyle() => grid.AppType.label(
   fontFeatures: grid.AppFont.tabularFigures,
 );
 
-/// A person as the leaderboard names them: the board's display name, else the
-/// email's first part, as before the board had names.
+/// A person as the leaderboard names them: their username, as everywhere in
+/// the Swarm (the board's account display name was a long one).
 String leaderboardName(SuperTabPerson person, SuperTabPersonScore? score) =>
-    score?.displayName ?? superTabPersonName(person.email);
+    person.username;
 
 /// Whether a person wears the crown: first on the board, with points. At the
 /// start of a week everyone ties at 0, and no one has taken #1 yet.

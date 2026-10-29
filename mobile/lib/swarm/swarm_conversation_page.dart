@@ -77,10 +77,8 @@ class SwarmConversationPage extends StatefulWidget {
     super.key,
     required this.swarmId,
     required this.conversationId,
-    this.title,
-    this.subtitle,
-    this.action,
-    this.below,
+    this.header = true,
+    this.buddy,
     this.messageId,
     this.decisionId,
     this.mention,
@@ -93,17 +91,15 @@ class SwarmConversationPage extends StatefulWidget {
   /// private line is answered in the project chat.
   final String? mention;
 
-  /// The header's lines in place of the chat's name and its project: a
-  /// project's chat is its project's screen, under the project's name and
-  /// who is in it (`swarm_project_page.dart`).
-  final String? title, subtitle;
+  /// Its own header: back, its name and its project, and — the person's own
+  /// Buddy chat — Remove Buddy at its end. None in a project's tab
+  /// (`swarm_project_page.dart`), under the project's own header.
+  final bool header;
 
-  /// At the header's end: a project's ⋮ menu. The person's own Buddy chat
-  /// has its own, Remove Buddy, when this is null.
-  final Widget? action;
-
-  /// Under the header: a project's team in one line.
-  final Widget? below;
+  /// What the person does to their Buddy, where the page around the chat
+  /// holds it, for its own header's menu; null makes the chat its own while
+  /// it is their Buddy chat.
+  final SwarmBuddyActions? buddy;
 
   @override
   State<SwarmConversationPage> createState() => _SwarmConversationPageState();
@@ -303,8 +299,13 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
   void _seeBuddy(SwarmConversation c, String? project) {
     final kept = _buddy;
     if (kept?.reader == c.reader && kept?.projectId == project) return;
-    kept?.dispose();
-    _buddy = project == null ? null : SwarmBuddyActions(c.reader, project);
+    if (kept != widget.buddy) kept?.dispose();
+    _buddy = switch (widget.buddy) {
+      _ when project == null => null,
+      final held? when held.reader == c.reader && held.projectId == project =>
+        held,
+      _ => SwarmBuddyActions(c.reader, project),
+    };
   }
 
   void _close() {
@@ -317,7 +318,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
       c.reader.removeListener(_see);
       c.dispose();
     }
-    _buddy?.dispose();
+    if (_buddy != widget.buddy) _buddy?.dispose();
     _buddy = null;
     _rows.clear();
     _madeFrom = null;
@@ -698,12 +699,16 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return Scaffold(
       backgroundColor: tty.ground,
       body: SafeArea(
+        // Under a project's header, which keeps clear of the status bar.
+        top: widget.header,
         child: session == null
             ? Align(
                 alignment: Alignment.topLeft,
-                child: TtyBackButton(
-                  onPressed: () => Navigator.of(context).maybePop(),
-                ),
+                child: widget.header
+                    ? TtyBackButton(
+                        onPressed: () => Navigator.of(context).maybePop(),
+                      )
+                    : null,
               )
             : c == null
             ? _unopened(context, session, tty)
@@ -724,14 +729,8 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _header(
-          context,
-          tty,
-          title: widget.title ?? (inbox.loaded ? 'Chat' : null),
-          project: widget.subtitle,
-          action: widget.action,
-        ),
-        ?widget.below,
+        if (widget.header)
+          _header(context, tty, title: inbox.loaded ? 'Chat' : null),
         Expanded(
           child: inbox.loaded
               ? _said(_notOpen)
@@ -842,27 +841,23 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       // Placeholders until the chat is known, unless it is not open.
-      ListenableBuilder(
-        listenable: c,
-        builder: (context, _) => _header(
-          context,
-          tty,
-          title:
-              widget.title ??
-              (view.known || c.state == SwarmChatState.lost
-                  ? view.title
-                  : null),
-          project: widget.subtitle ?? view.project,
-          // The person's own Buddy chat: Remove Buddy.
-          action:
-              widget.action ??
-              switch (_buddy) {
-                final buddy? => SwarmBuddyMenuButton(actions: buddy),
-                null => null,
-              },
+      if (widget.header)
+        ListenableBuilder(
+          listenable: c,
+          builder: (context, _) => _header(
+            context,
+            tty,
+            title: view.known || c.state == SwarmChatState.lost
+                ? view.title
+                : null,
+            project: view.project,
+            // The person's own Buddy chat: Remove Buddy.
+            action: switch (_buddy) {
+              final buddy? => SwarmBuddyMenuButton(actions: buddy),
+              null => null,
+            },
+          ),
         ),
-      ),
-      ?widget.below,
       if (_buddy case final buddy?) SwarmBuddyBar(actions: buddy),
       Expanded(
         child: Stack(
