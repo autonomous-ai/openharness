@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client'
 import { logger } from '../../utils/logger.js'
 
 /** Mongo's "not authorized" (code 13), as Prisma's raw command error carries it. */
-const notAuthorized = (error: unknown): boolean => /not authorized|Unauthorized|Code: `13`/.test(String((error as Error)?.message ?? error))
+export const notAuthorized = (error: unknown): boolean => /not authorized|Unauthorized|Code: `13`/.test(String((error as Error)?.message ?? error))
 
 /** One index as `createIndexes` takes it. */
 export type IndexSpec = { name: string; key: Record<string, number>; unique?: boolean; expireAfterSeconds?: number }
