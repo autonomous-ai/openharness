@@ -464,6 +464,28 @@ describe('host form (design 4.10)', () => {
     expect(toldHere()).toHaveLength(2)
   })
 
+  // WS roadmap Phase 2a, client reads: a member's apps read a Swarm when told (lib/swarmClientPushes.ts). The Lead's rule: a
+  // member removed by a commit hears that commit and nothing after it; someone not in the Swarm hears nothing.
+  it('tells the Swarm\'s people after each commit, a removed one once more and never again', async () => {
+    const s = await hostScene()
+    const { generation } = await fullRead(s.tabId)
+    const told: Array<{ tabId: string; userIds: string[]; lastChangedAt: number; parts: string[] }> = []
+    const store = new SuperTabStore(db, Date.now, null, { swarmChanged: change => { told.push(change) } })
+    const run = (body: Record<string, unknown>) => store.execute(owner, s.tabId, { operationId: randomUUID(), command: body as never })
+    await run({ type: 'conversation.rename', conversationId: s.secretGroup, title: 'Renamed' })
+    expect(told).toEqual([{ tabId: s.tabId, userIds: expect.arrayContaining([owner.sub, peer.sub, outsider.sub]), lastChangedAt: expect.any(Number), parts: ['main'] }])
+    expect(told[0]!.userIds).toHaveLength(3)
+    await store.observeMachine(owner, s.tabId, machine, { generation, resources: { cpuPercent: 5, memoryTotalBytes: null,
+      memoryUsedBytes: null, diskFreeBytes: null, diskTotalBytes: null, projectDiskFreeBytes: null, deviceType: null, chip: null, os: null,
+      gpuPercent: null }, tools: {}, quotas: [], runningHarnessIds: ['lead-harness', 'worker-harness', 'idle-harness', 'loner-harness'],
+      stoppedHarnessIds: [] })
+    expect(told.at(-1)!.parts).toEqual(['machine'])
+    await run({ type: 'member.remove', userId: outsider.sub })
+    expect(told.at(-1)!.userIds).toContain(outsider.sub)
+    await run({ type: 'conversation.rename', conversationId: s.web, title: 'After the removal' })
+    expect(told.at(-1)!.userIds.sort()).toEqual([owner.sub, peer.sub].sort())
+  })
+
   it('wakes the host for a pause even when a reading lands after it, before the host polls', async () => {
     const s = await hostScene()
     const { cursor, generation } = await fullRead(s.tabId)

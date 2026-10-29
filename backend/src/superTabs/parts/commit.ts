@@ -197,6 +197,20 @@ export function hostsToTell(writes: readonly PartWrite[], before: SuperTabState,
   return [...hosts]
 }
 
+/**
+ * The people whose apps a commit's writes concern, and which of the Swarm's stamps it moved (parts/write.ts guardedWrite):
+ * `machine` for a machine's own reading alone (every 15 s per machine), `main` for anything else. Everyone in the Swarm before
+ * or after is told, so a person removed reads once more and finds it gone. Only the Swarm's id reaches them; what they may
+ * read is decided by the read (read/views.ts readerView). Each person's apps are pushed these (lib/swarmClientPushes.ts).
+ */
+export function membersToTell(writes: readonly PartWrite[], before: SuperTabState, after: SuperTabState): { userIds: string[]; parts: Array<'main' | 'machine'> } {
+  const written = writes.filter(write => write.op !== 'touch')
+  if (!written.length) return { userIds: [], parts: [] }
+  const reading = (write: PartWrite) => write.kind === 'machine' && write.op === 'update' && !write.host
+  const parts = [...written.some(write => !reading(write)) ? ['main' as const] : [], ...written.some(reading) ? ['machine' as const] : []]
+  return { userIds: [...new Set([...before.people, ...after.people].map(person => person.id))], parts }
+}
+
 /** The agents a group's write let go: in its members or its work before, in neither after. Each is written again, data
  *  unchanged, so its host hears of it whatever later writes to the group leave in that group's marker (review round 2). */
 export function departedAgents(before: unknown, after: unknown): string[] {
@@ -206,7 +220,7 @@ export function departedAgents(before: unknown, after: unknown): string[] {
 }
 
 export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; state: SuperTabState; row: { id: string; revision: number } },
-  next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number>; hosts: string[] }> {
+  next: SuperTabState, opts: { stamp: number; touches?: Touch[] }): Promise<{ written: Written[]; versions: Map<string, number>; hosts: string[]; members: ReturnType<typeof membersToTell> }> {
   const { parts } = loaded, { stamp } = opts
   capReleased(next)
   const after = split(next, { tabId: parts.tabId, version: 0, now: stamp, messageBase: parts.sequenceBase })
@@ -276,5 +290,5 @@ export async function commitParts(tx: Transaction, loaded: { parts: SwarmParts; 
       data: { revision: loaded.row.revision + 1, ...indexesOf(next) } })
     if (!updated.count) throw new PartConflict('head', 'index')
   }
-  return { written, versions, hosts: hostsToTell(writes, loaded.state, next) }
+  return { written, versions, hosts: hostsToTell(writes, loaded.state, next), members: membersToTell(writes, loaded.state, next) }
 }

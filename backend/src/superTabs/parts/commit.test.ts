@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSuperTab } from '../model.js'
-import { capReleased, departedAgents, hostMarker, hostsToTell, plainHost, sameData, visibilityChanged } from './commit.js'
+import { capReleased, departedAgents, hostMarker, hostsToTell, membersToTell, plainHost, sameData, visibilityChanged } from './commit.js'
 import type { PartWrite } from './write.js'
 
 describe('writing a Swarm\'s parts', () => {
@@ -128,6 +128,39 @@ describe('which host a part concerns from its data alone', () => {
     expect(plainHost('start', { request: {} })).toBeNull()
     expect(plainHost('group', { agentIds: [] })).toBeNull()
     expect(plainHost('machine', { machineId: 'A' })).toBeNull()
+describe('which people a commit tells (WS roadmap Phase 2a, client reads)', () => {
+  const swarm = (...people: string[]) => {
+    const state = createSuperTab('tab', 'Pilot', { id: 'owner', email: 'owner@example.com' }, 'prod')
+    for (const id of people) state.people.push({ ...state.people[0]!, id, email: `${id}@example.com`, role: 'collaborator' })
+    return state
+  }
+  const update = (kind: PartWrite['kind'], key: string, data: unknown, host?: object): PartWrite => ({ op: 'update', kind, key, seen: 1, data, ...(host ? { host } : {}) })
+
+  it('tells every person in the Swarm, before or after, that its main parts changed', () => {
+    const told = membersToTell([update('group', 'g', {})], swarm('kim'), swarm('kim', 'lee'))
+    expect(told.userIds.sort()).toEqual(['kim', 'lee', 'owner'])
+    expect(told.parts).toEqual(['main'])
+  })
+
+  it('tells a person the commit removed, so their app reads and finds it gone', () => {
+    expect(membersToTell([update('member', 'kim', {})], swarm('kim'), swarm()).userIds.sort()).toEqual(['kim', 'owner'])
+  })
+
+  it('says a machine\'s reading alone changed only the machine parts, and both when a setting changed too', () => {
+    expect(membersToTell([update('machine', 'A', {})], swarm(), swarm()).parts).toEqual(['machine'])
+    expect(membersToTell([update('machine', 'A', {}), update('machine', 'B', {}, { hostChangedAt: new Date(9) })], swarm(), swarm()).parts)
+      .toEqual(['main', 'machine'])
+  })
+
+  // The Lead's rule (2026-10-29): someone who can see a Swarm without being in it keeps today's timers.
+  it('tells nobody who is not a person in the Swarm, an invited email included', () => {
+    const invited = swarm('kim')
+    invited.invitations.push({ email: 'stranger@example.com' } as never)
+    expect(membersToTell([update('head', 'head', {})], invited, invited).userIds.sort()).toEqual(['kim', 'owner'])
+  })
+
+  it('tells nobody for a commit that only touches', () => {
+    expect(membersToTell([{ op: 'touch', kind: 'head', key: 'head', seen: 1 }], swarm('kim'), swarm('kim'))).toEqual({ userIds: [], parts: [] })
   })
 })
 
