@@ -323,6 +323,42 @@ class SuperTabLaunch {
       final running = observation['runningHarnessIds'];
       final max = reading['maxAgents'];
       final checkouts = part(observation['readiness'])['checkouts'];
+      final engineRefusals = leadEngineRefusals(
+        offered: switch (reading['engines']) {
+          final List engines => engines.whereType<String>().toSet(),
+          _ => null,
+        },
+        readiness: {
+          for (final raw in part(observation['readiness'])['engines']
+                  as List? ??
+              const [])
+            if (part(raw) case {'engine': final String engine} && final row)
+              engine: (
+                installed: row['installed'] as bool?,
+                signedIn: row['signedIn'] as bool?,
+              ),
+        },
+        usedPercents: {
+          for (final raw in observation['quotas'] as List? ?? const [])
+            if (part(raw) case {
+              'engine': final String engine,
+              'known': true,
+              'windows': final List windows,
+            })
+              engine: [
+                for (final window in windows)
+                  if (part(window)['usedPercent'] case final num used) used,
+              ],
+        },
+        // Read by servers with engine health (#2192); absent before.
+        suspended: {
+          for (final source in [pool, reading])
+            if (source['suspendedEngines'] case final Map raw)
+              for (final MapEntry(:key, :value) in raw.entries)
+                if ((key, value) case (final String engine, final String why))
+                  engine: why,
+        },
+      );
       final device = part(observation['resources'])['deviceType'];
       return LeadMachine(
         id: id,
@@ -370,6 +406,7 @@ class SuperTabLaunch {
         own: own,
         native: own && connected,
         team: team,
+        engineRefusals: engineRefusals,
         unavailable: snapshot.paused
             ? kLeadSwarmPaused
             : own
@@ -410,6 +447,18 @@ class SuperTabLaunch {
             freeAgents: null,
             inSwarm: false,
             unavailable: snapshot.paused ? kLeadSwarmPaused : null,
+            // The Swarm reads nothing of it: this computer's own probe says
+            // which engines are there. One that installs on Create runs.
+            engineRefusals: leadEngineRefusals(
+              readiness: {
+                for (final engine in kLeadEngines)
+                  if (state.engines[engine] case final known?)
+                    engine: (
+                      installed: known.installed || known.installable,
+                      signedIn: known.signedIn,
+                    ),
+              },
+            ),
           ),
     ], null);
   }
