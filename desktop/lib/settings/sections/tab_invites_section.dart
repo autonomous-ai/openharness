@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../agent_messages/shared_tab_dialogs.dart';
-import '../../super_tabs/join_machine.dart' show swarmNewMemberRole;
+import '../../super_tabs/join_machine.dart'
+    show SwarmInviteAccepts, swarmNewMemberRole;
 import '../../agent_messages/shared_tab_placement.dart' show shortSharedText;
 import '../../agent_messages/shared_tabs.dart';
 import '../../agent_messages/update_harness.dart';
@@ -27,6 +28,7 @@ class TabInvitesSection extends StatefulWidget {
 class _TabInvitesSectionState extends State<TabInvitesSection> {
   List<Map<String, dynamic>> _superInvites = [], _superTabs = [];
   String? _superError, _accepting;
+  final _accepts = SwarmInviteAccepts();
   bool _loadingSuper = true;
   Timer? _refreshTimer;
   int _read = 0;
@@ -80,13 +82,20 @@ class _TabInvitesSectionState extends State<TabInvitesSection> {
     setState(() => _accepting = invite['inviteId'] as String);
     try {
       final app = widget.notifier;
-      final reply = await app.superTabs.map(
-        'POST',
-        '/api/super-tabs/${invite['tabId']}/commands',
-        body: {
-          'operationId': 'accept-${invite['inviteId']}',
-          'command': {'type': 'invite.accept', 'inviteId': invite['inviteId']},
-        },
+      // This attempt's own operation, never one shared with other computers.
+      final reply = await _accepts.accept(
+        invite['inviteId'] as String,
+        (operationId) => app.superTabs.map(
+          'POST',
+          '/api/super-tabs/${invite['tabId']}/commands',
+          body: {
+            'operationId': operationId,
+            'command': {
+              'type': 'invite.accept',
+              'inviteId': invite['inviteId'],
+            },
+          },
+        ),
       );
       final tabId = invite['tabId'] as String;
       final controller = await app.superTabs.open(tabId);

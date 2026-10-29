@@ -326,6 +326,55 @@ void main() {
     expect(swarmNewMemberRole({'alreadyMember': false}), isNull);
   });
 
+  // Re-check of #2188: every computer sent one fixed operation for an
+  // invitation, so a stale accept on computer B got A's answer back, "not a
+  // member before", and shared B too.
+  test('each computer\'s accept is its own attempt, so a stale one on another computer shares nothing', () async {
+    // The server as store.ts keeps it: an answer per operation, replayed; an
+    // invitation accepted once is gone.
+    final receipts = <String, Map<String, dynamic>>{};
+    var pending = true, loseNextReply = false;
+    Future<Map<String, dynamic>> server(String operationId) async {
+      if (receipts[operationId] case final receipt?) return receipt;
+      if (!pending) {
+        throw const SuperTabFailure(
+          'NOT_FOUND',
+          'This invitation is unavailable.',
+          statusCode: 404,
+        );
+      }
+      pending = false;
+      final answer = {
+        'result': {
+          'conversationId': 'lead',
+          'alreadyMember': false,
+          'role': 'collaborator',
+        },
+      };
+      receipts[operationId] = answer;
+      if (loseNextReply) {
+        loseNextReply = false;
+        throw const SuperTabFailure('NETWORK', 'lost reply');
+      }
+      return answer;
+    }
+
+    final a = SwarmInviteAccepts(), b = SwarmInviteAccepts();
+    // A's reply is lost; its retry is the same attempt and gets its answer.
+    loseNextReply = true;
+    await expectLater(a.accept('i1', server), throwsA(isA<SuperTabFailure>()));
+    final accepted = await a.accept('i1', server);
+    expect(swarmNewMemberRole(superTabMap(accepted['result'])), 'collaborator');
+    // B still shows the invitation and accepts it: refused, nothing to add.
+    await expectLater(
+      b.accept('i1', server),
+      throwsA(
+        isA<SuperTabFailure>().having((f) => f.code, 'code', 'NOT_FOUND'),
+      ),
+    );
+    expect(receipts, hasLength(1));
+  });
+
   group('the note after joining', noteTests);
 }
 
