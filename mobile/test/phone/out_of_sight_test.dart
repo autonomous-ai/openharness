@@ -118,6 +118,40 @@ void main() {
 
     expect(count.listened, isFalse);
   });
+
+  testWidgets('kept in sight under a part out of sight, it is out of sight '
+      'too, and in sight again with it', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ValueListenableBuilder(
+          valueListenable: hidden,
+          builder: (context, isHidden, _) => KeptOutOfSight(
+            hidden: isHidden,
+            child: KeptOutOfSight(
+              hidden: false,
+              child: ListenWhileInSight(
+                listenable: count,
+                builder: (context) => Text('${count.value}'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    hidden.value = true;
+    await tester.pump();
+
+    expect(count.listened, isFalse);
+    expect(find.text('0'), findsNothing, reason: 'offstage');
+
+    count.value = 2;
+    hidden.value = false;
+    await tester.pump();
+
+    expect(count.listened, isTrue);
+    expect(find.text('2'), findsOneWidget);
+  });
 }
 
 /// A number that says whether anything listens to it.

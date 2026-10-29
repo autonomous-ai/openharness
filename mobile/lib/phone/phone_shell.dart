@@ -13,9 +13,9 @@ import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
-import '../swarm/swarm_page.dart';
 import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_session.dart';
+import '../swarm/swarm_tabs.dart';
 import 'agent_home.dart';
 import 'approve_sign_in.dart';
 import 'browser_handoff.dart';
@@ -536,7 +536,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
               openMachineId: _linkedMachineId,
               openAgent: _openAgentRequest,
             ),
-            swarm: (_) => SwarmPage(
+            swarm: (_) => SwarmTabsPage(
               onSettings: (context) =>
                   openPhoneSettings(context, widget.notifier),
             ),
