@@ -102,6 +102,28 @@ export function quotaOf(reply: Json, engine: string, customAccount: boolean) {
   }
   return { known: windows.length > 0, account: typeof reading?.account === 'string' ? reading.account : null, windows }
 }
+const VENDOR: Record<string, string> = { claude: 'Anthropic', codex: 'OpenAI' }
+/** Why [engine]'s allowance could not be read from the account reader's [reply], or null when it was. Words only: no
+ *  account, token or plan. [relayed]: a Harness Team account, whose engines spend the owner's subscription through the
+ *  owner's relay, so its own home holds no sign-in to read. */
+export function quotaUnknownReason(reply: Json, engine: string, relayed: boolean): string | null {
+  if (quotaOf(reply, engine, false).known) return null
+  const reading = Array.isArray(reply.providers) ? reply.providers.map(object).find(r => r.provider === engine) : undefined
+  const vendor = VENDOR[engine] ?? 'The vendor'
+  if (!reading) return 'The allowance reader on this machine did not answer.'
+  if (reading.outcome === 'signedOut') {
+    if (relayed) return "This account runs on its owner's subscription; its allowance is read on the owner's machine."
+    return typeof reading.message === 'string' && /expired/i.test(reading.message)
+      ? 'The stored sign-in has expired; it renews the next time the engine runs here.'
+      : 'No subscription sign-in is stored on this machine.'
+  }
+  if (reading.outcome !== 'answered') return `${vendor} could not be reached.`
+  const status = reading.httpStatus
+  if (status === 429) return `${vendor} is limiting how often the allowance can be read.`
+  if (status === 401 || status === 403) return `${vendor} refused the stored sign-in.`
+  if (status === 200) return `${vendor} answered without usage windows.`
+  return `${vendor} answered with an error (HTTP ${finite(status) ? status : 'unknown'}).`
+}
 /** An engine that runs on an API key or a gateway's base URL has no subscription windows to read: it is metered, not unknown.
  * `env` is the machine's own, so the host reads its own and a key never leaves it. */
 export function meteredEngine(engine: string, env: NodeJS.ProcessEnv): boolean {
