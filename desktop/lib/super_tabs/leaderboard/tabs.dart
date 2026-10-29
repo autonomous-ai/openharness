@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../widgets/desktop_chrome.dart';
+import '../../widgets/finger_target.dart';
 
 /// The leaderboard's three lists (Dee, 2026-10-29): people, the permanent
 /// agents (the PM and Buddies), and the temporary workers by model.
@@ -59,12 +60,16 @@ class LeaderboardHeader extends StatelessWidget {
                 for (final tab in LeaderboardTab.values) ...[
                   if (tab != LeaderboardTab.values.first)
                     const SizedBox(width: _gap / 2),
-                  DesktopPill(
-                    key: ValueKey('leaderboard-tab-${tab.name}'),
-                    label: tab.label,
-                    compact: true,
-                    selected: tab == selected,
-                    onPressed: () => onSelect(tab),
+                  // A phone's pill is a finger's height.
+                  fingerTarget(
+                    enabled: workspaceIsCompact(context),
+                    DesktopPill(
+                      key: ValueKey('leaderboard-tab-${tab.name}'),
+                      label: tab.label,
+                      compact: true,
+                      selected: tab == selected,
+                      onPressed: () => onSelect(tab),
+                    ),
                   ),
                 ],
               ],

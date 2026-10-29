@@ -13,6 +13,7 @@ import '../state/harness_activity.dart';
 import '../terminal/terminal_theme.dart';
 import '../terminal/terminal_theme_store.dart';
 import '../widgets/desktop_chrome.dart';
+import '../widgets/finger_target.dart';
 import '../widgets/engine_identity.dart';
 import '../widgets/harness_activity_mark.dart';
 import 'agent_details.dart';
@@ -557,10 +558,14 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
                   unawaited(_board.showWeek(week == current ? null : week)),
             ),
           if (c.isOwner && _tab == LeaderboardTab.humans)
-            AppIconButton(
-              icon: AppIcons.plus,
-              tooltip: 'Invite people',
-              onPressed: widget.onInvite,
+            // A phone's add action is a finger's size, as the headings' is.
+            fingerTarget(
+              enabled: workspaceIsCompact(context),
+              AppIconButton(
+                icon: AppIcons.plus,
+                tooltip: 'Invite people',
+                onPressed: widget.onInvite,
+              ),
             ),
         ],
       ),
