@@ -76,7 +76,7 @@ class SuperTabLaunch {
     // A project's Product Manager starts on one of the Swarm's machines.
     // Read from the open Swarm when there is one; each submit reads afresh.
     List<LeadMachine>? leadMachines;
-    LeadRules? leadRules;
+    LeadModelList? leadModels;
     if (saved['newProject'] == true && tab.superTabId != null) {
       final id = tab.superTabId!;
       final policy = launch.readRoutingPolicy(id);
@@ -84,7 +84,7 @@ class SuperTabLaunch {
           app.superTabs.peek(id)?.snapshot ??
           await app.superTabs.readSnapshot(id);
       leadMachines = launch.leadMachinesOf(snapshot);
-      leadRules = launch.leadRulesOf(snapshot, await policy);
+      leadModels = LeadModelList.of(await policy);
     }
     final selectedRole =
         roles?.where((role) => role.id == saved['roleId']).firstOrNull ??
@@ -119,14 +119,32 @@ class SuperTabLaunch {
                 saved['creationRequest'] != null,
             prepare: (machine, task) async {
               if (integration.leadMachines != null) {
-                // The list from when the form opened may be stale by now. An
-                // unreadable Swarm keeps it: creating then fails with the
-                // Swarm's own answer, and the server still decides the start.
+                // The list from when the form opened may be stale by now. With
+                // no fresh read nothing is created: the machine is unchecked.
+                final name =
+                    integration.leadMachines!
+                        .where((m) => m.id == machine)
+                        .firstOrNull
+                        ?.name ??
+                    launch.machineNameOf(machine);
+                final SuperTabSnapshot fresh;
                 try {
-                  integration.leadMachines = launch.leadMachinesOf(
-                    await app.superTabs.readSnapshot(tab.superTabId!),
+                  fresh = await app.superTabs.readSnapshot(tab.superTabId!);
+                } on SuperTabFailure catch (failure) {
+                  if (failure.code == 'ACCOUNT_CHANGED') rethrow;
+                  throw SuperTabFailure(
+                    'SWARM_UNREADABLE',
+                    'Couldn’t check $name for the '
+                        'Product Manager: ${failure.message} Try again.',
                   );
-                } catch (_) {}
+                } catch (_) {
+                  throw SuperTabFailure(
+                    'SWARM_UNREADABLE',
+                    'Couldn’t check $name for the '
+                        'Product Manager: the Swarm didn’t answer. Try again.',
+                  );
+                }
+                integration.leadMachines = launch.leadMachinesOf(fresh);
                 launch.checkLeadMachine(integration.leadMachines!, machine);
               }
               if (integration.roles != null) {
@@ -224,7 +242,7 @@ class SuperTabLaunch {
           )
           ..pending = recovering
           ..leadMachines = leadMachines
-          ..leadRules = leadRules;
+          ..leadModels = leadModels;
     if (recovering) {
       integration
         ..machineId = saved['machineId'] as String?
@@ -245,8 +263,11 @@ class SuperTabLaunch {
   String get machineName {
     final machine = saved['machineId'] as String?;
     if (machine == null) return 'the machine';
-    return app.stateOf(machine)?.machine.displayName ?? machine;
+    return machineNameOf(machine);
   }
+
+  String machineNameOf(String machine) =>
+      app.stateOf(machine)?.machine.displayName ?? machine;
 
   String get startedNote =>
       'The $who started on $machineName. Check status to add it to the project.';
@@ -324,7 +345,7 @@ class SuperTabLaunch {
             superTabMachineSymbol(device is String ? device : null) ==
             'laptopcomputer',
         unavailable: snapshot.paused
-            ? 'New work is paused in this Swarm'
+            ? kLeadSwarmPaused
             : pool['contributorId'] != accountId
             ? 'Another person’s machine'
             : app.stateOf(id) == null
@@ -354,9 +375,7 @@ class SuperTabLaunch {
             online: !state.needsLink && !state.isOffline,
             freeAgents: null,
             inSwarm: false,
-            unavailable: snapshot.paused
-                ? 'New work is paused in this Swarm'
-                : null,
+            unavailable: snapshot.paused ? kLeadSwarmPaused : null,
           ),
     ], null);
   }
@@ -373,63 +392,6 @@ class SuperTabLaunch {
     } catch (_) {
       return null;
     }
-  }
-
-  /// The rules that will bind the new project (older Swarm-wide ones, and
-  /// its own on a retry; never another project's, which the server would
-  /// not apply) and the Swarm's model list ([policy]).
-  LeadRules leadRulesOf(
-    SuperTabSnapshot snapshot,
-    Map<String, dynamic>? policy,
-  ) {
-    final projectId = saved['projectId'];
-    String? engine, engineText;
-    final forbidden = <LeadForbidden>[];
-    for (final row in snapshot.rules) {
-      if (row['projectId'] != null && row['projectId'] != projectId) continue;
-      final rule = row['rule'] is Map ? superTabMap(row['rule']) : const {};
-      final text = row['text'] as String? ?? '';
-      switch (rule) {
-        case {'kind': 'preferEngine', 'engine': final String preferred}
-            when rule['taskKind'] == null || rule['taskKind'] == 'lead':
-          engine ??= preferred;
-          engineText ??= text;
-        case {'kind': 'forbidModel', 'model': final String model}:
-          forbidden.add(
-            LeadForbidden(model, engine: rule['engine'] as String?, text: text),
-          );
-      }
-    }
-    final byModel = <(String, String), bool>{};
-    final byEngine = <String, bool>{};
-    for (final row in policy?['models'] as List? ?? const []) {
-      if (row case {
-        'engine': final String engine,
-        'model': final String model,
-        'enabled': final bool enabled,
-      }) {
-        byModel[(engine, model)] =
-            (byModel[(engine, model)] ?? false) || enabled;
-        byEngine[engine] = (byEngine[engine] ?? false) || enabled;
-      }
-    }
-    return LeadRules(
-      engine: engine,
-      engineText: engineText,
-      forbidden: forbidden,
-      disabledEngines: {
-        for (final MapEntry(:key, :value) in byEngine.entries)
-          if (!value) key,
-      },
-      disabledModels: {
-        for (final MapEntry(:key, :value) in byModel.entries)
-          if (!value) key,
-      },
-      gridModels: switch (policy?['localModels']) {
-        {'enabled': false} => false,
-        _ => true,
-      },
-    );
   }
 
   /// Refuses a machine the list cannot start the Product Manager on now.

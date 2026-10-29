@@ -2269,13 +2269,7 @@ class NewHarnessFormState extends State<NewHarnessForm> {
                 _desktopField(
                   order: 9.86,
                   anchor: _desktopAnchors[_Row.agent]!,
-                  child: _desktopChoiceButton(
-                    _Row.agent,
-                    AppIcons.code,
-                    label: box.leadEngineByRule
-                        ? 'Swarm rule: ${box.agentLabel}'
-                        : null,
-                  ),
+                  child: _desktopChoiceButton(_Row.agent, AppIcons.code),
                 ),
               ),
               if (!box.isTerminal && !box.isCloud && !box.asGuest)

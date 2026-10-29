@@ -55,6 +55,10 @@ class SuperTabFixtureConnection extends WsConn {
   bool loseCreate = false, loseJoin = false;
   bool failNative = false;
   WsRequestFailure? backendFailure;
+
+  /// [backendFailure] refuses only commands: an older backend still answers
+  /// reads and rejects the command it does not know.
+  bool backendFailureOnCommandsOnly = false;
   bool failResume = false;
   bool nativeSurface = false;
   bool failFiles = false, failCreation = false, changeAccountOnUpload = false;
@@ -157,7 +161,9 @@ class SuperTabFixtureConnection extends WsConn {
           email: 'different@example.com',
         );
       }
-      if (payload['action'] == 'backend' && backendFailure != null) {
+      if (payload['action'] == 'backend' &&
+          backendFailure != null &&
+          !(backendFailureOnCommandsOnly && payload['method'] == 'GET')) {
         throw backendFailure!;
       }
       if (payload['action'] == 'wake') return {'ok': true};
@@ -789,92 +795,110 @@ void main() {
     },
   );
 
-  test(
-    'the rules that bind the new project and the Swarm’s model list apply',
-    () async {
-      final f = SuperTabLaunchFixture();
-      f.connection.server.state['machines'] = [studioPool()];
-      f.connection.server.state['rules'] = [
-        // From before rules were per project: it binds every project.
-        {
-          'id': 'r1',
-          'rule': {
-            'kind': 'preferEngine',
-            'taskKind': null,
+  test('the Swarm’s model list rules out what it turns off', () async {
+    final f = SuperTabLaunchFixture();
+    f.connection.server.state['machines'] = [studioPool()];
+    // As GET .../routing-policy answers (backend store.ts tabPolicy).
+    f.connection.server.routingPolicy = {
+      'policy': {
+        'version': 1,
+        'models': [
+          {
             'engine': 'claude',
+            'model': 'opus',
+            'effort': 'high',
+            'quality': 3,
+            'cost': 3,
+            'enabled': true,
           },
-          'text': 'Claude for everything.',
-        },
-        {
-          'id': 'r2',
-          'projectId': 'another-project',
-          'rule': {'kind': 'forbidModel', 'model': 'opus'},
-          'text': 'No Opus there.',
-        },
-        {
-          'id': 'r3',
-          'rule': {'kind': 'forbidModel', 'engine': 'claude', 'model': 'haiku'},
-          'text': 'No Haiku.',
-        },
-      ];
-      f.connection.server.routingPolicy = {
-        'policy': {
-          'models': [
-            {
-              'engine': 'codex',
-              'model': 'default',
-              'effort': 'default',
-              'quality': 3,
-              'cost': 2,
-              'enabled': false,
-            },
-            {
-              'engine': 'claude',
-              'model': 'default',
-              'effort': 'default',
-              'quality': 4,
-              'cost': 3,
-              'enabled': true,
-            },
-          ],
-          'floor': {'low': 1, 'medium': 2, 'high': 3},
-          'quotaReserve': 10,
-          'notes': '',
-          'localModels': {'quality': 2, 'enabled': false},
-        },
-      };
-      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
-      final box = await f.box(newProject: true);
-      final rules = box.integration!.leadRules!;
-      expect(rules.engine, 'claude');
-      expect(rules.engineText, 'Claude for everything.');
-      expect(rules.refusal('claude', null), isNull);
-      expect(
-        rules.refusal('claude', 'opus'),
-        isNull,
-        reason: 'another project’s rule',
-      );
-      expect(
-        rules.refusal('claude', 'claude-haiku-4-5'),
-        'Swarm rule: No Haiku.',
-      );
-      expect(
-        rules.refusal('codex', null),
-        'The Swarm’s model list has no enabled Codex model.',
-      );
-      expect(rules.gridModels, isFalse);
-    },
-  );
+          {
+            'engine': 'codex',
+            'model': 'default',
+            'effort': 'default',
+            'quality': 3,
+            'cost': 2,
+            'enabled': false,
+          },
+          {
+            'engine': 'claude',
+            'model': 'sonnet',
+            'effort': 'medium',
+            'quality': 2,
+            'cost': 2,
+            'enabled': true,
+          },
+          {
+            'engine': 'claude',
+            'model': 'haiku',
+            'effort': 'auto',
+            'quality': 1,
+            'cost': 1,
+            'enabled': false,
+          },
+        ],
+        'floor': {'low': 1, 'medium': 2, 'high': 3},
+        'quotaReserve': 10,
+        'notes': '',
+        'localModels': {'quality': 1, 'enabled': false},
+      },
+      'warnings': <String>[],
+      'overridden': <String>[],
+      'override': null,
+    };
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    final list = box.integration!.leadModels!;
+    expect(list.refusal('claude', null), isNull);
+    expect(list.refusal('claude', 'opus'), isNull);
+    expect(
+      list.refusal('claude', 'haiku'),
+      'The Swarm’s model list turns off Claude haiku.',
+    );
+    expect(
+      list.refusal('codex', null),
+      'The Swarm’s model list has no enabled Codex model.',
+    );
+    expect(list.gridModels, isFalse);
+  });
 
-  test('with no rule and no model list nothing is ruled out', () async {
+  test('without a model list nothing is ruled out', () async {
     final f = SuperTabLaunchFixture();
     f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
     final box = await f.box(newProject: true);
-    final rules = box.integration!.leadRules!;
-    expect(rules.engine, isNull);
-    expect(rules.refusal('codex', null), isNull);
-    expect(rules.gridModels, isTrue);
+    final list = box.integration!.leadModels!;
+    expect(list.refusal('codex', null), isNull);
+    expect(list.gridModels, isTrue);
   });
+
+  test(
+    'a Swarm that cannot be read at submit creates nothing and says so',
+    () async {
+      final f = SuperTabLaunchFixture();
+      f.connection.server.state['machines'] = [studioPool()];
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+      final box = await f.box(newProject: true);
+      f.connection.backendFailure = const WsRequestFailure(
+        responseType: 'super_tabs_result',
+        code: 'UNAVAILABLE',
+        detail: 'The Swarm service is unavailable.',
+        payload: {'status': 503},
+      );
+      expect(await box.create(), NewHarnessOutcome.failed);
+      expect(
+        box.error,
+        'Couldn’t check Mac Studio for the Product Manager: The Swarm service is unavailable. Try again.',
+      );
+      expect(
+        f.connection.calls.where(
+          (c) =>
+              '${(c.$2['body'] as Map?)?['command']?['type']}' ==
+              'project.create',
+        ),
+        isEmpty,
+      );
+      expect(f.connection.calls.where((c) => c.$1 == 'agent_create'), isEmpty);
+    },
+  );
 
   test('a new Swarm keeps choosing among the person’s own machines', () async {
     final f = SuperTabLaunchFixture();
@@ -888,6 +912,7 @@ void main() {
       final f = SuperTabLaunchFixture();
       f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
       final box = await f.box(newProject: true);
+      f.connection.backendFailureOnCommandsOnly = true;
       f.connection.backendFailure = const WsRequestFailure(
         responseType: 'super_tabs_result',
         code: 'VALIDATION_ERROR',

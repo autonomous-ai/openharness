@@ -115,33 +115,23 @@ String leadMachineDetail(LeadMachine machine, String? repository) {
   ].join(' · ');
 }
 
-/// A Swarm rule ruling out a model, in its owner's words.
-class LeadForbidden {
-  const LeadForbidden(this.model, {this.engine, required this.text});
-  final String model, text;
+/// Why a paused Swarm's machines take no work, as its rows and the
+/// Product Manager line say it.
+const kLeadSwarmPaused = 'New work is paused in this Swarm';
 
-  /// Null for every engine.
-  final String? engine;
-}
-
-/// What the Swarm decides about a new project's Product Manager: the rules
-/// that will bind the project (backend superTabs/rules.ts) and the Swarm's
-/// model list (its routing policy). Empty, it rules nothing out.
-class LeadRules {
-  const LeadRules({
-    this.engine,
-    this.engineText,
-    this.forbidden = const [],
+/// The Swarm's model list (its routing policy) for a new project's Product
+/// Manager: engines and models it turns off. Empty, it rules nothing out.
+///
+/// The owners' per-project rules (preferred engine, forbidden models) are not
+/// read here: a new project has none until it is created.
+class LeadModelList {
+  const LeadModelList({
     this.disabledEngines = const {},
     this.disabledModels = const {},
     this.gridModels = true,
   });
 
-  /// The engine a Swarm rule prefers, and that rule's words.
-  final String? engine, engineText;
-  final List<LeadForbidden> forbidden;
-
-  /// Engines the model list has no enabled model of.
+  /// Engines the list has no enabled model of.
   final Set<String> disabledEngines;
 
   /// Models the list turns off at every effort, as (engine, model).
@@ -150,7 +140,7 @@ class LeadRules {
   /// Whether the list lets work run on models served on the Swarm's grid.
   final bool gridModels;
 
-  /// Why the model list rules [engine] out, or null.
+  /// Why the list rules [engine] out, or null.
   String? engineRefusal(String engine) => disabledEngines.contains(engine)
       ? 'The Swarm’s model list has no enabled ${_engineName(engine)} model.'
       : null;
@@ -163,29 +153,40 @@ class LeadRules {
       return 'The Swarm’s model list turns off ${_engineName(engine)} '
           '${model ?? 'default model'}.';
     }
-    for (final rule in forbidden) {
-      if ((rule.engine == null || rule.engine == engine) &&
-          leadModelMatches(rule.model, model)) {
-        return 'Swarm rule: ${rule.text}';
+    return null;
+  }
+
+  /// Read from the Swarm's routing policy; null reads as an empty list.
+  factory LeadModelList.of(Map<String, dynamic>? policy) {
+    final byModel = <(String, String), bool>{};
+    final byEngine = <String, bool>{};
+    for (final row in policy?['models'] as List? ?? const []) {
+      if (row case {
+        'engine': final String engine,
+        'model': final String model,
+        'enabled': final bool enabled,
+      }) {
+        byModel[(engine, model)] =
+            (byModel[(engine, model)] ?? false) || enabled;
+        byEngine[engine] = (byEngine[engine] ?? false) || enabled;
       }
     }
-    return null;
+    return LeadModelList(
+      disabledEngines: {
+        for (final MapEntry(:key, :value) in byEngine.entries)
+          if (!value) key,
+      },
+      disabledModels: {
+        for (final MapEntry(:key, :value) in byModel.entries)
+          if (!value) key,
+      },
+      gridModels: switch (policy?['localModels']) {
+        {'enabled': false} => false,
+        _ => true,
+      },
+    );
   }
 }
 
 String _engineName(String engine) =>
     const {'claude': 'Claude', 'codex': 'Codex'}[engine] ?? engine;
-
-final _family = RegExp('haiku|sonnet|opus|fable');
-
-/// A rule names a model as its owner said it, matched as the server does
-/// (backend superTabs/rules.ts modelMatches): `haiku` matches every Haiku id,
-/// and an engine's default model is not known, so nothing matches it.
-bool leadModelMatches(String ruleModel, String? model) {
-  final rule = ruleModel.toLowerCase();
-  final target = (model ?? 'default').toLowerCase();
-  return target != 'default' &&
-      (target.contains(rule) ||
-          (_family.firstMatch(target)?[0] == target &&
-              _family.firstMatch(rule)?[0] == target));
-}

@@ -257,10 +257,6 @@ class SuperTabSnapshot {
         row['machines'] ?? const [],
         (m) => Map<String, dynamic>.unmodifiable(m),
       ),
-      rules = _list(
-        row['rules'] ?? const [],
-        (r) => Map<String, dynamic>.unmodifiable(r),
-      ),
       conversations = _list(
         row['conversations'],
         SuperTabConversation.fromJson,
@@ -325,10 +321,6 @@ class SuperTabSnapshot {
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
   final List<Map<String, dynamic>> machines;
-
-  /// The owners' routing rules the reader may see, as stored
-  /// (backend superTabs/rules.ts SwarmRule).
-  final List<Map<String, dynamic>> rules;
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;
   final List<Map<String, dynamic>> invitations;

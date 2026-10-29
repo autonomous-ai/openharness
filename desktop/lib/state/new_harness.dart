@@ -876,6 +876,14 @@ class NewHarnessController extends ChangeNotifier {
 
   bool? _recoveredWorktreePreference;
 
+  /// The Worktree setting a successful start saves for the next New Harness,
+  /// or null to leave it: a Swarm's Product Manager always gets a worktree,
+  /// which is not the person's choice.
+  bool? get worktreeToRemember => placesLead
+      ? null
+      : _recoveredWorktreePreference ??
+            (isGitProject && !inWorktree ? worktree : null);
+
   /// Fresh desktop work starts on main, with or without a worktree. A retry
   /// must instead keep the branch of the folder its first attempt prepared.
   bool get _defaultsToMain =>
@@ -1577,7 +1585,11 @@ class NewHarnessController extends ChangeNotifier {
   String? get leadBlocked {
     final machines = integration?.leadMachines;
     if (machines == null) return null;
-    if (leadMachine?.startable == true) return _leadRuleRefusal;
+    if (leadMachine?.startable == true) return _leadModelListRefusal;
+    if (machines.isNotEmpty &&
+        machines.every((m) => m.unavailable == kLeadSwarmPaused)) {
+      return '$kLeadSwarmPaused. New Project can start once it resumes.';
+    }
     if (bestLeadMachine(machines, cloudRepository) == null) {
       return 'No machine of yours in this Swarm is free. New Project can start once one is.';
     }
@@ -1590,12 +1602,6 @@ class NewHarnessController extends ChangeNotifier {
   void placeLead() {
     final machines = integration?.leadMachines;
     if (machines == null || locked) return;
-    // The engine a Swarm rule prefers, over the last one used.
-    if (integration?.leadRules?.engine case final engine?
-        when engine != _engine && compatibleEngines.contains(engine)) {
-      _selectEngine(engine);
-      notifyListeners();
-    }
     final best = bestLeadMachine(machines, cloudRepository);
     if (best == null || best.id == _machineId) return;
     chooseLeadMachine(best.id);
@@ -1633,26 +1639,23 @@ class NewHarnessController extends ChangeNotifier {
   /// default, which nothing knows before it starts.
   String get leadModelLabel => _model != null ? modelLabel : 'Default model';
 
-  /// Why the Swarm's rules rule out [model] (null for the engine's default)
-  /// for a new project's Product Manager, or null.
+  /// Why the Swarm's model list rules out [model] (null for the engine's
+  /// default) for a new project's Product Manager, or null.
   String? _leadModelRefusal(String? model, {bool grid = false}) {
-    final rules = integration?.leadRules;
-    if (!placesLead || rules == null) return null;
-    if (grid && !rules.gridModels) {
+    final list = integration?.leadModels;
+    if (!placesLead || list == null) return null;
+    if (grid && !list.gridModels) {
       return 'The Swarm’s model list turns off models on its grid.';
     }
-    return rules.refusal(_engine, model);
+    return list.refusal(_engine, model);
   }
 
-  /// The engine a Swarm rule chose, when the Product Manager runs it.
-  bool get leadEngineByRule =>
-      placesLead && integration?.leadRules?.engine == _engine;
-
-  /// Why the Swarm's rules rule out the engine or model chosen, or null.
-  String? get _leadRuleRefusal {
-    final rules = integration?.leadRules;
-    if (!placesLead || rules == null) return null;
-    if (rules.engineRefusal(_engine) case final why?) {
+  /// Why the Swarm's model list rules out the engine or model chosen, or
+  /// null.
+  String? get _leadModelListRefusal {
+    final list = integration?.leadModels;
+    if (!placesLead || list == null) return null;
+    if (list.engineRefusal(_engine) case final why?) {
       return '$why Choose another engine under Advanced.';
     }
     final why = _leadModelRefusal(_model?.id, grid: _model != null);
@@ -3408,7 +3411,7 @@ class NewHarnessController extends ChangeNotifier {
   NewHarnessOption _engineOption(String id) {
     final finderElsewhere = isFinderEngine(id) && !canOpenFinderOn(_machine);
     final ruledOut = placesLead
-        ? integration?.leadRules?.engineRefusal(id)
+        ? integration?.leadModels?.engineRefusal(id)
         : null;
     return NewHarnessOption(
       id: id,
@@ -4360,7 +4363,7 @@ class NewHarnessController extends ChangeNotifier {
           choice,
           harnessId: harness,
           setup: launchSetup,
-          worktree: launchedWorktree,
+          worktree: worktreeToRemember,
         ),
       );
     }

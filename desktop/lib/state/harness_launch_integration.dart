@@ -63,8 +63,8 @@ class HarnessLaunchIntegration {
   /// the ordinary machine, agent and folder controls.
   List<LeadMachine>? leadMachines;
 
-  /// With [leadMachines]: the Swarm's rules for its engine and model.
-  LeadRules? leadRules;
+  /// With [leadMachines]: the Swarm's model list for its engine and model.
+  LeadModelList? leadModels;
   final Future<String> Function(String machineId, String task) prepare;
   final Future<void> Function(String machineId, String harnessId) complete;
   final Future<void> Function(String machineId, String creationId) beforeSubmit;
