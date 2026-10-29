@@ -17,7 +17,7 @@ export function readableWeek(week: number | undefined, now: number): number {
 
 /** What the board reads of a group (stats.ts, record.ts waitsNow) and its read check (projects.ts canReadGroup); the title
  *  names it in a person's details. */
-const BOARD_FIELDS = ['id', 'kind', 'projectId', 'title', 'audience', 'requesterId', 'reviewOf', 'archived', 'pullRequestUrls', 'ledger',
+const BOARD_FIELDS = ['id', 'kind', 'projectId', 'title', 'leadId', 'audience', 'requesterId', 'reviewOf', 'archived', 'pullRequestUrls', 'ledger',
   'assignment.id', 'assignment.status'] as const
 
 /** Dormant groups of one project active since [since]: a request shipped in a week the board sums wrote its Done row then.
