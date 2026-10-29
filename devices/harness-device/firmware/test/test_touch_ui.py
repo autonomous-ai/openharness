@@ -235,7 +235,7 @@ code += function('ui_project_known') + function('ui_focus_project') + function('
 code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'notice_expire', 'on_face', 'notice_read_now', 'ui_notify_summary', 'ui_turn_error', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt',
              'utf8_trim', 'swarm_notice', 'swarm_notice_mark', 'swarm_notice_raise', 'swarm_notice_drop', 'swarm_events',
-             'swarm_tabs_changed', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
+             'swarm_tabs_changed', 'swarm_regain', 'ui_supertabs_ids', 'ui_supertab', 'ui_supertab_recap', 'ui_supertab_focus',
              'ui_supertab_wait', 'ui_supertab_wait_close', 'ui_supertabs_clear', 'swarm_said_of', 'ui_supertab_notice', 'ui_supertab_notice_read']:
     code += function(name)
 code += '#define ui_notify_task_done(a,b,c,d) ui_notify_summary(a,b,c,d,"alert",false,false)\n'
@@ -1639,6 +1639,33 @@ static void swarm_pane_checks(const char *dir) {
     // The Swarm gone from the list: back to TABS.
     { const char ids[2][ID_MAX] = {"s3", "s2"}; ui_supertabs_ids(ids, 2); }
     assert(!swarm_mode() && s.view == TABS);
+    // Diego's dial, 2026-10-29: after a reconnect the list came empty, then whole 2 s later. The Swarm on the face comes
+    // back on the Lead it showed, with no pick sent, and the TABS the dial opened by itself switched no desk tab meanwhile.
+    {
+        const char none[1][ID_MAX] = {""}, ids[3][ID_MAX] = {"s1", "s3", "s2"};
+        swarm_setup(); enter_at("s1", "L2"); s.view = HOME; swarm_sent = 0; int switched = tab_switches;
+        ui_supertabs_ids(none, 0); assert(!swarm_mode() && s.view == TABS);
+        int plain = tab_index_of("t2"); assert(plain >= 0 && !tab_swarm(plain));
+        ht_tab_carousel_reset(&tab_carousel, tabs_total(), plain); tabs_sync(); assert(tab_switches == switched);
+        fake_ms += 2000; ui_supertabs_ids(ids, 3); openharness_card(); card_send();
+        assert(swarm_mode() && !strcmp(sw.tab, "s1") && !strcmp(sw.lead, "L2") && s.view == HOME);
+        ui_supertab_focus("s1", "L2"); assert(!strcmp(sw.lead, "L2") && s.view == HOME);
+        assert(!wire_has(0, "select s1 L2") && tab_switches == switched);
+        // The focus alone brings it back too, when it comes before the card.
+        ui_supertabs_ids(none, 0); assert(s.view == TABS);
+        ui_supertabs_ids(ids, 3); openharness_card(); ht_supertabs_put(&swarm, &card, ms(), NULL, 0);
+        ui_supertab_focus("s1", "L2"); assert(swarm_mode() && !strcmp(sw.lead, "L2") && s.view == HOME);
+        // A Swarm that really went, back only after 10 s: TABS stays, and the person's touch browses as before.
+        ui_supertabs_ids(none, 0); fake_ms += 10000; ui_supertabs_ids(ids, 3); card_send();
+        assert(!swarm_mode() && s.view == TABS);
+        habitat_touch(true, 233, 233, fake_ms);
+        ht_tab_carousel_reset(&tab_carousel, tabs_total(), tab_index_of("t2")); tabs_sync(); assert(tab_switches == switched + 1);
+        habitat_touch_cancel();
+        // The person on TABS already, browsing: a Swarm coming back does not pull the dial off it.
+        swarm_setup(); enter_at("s1", "L2"); s.view = HOME;
+        ui_supertabs_ids(none, 0); habitat_touch(true, 233, 233, fake_ms); habitat_touch_cancel();
+        ui_supertabs_ids(ids, 3); card_send(); assert(!swarm_mode() && s.view == TABS);
+    }
     // Diego's dial, 2026-10-28: the window on a Swarm tab with no project open (its Chat with PM, a DM) names no Lead.
     // The dial still goes into that Swarm, on the Lead the desktop last showed there, else the first by order; a dial
     // already in it keeps its face.
