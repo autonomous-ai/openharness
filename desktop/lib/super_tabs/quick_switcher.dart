@@ -273,13 +273,12 @@ List<_Destination> _destinations(SuperTabController c) {
         'Person',
         person: p,
       ),
-    for (final a in s.agents)
-      if (projects.containsKey(a.projectId) &&
-          (!a.isBuddy || a.buddyOf == c.accountId))
+    for (final a in s.teamAgents)
+      if (projects.containsKey(a.projectId))
         _Destination(
           'agent:${a.id}',
           s.agentName(a.id),
-          '${a.isBuddy ? 'Your Buddy' : 'Agent'} · ${projects[a.projectId]!.name}',
+          'Agent · ${projects[a.projectId]!.name}',
           agent: a,
         ),
   ];

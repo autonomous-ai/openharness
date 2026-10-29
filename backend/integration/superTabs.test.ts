@@ -1164,6 +1164,68 @@ describe('Super Tabs on a real Mongo replica set', () => {
     expect(await store.delivery(host, tab, lead, delivery.id, { type: 'hold', claimId: 'claim', reason: 'team_waiting_idle' })).toEqual({ held: false })
   })
 
+  it('files replies under their thread root, summarises each thread for its page, and reads one thread', async () => {
+    const { tab, lead } = await fixture()
+    await invite(tab)
+    const reply = (text: string, replyTo: string, extra: Record<string, unknown> = {}) =>
+      ({ type: 'message.send', conversationId: 'lead', text, replyTo, recipientIds: [], ...extra }) as Command
+    const root = String((await run(tab, message('Should we do thread replies?'))).result.messageId)
+    const first = String((await run(tab, reply('Yes, threads.', root, { mentions: [owner.sub] }), host, lead)).result.messageId)
+    // A reply only in its thread leaves the chat's newest main-stream message where it was; an also-sent one moves it.
+    const lead1 = async () => (await store.read(owner, tab)).state.conversations.find(c => c.id === 'lead')!
+    const afterFirst = await lead1()
+    expect(afterFirst.lastMainSequence).toBe(afterFirst.lastMessageSequence - 1)
+    const second = String((await run(tab, reply('Agreed.', first, { alsoSend: true }), peer)).result.messageId)
+    const after = String((await run(tab, message('Next topic.'))).result.messageId)
+    const afterAll = await lead1()
+    expect(afterAll.lastMainSequence).toBe(afterAll.lastMessageSequence)
+
+    // Agents read one feed: every reply, each with its thread root.
+    const feed = (await store.messages(host, tab, 'lead', {}, lead)).messages
+    expect(feed.map(m => [m.id, m.thread, m.alsoInChat ?? null])).toEqual(
+      [[root, root, null], [first, root, null], [second, root, true], [after, after, null]])
+    expect(feed.find(m => m.id === second)!.replyTo).toBe(first)
+    const page = await store.messages(owner, tab, 'lead', {})
+    const last = feed.find(m => m.id === second)!
+    expect(page.threads).toEqual([{ id: root, replies: 2, lastSequence: last.sequence, lastAt: last.createdAt,
+      authors: [expect.objectContaining({ kind: 'person', id: peer.sub }), expect.objectContaining({ kind: 'agent', id: lead })],
+      people: [owner.sub, peer.sub] }])
+    // A poll that reads only a new reply still learns its root's summary.
+    const poll = await store.messages(owner, tab, 'lead', { after: feed.find(m => m.id === first)!.sequence })
+    expect(poll.threads.map(t => [t.id, t.replies])).toEqual([[root, 2]])
+
+    const thread = await store.messages(owner, tab, 'lead', { thread: root })
+    expect(thread.messages.map(m => m.id)).toEqual([root, first, second])
+    expect(thread.threads.map(t => t.id)).toEqual([root])
+
+    // A person who leaves is no longer named, though their reply stays.
+    await run(tab, { type: 'member.remove', userId: peer.sub })
+    const left = (await store.messages(owner, tab, 'lead', { thread: root })).threads[0]!
+    expect(left.people).toEqual([owner.sub])
+    expect(left.authors.map(a => a.id)).toEqual([lead])
+    expect(left.replies).toBe(2)
+  })
+
+  it('keeps a reply to a message written before threads inline, and refuses a thread of a conversation the reader cannot see', async () => {
+    const { tab } = await fixture()
+    await invite(tab)
+    const old = randomUUID().replaceAll('-', '').slice(0, 24)
+    await db.superTabMessage.create({ data: { id: old, tabId: tab, conversationId: 'lead', sequence: 0,
+      author: { kind: 'person', id: owner.sub, name: owner.email, membershipGeneration: 'g' }, text: 'Before threads.', recipientIds: [], mentions: [] } })
+    const answer = String((await run(tab, { type: 'message.send', conversationId: 'lead', text: 'Answered inline.', replyTo: old, recipientIds: [],
+      alsoSend: true }, peer)).result.messageId)
+    const rows = (await store.messages(owner, tab, 'lead', {})).messages
+    expect(rows.find(m => m.id === answer)).toMatchObject({ replyTo: old, thread: answer, alsoInChat: null })
+    expect(rows.find(m => m.id === old)!.thread).toBeNull()
+
+    const project = (await run(tab, { type: 'project.create', name: 'Private project', visibility: 'private', brief: '' })).result
+    const hidden = String(project.conversationId)
+    const secret = String((await run(tab, { ...message('Private root'), conversationId: hidden } as Command)).result.messageId)
+    await expect(store.messages(peer, tab, hidden, { thread: secret })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    // A root named under another conversation reads nothing of it.
+    expect((await store.messages(peer, tab, 'lead', { thread: secret })).messages).toEqual([])
+  })
+
   it('delivers a Lead\'s agent-only notice to the Lead once and shows it to no person in the project chat', async () => {
     const { tab, lead } = await fixture()
     await invite(tab)

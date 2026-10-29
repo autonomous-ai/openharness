@@ -204,16 +204,29 @@ export function recordRun(state: SuperTabState, group: Conversation, assignment:
     ...(group.stepUp ? { stepUp: { attempt: group.stepUp.attempt, reason: group.stepUp.reason } } : {}),
     ...(agentTarget(state, worker).launchedDefault ? { engineDefault: true as const } : {}) }
   const ledger = group.ledger ??= {}
-  // A request recorded before this time was kept still has its first attempt in [runs] until 20 more roll it off; only a
-  // request with no attempt yet starts now (review of #2097).
-  ledger.firstAssignedAt ??= ledger.runs?.[0]?.at ?? now
+  ledger.firstAssignedAt ??= firstAssignedAt(ledger) ?? now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
+}
+
+/** When a request's first attempt was assigned: kept since that was recorded. A request recorded before has its first
+ *  attempt in [runs] while fewer than MAX_RUNS are kept; once that many are, the first may have rolled off, so it takes
+ *  the time the request was asked (full review of #2097). Undefined for a request never assigned. */
+export function firstAssignedAt(ledger: GroupLedger): number | undefined {
+  if (ledger.firstAssignedAt != null) return ledger.firstAssignedAt
+  const runs = ledger.runs ?? []
+  if (!runs.length) return undefined
+  return runs.length < MAX_RUNS ? runs[0]!.at : ledger.askedAt ?? runs[0]!.at
 }
 
 /** An agent's verdict on an independent check is one finished review by the model it runs on. */
 export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, reviewer: Agent, now: number): void {
   if (!check.independent) return
   const ledger = group.ledger ??= {}
+  // A check given again on the same attempt is the same review (full review of #2097): only its first verdict counts.
+  // An attempt recorded before attempts were has no run to tell a repeat by, so it earns no model credit (review of
+  // #2128).
+  const run = ledger.runs?.find(r => r.assignmentId === group.assignment?.id)
+  if (!run || run.firstVerdicts?.[check.id] !== undefined) return
   const on = ranOn(state, reviewer, reviewer.configuration), week = weekStart(now)
   // Only the weeks the board reads: one row per week and model, however many verdicts.
   const kept = (ledger.reviews ?? []).filter(r => week - r.week < LEDGER_WEEKS * WEEK_MS)
