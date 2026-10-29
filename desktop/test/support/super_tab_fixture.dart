@@ -409,8 +409,10 @@ class ConversationServer {
   Map<String, dynamic>? saved;
   // While set, every read waits for it: a slow server.
   Completer<void>? holdReads;
-  // Makes every command answer with this refusal: {code, message}.
+  // Makes every command answer with this refusal: {code, message}, with
+  // [refuseStatus] as its HTTP status.
   Map<String, String>? refuse;
+  int refuseStatus = 409;
   // Added to every successful command's result, as a newer backend adds
   // fields such as `credentialNotice`.
   final commandResult = <String, dynamic>{};
@@ -746,7 +748,7 @@ class ConversationServer {
         throw SuperTabFailure(
           refusal['code']!,
           refusal['message']!,
-          statusCode: 409,
+          statusCode: refuseStatus,
         );
       }
       final operationId = body['operationId'] as String;
