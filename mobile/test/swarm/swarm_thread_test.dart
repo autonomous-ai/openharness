@@ -425,7 +425,7 @@ void main() {
       expect(await t.send(), isFalse);
       expect(t.unconfirmed, isTrue);
       expect(t.pending, 'Once only');
-      expect(t.error, contains('not confirmed'));
+      expect(t.error, contains('not sent'));
 
       lost = false;
       expect(await t.send(), isTrue);

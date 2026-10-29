@@ -1176,9 +1176,24 @@ describe('what a read costs the database (group 3b)', () => {
     const padding = 'old-state-'.repeat(2_000)
     await db.superTab.update({ where: { id: s.tabId }, data: { legacyState: { padding } } })
     const reads: Array<{ operation: string; select: Record<string, unknown> | undefined }> = []
+    const rawRows: Array<Record<string, unknown>> = []
+    // A named-index read (parts/indexed.ts readBy) names its fields in the $project that ends its pipeline: only an inclusion
+    // projection counts, since one that only leaves fields out (`{ _id: 0 }`, `{ padding: 0 }`) still returns the old state.
+    const included = (stage: { $project?: Record<string, unknown> } | undefined) => {
+      const fields = Object.entries(stage?.$project ?? {})
+      return fields.some(([, on]) => on === 1 || on === true)
+        && fields.every(([field, on]) => on === 1 || on === true || (field === '_id' && (on === 0 || on === false))) ? stage!.$project : undefined
+    }
     const client = db.$extends({ query: { $allModels: { async $allOperations({ model, operation, args, query }) {
-      if (model === 'SuperTab') reads.push({ operation, select: (args as { select?: Record<string, unknown> }).select })
-      return query(args)
+      const raw = operation === 'aggregateRaw'
+      if (model === 'SuperTab') {
+        reads.push({ operation, select: raw ? included((args as { pipeline?: Array<{ $project?: Record<string, unknown> }> }).pipeline?.at(-1))
+          : (args as { select?: Record<string, unknown> }).select })
+      }
+      const result = await query(args)
+      // And what the database answered: no raw row holds the old state, whatever the pipeline says.
+      if (model === 'SuperTab' && raw) rawRows.push(...result as unknown as Array<Record<string, unknown>>)
+      return result
     } } } }) as unknown as PrismaClient
     const hosts = new HostReads(new SuperTabStore(client), { now: () => clock })
     clock = Date.now()
@@ -1189,10 +1204,12 @@ describe('what a read costs the database (group 3b)', () => {
 
     expect(first.tabs).toHaveLength(1)
     expect(JSON.stringify([first, idle])).not.toContain('old-state-')
-    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields: none is the old state.
+    // The poll reads the Swarm's row for its list and its owner, each time by naming the fields (Prisma's select, or a raw
+    // read's closing inclusion $project): none is the old state, and no raw row the database returned holds it.
     expect(reads.length).toBeGreaterThan(0)
     for (const read of reads) expect(read.select, read.operation).toBeDefined()
     for (const read of reads) expect(read.select).not.toHaveProperty('legacyState')
+    for (const row of rawRows) expect(Object.keys(row)).not.toContain('legacyState')
   })
 
   it('the host form asks for the newest change only of the Swarms it answers for', async () => {

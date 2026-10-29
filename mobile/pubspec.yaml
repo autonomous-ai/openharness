@@ -72,6 +72,9 @@ dependencies:
   # files, and emptied on sign-out, Swarm off, account change and a Swarm's removal. Pinned
   # exactly: it decides where the account's files lie on the phone.
   flutter_cache_manager: 3.4.5
+  # The cache's fetch of a chat picture, sent with redirects refused (`SwarmFileFetch`), so
+  # nothing from another host is kept or drawn. Already in the app through flutter_cache_manager.
+  http: ^1.6.0
   # Sending any other file to an agent — a PDF, a log, a zip — from the same key: the system's own
   # document picker (Files on iOS, the Storage Access Framework on Android), which hands over one
   # file the person chose and asks for no storage permission. The bytes go out as the CLI's
