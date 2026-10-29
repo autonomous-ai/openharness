@@ -326,15 +326,19 @@ void main() {
     testWidgets('offline, it says so, the chat stays, and Start again starts '
         'it on the same machine and agent', (tester) async {
       final fake = backend(
-        buddy: {
-          ...wren(downSince: offline),
-          'configuration': {'engine': 'codex'},
-        },
+        buddy: wren(downSince: offline),
         machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
       );
       await pump(tester, fake);
 
       expect(find.text('Wren is offline. Your chat stays.'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: key('swarm-buddy-start-again'),
+          matching: find.text('Start again'),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(key('swarm-buddy-start-again'));
       await tester.pumpAndSettle();
 
@@ -343,7 +347,38 @@ void main() {
           'type': 'buddy.create',
           'projectId': project,
           'machineId': 'mac-1',
-          'engine': 'codex',
+          'engine': 'claude',
+        },
+      ]);
+    });
+
+    testWidgets('an offline Codex Buddy starts again with Claude Code, since '
+        'the server refuses a Codex Buddy for now', (tester) async {
+      final fake = backend(
+        buddy: {
+          ...wren(downSince: offline),
+          'configuration': {'engine': 'codex'},
+        },
+        machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
+      );
+      await pump(tester, fake);
+
+      expect(
+        find.descendant(
+          of: key('swarm-buddy-start-again'),
+          matching: find.text('Start with Claude Code'),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-buddy-start-again'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands, [
+        {
+          'type': 'buddy.create',
+          'projectId': project,
+          'machineId': 'mac-1',
+          'engine': 'claude',
         },
       ]);
     });
@@ -428,10 +463,8 @@ void main() {
       );
       expect(key('swarm-buddy-menu'), findsNothing, reason: 'none to remove');
 
-      await tester.tap(key('swarm-buddy-engine-codex'));
-      await tester.pump();
       startsNext(fake, [
-        buddyStartData('s1', chatId: chat, machineId: 'mac-1', engine: 'codex'),
+        buddyStartData('s1', chatId: chat, machineId: 'mac-1'),
       ]);
       await tester.tap(key('swarm-buddy-start-button'));
       await tester.pumpAndSettle();
@@ -441,12 +474,12 @@ void main() {
           'type': 'buddy.create',
           'projectId': project,
           'machineId': 'mac-1',
-          'engine': 'codex',
+          'engine': 'claude',
         },
       ]);
       expect(
         tester.widget<Text>(key('swarm-buddy-starting')).data,
-        'Starting Codex on Tonys-MacBook-Pro…',
+        'Starting Claude on Tonys-MacBook-Pro…',
       );
       expect(key('swarm-buddy-start'), findsNothing);
     });
@@ -492,8 +525,62 @@ void main() {
       expect(key('swarm-buddy-start-button'), findsNothing);
     });
 
+    testWidgets('Codex is offered turned off, with the reason the server '
+        'refuses it beside it, as on Desktop; Claude stays picked', (
+      tester,
+    ) async {
+      final fake = backend(machines: [machine('mac-1', 'Tonys-MacBook-Pro')]);
+      await pump(tester, fake);
+
+      expect(
+        find.text(
+          'A Codex Buddy is not available yet: Codex would run some commands '
+          'outside its sandbox without asking. Choose Claude Code.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-buddy-engine-codex'));
+      await tester.pump();
+      await tester.tap(key('swarm-buddy-start-button'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single['engine'], 'claude');
+    });
+
     testWidgets('a start that failed says why, and Start again asks with the '
         'same machine and agent', (tester) async {
+      final fake = backend(
+        machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
+        starts: [
+          buddyStartData(
+            's1',
+            chatId: chat,
+            error: 'Claude Code is not signed in on Tonys-MacBook-Pro.',
+          ),
+        ],
+      );
+      await pump(tester, fake);
+
+      expect(
+        find.text(
+          "Couldn't start: Claude Code is not signed in on Tonys-MacBook-Pro.",
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(key('swarm-buddy-start-again'));
+      await tester.pumpAndSettle();
+
+      expect(fake.commands.single, {
+        'type': 'buddy.create',
+        'projectId': project,
+        'machineId': 'mac-1',
+        'engine': 'claude',
+      });
+    });
+
+    testWidgets('a Codex start that failed is asked again with Claude Code', (
+      tester,
+    ) async {
       final fake = backend(
         machines: [machine('mac-1', 'Tonys-MacBook-Pro')],
         starts: [
@@ -508,8 +595,9 @@ void main() {
       await pump(tester, fake);
 
       expect(
-        find.text(
-          "Couldn't start: Codex is not signed in on Tonys-MacBook-Pro.",
+        find.descendant(
+          of: key('swarm-buddy-start-again'),
+          matching: find.text('Start with Claude Code'),
         ),
         findsOneWidget,
       );
@@ -520,7 +608,7 @@ void main() {
         'type': 'buddy.create',
         'projectId': project,
         'machineId': 'mac-1',
-        'engine': 'codex',
+        'engine': 'claude',
       });
     });
 

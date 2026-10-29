@@ -158,11 +158,12 @@ class SwarmBuddyBar extends StatelessWidget {
             text:
                 '${swarmBuddyName(reader, actions.projectId)} is offline. '
                 'Your chat stays.',
+            engine: agent.engine,
             again: canWrite
                 ? () => unawaited(
                     actions.start(
                       machineId: agent.machineId,
-                      engine: agent.engine,
+                      engine: swarmBuddyRestartEngine(agent.engine),
                     ),
                   )
                 : null,
@@ -187,9 +188,14 @@ class SwarmBuddyBar extends StatelessWidget {
       return _Line(
         key: const ValueKey('swarm-buddy-failed'),
         text: "Couldn't start: $error",
+        engine: engine,
         again: canWrite && machineId.isNotEmpty
-            ? () =>
-                  unawaited(actions.start(machineId: machineId, engine: engine))
+            ? () => unawaited(
+                actions.start(
+                  machineId: machineId,
+                  engine: swarmBuddyRestartEngine(engine),
+                ),
+              )
             : null,
         busy: actions.busy,
       );
@@ -204,16 +210,19 @@ class SwarmBuddyBar extends StatelessWidget {
 }
 
 /// What happened to the Buddy, in a line, and Start again at its end for a
-/// person who may write.
+/// person who may write: "Start with Claude Code" for an [engine] the server
+/// refuses.
 class _Line extends StatelessWidget {
   const _Line({
     super.key,
     required this.text,
+    required this.engine,
     required this.again,
     required this.busy,
   });
 
   final String text;
+  final String engine;
   final VoidCallback? again;
   final bool busy;
 
@@ -226,7 +235,7 @@ class _Line extends StatelessWidget {
       if (again != null)
         SwarmButton(
           key: const ValueKey('swarm-buddy-start-again'),
-          label: 'Start again',
+          label: swarmBuddyRestartLabel(engine),
           style: SwarmButtonStyle.link,
           busy: busy,
           busyLabel: 'Starting…',
@@ -347,7 +356,9 @@ class _BuddyStartState extends State<_BuddyStart> {
                       key: ValueKey('swarm-buddy-engine-$key'),
                       label: value,
                       icon: key == _engine ? LucideIcons.check : null,
-                      onPressed: busy
+                      // One the server refuses is offered turned off.
+                      onPressed:
+                          busy || swarmBuddyEngineRefusals.containsKey(key)
                           ? null
                           : () => setState(() => _engine = key),
                     ),
@@ -355,6 +366,14 @@ class _BuddyStartState extends State<_BuddyStart> {
               ],
             ),
           ),
+          for (final refusal in swarmBuddyEngineRefusals.values)
+            Padding(
+              padding: const EdgeInsets.only(
+                left: _Field._labelWidth,
+                top: AppSpace.xs,
+              ),
+              child: SwarmRow.line(refusal, lines: 3),
+            ),
           const SizedBox(height: AppSpace.s),
           SwarmButton(
             key: const ValueKey('swarm-buddy-start-button'),

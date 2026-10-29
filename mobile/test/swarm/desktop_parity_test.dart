@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/swarm/swarm_buddy.dart';
 
 /// The Swarm models the phone carries as copies of the desktop's
 /// (`../desktop/lib/super_tabs`): phone path → desktop path. The phone is a
@@ -27,7 +28,9 @@ const _model = ('lib/swarm/model.dart', 'lib/super_tabs/model.dart');
 
 void main() {
   test("${_model.$1} reads every field the desktop's ${_model.$2} reads", () {
-    final reads = RegExp(r"(?:row|start|json)\['(\w+)'\]|_text\(row, '(\w+)'\)");
+    final reads = RegExp(
+      r"(?:row|start|json)\['(\w+)'\]|_text\(row, '(\w+)'\)",
+    );
     Set<String> fields(String path) => {
       for (final m in reads.allMatches(File(path).readAsStringSync()))
         (m.group(1) ?? m.group(2))!,
@@ -36,6 +39,23 @@ void main() {
     expect(desktop, isNotEmpty);
     expect(desktop.difference(fields(_model.$1)), isEmpty);
   });
+
+  test(
+    'a Buddy engine the server refuses is refused in the desktop\'s words',
+    () {
+      // The backend checks the desktop's words against its own refusal
+      // (buddies.test.ts); the phone shows the same beside a turned-off engine.
+      final desktop = File('../desktop/lib/super_tabs/buddies.dart')
+          .readAsStringSync();
+      final refusals = RegExp(
+        r"kBuddyEngineRefusals = \{\s*((?:'\w+':\s*'[^']*',\s*)*)\}",
+      ).firstMatch(desktop)!.group(1)!;
+      expect(swarmBuddyEngineRefusals, {
+        for (final m in RegExp(r"'(\w+)':\s*'([^']*)'").allMatches(refusals))
+          m.group(1)!: m.group(2)!,
+      });
+    },
+  );
 
   for (final MapEntry(key: phone, value: desktop) in _copies.entries) {
     test("$phone matches the desktop's $desktop", () {
