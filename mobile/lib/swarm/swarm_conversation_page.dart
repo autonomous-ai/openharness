@@ -1215,6 +1215,21 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 style: AppType.caption(color: tty.yellow),
               ),
             ),
+          // Quiet: nothing went wrong, the words stay in the box.
+          if (_voice?.stopped case final stopped?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                AppSpace.xs,
+                AppSpace.s,
+              ),
+              child: Text(
+                stopped,
+                key: const ValueKey('swarm-voice-stopped'),
+                style: AppType.caption(color: AppPalette.textSecondary),
+              ),
+            ),
           SwarmOutgoingChips(conversation: c),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,

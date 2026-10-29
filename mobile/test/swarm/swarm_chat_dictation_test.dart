@@ -319,6 +319,48 @@ void main() {
     expect(fake.commands, isEmpty);
   });
 
+  testWidgets('stopping by itself says so quietly for three seconds; the '
+      'words stay in the box', (tester) async {
+    await pump(tester);
+    await tapMic(tester);
+    await say(tester, 'almost done');
+    expect(find.text('Stopped listening'), findsNothing);
+
+    await tester.pump(const Duration(minutes: 2));
+    await frames(tester);
+    expect(dictation.listening, isFalse);
+    expect(
+      tester.widget<Text>(key('swarm-voice-stopped')).data,
+      'Stopped listening',
+    );
+    expect(box(tester), 'almost done');
+    expect(key('swarm-voice-note'), findsNothing, reason: 'nothing went wrong');
+
+    await tester.pump(const Duration(milliseconds: 2900));
+    expect(find.text('Stopped listening'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Stopped listening'), findsNothing);
+    expect(box(tester), 'almost done');
+    expect(fake.commands, isEmpty);
+  });
+
+  testWidgets('a tap ends no take with Stopped listening, and a new take '
+      'takes it away', (tester) async {
+    await pump(tester);
+    await tapMic(tester);
+    await say(tester, 'Ship it');
+    await tapMic(tester);
+    await tester.pumpAndSettle();
+    expect(find.text('Stopped listening'), findsNothing, reason: 'tapped');
+
+    await tapMic(tester);
+    await tester.pump(const Duration(minutes: 2));
+    await frames(tester);
+    expect(find.text('Stopped listening'), findsOneWidget);
+    await tapMic(tester);
+    expect(find.text('Stopped listening'), findsNothing);
+  });
+
   testWidgets('a second tap with nothing said sends nothing', (tester) async {
     await pump(tester);
     await tapMic(tester);

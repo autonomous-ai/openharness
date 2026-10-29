@@ -53,6 +53,12 @@ class SwarmVoice extends ChangeNotifier {
   /// for nobody). A shorter pause never ends it.
   static const idle = Duration(minutes: 2);
 
+  /// What the chat says, quietly, as the recognizer stops by itself after
+  /// [idle], for [stoppedLinger] (Lead, 10-29: a mic that went still with no
+  /// word said why).
+  static const stoppedListening = 'Stopped listening';
+  static const stoppedLinger = Duration(seconds: 3);
+
   /// How long the recognizer has to say it has stopped, after a tap asked it
   /// to, before its take is given up and what the box holds is sent.
   static const _endWait = Duration(seconds: 2);
@@ -91,7 +97,7 @@ class SwarmVoice extends ChangeNotifier {
   /// Every word the recognizer has heard in the take, as it last said them;
   /// and those of them already in [_liveFrom].
   List<String> _liveHeard = const [], _liveBase = const [];
-  Timer? _liveEnd, _liveIdle, _liveNoticeTimer;
+  Timer? _liveEnd, _liveIdle, _liveNoticeTimer, _stoppedTimer;
   final ValueNotifier<double> _liveLevel = ValueNotifier(0);
   String? _liveNotice;
 
@@ -119,6 +125,10 @@ class SwarmVoice extends ChangeNotifier {
 
   /// What went wrong with the last take, as the terminal says it.
   String? get notice => _liveNotice ?? _voice?.notice;
+
+  /// [stoppedListening] for a moment after the recognizer stopped by itself;
+  /// null otherwise.
+  String? get stopped => _stoppedTimer == null ? null : stoppedListening;
 
   /// The mic's face: null at rest.
   VoiceMicFace? get face => switch (_live) {
@@ -162,6 +172,8 @@ class SwarmVoice extends ChangeNotifier {
       case _Live.off:
     }
     _setLiveNotice(null);
+    _stoppedTimer?.cancel();
+    _stoppedTimer = null;
     final recorded = _voice;
     final underWay =
         recorded != null &&
@@ -268,7 +280,12 @@ class SwarmVoice extends ChangeNotifier {
   void _waitForWords(int take) {
     _liveIdle?.cancel();
     _liveIdle = Timer(idle, () {
-      if (take == _liveTake && _live == _Live.listening) _offLive();
+      if (take != _liveTake || _live != _Live.listening) return;
+      _stoppedTimer = Timer(stoppedLinger, () {
+        _stoppedTimer = null;
+        if (!_disposed) notifyListeners();
+      });
+      _offLive();
     });
   }
 
@@ -476,6 +493,7 @@ class SwarmVoice extends ChangeNotifier {
     _disposed = true;
     _offLive();
     _liveNoticeTimer?.cancel();
+    _stoppedTimer?.cancel();
     _liveLevel.dispose();
     _release(false);
     _lifecycle?.dispose();
