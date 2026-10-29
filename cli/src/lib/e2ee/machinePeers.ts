@@ -26,6 +26,8 @@ const GONE_MAX = 256
 // Marks the file could not take (a full or read-only disk, review of #2101), for every store in this process: they still
 // keep the trust group from pinning the machine again and the relay from dialling it, until the daemon restarts.
 const goneInMemory = new Set<string>()
+// And the other way: machines listed again whose mark the file could not drop (review of #2101, Batch S).
+const backInMemory = new Set<string>()
 
 export interface MachinePeer {
   machineId: string
@@ -76,9 +78,10 @@ export class MachinePeerStore {
     return true
   }
 
-  /** The backend said [machineId] was deleted: drop its pin, and remember it so the trust group does not pin it again. */
-  /** Throws when the mark or the unpin cannot be written; the mark holds in memory for this process all the same. */
+  /** The backend said [machineId] was deleted: drop its pin, and remember it so the trust group does not pin it again.
+   *  Throws when the mark or the unpin cannot be written; the mark holds in memory for this process all the same. */
   markGone(machineId: string): void {
+    backInMemory.delete(machineId)
     const gone = this.gone()
     gone.delete(machineId)
     gone.add(machineId)
@@ -93,19 +96,27 @@ export class MachinePeerStore {
       const raw = JSON.parse(readFileSync(GONE_FILE, 'utf-8')) as unknown
       if (Array.isArray(raw)) kept = raw.filter((id): id is string => typeof id === 'string')
     } catch { /* none yet, or unreadable: the marks in memory still hold */ }
-    return new Set([...kept, ...goneInMemory])
+    return new Set([...kept.filter((id) => !backInMemory.has(id)), ...goneInMemory])
   }
 
-  /** The account's machine list names [listed]: any of them marked gone is back (re-added, or shared again). True when one was. */
+  /** The account's machine list names [listed]: any of them marked gone is back (re-added, or shared again). True when one was.
+   *  Never throws: it runs in the machine-list callback, and a file it cannot rewrite leaves them back in memory. */
   restore(listed: Iterable<string>): boolean {
     const gone = this.gone()
-    let back = false
+    const back: string[] = []
     for (const id of listed) {
+      if (!gone.delete(id)) continue
       goneInMemory.delete(id)
-      back = gone.delete(id) || back
+      back.push(id)
     }
-    if (back) writeGone(new Set([...gone].filter((id) => !goneInMemory.has(id))))
-    return back
+    if (!back.length) return false
+    try {
+      writeGone(gone)
+    } catch (err) {
+      for (const id of back) backInMemory.add(id)
+      console.warn(`[relay] could not record ${back.length} machine(s) as back on the list, kept in memory: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    return true
   }
 
   list(): Array<MachinePeer & { fingerprint: string }> {

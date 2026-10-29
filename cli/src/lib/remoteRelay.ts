@@ -63,8 +63,10 @@ const REFUSED_BACKOFF_MAX_MS = 30_000
 const RETRY_AFTER_MAX_MS = 5 * 60_000
 // Warm background sessions kept per machine. Each concurrent background client needs its own (they
 // must not see each other's frames), so the cap is "how many pollers may overlap on one machine and
-// still find a warm session"; beyond it the extra session is torn down on detach as it always was.
-const ISOLATED_IDLE_MAX = 4
+// still find a warm session"; beyond it the extra session is closed on detach, as `shelf full`, so the backend's
+// disconnect lines count it. 4 until the WebSocket roadmap's Phase 1 (item 6): each idle session costs the backend one
+// quiet socket, and with no count of the overflows the cap was doubled rather than tuned; those lines tune it next.
+const ISOLATED_IDLE_MAX = 8
 // Same convention/value as localWsServer.ts's app<->daemon heartbeat. Without this, a machine-node
 // cycling (e.g. `harness start` on the OTHER end after a crash/restart) can leave this daemon holding
 // an upstream socket the backend silently dropped with no close frame — every RPC sent through it then
@@ -369,7 +371,7 @@ export class RemoteRelayPool {
         detached = true
         session.detach() // the pool's own linger starts here
         const idle = this.idleIsolated.get(machineId) ?? []
-        if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId); return }
+        if (idle.length >= ISOLATED_IDLE_MAX) { pool.invalidate(machineId, { code: 1000, reason: 'shelf full' }); return }
         idle.push(pool)
         this.idleIsolated.set(machineId, idle)
       },
@@ -392,7 +394,7 @@ export class RemoteRelayPool {
    *  without ever touching this socket (nothing else — not even the heartbeat, since backend itself
    *  keeps answering pings fine — would ever notice on its own). Signalled by the local client sending
    *  `forceReconnect: true` on a fresh `machine_select` after observing a live RPC time out. */
-  invalidate(machineId: string): void {
+  invalidate(machineId: string, close?: { code: number; reason: string }): void {
     const entry = this.entries.get(machineId)
     if (!entry) return
     this.entries.delete(machineId)
@@ -410,7 +412,8 @@ export class RemoteRelayPool {
     entry.onClosed = null
     void entry.p2p?.stop('invalidated', false)
     entry.p2p = null
-    try { entry.ws.terminate() } catch { /* already gone */ }
+    // A healthy session put away is closed saying why; one known dead is cut.
+    try { if (close) entry.ws.close(close.code, close.reason); else entry.ws.terminate() } catch { /* already gone */ }
   }
 
   /** Every session this pool holds, ended, for a gateway that is going (its core went away, or it is

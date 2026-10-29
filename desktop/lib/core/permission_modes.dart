@@ -81,6 +81,18 @@ const Map<String, List<PermissionMode>> kEnginePermissionModes = {
   ],
 };
 
+/// Modes Harness launches on its own and New Harness never offers: a
+/// Buddy's (CLI superTabs/start.ts), named here so its details read by name.
+const Map<String, List<PermissionMode>> kLaunchOnlyPermissionModes = {
+  'codex': [
+    PermissionMode(
+      'readOnlyAsk',
+      'Read only, asks you',
+      'Reads in its sandbox, asks you before anything outside it',
+    ),
+  ],
+};
+
 /// The modes [engine] offers, or empty when it has none to choose between.
 List<PermissionMode> permissionModesOf(String engine) =>
     kEnginePermissionModes[engine] ?? const [];
