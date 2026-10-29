@@ -204,6 +204,18 @@ describe('adding a Buddy', () => {
     expect(f.state.conversations.filter(c => c.kind === 'buddy')).toHaveLength(1)
   })
 
+  // Security review of #2093 (Lead's ruling): Harness cannot yet tell a Buddy's window from another agent's on Windows, so a
+  // Buddy there made every agent's Swarm command on that PC refuse. None is added there until a real caller check exists.
+  it('is refused on a Windows machine, with the reason, and allowed on a Mac or Linux one', () => {
+    const f = fresh()
+    const os = (name: string | null) => { f.state.machines!.find(m => m.machineId === 'peer-mac')!.observation!.resources.os = name }
+    os('Windows')
+    expect(() => addBuddy(f, peer, f.app.projectId)).toThrow('A Buddy cannot run on a Windows machine yet')
+    expect(f.state.starts ?? []).toEqual([])
+    os('Linux')
+    expect(addBuddy(f, peer, f.app.projectId).result.startId).toBeTruthy()
+  })
+
   it('is refused to an agent, a viewer, and on a machine that is not in the Swarm', () => {
     const f = fresh()
     expect(() => addBuddy(f, agentActor(f.pm), f.app.projectId)).toThrow('A person adds their own Buddy')

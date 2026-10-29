@@ -1426,6 +1426,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (pool.contributorId !== me.id || grant.machineOwnerId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') {
         fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
       }
+      // Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093): its machine
+      // refused every agent's Swarm command while one ran there. None is added on Windows until a real caller check exists
+      // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop.
+      if (pool.observation?.resources.os === 'Windows') {
+        fail('BUDDY_WINDOWS', 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines from the Swarm\'s Machines list.', 403)
+      }
       const contributor = person(state, grant.contributorId)
       openBuddyChat(state, project.id, me)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).

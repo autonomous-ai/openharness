@@ -190,7 +190,24 @@ Buddies are on in every Swarm; there is no setting. They replaced Chat with PM (
   manager puts nothing there it would not say in the project chat.
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
   list, and Claude Code (a Codex Buddy is refused for now; see below). Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
-  account: never on a machine shared with them, and never in a Harness Team account.
+  account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
+  Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
+  runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
+  agent.
+- A Buddy's machine checks every Swarm command against the window it runs in. An agent speaks only as itself, only
+  through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
+  `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The window's agent is
+  taken only when Harness's own window for it is among the command's parent processes, so a private tmux server can't
+  pose as another agent's window. What it can't see reads as a person's terminal, where naming an agent still works.
+  Each needs an agent deliberately evading the check:
+  - a command that detaches from its window and clears its tmux variables;
+  - a command run in a private tmux server's window, at a number no agent has;
+  - a command run through a fake tmux in the account's own `~/.local/bin`, which Harness trusts before Homebrew's.
+
+  Refusing these would also refuse people who work in their own tmux. The real fix is for the daemon to identify the
+  caller itself from its connection; that's the planned follow-up.
+- On Windows, the window is whatever the shell says it is, so any agent there could name another agent's window. Only
+  Buddies are kept off Windows; other agents there are trusted as before until Windows has a real caller check.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.

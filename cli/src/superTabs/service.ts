@@ -230,6 +230,8 @@ export interface SuperTabServiceOptions {
   /** The owner's subscriptions for the Harness Team account (team/relay.ts), for a spec. */
   teamRelay?: () => Pick<TeamRelayPublisher, 'start' | 'stop'>
 }
+const LOCAL_ONLY = 'An agent speaks to the Swarm through its own computer\'s Harness only, not through another machine.'
+
 export function superTabService(core: CoreApi, options: SuperTabServiceOptions = {}): { requests: ServiceRequests; port: SuperTabsPort } {
   const preparations = new ContributionPreparations(input => (options.prepareContribution ?? prepareContribution)(core, input))
   // One host form and one set of Swarm reads per machine, shared by the host and every action here (design 2026-10-26 5.3).
@@ -362,6 +364,20 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
           const grant = await port.swarmRole(String(payload.harnessId ?? ''))
           return { ok: true, role: grant ? grant.role : grant, ...(grant ? { mode: grant.mode } : {}) }
         }
+        // `harness send`, `new`, `tell` and `close` from a pane (buddyPane.ts): whether its harness is a Buddy, from this computer's
+        // own launch record (start.ts starts one with the Swarm role buddy; core/agents/create.ts saves it on the session). The
+        // second review of #2087 found the server read alone missed its deadline 2 times in 3 under load: it is asked only about a
+        // harness an agent started with no Swarm record, and only as one more reason to refuse. Without a harness: whether this
+        // computer runs a Buddy at all, which Windows refuses on as it cannot check a pane.
+        if (payload.action === 'buddyCheck') {
+          if (!asker.local) return { error: 'OWNER_REQUIRED' }
+          if (payload.harnessId === undefined) return { ok: true, buddiesHere: core.agents.live().some(session => session.swarmSkill?.role === 'buddy') }
+          const session = identifier(payload.harnessId) ? core.agents.byAgent(payload.harnessId) : undefined
+          if (!session || session.startedBy !== 'agent' && !session.swarmSkill) return { ok: true, buddy: false }
+          if (session.swarmSkill) return { ok: true, buddy: session.swarmSkill.role === 'buddy' }
+          const grant = await port.swarmRole(session.agentId).catch(() => undefined)
+          return { ok: true, buddy: grant?.role === 'buddy' }
+        }
         if (payload.action === 'prepareContribution') return preparations.read(payload)
         // `harness super-tab set-agents`, typed by the person at this computer; never through the relay.
         if (payload.action === 'setMachineAgents') {
@@ -411,6 +427,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         const named = identifier(payload.agentId) ? payload.agentId : null
         const hashed = identifier(payload.harnessId) ? createHash('sha256').update(JSON.stringify([core.daemon.machineId(), payload.harnessId])).digest('hex').slice(0, 24) : null
         if (payload.action === 'help' && (!identifier(payload.tabId) || !(named ?? hashed))) return { ok: true, help: HELP }
+        // An agent speaks through its own computer's Harness alone: the second review of #2087 sent a Buddy's request with
+        // --machine to the owner's other Mac, which knew no pane there and served the agent it named. Delivered instructions
+        // always name this computer.
+        if (!asker.local) return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_LOCAL_ONLY', detail: LOCAL_ONLY }
         if (!identifier(payload.tabId) || !(named ?? hashed)) return { error: 'INVALID_REQUEST' }
         // The caller is one of this machine's running agents, as the host roster lists it now: no Swarm is read to know that
         // (design 2026-10-26 5.3), and the roster is read again for every call, as the whole Swarm once was, by its changes
@@ -428,6 +448,10 @@ export function superTabService(core: CoreApi, options: SuperTabServiceOptions =
         // The server leaves an agent off the roster when this machine has no access or billing for it; it gives no reason,
         // and the server enforces the grant anyway, so the text says where to look (Lead's ruling, #1726 G5).
         if (!caller || !identifier(agent.id)) return { error: 'AGENT_UNAVAILABLE', detail: OFF_ROSTER }
+        // A harness speaks as its own agent alone (security review of #2087: a Buddy named its Builder with --agent).
+        if (named && identifier(payload.harnessId) && agent.harnessId !== payload.harnessId && payload.action !== 'help') {
+          return { error: 'AGENT_MISMATCH', detail: 'This harness may speak only as its own Swarm agent. Run the command without --agent, or with its own id.' }
+        }
         if (typeof agent.harnessId !== 'string' || identifier(payload.harnessId) && agent.harnessId !== payload.harnessId || !core.agents.byAgent(agent.harnessId)) {
           return payload.action === 'help' ? { ok: true, help: HELP } : { error: 'AGENT_UNAVAILABLE', detail: 'This agent is not a running contribution on this machine.' }
         }
