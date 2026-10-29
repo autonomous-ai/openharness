@@ -41,11 +41,12 @@ class SwarmChatPeeks extends ChangeNotifier {
   int _running = 0;
   bool _disposed = false;
 
-  /// Some chat could not be read at its last counter: not a refusal, which
-  /// is no failure to report.
-  bool get failed => _entries.entries.any(
-    (e) => e.value.failures > 0 && _current(e.key.$1, e.value),
-  );
+  /// [chatId] of [reader] could not be read at its last counter: not a
+  /// refusal, which is no failure to report.
+  bool failedAt(SwarmReader reader, String chatId) {
+    final entry = _entries[(reader, chatId)];
+    return entry != null && entry.failures > 0 && _current(reader, entry);
+  }
 
   /// What was last read of [chatId] in [reader], while the reader still
   /// holds what it was read under; null before, or once it is not.
@@ -54,13 +55,14 @@ class SwarmChatPeeks extends ChangeNotifier {
     return entry != null && _current(reader, entry) ? entry.peek : null;
   }
 
-  /// Reads [chatId] of [reader] unless it was read at [counter] already, is
+  /// Reads [chatId] of [reader] unless it was read at [counter] (compared by
+  /// value) already, is
   /// being read, was refused, or failed [tries] times there. Its newest page,
   /// or with [after] the rows past that sequence.
   void want(
     SwarmReader reader,
     String chatId, {
-    required int counter,
+    required Object counter,
     int? after,
   }) {
     if (_disposed || reader.accessRevoked) return;
@@ -179,7 +181,8 @@ class SwarmChatPeeks extends ChangeNotifier {
 
 class _Entry {
   _Entry(this.counter, this.generation, {this.peek});
-  final int counter, generation;
+  final Object counter;
+  final int generation;
   SwarmPeek? peek;
   int? after;
   int failures = 0;

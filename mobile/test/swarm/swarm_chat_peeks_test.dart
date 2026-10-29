@@ -167,7 +167,11 @@ void main() {
       await settle();
 
       expect(p.of(r, 'a'), isNull);
-      expect(p.failed, isFalse, reason: 'a refusal is no failure to report');
+      expect(
+        p.failedAt(r, 'a'),
+        isFalse,
+        reason: 'a refusal is no failure to report',
+      );
       expect(reads(fake, 'a'), 1);
     },
   );
@@ -186,13 +190,13 @@ void main() {
       await settle();
     }
     expect(reads(fake, 'a'), 3);
-    expect(p.failed, isTrue);
+    expect(p.failedAt(r, 'a'), isTrue);
 
     fail = false;
     p.want(r, 'a', counter: 2);
     await settle();
     expect(p.of(r, 'a'), isNotNull);
-    expect(p.failed, isFalse);
+    expect(p.failedAt(r, 'a'), isFalse);
   });
 
   test('a page of another conversation is refused', () async {

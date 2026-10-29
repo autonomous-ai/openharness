@@ -7,6 +7,8 @@ import '../core/local_key_value_store.dart';
 import '../notify/system_notices.dart';
 import '../phone/voice_input_controller.dart';
 import '../settings/experimental_features.dart';
+import 'swarm_activity.dart';
+import 'swarm_chat_peeks.dart';
 import 'swarm_choices.dart';
 import 'swarm_dictation.dart';
 import 'swarm_face.dart';
@@ -54,6 +56,15 @@ class SwarmSession extends ChangeNotifier {
 
   final String accountId;
   final SwarmInbox inbox;
+
+  /// The project and Buddy chats read for Activity and Buddies, a few at a
+  /// time ([SwarmChatPeeks]).
+  final peeks = SwarmChatPeeks();
+
+  /// Activity, in place of Needs you: its filters, counts and handled rows.
+  /// Made when a screen first asks for it.
+  SwarmActivity get activity => _activity ??= SwarmActivity(this);
+  SwarmActivity? _activity;
 
   /// What the person chose for Home on this phone: the projects pinned and
   /// the one Swarm shown. A Swarm the account no longer has takes its own.
@@ -178,6 +189,8 @@ class SwarmSession extends ChangeNotifier {
       held.timer.cancel();
     }
     _held.clear();
+    _activity?.dispose();
+    peeks.dispose();
     inbox.removeListener(_needsChanged);
     _announcer.clear();
     inbox.dispose();
