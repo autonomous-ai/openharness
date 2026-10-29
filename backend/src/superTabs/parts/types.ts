@@ -45,7 +45,7 @@ export interface MachineData {
   reservations: Array<{ harnessId: string; generation: string; renewed: boolean }>
   /** Harnesses a host proved stopped, oldest first, at most RELEASED_CAP. */
   released: string[]
-  closingSessions: Array<{ agentId: string; harnessId: string; machineOwnerId: string }>
+  closingSessions: Array<Omit<NonNullable<SuperTabState['closingSessions']>[number], 'machineId'>>
   cleanups: Array<{ removalId: string; machineOwnerId: string; requestedAt?: string }>
 }
 
