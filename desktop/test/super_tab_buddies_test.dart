@@ -6,6 +6,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/harness_activity.dart';
 import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/buddies.dart' show kBuddyEngineRefusals;
+import 'package:harness/super_tabs/buddy_machines.dart' show kBuddyNoMachine;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
@@ -596,18 +597,13 @@ void main() {
         final c = await show(tester, server);
         await open(tester);
 
-        expect(
-          find.text(
-            'A Buddy runs on one of your own machines. Add one of yours to this Swarm first.',
-          ),
-          findsOneWidget,
-        );
+        expect(find.text(kBuddyNoMachine), findsOneWidget);
         expect(tester.widget<FilledButton>(submit).onPressed, isNull);
         await close(tester, c);
       });
 
       testWidgets(
-        'if the chosen machine leaves the Swarm while the dialog is open, Add Buddy turns off',
+        'if their only machine goes while the dialog is open, Add Buddy turns off',
         (tester) async {
           final server = buddySwarm();
           final c = await show(tester, server);
@@ -620,12 +616,7 @@ void main() {
           await c.refresh();
           await tester.pumpAndSettle();
 
-          expect(
-            find.text(
-              'A Buddy runs on one of your own machines. Add one of yours to this Swarm first.',
-            ),
-            findsOneWidget,
-          );
+          expect(find.text(kBuddyNoMachine), findsOneWidget);
           expect(tester.widget<FilledButton>(submit).onPressed, isNull);
           await close(tester, c);
         },

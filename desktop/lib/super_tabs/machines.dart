@@ -569,6 +569,33 @@ List<String> _contributedEngines(Map<String, dynamic> prepared) {
   return engines;
 }
 
+/// The setup a Buddy sends for [machineId], one of the reader's own machines
+/// outside the Swarm: prepared there as Add machine prepares one (its folder
+/// and engines), so the server records it for their Buddies alone and never
+/// adds it to the Swarm (Dee, 10-29). Null when [alive] ended first or the
+/// reader can no longer write.
+Future<Map<String, dynamic>?> prepareBuddyMachine(
+  SuperTabController c,
+  AppNotifier app,
+  String machineId, {
+  required String setupId,
+  required bool Function() alive,
+}) async {
+  final prepared = await _prepareContribution(
+    c,
+    app,
+    machineId,
+    setupId: setupId,
+    alive: alive,
+  );
+  if (prepared == null) return null;
+  return {
+    'name': app.stateOf(machineId)?.machine.displayName ?? machineId,
+    'cwd': prepared['cwd'],
+    'engines': _contributedEngines(prepared),
+  };
+}
+
 /// Adds the prepared [machineId] to the Swarm, offering [maxAgents] slots.
 /// False when [alive] says the asker is gone or the reader can no longer
 /// write, in which case nothing was added.
