@@ -10,6 +10,7 @@ import 'package:harness_mobile/phone/phone_navigation.dart';
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/shared/theme/app_icon_size.dart';
+import 'package:harness_mobile/shared/theme/app_ink.dart';
 import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/theme/app_type.dart';
@@ -598,7 +599,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
     Widget? action,
   }) => Padding(
     key: const ValueKey('swarm-chat-header'),
-    padding: const EdgeInsets.fromLTRB(0, 2, _headerEnd, 2),
+    padding: const EdgeInsets.fromLTRB(0, AppSpace.xs, _headerEnd, AppSpace.xs),
     child: Row(
       children: [
         TtyBackButton(onPressed: () => Navigator.of(context).maybePop()),
@@ -659,7 +660,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
   );
 
   /// The header's inset at its end.
-  static const _headerEnd = 8.0;
+  static const _headerEnd = AppSpace.s;
 
   /// The header and the composer follow [view] — the header [c] too, until
   /// the chat is known; the messages, and what is said under them, follow
@@ -732,7 +733,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
             children: [
               if (note != null)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.screenInset,
+                    AppSpace.s,
+                    AppSpace.screenInset,
+                    0,
+                  ),
                   child: Text(
                     note,
                     key: const ValueKey('swarm-find-note'),
@@ -745,7 +751,12 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                   when c.state != SwarmChatState.lost &&
                       (view.known || c.messages.isNotEmpty))
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpace.screenInset,
+                    AppSpace.s,
+                    AppSpace.screenInset,
+                    0,
+                  ),
                   child: Text(
                     error,
                     key: const ValueKey('swarm-post-error'),
@@ -763,7 +774,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         )
       else if (view.known)
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpace.l),
           child: Text(
             view.archived
                 ? 'This chat is archived.'
@@ -1024,7 +1035,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
       key: const ValueKey('swarm-messages'),
       controller: _scroll,
       reverse: true,
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: _listPadding,
       itemCount: lead + entries.length + (c.hasOlder ? 1 : 0),
       // A row keeps its element when a message or a post moves the others'
       // places.
@@ -1149,7 +1160,10 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
         color: Color.alphaBlend(tty.text.withValues(alpha: 0.02), tty.ground),
         border: Border(top: BorderSide(color: swarmChatHair(tty))),
       ),
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.m,
+        vertical: AppSpace.s,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1166,12 +1180,17 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
           if (replying != null)
             Padding(
               key: const ValueKey('swarm-reply-bar'),
-              padding: const EdgeInsets.fromLTRB(2, 0, 0, 4),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.xs,
+                0,
+                0,
+                AppSpace.xs,
+              ),
               child: Row(
                 children: [
                   Expanded(
                     child: Container(
-                      padding: const EdgeInsets.only(left: 8),
+                      padding: const EdgeInsets.only(left: AppSpace.s),
                       decoration: BoxDecoration(
                         border: Border(
                           left: BorderSide(
@@ -1304,7 +1323,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage> {
                 child: Icon(
                   LucideIcons.arrowUp,
                   size: 20,
-                  color: canSend ? Colors.white : AppPalette.textFaint,
+                  color: canSend ? AppInk.onFill : AppPalette.textFaint,
                 ),
               ),
             ],
@@ -1678,6 +1697,15 @@ SuperTabAgent? swarmAsker(SuperTabSnapshot snapshot, SwarmDecisionNeed need) =>
         .where((a) => snapshot.agentName(a.id) == need.decision.askerName)
         .firstOrNull;
 
+/// Around the chat's column of messages, and of the skeleton standing in for
+/// them.
+const _listPadding = EdgeInsets.fromLTRB(
+  AppSpace.m,
+  AppSpace.xs,
+  AppSpace.m,
+  AppSpace.m,
+);
+
 /// The chat's first page on its way: bubbles in the shape of messages, at
 /// the foot where they will show. Each has a fixed number of lines, so none
 /// changes height as it breathes.
@@ -1704,7 +1732,7 @@ class _ChatSkeleton extends StatelessWidget {
       // off at the top.
       reverse: true,
       physics: const NeverScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: _listPadding,
       child: Column(
         children: [
           for (final (lines, width) in _bubbles)
@@ -1727,7 +1755,7 @@ class _SkeletonBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = swarmChatText(16, height: 1.42);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 7, 6, 7),
+      padding: SwarmMessageFrame.padding(),
       child: SwarmMessageFrame(
         key: const ValueKey('swarm-skeleton-bubble'),
         grouped: false,
@@ -1742,7 +1770,7 @@ class _SkeletonBubble extends StatelessWidget {
         ),
         body: [
           Padding(
-            padding: const EdgeInsets.only(top: 2),
+            padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
             child: Column(
               children: [
                 for (var line = 1; line <= lines; line++)
@@ -1769,7 +1797,7 @@ class _Day extends StatelessWidget {
   Widget build(BuildContext context) {
     AppTheme.watch(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 14, 0, 8),
+      padding: const EdgeInsets.fromLTRB(0, AppSpace.l, 0, AppSpace.s),
       child: Text(
         swarmDayLabel(day, today),
         textAlign: TextAlign.center,
@@ -1783,6 +1811,8 @@ class _Day extends StatelessWidget {
 /// down to them.
 class _NewPill extends StatelessWidget {
   const _NewPill({required this.count, required this.onTap});
+
+  static const double _height = 36;
 
   final int count;
   final VoidCallback onTap;
@@ -1798,31 +1828,26 @@ class _NewPill extends StatelessWidget {
       onTap: onTap,
       // 44 to tap, 36 to see.
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(vertical: AppSpace.xs),
         child: Container(
-          height: 36,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
+          height: _height,
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
           decoration: BoxDecoration(
             color: AppPalette.accent,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x59000000),
-                blurRadius: 12,
-                offset: Offset(0, 4),
-              ),
-            ],
+            // An action button's capsule.
+            borderRadius: BorderRadius.circular(_height / 2),
+            boxShadow: AppSurface.shadow,
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(LucideIcons.arrowDown, size: 16, color: Colors.white),
+              const Icon(LucideIcons.arrowDown, size: 16, color: AppInk.onFill),
               const SizedBox(width: 6),
               Text(
                 '$count new',
                 style: swarmChatText(
                   14,
-                  color: Colors.white,
+                  color: AppInk.onFill,
                   weight: FontWeight.w600,
                 ),
               ),
@@ -1867,7 +1892,7 @@ class _Pending extends StatelessWidget {
     final tty = Tty.of(context);
     return Padding(
       key: const ValueKey('swarm-pending'),
-      padding: const EdgeInsets.fromLTRB(6, 7, 6, 7),
+      padding: SwarmMessageFrame.padding(),
       child: SwarmMessageFrame(
         grouped: false,
         avatar: SwarmChatAvatar(
@@ -1892,7 +1917,7 @@ class _Pending extends StatelessWidget {
           ?quote,
           if (text.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(top: 2),
+              padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
               child: Text.rich(
                 mentions.span(
                   text,
@@ -1919,7 +1944,7 @@ class _Pending extends StatelessWidget {
             ),
           if (!sending)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: AppSpace.s),
               child: SwarmSmallButton(
                 key: const ValueKey('swarm-resend-post'),
                 icon: LucideIcons.rotateCw,
@@ -1964,7 +1989,7 @@ class _Ask extends StatelessWidget {
     String two(int n) => n.toString().padLeft(2, '0');
     return Padding(
       key: ValueKey('swarm-ask-${decision.id}'),
-      padding: EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7),
+      padding: SwarmMessageFrame.padding(grouped: grouped),
       child: SwarmMessageFrame(
         grouped: grouped,
         avatar: SwarmChatAvatar(
@@ -1988,12 +2013,17 @@ class _Ask extends StatelessWidget {
         body: [
           Container(
             width: double.infinity,
-            margin: const EdgeInsets.only(top: 8),
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+            margin: const EdgeInsets.only(top: AppSpace.s),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.l,
+              AppSpace.m,
+              AppSpace.l,
+              AppSpace.l,
+            ),
             decoration: BoxDecoration(
               color: swarmChatCard(tty),
               border: Border.all(color: swarmChatHair(tty)),
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(AppCard.radius),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2059,24 +2089,18 @@ class _MentionPicker extends StatelessWidget {
     ];
     return Container(
       key: const ValueKey('swarm-mention-picker'),
-      margin: const EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: AppSpace.s),
       constraints: const BoxConstraints(maxHeight: 220),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: swarmChatCard(tty),
         border: Border.all(color: swarmChatHair(tty)),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x80000000),
-            blurRadius: 30,
-            offset: Offset(0, 10),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(AppMenu.panelRadius),
+        boxShadow: AppSurface.shadow,
       ),
       child: shown.isEmpty
           ? Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(AppSpace.l),
               child: Text(
                 'No agent by that name.',
                 style: swarmChatText(14, color: AppPalette.textSecondary),
@@ -2093,7 +2117,9 @@ class _MentionPicker extends StatelessWidget {
                     minHeight: 52,
                     onTap: () => onPick(agent),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpace.l,
+                      ),
                       child: Row(
                         children: [
                           SwarmChatAvatar(
@@ -2214,11 +2240,16 @@ class _MessageField extends StatelessWidget {
         key: const ValueKey('swarm-field'),
         constraints: const BoxConstraints(minHeight: 44),
         alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        // One line rests at the 44 of the buttons beside it.
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.l,
+          vertical: AppSpace.s,
+        ),
         decoration: BoxDecoration(
           color: ttyRaised(tty),
           border: Border.all(color: swarmChatHair(tty)),
-          borderRadius: BorderRadius.circular(22),
+          // A text field's rounded rectangle.
+          borderRadius: BorderRadius.circular(AppControl.radius),
         ),
         child: TextSelectionTheme(
           data: TextSelectionThemeData(
@@ -2314,7 +2345,7 @@ class _Link extends StatelessWidget {
     semanticsLabel: label,
     onTap: onTap,
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.l),
       child: Text(
         label,
         style: swarmChatText(15, color: AppPalette.accentOnSurface),

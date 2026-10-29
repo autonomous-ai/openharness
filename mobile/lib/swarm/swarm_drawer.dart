@@ -102,8 +102,9 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
+              // The title over the rows' words.
               padding: const EdgeInsets.fromLTRB(
-                AppSpace.l,
+                AppSpace.s + SwarmDrawerRow.inset,
                 AppSpace.xs,
                 AppSpace.s,
                 AppSpace.s,
@@ -239,7 +240,7 @@ class _SwarmDrawerState extends State<SwarmDrawer> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(
                     horizontal: AppSpace.s,
-                    vertical: AppSpace.xs,
+                    vertical: AppSpace.s,
                   ),
                   child: SwarmDrawerRow(
                     key: const ValueKey('swarm-drawer-settings'),
@@ -460,10 +461,10 @@ class _Caption extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.fromLTRB(
-      AppSpace.s,
+      SwarmDrawerRow.inset,
       AppSpace.l,
+      SwarmDrawerRow.inset,
       AppSpace.s,
-      AppSpace.xs,
     ),
     child: Text(
       text,
@@ -550,10 +551,13 @@ class SwarmDrawerRow extends StatelessWidget {
   /// Every row but a chat under its project clears this, for a thumb.
   static const double height = 52;
 
+  /// From a row's edges to its words.
+  static const double inset = AppSpace.m;
+
   /// Around a row's words; a chat's start under its project's name.
   static const padding = EdgeInsets.symmetric(
-    horizontal: AppSpace.s,
-    vertical: AppSpace.xs,
+    horizontal: inset,
+    vertical: AppSpace.s,
   );
 
   @override

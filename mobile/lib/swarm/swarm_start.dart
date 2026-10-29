@@ -241,7 +241,7 @@ class _HowSheet extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpace.screenInset,
-          AppSpace.m,
+          AppSpace.l,
           AppSpace.screenInset,
           AppSpace.m,
         ),

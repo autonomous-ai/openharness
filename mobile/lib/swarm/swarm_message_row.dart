@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:harness_mobile/phone/tty.dart';
 import 'package:harness_mobile/phone/tty_controls.dart';
+import 'package:harness_mobile/shared/theme/app_ink.dart';
+import 'package:harness_mobile/shared/theme/app_space.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
 import 'model.dart';
@@ -132,6 +134,18 @@ class SwarmMessageFrame extends StatelessWidget {
   /// The avatar's column: the avatar and the room after it, a thumb wide.
   static const double column = 44;
 
+  /// Around a message in the chat's column, a post's and a skeleton's too;
+  /// one [grouped] under the message before it leaves no room above.
+  static EdgeInsets padding({bool grouped = false}) => EdgeInsets.fromLTRB(
+    AppSpace.s,
+    grouped ? 0 : AppSpace.s,
+    AppSpace.s,
+    AppSpace.s,
+  );
+
+  /// Between a message's header and its words.
+  static const double bodyGap = AppSpace.xs;
+
   @override
   Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
@@ -239,7 +253,7 @@ class SwarmMessageRow extends StatelessWidget {
     final at = message.createdAt?.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
     final key = ValueKey('swarm-message-${message.id}');
-    final padding = EdgeInsets.fromLTRB(6, grouped ? 0 : 7, 6, 7);
+    final padding = SwarmMessageFrame.padding(grouped: grouped);
     final frame = SwarmMessageFrame(
       grouped: grouped,
       onAvatar: onAuthor,
@@ -275,7 +289,7 @@ class SwarmMessageRow extends StatelessWidget {
               behavior: HitTestBehavior.opaque,
               onTap: onTap,
               child: Padding(
-                padding: const EdgeInsets.only(top: 2),
+                padding: const EdgeInsets.only(top: SwarmMessageFrame.bodyGap),
                 child: SizedBox(
                   width: double.infinity,
                   child: Text.rich(
@@ -301,7 +315,7 @@ class SwarmMessageRow extends StatelessWidget {
         ?below,
         if (actions)
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: AppSpace.s),
             child: Wrap(
               spacing: 6,
               runSpacing: 6,
@@ -342,7 +356,7 @@ class SwarmMessageRow extends StatelessWidget {
         color: lit
             ? AppPalette.accentOnSurface.withValues(alpha: 0.16)
             : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppControl.rowRadius),
       ),
       child: held,
     );
@@ -397,10 +411,10 @@ class SwarmRoleBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
       decoration: BoxDecoration(
         border: Border.all(color: swarmChatHair(tty)),
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(AppCard.insetRadius),
       ),
       child: Text(
         label,
@@ -433,17 +447,8 @@ class SwarmChatAvatar extends StatelessWidget {
 
   static const double size = 32;
 
-  /// Deep enough under a white initial in either theme.
-  static const _agents = [
-    Color(0xFF1D5BD6),
-    Color(0xFF0F766E),
-    Color(0xFF6D28D9),
-    Color(0xFFA65A08),
-    Color(0xFFBE123C),
-    Color(0xFF15803D),
-    Color(0xFF4E5D78),
-  ];
-  static const _person = Color(0xFF4B5F9B);
+  /// The member palette, its first hue (blue) kept for the [pm].
+  static const _agents = AppPalette.avatarPalette;
 
   final String name, id;
   final bool agent;
@@ -460,7 +465,7 @@ class SwarmChatAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fill = !agent
-        ? _person
+        ? AppPalette.avatarFill
         : pm
         ? _agents.first
         : _agents[1 +
@@ -485,7 +490,7 @@ class SwarmChatAvatar extends StatelessWidget {
             initial,
             style: swarmChatText(
               13.5,
-              color: Colors.white,
+              color: AppInk.onFill,
               weight: FontWeight.w600,
             ),
           ),
@@ -509,8 +514,11 @@ class SwarmQuote extends StatelessWidget {
     final tty = Tty.of(context);
     final quote = Container(
       width: double.infinity,
-      margin: const EdgeInsets.only(top: 5, bottom: 3),
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 8),
+      margin: const EdgeInsets.symmetric(vertical: AppSpace.xs),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.m,
+        vertical: AppSpace.s,
+      ),
       decoration: BoxDecoration(
         color: tty.text.withValues(alpha: 0.05),
         border: Border(left: BorderSide(color: AppPalette.textFaint, width: 3)),
@@ -576,11 +584,11 @@ class SwarmSmallButton extends StatelessWidget {
         onTap: onTap,
         child: Container(
           constraints: const BoxConstraints(minHeight: 36),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
           decoration: BoxDecoration(
             color: ttyRaised(tty),
             border: Border.all(color: swarmChatHair(tty)),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(AppControl.radius),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -616,7 +624,7 @@ class SwarmFileChip extends StatelessWidget {
     final url = link;
     final color = url == null ? AppPalette.textFaint : tty.blue;
     return Padding(
-      padding: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: AppSpace.s),
       child: Semantics(
         button: url != null,
         label: 'File: ${file.name}, $size',
@@ -630,11 +638,11 @@ class SwarmFileChip extends StatelessWidget {
                 ),
           child: Container(
             constraints: const BoxConstraints(minHeight: 40),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.m),
             decoration: BoxDecoration(
               color: swarmChatCard(tty),
               border: Border.all(color: swarmChatHair(tty)),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(AppControl.radius),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,

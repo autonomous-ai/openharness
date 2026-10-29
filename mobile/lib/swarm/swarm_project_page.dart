@@ -291,7 +291,9 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       onPressed: () => Navigator.of(context).maybePop(),
     );
     if (session == null) {
-      return _Frame(top: SwarmTopBar(leading: back, title: ''));
+      return _Frame(
+        top: SwarmTopBar(leading: back, title: ''),
+      );
     }
     return ListenableBuilder(
       // Not listed yet: the inbox tells when it is ([_inboxChanged]).
@@ -325,7 +327,12 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
             onRefresh: _pull,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.screenInset,
+                AppSpace.s,
+                AppSpace.screenInset,
+                0,
+              ),
               children: [SwarmRow.line(why, lines: 3)],
             ),
           ),
@@ -353,7 +360,10 @@ class _Frame extends StatelessWidget {
         bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [top, if (body case final body?) Expanded(child: body)],
+          children: [
+            top,
+            if (body case final body?) Expanded(child: body),
+          ],
         ),
       ),
     );
@@ -614,9 +624,7 @@ class _SwarmProjectStatusState extends State<SwarmProjectStatus> {
     return (
       glance: swarmTeamGlance(snapshot, projectId: project.id),
       // What was kept is not now, what waits on the person least of all.
-      waiting: kept
-          ? 0
-          : work.active.where((g) => waits.contains(g.id)).length,
+      waiting: kept ? 0 : work.active.where((g) => waits.contains(g.id)).length,
       kept: kept,
     );
   }
@@ -726,7 +734,6 @@ Future<void> showSwarmProjectSheet(
   context: context,
   isScrollControlled: true,
   backgroundColor: AppGlass.rowFill,
-  barrierColor: Colors.black.withValues(alpha: .55),
   shape: AppControl.sheetShape,
   // On the page's own navigator, under the shell's [SwarmScope]: a chat
   // opened from it goes over it, and back comes back to it.
@@ -782,22 +789,27 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.l,
+            AppSpace.s,
+            AppSpace.l,
+            0,
+          ),
           child: session == null || inbox == null
               ? const SizedBox.shrink()
               // Not listed yet, the inbox tells when it is; then the Swarm's
               // reader tells what changes.
               : ListenableBuilder(
                   listenable: inbox,
-                  builder: (context, _) => switch (inbox.reader(
-                    widget.swarmId,
-                  )) {
-                    final reader? => ListenableBuilder(
-                      listenable: reader,
-                      builder: (context, _) => _sheet(context, session, reader),
-                    ),
-                    null => _sheet(context, session, null),
-                  },
+                  builder: (context, _) =>
+                      switch (inbox.reader(widget.swarmId)) {
+                        final reader? => ListenableBuilder(
+                          listenable: reader,
+                          builder: (context, _) =>
+                              _sheet(context, session, reader),
+                        ),
+                        null => _sheet(context, session, null),
+                      },
                 ),
         ),
       ),
@@ -831,7 +843,10 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
     if (snapshot == null) {
       body = switch (reader?.error) {
         final error? => Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpace.xs,
+            vertical: AppSpace.s,
+          ),
           child: SwarmRow.line(error, lines: 3),
         ),
         null => _team ? const _MatesLoading() : const _WorkLoading(),
@@ -852,19 +867,25 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // The grabber: a capsule as wide as the two largest steps.
         Center(
           child: Container(
-            width: 36,
-            height: 5,
-            margin: const EdgeInsets.only(bottom: 8),
-            decoration: BoxDecoration(
+            width: AppSpace.xl + AppSpace.m,
+            height: AppSpace.xs,
+            margin: const EdgeInsets.only(bottom: AppSpace.s),
+            decoration: ShapeDecoration(
               color: AppGlass.hair,
-              borderRadius: BorderRadius.circular(3),
+              shape: const StadiumBorder(),
             ),
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(4, 0, 2, 6),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.xs,
+            0,
+            AppSpace.xs,
+            AppSpace.s,
+          ),
           child: Row(
             children: [
               Expanded(
@@ -872,11 +893,7 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
                   project?.name ?? 'Team',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: AppPalette.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: AppType.heading(color: AppPalette.textPrimary),
                 ),
               ),
               SwarmIconButton(
@@ -963,7 +980,7 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
       if (working.isEmpty)
         box(
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpace.xs),
             child: SwarmRow.line('No work going on.'),
           ),
         )
@@ -999,7 +1016,7 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
       if (_older && _olderError != null)
         box(
           Padding(
-            padding: const EdgeInsets.only(top: 8),
+            padding: const EdgeInsets.only(top: AppSpace.s),
             child: SwarmRow.line(
               _olderError!,
               lines: 2,
@@ -1010,7 +1027,12 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
       else if (_older && olderRead && work.older.isEmpty)
         box(
           Padding(
-            padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpace.xs,
+              AppSpace.s,
+              AppSpace.xs,
+              0,
+            ),
             child: SwarmRow.line('No older work.'),
           ),
         ),
@@ -1024,7 +1046,10 @@ class _SwarmProjectSheetState extends State<SwarmProjectSheet> {
   Widget _mates(SwarmTeamGlance glance, String? pmId) {
     if (glance.agents.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+        padding: const EdgeInsets.symmetric(
+          horizontal: AppSpace.xs,
+          vertical: AppSpace.s,
+        ),
         child: Align(
           alignment: Alignment.topLeft,
           child: SwarmRow.line(glance.line),
@@ -1138,7 +1163,11 @@ class _Parts extends StatelessWidget {
         child: Row(
           children: [
             part('Work', work, !team),
-            part('Team', mates == null ? null : (text: mates!, waits: false), team),
+            part(
+              'Team',
+              mates == null ? null : (text: mates!, waits: false),
+              team,
+            ),
           ],
         ),
       ),
@@ -1196,7 +1225,12 @@ class _LoadingTopBar extends StatelessWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 52),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(4, 2, 8, 2),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.xs,
+          AppSpace.xs,
+          AppSpace.s,
+          AppSpace.xs,
+        ),
         child: Row(
           children: [
             leading,
@@ -1266,7 +1300,10 @@ class _SkeletonRow extends StatelessWidget {
   Widget build(BuildContext context) => ConstrainedBox(
     constraints: const BoxConstraints(minHeight: SwarmRow.height),
     child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.l,
+        vertical: AppSpace.m,
+      ),
       child: Row(
         children: [
           const Skeleton(width: 24, height: 24, radius: 12),
@@ -1277,16 +1314,12 @@ class _SkeletonRow extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 SkeletonText(
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w500,
-                    height: 1.3,
-                  ),
+                  style: AppType.label(height: 1.3),
                   widthFactor: width,
                 ),
                 const SizedBox(height: 3),
                 SkeletonText(
-                  style: const TextStyle(fontSize: 13.5, height: 1.35),
+                  style: AppType.caption(height: 1.35),
                   widthFactor: width + .25,
                 ),
               ],
@@ -1323,8 +1356,8 @@ class _MatesLoading extends StatelessWidget {
               opacity: skeletonFade(i, 3, depth: .4),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 4,
-                  vertical: 12,
+                  horizontal: AppSpace.xs,
+                  vertical: AppSpace.m,
                 ),
                 child: Row(
                   children: [
@@ -1339,15 +1372,12 @@ class _MatesLoading extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           SkeletonText(
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                            ),
+                            style: AppType.label(),
                             widthFactor: i.isEven ? .35 : .5,
                           ),
                           const SizedBox(height: 3),
-                          const SkeletonText(
-                            style: TextStyle(fontSize: 13.5, height: 1.4),
+                          SkeletonText(
+                            style: AppType.caption(height: 1.4),
                             widthFactor: .7,
                           ),
                         ],
@@ -1381,7 +1411,10 @@ class _Mate extends StatelessWidget {
     final shell = PhoneShellScope.maybeOf(context);
     return Padding(
       key: ValueKey('swarm-agent-${glance.agent.id}'),
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 12),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpace.xs,
+        vertical: AppSpace.m,
+      ),
       child: Row(
         children: [
           SwarmAvatar(
@@ -1401,21 +1434,21 @@ class _Mate extends StatelessWidget {
                         glance.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: AppPalette.textPrimary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        style: AppType.label(color: AppPalette.textPrimary),
                       ),
                     ),
                     const SizedBox(width: 6),
                     DecoratedBox(
                       decoration: BoxDecoration(
                         border: Border.all(color: AppGlass.hair),
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(
+                          AppCard.insetRadius,
+                        ),
                       ),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpace.xs,
+                        ),
                         child: Text(
                           role,
                           style: tty
@@ -1450,9 +1483,8 @@ class _Mate extends StatelessWidget {
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
+                  style: AppType.caption(
                     color: AppPalette.textSecondary,
-                    fontSize: 13.5,
                     height: 1.4,
                   ),
                 ),
