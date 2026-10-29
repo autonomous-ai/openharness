@@ -956,20 +956,37 @@ void main() {
     await f.close(tester);
   });
 
-  testWidgets('a Buddy reads Buddy, never Dev: it takes no work', (
-    tester,
-  ) async {
-    final f = await fixture(tester);
-    (f.server.state['agents'] as List)[1]['buddyOf'] = {
-      'personId': 'owner',
-      'generation': 'fixture',
-    };
-    await f.controller.refresh();
-    await f.show(tester);
-    expect(f.inRow(1, find.text('Buddy')), findsOneWidget);
-    expect(f.inRow(1, find.text('Dev')), findsNothing);
-    await f.close(tester);
-  });
+  testWidgets(
+    'Buddies are personal: with three running, nobody sees any in Agents, the reader\'s own included',
+    (tester) async {
+      for (final account in ['owner', 'maya']) {
+        final f = await fixture(tester, account: account);
+        final agents = f.server.state['agents'] as List;
+        // The owner's Buddy and another person's, both in the project, and a third on the same machine.
+        agents[1]['buddyOf'] = {'personId': 'owner', 'generation': 'fixture'};
+        agents[3]['buddyOf'] = {'personId': 'maya', 'generation': 'fixture'};
+        agents.add(<String, Object>{
+          ...(agents[3] as Map<String, Object>),
+          'id': 'agent-4',
+          'harnessId': 'a4',
+          'displayName': 'Echo',
+          'buddyOf': {'personId': 'sam', 'generation': 'fixture'},
+        });
+        await f.controller.refresh();
+        await f.show(tester);
+        expect(f.row(0), findsOneWidget, reason: '$account sees the PM');
+        for (final buddy in [1, 3, 4]) {
+          expect(
+            f.row(buddy),
+            findsNothing,
+            reason: '$account sees no Buddy (agent-$buddy)',
+          );
+        }
+        expect(find.text('Buddy'), findsNothing);
+        await f.close(tester);
+      }
+    },
+  );
 
   testWidgets('custom role name appears in the roster and agent details', (
     tester,
