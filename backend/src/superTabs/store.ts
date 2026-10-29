@@ -1094,7 +1094,7 @@ export class SuperTabStore {
       if (command.type === 'message.send' && command.replyTo) {
         const reply = await tx.superTabMessage.findFirst({ where: { id: command.replyTo, tabId, conversationId: command.conversationId } })
         if (reply) context.reply = { id: reply.id, conversationId: reply.conversationId, author: reply.author as unknown as Author, createdAt: reply.createdAt.getTime(),
-          thread: reply.thread }
+          thread: reply.thread, ...(agentOnly(reply.source) ? { agentOnly: true } : {}) }
       }
       if (command.type === 'message.send' && actor.kind === 'person') context.openTags = await openTags(tx, tabId, command.conversationId, actor.userId, context.now)
       if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {

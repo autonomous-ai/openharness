@@ -891,6 +891,22 @@ describe('a task that stalls', () => {
     expect((await f.assignment()).status).toBe('lost')
   })
 
+  // Its delivery invites the Lead to reply to it. A reply joins its message's thread, which people open from its root: under
+  // a notice they cannot read, the Lead's answer to them would be hidden too.
+  it('lists the Lead\'s reply to a stalled alert in the chat people read, not in a thread under the alert', async () => {
+    const f = await swarm()
+    const posted = f.clock.now
+    await f.beat(posted)
+    await f.execute({ type: 'work.status', conversationId: f.group, assignmentId: f.assignmentId, status: 'working', result: 'Started' }, host, f.worker)
+    await tick(f, posted + 30 * MINUTE)
+    const [stalled] = await stalledRows(f)
+    const sent = await f.execute({ type: 'message.send', conversationId: stalled!.conversationId, text: 'I nudged the worker.', replyTo: stalled!.id,
+      recipientIds: [] } as Command, host, f.lead)
+    const shown = (await f.timed.messages(owner, f.tab, stalled!.conversationId, {})).messages.find(m => m.id === sent.result.messageId)!
+    expect(shown.thread ?? shown.id).toBe(shown.id)
+    expect(shown.text).toBe('I nudged the worker.')
+  })
+
   it('is orphaned when its agent is removed, and the Lead is woken once by the next time checks', async () => {
     const f = await swarm()
     await f.beat(f.clock.now)
