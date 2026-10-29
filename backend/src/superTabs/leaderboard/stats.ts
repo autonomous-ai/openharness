@@ -8,7 +8,7 @@ import type { ContributedMachine } from '../machines.js'
 import { isLeads, type Conversation, type SuperTabState } from '../model.js'
 import { isBuddy } from '../buddies.js'
 import { agentProjectId, canReadProject, projectOf } from '../projects.js'
-import { waitedOn, waitsNow, type RanOn, type Run, type Unblock } from './record.js'
+import { waitedOn, waitsNow, type RanOn, type Unblock } from './record.js'
 import { DAY_MS, WEEK_MS } from './week.js'
 import type { AgentScore, Leaderboard, Medal, ModelScore, ModelShare, PersonDetails, PersonScore, WeekGoal } from './contract.js'
 
@@ -46,7 +46,10 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
   const visible = groups.filter(g => !isLeads(g) && !g.audience && (g.projectId ?? 'lead') === projectId)
   const shared = visible.filter(g => g.id !== project.leadConversationId)
   const requests = shared.filter(g => !g.reviewOf)
-  const landed = requests.filter(g => g.requesterId && g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
+  // Shipped with a PR: what agents and models are credited for. A person's points also need them to have asked (review
+  // of #2097: a group opened from a Buddy's proposal may name no requester).
+  const shippedRequests = requests.filter(g => g.ledger?.shippedAt != null && (g.pullRequestUrls?.length ?? 0) > 0)
+  const landed = shippedRequests.filter(g => g.requesterId)
   const players = state.people.filter(p => canReadProject(state, { kind: 'person', userId: p.id, email: p.email }, project))
   const inWeek = (at: number, start = week) => at >= start && at < start + WEEK_MS
   // Each person's records, gathered once: the board scores every player three times (Diego's issue file, 2026-10-27).
@@ -95,8 +98,8 @@ export function leaderboard({ state, groups, machines: visibleMachines, projectI
     people,
     waiting: waitingNow(state, shared),
     models: { thisWeek: modelShare(requests, week), lastWeek: modelShare(requests, week - WEEK_MS) },
-    agents: agentScores(state, projectId, landed.filter(g => inWeek(g.ledger!.shippedAt!))),
-    byModel: modelScores(requests, landed.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
+    agents: agentScores(state, projectId, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!))),
+    byModel: modelScores(requests, shippedRequests.filter(g => inWeek(g.ledger!.shippedAt!)), inWeek),
   }
 }
 
@@ -108,7 +111,9 @@ function agentScores(state: SuperTabState, projectId: string, shippedThisWeek: C
     .filter(a => a.id === pmId || (isBuddy(a) && agentProjectId(state, a) === projectId))
     .map(a => {
       const buddy = isBuddy(a)
-      const shipped = shippedThisWeek.filter(g => buddy ? g.ledger?.proposal?.buddyId === a.id : g.leadId === a.id).length
+      // The lead recorded when it shipped; a request shipped before that was recorded, its lead now.
+      const ledBy = (g: Conversation) => g.ledger?.shippedLeadId !== undefined ? g.ledger.shippedLeadId : g.leadId
+      const shipped = shippedThisWeek.filter(g => buddy ? g.ledger?.proposal?.buddyId === a.id : ledBy(g) === a.id).length
       return { agentId: a.id, displayName: a.displayName ?? a.name, kind: buddy ? 'buddy' as const : 'pm' as const,
         personId: a.buddyOf?.personId ?? null, machineId: a.machineId, points: shipped * SHIPPED_POINTS, shipped }
     })
@@ -129,13 +134,15 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
     return entry
   }
   for (const group of shippedThisWeek) {
-    const shippedAt = group.ledger!.shippedAt!, runs = (group.ledger!.runs ?? []).filter(r => r.at <= shippedAt)
-    const last: Run | undefined = runs.at(-1)
+    // The attempt recorded when it shipped; a request shipped before that was recorded, its last attempt by then.
+    const ledger = group.ledger!, shippedAt = ledger.shippedAt!, runs = (ledger.runs ?? []).filter(r => r.at <= shippedAt)
+    const last: RanOn & { at: number } | undefined = ledger.shippedBy ?? runs.at(-1)
     if (!last) continue
     const entry = row(last)
     entry.shipped.count++
     entry.attemptMs.push(shippedAt - last.at)
-    entry.requestMs.push(shippedAt - runs[0]!.at)
+    const first = ledger.firstAssignedAt ?? runs[0]?.at
+    if (first != null) entry.requestMs.push(shippedAt - first)
   }
   for (const group of requests) {
     for (const run of group.ledger?.runs ?? []) {
@@ -145,7 +152,7 @@ function modelScores(requests: Conversation[], shippedThisWeek: Conversation[], 
       entry.firstReview.reviewed++
       if (run.firstReview) entry.firstReview.passed++
     }
-    for (const verdict of group.ledger?.verdicts ?? []) if (inWeek(verdict.at)) row(verdict).reviews++
+    for (const counted of group.ledger?.reviews ?? []) if (inWeek(counted.week)) row(counted).reviews += counted.count
   }
   const scored = [...rows.values()].map(({ attemptMs, requestMs, ...entry }) => ({ ...entry,
     points: entry.shipped.count * SHIPPED_POINTS + entry.reviews * REVIEW_POINTS,

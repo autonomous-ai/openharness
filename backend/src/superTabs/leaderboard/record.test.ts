@@ -606,10 +606,31 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     // A person's verdict, and one on a check that is not a review, are no model's review.
     verdict(f, id, assignmentId, true)
     verdict(f, id, assignmentId, true, false, f.asAgent(reviewer))
-    expect(f.group(id).ledger!.verdicts).toEqual([
-      { at: 7_000, engine: 'codex', model: 'gpt-5.5', effort: 'medium' },
-      { at: 7_000, engine: 'codex', model: 'gpt-5.5', effort: 'medium' },
+    expect(f.group(id).ledger!.reviews).toEqual([
+      { week: weekStart(7_000), engine: 'codex', model: 'gpt-5.5', effort: 'medium', count: 2 },
     ])
+  })
+
+  it('counts every verdict exactly, however many a group gets in a week (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    for (let i = 0; i < 45; i++) verdict(f, id, assignmentId, i % 2 === 0, true, f.asAgent(reviewer))
+    expect(f.group(id).ledger!.reviews).toEqual([{ week: weekStart(1_000), engine: 'claude', model: 'opus', effort: 'high', count: 45 }])
+  })
+
+  it('keeps review counts for the weeks the board reads, and drops older ones', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const { assignmentId } = f.assign(id)
+    const reviewer = f.add('reviewer', id)
+    const start = weekStart(Date.UTC(2026, 9, 26))
+    for (let back = 6; back >= 0; back--) {
+      f.at(start - back * WEEK_MS + DAY_MS)
+      verdict(f, id, assignmentId, true, true, f.asAgent(reviewer))
+    }
+    expect(f.group(id).ledger!.reviews!.map(r => (start - r.week) / WEEK_MS)).toEqual([4, 3, 2, 1, 0])
   })
 
   it('keeps the last 20 assignments of a group', () => {
@@ -624,6 +645,64 @@ describe('the model behind each assignment, and its first review (roadmap, Dec: 
     }
     expect(f.group(id).ledger!.runs).toHaveLength(20)
     expect(f.group(id).ledger!.runs!.map(r => r.assignmentId)).not.toContain(first)
+  })
+
+  it('records the attempt a request shipped on, and keeps it through a later attempt (review of #2097)', () => {
+    const f = fixture()
+    f.at(5_000)
+    const id = f.create(owner, { checks })
+    const { worker, assignmentId } = f.assign(id)
+    f.at(6_000)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    const shippedBy = { assignmentId, at: 5_000, engine: 'claude', model: 'opus', effort: 'high' }
+    expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
+    // Reopened and worked again on another model: the ship stays the first attempt's.
+    const other = f.add('other', id)
+    f.state.agents.find(a => a.id === other)!.configuration = { ...config, model: 'sonnet' }
+    f.at(7_000)
+    f.assign(id, other)
+    expect(f.group(id).ledger!.shippedBy).toEqual(shippedBy)
+  })
+
+  it('keeps who led the group when it shipped, whoever leads it later (review of #2097)', () => {
+    const f = fixture()
+    const lead = f.add('lead', 'lead', true)
+    const id = f.create(owner, { checks })
+    expect(f.group(id).leadId).toBe(lead)
+    const { worker, assignmentId } = f.assign(id)
+    f.passChecks(id, assignmentId)
+    f.status(id, assignmentId, worker, 'done', 'Shipped at rev abc.')
+    expect(f.group(id).ledger!.shippedLeadId).toBe(lead)
+    f.group(id).leadId = 'someone-else'
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7' })
+    expect(f.group(id).ledger!.shippedLeadId).toBe(lead)
+  })
+
+  it('ships on the attempt that ran when the recorded merge happened', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks })
+    f.at(5_000)
+    const first = f.assign(id)
+    f.run({ type: 'work.cancel', conversationId: id, assignmentId: first.assignmentId, reason: 'Again.' })
+    f.at(8_000)
+    f.assign(id, f.add('second', id))
+    f.at(9_000)
+    f.run({ type: 'conversation.merged', conversationId: id, pullRequestUrl: 'https://github.com/o/r/pull/7', mergedAt: new Date(6_000).toISOString() })
+    expect(f.group(id).ledger!.shippedBy).toMatchObject({ assignmentId: first.assignmentId, at: 5_000 })
+  })
+
+  it('keeps the request\'s first assignment time once its first attempt has rolled off (review of #2097)', () => {
+    const f = fixture()
+    const id = f.create(owner, { checks: independent })
+    const worker = f.add('worker', id)
+    for (let i = 0; i < 21; i++) {
+      f.at(10_000 + i)
+      const { assignmentId } = f.assign(id, worker)
+      f.run({ type: 'work.cancel', conversationId: id, assignmentId, reason: 'Again.' })
+    }
+    expect(f.group(id).ledger!.runs![0]!.at).toBe(10_001)
+    expect(f.group(id).ledger!.firstAssignedAt).toBe(10_000)
   })
 })
 

@@ -314,9 +314,23 @@ describe('Models: temporary workers by engine, model and effort, never by agent 
   })
 
   it('gives a reviewer model 1 point per finished review verdict of the week', () => {
-    const verdict = (at: number) => ({ at, engine: 'codex', model: 'gpt-5.5', effort: 'medium' })
-    const view = board(swarm(), [group({ status: 'review', ledger: { verdicts: [verdict(WEEK + HOUR), verdict(WEEK + 2 * HOUR), verdict(LAST)] } })])
-    expect(model(view, 'gpt-5.5', 'medium')).toMatchObject({ points: 2, reviews: 2, shipped: { count: 0 } })
+    const counted = (week: number, count: number) => ({ week, engine: 'codex', model: 'gpt-5.5', effort: 'medium', count })
+    const view = board(swarm(), [group({ status: 'review', ledger: { reviews: [counted(LAST, 1), counted(WEEK, 2)] } }),
+      group({ status: 'review', ledger: { reviews: [counted(WEEK, 41)] } })])
+    expect(model(view, 'gpt-5.5', 'medium')).toMatchObject({ points: 43, reviews: 43, shipped: { count: 0 } })
+  })
+
+  it('credits the model recorded when the request shipped, though its attempts have aged out since (review of #2097)', () => {
+    const shippedBy = { assignmentId: 'a1', at: WEEK, engine: 'codex', model: 'gpt-5.5', effort: 'medium' }
+    const view = board(swarm(), [landed(WEEK + 2 * HOUR, [], { shippedBy }),
+      landed(WEEK + 2 * HOUR, [run('b1', WEEK + 3 * HOUR)], { shippedBy })])
+    expect(model(view, 'gpt-5.5', 'medium').shipped).toMatchObject({ count: 2, medianAttemptMs: 2 * HOUR })
+    expect(model(view, 'opus').shipped.count).toBe(0)
+  })
+
+  it('times the whole request from its first assignment, kept after its first attempt rolled off (review of #2097)', () => {
+    const view = board(swarm(), [landed(WEEK + 5 * HOUR, [run('a21', WEEK + 4 * HOUR)], { firstAssignedAt: WEEK })])
+    expect(model(view, 'opus').shipped).toMatchObject({ medianAttemptMs: HOUR, medianRequestMs: 5 * HOUR })
   })
 
   it('keeps each effort apart, and attempts recorded before effort was as their own row', () => {
@@ -363,6 +377,29 @@ describe('Agents: the permanent agents, the PM and Buddies, by name like people 
     const view = board(agents(swarm()), [shipped('dee', WEEK, WEEK + HOUR, { leadId: 'river' }), shipped('ken', WEEK, WEEK + 2 * HOUR, { leadId: 'river' }),
       shipped('dee', LAST, LAST + HOUR, { leadId: 'river' }), shipped('dee', WEEK, WEEK + HOUR, { leadId: 'someone-else' })])
     expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2, rank: 1 })
+  })
+
+  it('credits a group opened from a proposal with no person named as its requester (review of #2097)', () => {
+    const run = { assignmentId: 'a1', engine: 'claude', model: 'opus', effort: 'high', at: WEEK }
+    const fromProposal = group({ leadId: 'river', status: 'done', pullRequestUrls: ['https://github.com/o/r/pull/1'],
+      ledger: { askedAt: WEEK, shippedAt: WEEK + HOUR, runs: [run], proposal: { buddyId: 'sparky', messageId: 'm1' } } })
+    const view = board(agents(swarm()), [fromProposal])
+    expect(of(view, 'sparky')).toMatchObject({ points: 3, shipped: 1 })
+    expect(of(view, 'river')).toMatchObject({ points: 3, shipped: 1 })
+    expect(view.byModel.find(m => m.model === 'opus')!.shipped.count).toBe(1)
+    // A person's points still need them to have asked.
+    expect(view.people.every(p => p.shipped.count === 0)).toBe(true)
+  })
+
+  it('credits the PM who led the group when it shipped, not whoever leads it now (review of #2097)', () => {
+    const ledger = (shippedLeadId: string | null) => ({ askedAt: WEEK, shippedAt: WEEK + HOUR, shippedLeadId })
+    const view = board(agents(swarm()), [
+      shipped('dee', WEEK, WEEK + HOUR, { leadId: 'someone-else', ledger: ledger('river') }),
+      shipped('dee', WEEK, WEEK + HOUR, { leadId: null, ledger: ledger('river') }),
+      // Led by nobody when it shipped: nobody's credit, though River leads it now.
+      shipped('dee', WEEK, WEEK + HOUR, { leadId: 'river', ledger: ledger(null) }),
+    ])
+    expect(of(view, 'river')).toMatchObject({ points: 6, shipped: 2 })
   })
 
   it('gives a Buddy 3 points per group opened from its proposal that shipped this week', () => {

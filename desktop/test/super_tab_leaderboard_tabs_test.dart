@@ -178,7 +178,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        inRow('agent-lead-agent', find.textContaining('PM · Mac Studio')),
+        inRow('agent-lead-agent', find.textContaining('PM · Pilot')),
         findsOneWidget,
       );
       expect(

@@ -140,8 +140,8 @@ class _ScoreRow extends StatelessWidget {
   );
 }
 
-/// The PM or a Buddy, by name like a person: "PM · Mac Studio" or
-/// "Buddy · dee" beside the name, and what they shipped beneath.
+/// The PM or a Buddy, by name like a person: "PM · openharness" (the project
+/// it leads) or "Buddy · dee" beside the name, and what they shipped beneath.
 class LeaderboardAgentRow extends StatelessWidget {
   const LeaderboardAgentRow({
     super.key,
@@ -149,7 +149,7 @@ class LeaderboardAgentRow extends StatelessWidget {
     required this.agent,
     required this.columns,
     required this.weekName,
-    this.machineName,
+    this.projectName,
     this.ownerName,
   });
   final SuperTabAgentScore score;
@@ -159,8 +159,8 @@ class LeaderboardAgentRow extends StatelessWidget {
   final LeaderboardColumns columns;
   final String weekName;
 
-  /// The PM's computer, and a Buddy's person, as the Swarm names them.
-  final String? machineName, ownerName;
+  /// The project the PM leads, and a Buddy's person, as the Swarm names them.
+  final String? projectName, ownerName;
 
   @override
   Widget build(BuildContext context) {
@@ -183,7 +183,7 @@ class LeaderboardAgentRow extends StatelessWidget {
       name: score.displayName,
       tag: score.buddy
           ? ['Buddy', ?ownerName].join(' · ')
-          : ['PM', ?machineName].join(' · '),
+          : ['PM', ?projectName].join(' · '),
       numbers: [
         if (score.shipped > 0)
           score.buddy

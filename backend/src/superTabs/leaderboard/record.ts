@@ -4,7 +4,7 @@
  */
 import { isLeads, type Actor, type Agent, type AgentConfiguration, type Assignment, type Author, type Check, type Conversation, type SuperTabState, type WorkStatus } from '../model.js'
 import { groupProject, ledProject } from '../projects.js'
-import { WEEK_MS } from './week.js'
+import { WEEK_MS, weekStart } from './week.js'
 import type { UnblockKind } from './contract.js'
 
 /** How a person unblocked work (Dee, 2026-10-28): answered a decision, approved the Lead's plan, answered work waiting on them,
@@ -20,9 +20,10 @@ export interface Run extends RanOn { assignmentId: string; at: number
 /** What an agent ran on: its engine, the model (a grid model's own name, `grid` set), and its effort when it names one;
  *  absent from attempts recorded before efforts were (Lead, 2026-10-29: never guessed afterwards). */
 export interface RanOn { engine: string; model: string | null; effort?: string; grid?: true }
-/** A finished review verdict an agent gave on the group's work, and what it ran on: a reviewer model's point (Lead,
- *  2026-10-29). A person's verdict is no model's. */
-export interface Verdict extends RanOn { at: number }
+/** How many review verdicts agents running on one model gave on the group's work in one week (Monday 00:00 UTC): a reviewer
+ *  model's points (Lead, 2026-10-29). Counted, not listed, so no cap ever drops an earned point (review of #2097). A
+ *  person's verdict is no model's. */
+export interface ReviewCount extends RanOn { week: number; count: number }
 /** A group's leaderboard bookkeeping; readers never get it whole (read/views.ts groupView). */
 export interface GroupLedger {
   askedAt?: number
@@ -39,8 +40,15 @@ export interface GroupLedger {
   unblocks?: Unblock[]
   /** The last MAX_RUNS attempts, oldest first. */
   runs?: Run[]
-  /** The last MAX_VERDICTS review verdicts agents gave, oldest first. */
-  verdicts?: Verdict[]
+  /** When its first attempt was assigned: kept apart, as that attempt rolls off [runs] after MAX_RUNS (review of #2097). */
+  firstAssignedAt?: number
+  /** The attempt it shipped on, and what that ran on, kept from the moment it shipped: a later attempt or older attempts
+   *  rolling off never move its model's credit (review of #2097). */
+  shippedBy?: RanOn & { assignmentId: string; at: number }
+  /** Who led the group when it shipped, null for nobody: the PM's credit, kept whoever leads it later (review of #2097). */
+  shippedLeadId?: string | null
+  /** Review verdicts by week and model, for the last LEDGER_WEEKS weeks, oldest first. */
+  reviews?: ReviewCount[]
   /** The Buddy's proposal the group was opened from: the Buddy earns when it ships (Lead, 2026-10-29). */
   proposal?: { buddyId: string; messageId: string }
 }
@@ -49,8 +57,6 @@ export interface GroupLedger {
 export const LEDGER_WEEKS = 5
 /** A group is one request; more attempts than this are a stuck task, and the oldest say nothing new. */
 export const MAX_RUNS = 20
-/** Verdicts one group keeps: a few reviews per attempt. */
-export const MAX_VERDICTS = 40
 /** Credits one conversation keeps, newest: a busy Lead conversation collects approvals and tag replies for weeks. */
 export const MAX_UNBLOCKS = 200
 
@@ -70,7 +76,21 @@ export function recordStatus(group: Conversation, assignment: Assignment, previo
   if (assignment.status === 'needs_human' && messageId && (previous !== 'needs_human' || !open)) {
     ledger.waiting = { assignmentId: assignment.id, since: now, messageId, ...decisionId ? { decisionId } : {} }
   } else if (assignment.status !== 'needs_human') delete ledger.waiting
-  if (assignment.status === 'done') ledger.shippedAt ??= now
+  if (assignment.status === 'done' && ledger.shippedAt == null) {
+    ledger.shippedAt = now
+    shipOn(group, ledger.runs?.find(r => r.assignmentId === assignment.id))
+  }
+}
+
+/** Keeps who led a request when it shipped, and the attempt it shipped on: the given one, else the last one assigned by
+ *  the time it shipped. */
+function shipOn(group: Conversation, run?: Run): void {
+  const ledger = group.ledger!
+  ledger.shippedLeadId = group.leadId ?? null
+  const shipping = run ?? ledger.runs?.filter(r => r.at <= ledger.shippedAt!).at(-1)
+  if (!shipping) return
+  const { firstVerdicts: _verdicts, firstReview: _review, ...shippedBy } = shipping
+  ledger.shippedBy = shippedBy
 }
 
 /** One GitHub pull request link, as a merge record names it (model.ts appendPullRequestUrls finds the same in text). */
@@ -81,7 +101,11 @@ export const PULL_REQUEST_URL = /^https:\/\/github\.com\/[A-Za-z0-9_-]+\/[A-Za-z
 export function recordMerged(group: Conversation, mergedAt: number): void {
   const ledger = group.ledger ??= {}
   ledger.mergedAt = Math.min(ledger.mergedAt ?? mergedAt, mergedAt)
-  ledger.shippedAt = ledger.mergedAt
+  // An earlier merge than the ship on record moves the ship to the attempt that ran then.
+  if (ledger.shippedAt !== ledger.mergedAt || !ledger.shippedBy) {
+    ledger.shippedAt = ledger.mergedAt
+    shipOn(group)
+  }
 }
 
 /** The person a waiting item waits on: its requester while still a member, otherwise the project's owner. */
@@ -164,6 +188,7 @@ export function waitsNow(group: Conversation): boolean {
 export function recordRun(state: SuperTabState, group: Conversation, assignment: Assignment, worker: Agent, now: number): void {
   const run: Run = { assignmentId: assignment.id, ...ranOn(state, worker, assignment.configuration), at: now }
   const ledger = group.ledger ??= {}
+  ledger.firstAssignedAt ??= now
   ledger.runs = [...ledger.runs ?? [], run].slice(-MAX_RUNS)
 }
 
@@ -171,7 +196,13 @@ export function recordRun(state: SuperTabState, group: Conversation, assignment:
 export function recordVerdict(state: SuperTabState, group: Conversation, check: Check, reviewer: Agent, now: number): void {
   if (!check.independent) return
   const ledger = group.ledger ??= {}
-  ledger.verdicts = [...ledger.verdicts ?? [], { ...ranOn(state, reviewer, reviewer.configuration), at: now }].slice(-MAX_VERDICTS)
+  const on = ranOn(state, reviewer, reviewer.configuration), week = weekStart(now)
+  // Only the weeks the board reads: one row per week and model, however many verdicts.
+  const kept = (ledger.reviews ?? []).filter(r => week - r.week < LEDGER_WEEKS * WEEK_MS)
+  const same = kept.find(r => r.week === week && r.engine === on.engine && r.model === on.model && r.effort === on.effort && r.grid === on.grid)
+  if (same) same.count++
+  else kept.push({ week, ...on, count: 1 })
+  ledger.reviews = kept
 }
 
 /** A group opened from a Buddy's proposal remembers it, for the Buddy's points when it ships. */

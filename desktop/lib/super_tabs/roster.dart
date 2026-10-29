@@ -646,9 +646,10 @@ class _SuperTabRosterState extends State<SuperTabRoster> {
               .firstOrNull,
           columns: columns,
           weekName: week,
-          machineName:
-              snapshot?.pool(snapshot.placeOf(score.machineId))?['name']
-                  as String?,
+          projectName: snapshot?.projects
+              .where((p) => p.id == board.projectId)
+              .firstOrNull
+              ?.name,
           ownerName: switch (snapshot?.people
               .where((p) => p.id == score.personId)
               .firstOrNull) {
