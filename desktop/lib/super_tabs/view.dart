@@ -1732,9 +1732,14 @@ class _SuperTabViewState extends State<SuperTabView>
           if (editable && project?.ownerId == c.accountId)
             item('Delete Project', () => _groupAction('delete', group)),
         ] else if (_isBuddyChat(group)) ...[
-          // A Buddy chat is the reader's own: the Buddy itself to remove.
-          // Nothing to rename or archive, and no way to a Chat with PM (Ken,
-          // 10-28).
+          // A Buddy chat is the reader's own: the Buddy itself to name, any
+          // time, and to remove. Nothing to archive, and no way to a Chat with
+          // PM (Ken, 10-28).
+          if (editable)
+            item(
+              'Rename Buddy…',
+              () => unawaited(showRenameBuddy(context, c, group.projectId)),
+            ),
           if (editable && c.buddy(group.projectId) != null)
             item(
               'Remove Buddy',

@@ -317,6 +317,128 @@ Future<void> confirmRemoveBuddy(
   if (remove == true) await c.removeBuddy(projectId);
 }
 
+/// What the reader's Buddy is called until they name it, as the backend
+/// names it: "ken's Buddy".
+String buddyDefaultName(SuperTabController c) {
+  final email = c.snapshot?.people
+      .where((p) => p.id == c.accountId)
+      .firstOrNull
+      ?.email;
+  return "${(email ?? '').split('@').first}'s Buddy";
+}
+
+/// Rename the reader's Buddy in [projectId] (mockup confirmed by Diego,
+/// 10-29): the name everyone in the Swarm sees; empty goes back to
+/// [buddyDefaultName]. The backend checks the name and says why it refuses.
+Future<void> showRenameBuddy(
+  BuildContext context,
+  SuperTabController c,
+  String projectId,
+) => showAppDialog<void>(
+  context: context,
+  builder: (context) => SuperTabDialogScope(
+    controller: c,
+    projectId: projectId,
+    child: _RenameBuddyDialog(controller: c, projectId: projectId),
+  ),
+);
+
+class _RenameBuddyDialog extends StatefulWidget {
+  const _RenameBuddyDialog({required this.controller, required this.projectId});
+  final SuperTabController controller;
+  final String projectId;
+
+  @override
+  State<_RenameBuddyDialog> createState() => _RenameBuddyDialogState();
+}
+
+class _RenameBuddyDialogState extends State<_RenameBuddyDialog> {
+  SuperTabController get c => widget.controller;
+
+  /// The backend's limit: a longer name is refused there anyway.
+  static const _maxLength = 32;
+  late final _name = TextEditingController(
+    text: c.buddyChat(widget.projectId)?.buddyName ?? '',
+  );
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final renamed = await c.renameBuddy(widget.projectId, _name.text);
+    if (!mounted) return;
+    if (renamed) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = c.operationError ?? 'Could not rename the Buddy. Try again.';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final fallback = buddyDefaultName(c);
+    return AlertDialog(
+      title: const Text('Rename your Buddy'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Everyone in this Swarm sees this name.',
+              style: DesktopChrome.text(),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const ValueKey('super-buddy-name'),
+              controller: _name,
+              autofocus: true,
+              enabled: !_busy,
+              maxLength: _maxLength,
+              decoration: InputDecoration(hintText: fallback, counterText: ''),
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Leave it empty to go back to "$fallback".',
+              style: DesktopChrome.control(color: DesktopChrome.muted),
+            ),
+            if (_error case final error?) ...[
+              const SizedBox(height: 12),
+              Text(error, style: DesktopChrome.control()),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
 /// Under a Buddy chat's header: what it runs on and who else can see its
 /// terminal, and, while it is down, a way to start it again. Before its
 /// agent is there, how its start is going (backend: the start carries the

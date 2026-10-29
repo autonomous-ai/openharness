@@ -117,6 +117,24 @@ void main() {
 
       await c.select('buddy-peer-lead');
       await capture('chat');
+      // Rename Buddy (Diego, 10-29): the ⋮ menu, the dialog, then the header.
+      await tester.tap(find.byTooltip('Buddy options'));
+      await tester.pumpAndSettle();
+      await captureWindow(
+        tester,
+        shots,
+        'buddy-rename-menu-${brightness.name}',
+      );
+      await tester.tap(find.text('Rename Buddy…'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('super-buddy-name')),
+        'Sparky',
+      );
+      await tester.pumpAndSettle();
+      await captureWindow(tester, shots, 'buddy-rename-${brightness.name}');
+      await tester.tap(find.text('Save'));
+      await capture('renamed');
       await c.select('buddy-peer-web');
       await capture('offline');
       await c.select('lead');
