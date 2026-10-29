@@ -1000,6 +1000,20 @@ describe('SwarmCards Buddy side', () => {
     t.cards.want(false)
   })
 
+  it('says the Swarm\'s side on its card, so a dial follows the daemon\'s side even where no face changes', async () => {
+    // No Buddy chat in the Swarm: a side changes no face, and the card alone tells the dial (review of #2218).
+    const t = chatSwarm({})
+    t.cards.want(true, [], null)
+    await vi.waitFor(() => expect(t.seen).toHaveLength(1))
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    t.cards.side('t1', 'buddy')
+    expect(t.seen.at(-1)?.[0].side).toBe('buddy')
+    // The desktop opens a group: the side goes, and the card says so.
+    t.cards.want(true, [], { tabId: 't1', conversationId: 'g-web' })
+    expect(t.seen.at(-1)?.[0].side).toBeUndefined()
+    t.cards.want(false)
+  })
+
   it('keeps the side per Swarm, refuses a bad tab or side, and forgets every side when the devices go', async () => {
     const t = chatSwarm({}, true)
     t.cards.want(true, [], null)

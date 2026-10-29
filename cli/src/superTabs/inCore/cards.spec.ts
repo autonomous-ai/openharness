@@ -33,6 +33,14 @@ describe('the Swarm cards on the devices', () => {
     expect(swarmCards).toHaveBeenCalledWith([])
   })
 
+  it('passes a Swarm\'s Buddy side on, and nothing else as a side', () => {
+    const { cards, swarmCards } = setup()
+    cards.cards([card('t1', [lead('l1')], { side: 'buddy' }), card('t2', [lead('l2')], { side: 'pm' }), card('t3', [lead('l3')], { side: true })])
+    const sent = swarmCards.mock.calls.at(-1)?.[0] as Array<Record<string, unknown>>
+    expect(sent.map((c) => c.side)).toEqual(['buddy', undefined, undefined])
+    expect('side' in sent[1]).toBe(false)
+  })
+
   it('checks ids, counts and strings, and drops a malformed list whole, keeping the last good one', () => {
     const { cards, swarmCards, log } = setup()
     cards.cards([card('t1')])

@@ -111,7 +111,7 @@ function cardIn(value: unknown): SwarmCard | null {
     if (!lead) return null
     leads.push(lead)
   }
-  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads }
+  return { id: card.id, name: cut(card.name, NAME_BYTES), count: card.count, leads, ...(card.side === 'buddy' ? { side: 'buddy' as const } : {}) }
 }
 
 /** A recap the service sent, checked and cut; null when it is not one. */

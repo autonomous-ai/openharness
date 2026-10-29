@@ -403,7 +403,8 @@ export class SwarmCards {
         const notice = this.notices.get(recapKey(row.id, lead.id)), buddyNotice = this.buddyNotices.get(recapKey(row.id, lead.id))
         return { ...lead, ...(notice ? { notice } : {}), ...(buddyNotice ? { buddyNotice } : {}) }
       })
-      cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed })
+      cards.push({ id: row.id, name: cut(String(tab.state.name ?? row.name ?? ''), NAME_BYTES), count, leads: noticed,
+        ...(this.sides.get(row.id) === 'buddy' ? { side: 'buddy' as const } : {}) })
     }
     // `since` moves every poll while a turn runs and the Pro counts on by itself, so it alone never re-sends the list.
     // Nor does a clock that keeps its turn; one whose turn changed (the Lead's ended, a worker's goes on) does. The start is

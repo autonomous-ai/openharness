@@ -1235,7 +1235,9 @@ export interface SwarmLead {
   buddyNotice?: LeadNotice
 }
 /** One Swarm this account is in, as a Harness Pro's card: its Leads, most urgent first. */
-export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[] }
+/** `side` 'buddy' while a swarmBuddy dial keeps the Swarm on its Buddy side (spec 2026-10-29-round-dial-pm-buddy): the dial
+ *  follows it as the daemon's, which a face alone cannot tell where no project has a Buddy chat (review of #2218). */
+export interface SwarmCard { id: string; name: string; count: number; leads: SwarmLead[]; side?: 'buddy' }
 /** A Lead's last message, for its card; `chatId` when it is the last message of the chat on the round dial's face, and
  *  `buddy` when that face is a swarmBuddy dial's (`CardChat` 'buddy'), so each dial takes only the recaps it asked for. */
 export interface LeadRecap { tabId: string; leadId: string; text: string; at: number; none: boolean; chatId?: string; buddy?: true }

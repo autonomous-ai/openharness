@@ -4485,7 +4485,20 @@ describe('swarm cards', () => {
           // Buddies off: exactly a swarmChat dial's Lead.
           { ...base(3) },
         ])
+        // The Swarm's side, which the dial follows as the daemon's: 'pm' unless the cards keep the Buddy side.
+        expect(ofType(port, 'supertab')[0].side).toBe('pm')
       } finally { await session.stop() }
+    })
+
+    it('a swarmBuddy dial hears the Swarm\'s Buddy side; a swarmChat dial never hears a side', async () => {
+      for (const [hello, side] of [[BUDDY, 'buddy'], [ROUND, undefined]] as const) {
+        const { session, port } = await connect(cardHost({ cards: [card('st1', [withBuddy()], { side: 'buddy' })] }))
+        try {
+          port.say(hello)
+          await vi.waitFor(() => expect(ofType(port, 'supertab')).toHaveLength(1))
+          expect(ofType(port, 'supertab')[0].side).toBe(side)
+        } finally { await session.stop() }
+      }
     })
 
     it('a swarmChat dial without swarmBuddy gets today\'s frame, byte for byte, whatever the Buddy fields', async () => {
