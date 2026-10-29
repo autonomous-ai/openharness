@@ -1,13 +1,37 @@
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
+import 'box_render_preview_test.dart' show loadPreviewFonts;
 import 'support/super_tab_fixture.dart';
 
+/// Set to a folder to write the PR's screenshots there.
+final shots = Platform.environment['SUPER_TAB_PERSON_MENTION_SHOTS'];
+final _picture = GlobalKey();
+
+Future<void> shot(WidgetTester tester, String name) async {
+  await tester.runAsync(() async {
+    final boundary =
+        _picture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = await boundary.toImage();
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    await Directory(shots!).create(recursive: true);
+    await File('$shots/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    image.dispose();
+  });
+}
+
 void main() {
+  setUpAll(() async {
+    if (shots != null) await loadPreviewFonts();
+  });
   final composer = find.byKey(const ValueKey('super-message-composer'));
   final picker = find.byKey(const ValueKey('super-composer-completions'));
 
@@ -45,6 +69,8 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: grid.buildAppTheme(brightness: brightness),
+        builder: (context, child) =>
+            RepaintBoundary(key: _picture, child: child),
         home: Scaffold(
           body: SuperTabView(
             controller: c,
@@ -139,4 +165,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(choices(tester), ['dee', 'Kestrel']);
   });
+
+  for (final brightness in Brightness.values) {
+    testWidgets('screenshots for review, ${brightness.name}', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 640));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      grid.AppTheme.brightness.value = brightness;
+      addTearDown(() => grid.AppTheme.brightness.value = Brightness.light);
+      final server = swarm()
+        ..tag('message-1', text: '@river can you try it?', leadId: 'dee');
+      server.mentions.last['leadName'] = 'dee';
+      await show(tester, server, brightness: brightness);
+      await tester.tap(composer);
+      await tester.enterText(composer, 'Please check @');
+      await tester.pumpAndSettle();
+      await shot(tester, 'picker-all-${brightness.name}');
+      await tester.enterText(composer, 'Please check @ke');
+      await tester.pumpAndSettle();
+      await shot(tester, 'picker-ke-${brightness.name}');
+      await tester.enterText(composer, '');
+      await tester.tap(find.byKey(const ValueKey('super-notifications')));
+      await tester.pumpAndSettle();
+      await shot(tester, 'notification-${brightness.name}');
+    }, skip: shots == null);
+  }
 }
