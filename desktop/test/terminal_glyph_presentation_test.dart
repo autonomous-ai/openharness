@@ -63,16 +63,22 @@ void main() {
     'an icon cell is drawn with the symbol face and stays inside its cell',
     () async {
       await _loadIconFace();
+      await _loadTextFace();
       const fontSize = 13.0;
+      // The web's text face: its cell is narrower than an em, so an icon drawn
+      // unscaled would spill into the next cell.
       final painter = TerminalPainter(
         theme: TerminalThemes.defaultTheme,
         textStyle: const TerminalStyle(
           fontSize: fontSize,
+          fontFamily: 'Roboto Mono',
+          fontFamilyFallback: [],
           symbolFontFamily: 'Symbols Nerd Font Mono',
         ),
         textScaler: TextScaler.noScaling,
       );
       final cell = painter.cellSize;
+      expect(cell.width, lessThan(fontSize * 0.7));
       final icon = CellData(
         foreground: 0,
         background: 0,
@@ -130,6 +136,16 @@ Future<void> _loadIconFace() async {
 }
 
 bool _iconFaceLoaded = false;
+
+Future<void> _loadTextFace() async {
+  if (_textFaceLoaded) return;
+  final loader = FontLoader('Roboto Mono')
+    ..addFont(rootBundle.load('assets/fonts/roboto-mono/RobotoMono.ttf'));
+  await loader.load();
+  _textFaceLoaded = true;
+}
+
+bool _textFaceLoaded = false;
 
 double _advance(String text, double fontSize) {
   final style = TextStyle(

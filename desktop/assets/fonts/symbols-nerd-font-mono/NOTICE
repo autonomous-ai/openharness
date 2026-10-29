@@ -1,0 +1,34 @@
+Symbols Nerd Font Mono (Nerd Fonts v3.5.1, https://github.com/ryanoasis/nerd-fonts)
+collects icons from the glyph sets below. Nerd Fonts scaled and positioned
+each glyph for its cell and repaired a few defective ones; see
+https://github.com/ryanoasis/nerd-fonts/blob/v3.5.1/license-audit.md.
+Nerd Fonts' own work is under the MIT license in LICENSE.
+
+Codicons 0.0.45
+  Copyright (c) Microsoft Corporation.
+  License: CC BY 4.0 (CC-BY-4.0.txt)
+  Source: https://github.com/microsoft/vscode-codicons
+
+Font Awesome Free 6.5.1
+  Copyright 2023 Fonticons, Inc. (https://fontawesome.com)
+  License: CC BY 4.0 (CC-BY-4.0.txt), https://fontawesome.com/license/free
+  Source: https://github.com/FortAwesome/Font-Awesome
+
+Material Design Icons (October 6, 2022)
+  Pictogrammers (https://pictogrammers.com)
+  License: Apache 2.0 (Apache-2.0.txt)
+  Source: https://github.com/Templarian/MaterialDesign-Font
+
+Weather Icons 2.0.10
+  Copyright (c) Erik Flowers
+  License: SIL OFL 1.1 (OFL.txt)
+  Source: https://github.com/erikflowers/weather-icons
+
+Pomicons 1.001
+  Copyright (c) 2021, Gabriele Lana, with Reserved Font Name Pomicons.
+  License: SIL OFL 1.1 (OFL.txt)
+  Source: https://github.com/gabrielelana/pomicons
+
+The other sets (Devicons, Font Awesome Extension, Octicons, Seti UI,
+Powerline Symbols, Powerline Extra Symbols, IEC Power Symbols) are under the
+MIT license; Font Logos is unlicensed.

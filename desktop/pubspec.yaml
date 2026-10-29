@@ -130,9 +130,10 @@ flutter:
         - asset: assets/fonts/roboto-mono/RobotoMono.ttf
         - asset: assets/fonts/roboto-mono/RobotoMono-Italic.ttf
           style: italic
-    # Icons only (Nerd Fonts v3.5.1, MIT). Claude Code prints these from the
-    # private-use area; the text faces above do not carry them. One em wide,
-    # so the terminal scales them down to the cell measured from the text face.
+    # Icons only (Nerd Fonts v3.5.1: MIT, plus the glyph-set licenses listed in
+    # its NOTICE). Claude Code prints these from the private-use area;
+    # the text faces above do not carry them. One em wide, so the terminal
+    # scales them down to the cell measured from the text face.
     - family: Symbols Nerd Font Mono
       fonts:
         - asset: assets/fonts/symbols-nerd-font-mono/SymbolsNerdFontMono-Regular.ttf
@@ -148,6 +149,10 @@ flutter:
     - assets/daemon-art/portrait/
     - assets/fonts/roboto-mono/OFL.txt
     - assets/fonts/symbols-nerd-font-mono/LICENSE
+    - assets/fonts/symbols-nerd-font-mono/NOTICE
+    - assets/fonts/symbols-nerd-font-mono/CC-BY-4.0.txt
+    - assets/fonts/symbols-nerd-font-mono/Apache-2.0.txt
+    - assets/fonts/symbols-nerd-font-mono/OFL.txt
     - assets/machines.svg
     - assets/models.svg
     - assets/harnesses.svg
