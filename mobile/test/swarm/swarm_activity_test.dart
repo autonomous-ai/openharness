@@ -7,6 +7,7 @@ import 'package:harness_mobile/swarm/swarm_request.dart';
 import 'package:harness_mobile/swarm/swarm_session.dart';
 
 import '../voice_fakes.dart' show MemoryKeyValueStore;
+import 'swarm_activity_fixture.dart';
 import 'swarm_fixture.dart';
 
 /// Activity, in place of Needs you (Tony's prototype C3): what the Swarms ask
@@ -16,124 +17,10 @@ import 'swarm_fixture.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  const chatPath = '/api/super-tabs/$tab/conversations/$leadChat/messages';
-
-  Map<String, dynamic> message(
-    String id,
-    int sequence, {
-    String text = '',
-    bool mine = false,
-    String? thread,
-    List<Map<String, dynamic>> reactions = const [],
-  }) => {
-    'id': id,
-    'conversationId': leadChat,
-    'text': text.isEmpty ? 'Row $id' : text,
-    'sequence': sequence,
-    'thread': thread ?? id,
-    'author': mine
-        ? {'kind': 'person', 'id': me, 'name': 'tony@example.com'}
-        : {'kind': 'agent', 'id': 'agent-lead', 'name': 'River'},
-    'reactions': reactions,
-    'createdAt': DateTime.utc(2026, 10, 29, 8, sequence).toIso8601String(),
-  };
-
-  Map<String, dynamic> thread(
-    String root, {
-    required int last,
-    List<String> people = const [me],
-    bool lastByMe = false,
-  }) => {
-    'id': root,
-    'replies': 2,
-    'lastSequence': last,
-    'lastAt': DateTime.utc(2026, 10, 29, 9, last).toIso8601String(),
-    'authors': [
-      lastByMe
-          ? {'kind': 'person', 'id': me, 'name': 'tony@example.com'}
-          : {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
-    ],
-    'people': people,
-  };
-
-  /// One Swarm, project Mobile: decision d1 (recommending "Merge"), River's
-  /// tag m1, work g1 waiting on the person, and a project chat whose newest
-  /// page [page] answers. The server's read mark of that chat is [readMark].
-  FakeSwarm backend({
-    Map<String, dynamic> Function()? page,
-    int readMark = 10,
-    int chatSequence = 12,
-    bool decision = true,
-  }) {
-    final fake = FakeSwarm();
-    fake.routes['/api/super-tabs/list'] = (_) => {
-      'tabs': [
-        {'id': tab, 'name': 'Phone Swarm', 'ownerId': me, 'lastChangedAt': 1},
-      ],
-      'next': null,
-    };
-    final derived = {
-      'decisionsWaiting': decision ? 1 : 0,
-      'mentionsWaiting': 1,
-      'readMarks': {leadChat: readMark},
-    };
-    fake.routes['/api/super-tabs/$tab/parts'] = (_) {
-      final load = firstLoad(
-        derived: derived,
-        lastChangedAt: 1,
-        groups: [
-          groupData(
-            'g1',
-            title: 'Fix login',
-            number: 4,
-            status: 'needs_human',
-            workerId: 'agent-builder',
-          ),
-        ],
-      );
-      // The project chat holds [chatSequence] rows.
-      final lead = (load['groups'] as List).first as Map<String, dynamic>;
-      (lead['data'] as Map<String, dynamic>)['lastMessageSequence'] =
-          chatSequence;
-      return load;
-    };
-    fake.routes['/api/super-tabs/$tab/changes'] = (_) =>
-        changes(cursor: 'c2', derived: derived, lastChangedAt: 1);
-    fake.routes['/api/super-tabs/$tab/decisions?state=open'] = (_) => {
-      'decisions': [
-        if (decision)
-          {
-            'id': 'd1',
-            'projectName': 'Mobile',
-            'conversationId': 'g1',
-            'conversationTitle': 'Fix login',
-            'askerName': 'River',
-            'question': 'Approve merge: PR #2154?',
-            'options': ['Wait', 'Merge'],
-            'recommended': 1,
-          },
-      ],
-    };
-    fake.routes['/api/super-tabs/$tab/mentions?state=waiting'] = (_) => {
-      'mentions': [
-        {
-          'id': 'm1',
-          'projectName': 'Mobile',
-          'conversationId': leadChat,
-          'conversationTitle': 'Mobile',
-          'messageId': 'msg-tag',
-          'leadName': 'River',
-          'text': 'Can you check the copy?',
-        },
-      ],
-    };
-    fake.routes['/api/super-tabs/$tab/commands'] = (_) => {
-      'result': <String, dynamic>{},
-    };
-    fake.routes[chatPath] = (_) =>
-        page?.call() ?? {'messages': <Object>[], 'next': null};
-    return fake;
-  }
+  const chatPath = activityChatPath;
+  const backend = activityBackend;
+  const message = activityMessage;
+  const thread = activityThread;
 
   Future<SwarmSession> start(
     FakeSwarm fake, {
@@ -279,47 +166,7 @@ void main() {
   });
 
   group('Threads and Reactions', () {
-    Map<String, dynamic> page() => {
-      'messages': [
-        message('root-1', 3, text: 'Ship the build tonight?', mine: true),
-        message(
-          'mine-2',
-          5,
-          text: 'Copy is fixed.',
-          mine: true,
-          reactions: [
-            {
-              'emoji': 'check',
-              'by': [
-                {'kind': 'agent', 'id': 'agent-lead'},
-                {'kind': 'person', 'id': me},
-              ],
-            },
-          ],
-        ),
-        message(
-          'own-only',
-          6,
-          mine: true,
-          reactions: [
-            {
-              'emoji': 'eyes',
-              'by': [
-                {'kind': 'person', 'id': me},
-              ],
-            },
-          ],
-        ),
-        message('root-old', 7),
-        message('root-others', 8),
-      ],
-      'threads': [
-        thread('root-1', last: 12),
-        thread('root-old', last: 9),
-        thread('root-others', last: 12, people: ['person-other']),
-      ],
-      'next': null,
-    };
+    const page = activityPage;
 
     test('reads nothing until Activity is on screen, then each project chat '
         'once per counter', () async {
