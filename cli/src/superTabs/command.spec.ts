@@ -329,7 +329,7 @@ it('refuses a command that sets TMUX_PANE to another harness\'s pane, before it 
     ? { agents: [{ id: 'builder-harness', engine: 'claude', tmuxPane: '%7', status: 'active' }] } : { ok: true })
   const print = vi.fn()
   // This command runs in pane %42 (its process 700 is an ancestor); %7 is the Builder's.
-  const probe = { panes: () => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }], ancestors: () => [900, 800, 700, 1] }
+  const probe = { panes: () => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }], ancestors: () => [900, 800, 700, 600, 1].map(pid => ({ pid, command: pid === 600 ? 'tmux' : 'node' })) }
   const deps = { where: () => where, probe, env: { TMUX_PANE: '%7' }, open: async () => ({ request, close: vi.fn(), machineId: 'machine' }), print }
   for (const argv of [['--tab', 'tab', 'post', 'g1', 'Ready', 'op'], ['--tab', 'tab', '--agent', 'builder', 'post', 'g1', 'Ready', 'op']]) {
     expect(await superTabCommand(argv, deps)).toBe(1)
@@ -385,4 +385,29 @@ it('refuses --agent from an agent\'s shell on Windows while this computer runs a
   }
   buddiesHere = true
   expect(await superTabCommand([...prefix, 'status'], { ...deps, env: {} })).toBe(0)
+})
+// The re-check of #2093 (minor 6): on Windows, --machine asked the other machine's daemon whether a Buddy runs, which it
+// does not answer for another computer, and a pty host pane was no pane for the other-machine refusal.
+it('on Windows, refuses another machine from a harness\'s pane, and asks this computer\'s daemon about its Buddies', async () => {
+  const opened: Where[] = []
+  let buddiesHere = false
+  const request = vi.fn(async (type: string, payload: Record<string, unknown> = {}) => type === 'agents_list'
+    ? { agents: [{ id: 'win-harness', engine: 'claude', tmuxPane: '%3', status: 'active', terminal: { runtimes: [{ backend: 'ptyhost', instance: 'p1', paneId: '%3' }] } }] }
+    : payload.action === 'buddyCheck' ? { ok: true, buddiesHere } : { ok: true })
+  const print = vi.fn()
+  const deps = { where: () => where, print, platform: 'win32' as const,
+    open: async (to: Where) => { opened.push(to); return { request, close: vi.fn(), machineId: to.machineId } as never } }
+  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: { HARNESS_PANE: 'p1:%3' } })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('this computer\'s own Harness only')
+  expect(opened).toEqual([where])
+  // A Claude Code shell with no Harness pane: this computer's daemon is asked about its Buddies, not the other machine's.
+  buddiesHere = true
+  opened.length = 0
+  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's' } })).toBe(1)
+  expect(JSON.parse(print.mock.calls.at(-1)![0]).error).toContain('This Windows computer runs a Buddy')
+  expect(opened).toEqual([where])
+  // A person's terminal chooses its machine.
+  opened.length = 0
+  expect(await superTabCommand(['--machine', 'macbook', ...prefix, 'status'], { ...deps, env: {} })).toBe(0)
+  expect(opened.at(-1)).toMatchObject({ machineId: 'macbook' })
 })

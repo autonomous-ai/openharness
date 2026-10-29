@@ -3,8 +3,8 @@ import { buddyRefusal, WINDOWS_BUDDY } from './buddyPane.js'
 
 const where = { port: 14001, dataDir: '/fixture', machineId: 'machine' }
 const BUDDY = 'A Buddy talks with its owner in its own chat: it may not send to, start, tell or close other sessions.'
-// This command runs in pane %42 (its process 700 is an ancestor); %7 is another harness's.
-const probe = () => ({ panes: vi.fn(() => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }]), ancestors: vi.fn(() => [900, 700, 1]) })
+// This command runs in pane %42 (its process 700 is an ancestor, under the tmux server 600); %7 is another harness's.
+const probe = () => ({ panes: vi.fn(() => [{ pane: '%7', pid: 500 }, { pane: '%42', pid: 700 }]), ancestors: vi.fn(() => [{ pid: 900, command: 'node' }, { pid: 700, command: '/bin/zsh' }, { pid: 600, command: 'tmux' }, { pid: 1, command: '/sbin/launchd' }]) })
 
 /** This machine's daemon: harness `pane-harness` runs in pane %42, and the Swarm's service answers [check] for whether it,
  *  or any harness here, is a Buddy. */
@@ -31,7 +31,7 @@ it('refuses a Buddy\'s pane, as this computer\'s launch record says', async () =
 it('lets Leads, Builders, Reviewers, harnesses in no Swarm and a person\'s terminal go on', async () => {
   expect(await buddyRefusal(daemon(swarm(false)).deps, 'darwin')).toBeNull()
   const outside = daemon(swarm(true))
-  expect(await buddyRefusal({ ...outside.deps, probe: { panes: () => [], ancestors: () => [900, 1] } }, 'darwin')).toBeNull()
+  expect(await buddyRefusal({ ...outside.deps, probe: { panes: () => [], ancestors: () => [{ pid: 900, command: 'node' }, { pid: 1, command: '/sbin/launchd' }] } }, 'darwin')).toBeNull()
 })
 
 // The second review: with the Swarm off nothing may change, so whether it is on is settled before any pane is looked at.

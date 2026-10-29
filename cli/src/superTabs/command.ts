@@ -13,6 +13,16 @@ import { runningPane, type PaneProbe } from './callerPane.js'
 // cli.ts's way to it: this file is its door to the Swarm's code (architecture.spec.ts SWARM_DOORS).
 export { buddyRefusal } from './buddyPane.js'
 import { agentShell, buddiesHere, WINDOWS_BUDDY } from './buddyPane.js'
+import { sendPane } from '../messages/command.js'
+
+/** A frame with its terminals, as agents_list sends them: a pty host pane is named by its instance and pane (Windows). */
+type PaneFrame = Frame & { terminal?: { runtimes?: Array<{ backend?: string; instance?: string; paneId?: string }> } }
+/** Whether [pane] is a harness's here: a tmux pane as `callerOf` finds it, or a pty host's `<instance>:%N`. */
+function harnessIn(frames: PaneFrame[], pane: string, machineId: string): boolean {
+  const pty = /^([^:]+):(%\d+)$/.exec(pane)
+  if (!pty) return !!callerOf(frames, pane, machineId)
+  return frames.some(frame => frame.terminal?.runtimes?.some(r => r.backend === 'ptyhost' && r.instance === pty[1] && r.paneId === pty[2]))
+}
 
 const ELSEWHERE = 'From a harness, Swarm commands go to this computer\'s own Harness only: leave out --machine and --port, or give this computer\'s own.'
 
@@ -118,16 +128,25 @@ export async function superTabCommand(argv: readonly string[], deps: {
     operationId = request.payload.operationId
     // A harness reaches the Swarm through this computer's Harness alone (second review of #2087: a Buddy's --machine reached
     // the owner's other Mac, which knew no pane there). The daemon refuses an agent's request from another computer as well.
-    if (pane && (request.where.port !== local.port || request.where.machineId !== local.machineId)) {
-      const home = await open(local)
-      try {
+    const elsewhere = request.where.port !== local.port || request.where.machineId !== local.machineId
+    // Windows has no cheap check of a pty host pane, so its pane is the one the shell names, for the refusal below alone; and
+    // while this computer runs a Buddy, an agent's shell there names no agent. Both are asked of this computer's daemon,
+    // never the other machine's (re-check of #2093: --machine asked the other one, which does not answer for this computer).
+    const asking = pane ?? (platform === 'win32' ? sendPane(env) : undefined)
+    const windowsAgent = platform === 'win32' && !!request.payload.agentId && agentShell(env)
+    const checks = async (home: Daemon) => {
+      if (elsewhere && asking) {
         const listed = await home.request('agents_list')
-        if (callerOf(Array.isArray(listed.agents) ? listed.agents as Frame[] : [], pane, local.machineId)) throw new Error(ELSEWHERE)
-      } finally { home.close() }
+        if (harnessIn(Array.isArray(listed.agents) ? listed.agents as PaneFrame[] : [], asking, local.machineId)) throw new Error(ELSEWHERE)
+      }
+      if (windowsAgent && await buddiesHere(home)) throw new Error(WINDOWS_BUDDY)
+    }
+    if (elsewhere && (asking || windowsAgent)) {
+      const home = await open(local)
+      try { await checks(home) } finally { home.close() }
     }
     daemon = await open(request.where)
-    // Windows has no cheap check of a pty host pane: while this computer runs a Buddy, an agent's shell names no agent.
-    if (platform === 'win32' && request.payload.agentId && agentShell(env) && await buddiesHere(daemon)) throw new Error(WINDOWS_BUDDY)
+    if (!elsewhere) await checks(daemon)
     const owners = request.payload.action === 'backend' || request.payload.action === 'setMachineAgents'
     if (owners) {
       // The owner's own acts: removal deletes this machine's Swarm folders, and no agent raises its own machine's room

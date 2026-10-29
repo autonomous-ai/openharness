@@ -15,7 +15,7 @@ const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const runs = new SpawnedRuns((command) => command.includes(CLI_SOURCE))
 process.once('exit', () => runs.killAllSync())
 const PORT = 47391
-const REFUSED = 'This command names a pane it does not run in. Run it as your harness gave it, without setting TMUX_PANE.'
+const REFUSED = 'Harness could not tell which pane this command runs in, so it did not run it. Run it as your harness gave it, in its own pane.'
 
 const cleanup: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -47,7 +47,7 @@ it('runs send, new, tell and close only past the Buddy check, and other verbs wi
   const dataDir = join(root, 'data')
   const heard = await fakeDaemon(dataDir)
   writeFileSync(join(root, 'computer-id'), 'machine-test')
-  // A pane the command does not run in: no tmux server answers here, so nothing can prove it, and the check refuses.
+  // A pane named with no tmux server here to prove it: the check refuses (it fails closed).
   const env = { ...process.env, HOME: root, HARNESS_AUTH_DIR: join(root, 'auth'), ADAPTER_DATA_DIR: dataDir, ADAPTER_CLI_DIR: join(root, 'cli'),
     ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'), ADAPTER_UPDATE_DISABLE: 'true', PORT: String(PORT), TMUX: '', TMUX_TMPDIR: root,
     TMUX_PANE: '%42', DISABLE_GRID_INSTALL: 'true', DISABLE_HOOK_INSTALL: 'true', BACKEND_WS_URL: 'http://127.0.0.1:1' }

@@ -197,7 +197,15 @@ any still starting, and stops their posts. Their chats stay for their owners to 
 
 - Each person may add one Buddy per project. They choose the project, one of their own machines in the Swarm's Machines
   list, and Claude Code or Codex. Like a Product Manager, a Buddy runs only on its owner's own machine, in their own
-  account: never on a machine shared with them, and never in a Harness Team account.
+  account: never on a machine shared with them, and never in a Harness Team account. A Buddy can't be added on a
+  Windows machine yet: Harness can't yet tell a Buddy's window from another agent's there. As a backstop, while a Buddy
+  runs on a Windows computer, agents there may not send to, start, tell or close other sessions, or speak as a named
+  agent.
+- A Buddy's machine checks every Swarm command against the window it runs in. An agent speaks only as itself, only
+  through its own computer's Harness, never through another machine. From a Buddy's window, `harness send`, `new`,
+  `tell` and `close` are refused. A command that can't prove which window it runs in is refused. The one case it can't
+  see is a command that deliberately detaches from its window and clears its tmux variables; it reads as a person's
+  terminal.
 - A Buddy reads its project's chat and its own chat, nothing else. It cannot read workgroups, other people's chats or
   the Leads conversation. It can post only in its own chat. The server refuses every other command, and a Buddy's own
   Swarm read shows no machines or routing rules.
