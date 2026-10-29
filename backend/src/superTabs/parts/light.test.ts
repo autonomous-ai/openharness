@@ -6,14 +6,14 @@ import { FINISHED, GROUP_FIELDS } from './light.js'
  *  here, and the test below until light.ts either projects it or names it as unread by reads (review of #1745). */
 const assignment: Required<Assignment> = {
   id: 'w', agentId: 'a', status: 'working', configuration: { engine: 'codex', model: null, effort: null, contextWindow: null, engineVersion: null },
-  execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null, recordingProgress: { at: 1, revision: 1 }, leaseUntil: 1, progressAt: 1,
+  execution: { machineId: 'm', harnessId: 'h', machineOwnerId: 'o' }, result: null, recordingProgress: { at: 1, revision: 1 }, leaseUntil: 1, progressAt: 1, askedOf: 'p',
   lost: { reason: 'r', at: 1 },
 }
 const conversation: Required<Conversation> = {
   id: 'g', kind: 'leads', projectId: 'p', number: 1, title: 't', leadId: null, agentIds: [], archived: false, brief: '',
   task: { goal: '', changes: '', constraints: '', owns: [] }, reviewOf: 'r', checks: [], assignment, lastMessageSequence: 0, pullRequestUrls: [],
   messageSeq: 0, reportSeq: 0, dormant: false, lastActivityAt: '', audience: { people: [] }, lostAttempt: { id: 'w', agentId: 'a' }, reactionSeq: 0,
-  requesterId: 'p', ledger: {}, proposals: [],
+  requesterId: 'p', ledger: {}, proposals: [], liveness: { state: 'quiet', why: 'silent', since: 1 }, leadAction: { kind: 'post', at: 1 },
 }
 
 describe('the light conversation projection (parts/light.ts)', () => {

@@ -764,6 +764,30 @@ class ConversationServer {
         output
           ..['startId'] = 'start-$revision'
           ..['conversationId'] = chatId;
+      } else if (command['type'] == 'buddy.chat') {
+        // As the backend's: the reader's own Buddy chat in the project, opened
+        // before any Buddy, the same chat a Buddy added later joins.
+        final person = reader ?? 'owner';
+        final projectId = command['projectId'] as String;
+        final chatId = 'buddy-$person-$projectId';
+        final conversations = (state['conversations'] as List)
+            .cast<Map<String, dynamic>>();
+        if (!conversations.any((g) => g['id'] == chatId)) {
+          revision++;
+          final owner = (state['people'] as List? ?? const [])
+              .cast<Map>()
+              .where((p) => p['id'] == person)
+              .firstOrNull;
+          final name = (owner?['email'] as String? ?? person).split('@').first;
+          conversations.add({
+            ...conversationFixture(chatId, "$name's Buddy"),
+            'kind': 'buddy',
+            'projectId': projectId,
+            'buddyOwnerId': person,
+            'agentIds': <String>[],
+          });
+        }
+        output['conversationId'] = chatId;
       } else if (command['type'] == 'buddy.remove') {
         revision++;
         final person = reader ?? 'owner';

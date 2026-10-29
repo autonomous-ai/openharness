@@ -10,13 +10,14 @@ const R = 9_000
 const LATER = NOW + 5_000
 const agentActor = (agentId: string): Actor => ({ kind: 'agent', agentId, machineOwnerId: `${owner.userId}-machine` })
 
-function scene() {
+function scene(closed = false) {
   const s = richSwarm()
   s.contribute('mac', 'swarm')
+  // peer's Buddy chat, or with no kind their Chat with PM from before Buddies replaced it (projects.ts isClosedPmChat).
   const privateId = s.group('Peer and PM')
   s.edit(state => {
     const generation = state.people.find(p => p.id === peer.userId)!.generation
-    state.conversations.find(c => c.id === privateId)!.audience = { people: [{ id: peer.userId, generation }] }
+    Object.assign(state.conversations.find(c => c.id === privateId)!, { ...closed ? {} : { kind: 'buddy' }, audience: { people: [{ id: peer.userId, generation }] } })
   })
   return { s, privateId, parts: store.split(s.state, { tabId: 'tab', version: R, now: NOW }) }
 }
@@ -55,17 +56,17 @@ describe('changes since a cursor (design 4.4)', () => {
     expect(keys(receive(parts, changed, owner).groups)).toEqual([s.web, s.secretGroup])
   })
 
-  it('sends a private conversation\'s change, removal and dormant stub only to its audience and the Lead', () => {
-    const { s, parts, privateId } = scene()
+  it('sends a Buddy chat\'s change, removal and dormant stub only to its owner, never the Lead; a closed Chat with PM\'s to nobody', () => {
+    const { s, privateId } = scene()
     for (const change of [(p: Part) => { (p.data as { title: string }).title = 'x' }, (p: Part) => { p.deleted = true }, (p: Part) => { p.dormant = true }]) {
       const { parts: fresh } = scene()
       const changed = [write(fresh, 'groups', privateId, change)]
       expect(keys(receive(fresh, changed, peer).groups)).toEqual([privateId])
-      expect(keys(receive(fresh, changed, agentActor(s.lead)).groups)).toEqual([privateId])
-      expect(receive(fresh, changed, owner).groups).toEqual([])
-      expect(receive(fresh, changed, agentActor(s.worker)).groups).toEqual([])
+      for (const reader of [agentActor(s.lead), owner, agentActor(s.worker)]) expect(receive(fresh, changed, reader).groups).toEqual([])
+      const { parts: closed } = scene(true)
+      const closedChange = [write(closed, 'groups', privateId, change)]
+      for (const reader of [peer, agentActor(s.lead), owner]) expect(receive(closed, closedChange, reader).groups).toEqual([])
     }
-    void parts
   })
 
   it('sends a removed or dormant group as a one-line stub, never its last data', () => {

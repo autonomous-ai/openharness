@@ -44,15 +44,11 @@
   "desktop/lib/super_tabs/notifications.dart": {
     "edge-insets": 8
   },
-  "desktop/lib/super_tabs/pm_chat_rows.dart": {
-    "edge-insets": 3,
-    "border-radius": 2
-  },
   "desktop/lib/super_tabs/profile_sheet.dart": {
     "font-size": 1
   },
   "desktop/lib/super_tabs/project_sidebar.dart": {
-    "edge-insets": 10
+    "edge-insets": 9
   },
   "desktop/lib/super_tabs/pull_requests.dart": {
     "edge-insets": 12,

@@ -647,6 +647,13 @@ export class FakeBackend {
     for (const machineId of this.nodes.keys()) this.sendNode(machineId, '', { type: 'desk_changed', payload: { revision: 0 } })
   }
 
+  /** Renames one of the account's machines, as the Machines list on any computer does: every node hears `machines_changed`. */
+  renameMachine(machineId: string, name: string): void {
+    const machine = this.machines.get(machineId)
+    if (machine) machine.name = name
+    for (const node of this.nodes.keys()) this.sendNode(node, '', { type: 'machines_changed', payload: { reason: 'renamed' } })
+  }
+
   private sendNode(machineId: string, connId: string, frame: Frame): boolean {
     const ws = this.nodes.get(machineId)
     if (ws?.readyState !== WebSocket.OPEN) return false

@@ -761,7 +761,7 @@ export class RemoteRelayPool {
       ws.once('error', (err) => {
         if (!settled) { settled = true; clearTimeout(timeout); reject(err instanceof Error ? err : new Error(String(err))) }
       })
-      // The backend refused before the upgrade (WEB_WS_AUTH_HTTP_401): a 401 is the 4401 it used to close with, which
+      // The backend refused before the upgrade (HTTP 401 to a socket that sent auth=http): a 401 is the 4401 it used to close with, which
       // connect() answers with one refresh. With this listener `ws` leaves the request open, so it is ended here.
       ws.once('unexpected-response', (_req, res) => {
         if (!settled) {
