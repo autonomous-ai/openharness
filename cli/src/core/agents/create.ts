@@ -376,7 +376,7 @@ export function createAgentCreator({
     // as every relaunch reads them again (`buildLaunchOverrides`). Never a Buddy's: it starts no MCP server, as a server
     // runs with its person's credentials and its tools are not its guard's to vet (review 3 of #2092).
     const machineMcp = input.swarmRole === 'buddy' ? [] : machineMcpLaunchArgs(engine, cwd)
-    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...told])
+    const extraArgs = joinedInstructions(engine, [...(gridLaunch?.args ?? relay?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, native ? native.opencodeMajor : opencode ? await opencode.opencodeMajorVersion() : null) : []), ...machineMcp, ...(swarmLaunch && swarmSkill ? swarmLaunch.args(engine) : []), ...told])
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt

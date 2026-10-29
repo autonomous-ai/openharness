@@ -12,6 +12,7 @@ import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch
 import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 import { AGENT_ATTRIBUTION_LINE, HARNESS_INSTRUCTIONS } from './agentAttribution.js'
 import { prepareSwarmSkill } from './swarmSkills.js'
+import { swarmEngineArgs } from './swarmEngineArgs.js'
 import { swarmGitHubLaunch } from './swarmGitHub.js'
 import { writeMachineMcp } from './machineMcp.js'
 
@@ -40,7 +41,7 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
     // consult the config.toml of whoever is running the suite.
     readCodexConfig: () => null,
     // The Swarm on, as by default (`HARNESS_SWARM`); a test of it off leaves it out.
-    swarm: { prepare: prepareSwarmSkill, github: (key) => swarmGitHubLaunch(key) },
+    swarm: { prepare: prepareSwarmSkill, github: (key) => swarmGitHubLaunch(key), args: swarmEngineArgs },
     ...overrides,
   }
   return { d, calls }
@@ -521,6 +522,15 @@ describe('buildLaunchOverrides — a Swarm session on the Harness GitHub App', (
     if (!result.ok) throw new Error(result.error)
     expect(result.overrides.env).not.toHaveProperty('GIT_CONFIG_PARAMETERS')
     expect(result.overrides.clearEnv).not.toContain('GH_TOKEN')
+  })
+
+  it('relaunches a Swarm Codex without its startup update check, and a Codex the Swarm never started with it', async () => {
+    const { d } = deps()
+    const swarm = await buildLaunchOverrides(d, 'codex', { cwd: workspace(), swarmSkill: { role: 'dev', key: 'harness-codex-plain' } }, 'agent-1', () => true)
+    const own = await buildLaunchOverrides(d, 'codex', { cwd: workspace() }, 'agent-1', () => true)
+    if (!swarm.ok || !own.ok) throw new Error('relaunch refused')
+    expect(swarm.overrides.extraArgs.join(' ')).toContain('-c check_for_update_on_startup=false')
+    expect(own.overrides.extraArgs.join(' ')).not.toContain('check_for_update_on_startup')
   })
 
   // HARNESS_SWARM=off: the core hands in no Swarm, and a session the Swarm started is not relaunched without its role.

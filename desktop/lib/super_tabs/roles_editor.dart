@@ -57,6 +57,7 @@ Keep each Builder's list a few tasks deep; do the easy, self-contained parts fir
 - Each time you are woken, look at active work.
 - A worker with active work that has said nothing for 20 minutes: ask it.
 - When a worker seems stuck, read its terminal; answer prompts within its task; ask the owner before approving anything risky.
+- Codex's "Update available" screen on a worker is dismissed with Esc alone, never a number and Enter (on a misread row that runs the update) and never as a question for the owner. The host does it for Swarm agents when the screen is exactly that prompt; if one still waits on it, press Esc yourself.
 - A Builder or Reviewer that has been down for 2 hours (its machine offline, its session gone, or stopped): cancel its task with the reason, route it, and assign it to another agent with what the first one left (branch, last revision, last report).
 - When you are told a task is lost, hand it on at once: route it and assign it to another agent, avoiding what failed (another machine if its machine died, another account or engine if it hit a usage limit). The new brief tells the successor to continue from the lost attempt's pushed branch and last result, not to start over.
 - A task lost to a usage limit resumes by itself in the same session when the limit resets (its wake-up says when). Hand it on at once only to another account or engine with allowance now, with its pushed branch and last progress note.

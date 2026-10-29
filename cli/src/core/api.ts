@@ -1209,6 +1209,8 @@ export interface SwarmLaunch {
   mode(value: unknown): value is NonNullable<SwarmSkill['mode']>
   prepare(cwd: string, skill: SwarmSkill): { instructions: string }
   github(key: string): { env: Record<string, string>; clearEnv: string[] } | null
+  /** The engine's arguments for a session the Swarm starts, never for a person's own (lib/swarmEngineArgs.ts). */
+  args(engine: string): string[]
 }
 
 /** Fill a missing Swarm role of an older Swarm session at its restart or resume (superTabs/inCore/adoption.ts): the row
@@ -1252,6 +1254,9 @@ export interface SuperTabsCore {
   screen(agentId: string, scrollback: number): Promise<SuperTabScreen>
   /** Text, then each key by its tmux name, typed into a member's terminal under the pane's write lock. */
   input(agentId: string, text: string, keys: string[]): Promise<SuperTabTyped>
+  /** The same keys, sent only if the visible screen, read again under the pane's write lock, is exactly `screen` (superTabs/inCore/
+   *  terminal.ts): for a caller that read the screen earlier and must not type into a different one. */
+  inputIfScreen(agentId: string, keys: string[], screen: string): Promise<SuperTabTyped>
 }
 export type SuperTabScreen = { ok: true; text: string; hold: MessageHold | null } | { ok: false; error: string }
 export type SuperTabTyped = { ok: true } | { ok: false; error: string }
