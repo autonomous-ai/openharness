@@ -22,6 +22,21 @@
 	<string>$(FLUTTER_BUILD_NAME)</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
+	<!-- harness://swarm/<tab>/<conversation>/<message>: the message link Desktop's
+	     Copy link to message makes (and the phone's long-press sheet copies).
+	     LinkChannel in AppDelegate.swift takes it to Dart, which opens the chat
+	     at that message; the link names ids only and grants nothing. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>ai.autonomous.harness.swarm-link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>harness</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<!-- ⚠️ DECISION, NOT A DEFAULT — and it is currently the OPTIMISTIC one.
@@ -34,6 +49,10 @@
 	     Getting it wrong is not a build error: review asks, and the version
 	     sits still until someone answers. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Off: a message link goes through LinkChannel, never Flutter's own
+	     route push, which this app's navigator has no route for. -->
+	<key>FlutterDeepLinkingEnabled</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>

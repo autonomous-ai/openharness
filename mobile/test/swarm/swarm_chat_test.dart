@@ -169,6 +169,7 @@ void main() {
   Future<void> show(
     WidgetTester tester,
     SwarmHost host, {
+    String swarmId = tab,
     String conversation = 'g1',
     String? messageId,
     String? decisionId,
@@ -181,7 +182,7 @@ void main() {
         theme: grid.buildAppTheme(brightness: Brightness.dark),
         builder: (context, child) => SwarmScope(notifier: host, child: child!),
         home: SwarmConversationPage(
-          swarmId: tab,
+          swarmId: swarmId,
           conversationId: conversation,
           messageId: messageId,
           decisionId: decisionId,
@@ -198,6 +199,7 @@ void main() {
   Future<SwarmHost> pump(
     WidgetTester tester,
     FakeSwarm fake, {
+    String swarmId = tab,
     String conversation = 'g1',
     String? messageId,
     String? decisionId,
@@ -220,6 +222,7 @@ void main() {
     await show(
       tester,
       host,
+      swarmId: swarmId,
       conversation: conversation,
       settle: settle,
       messageId: messageId,
@@ -2752,6 +2755,136 @@ void main() {
       expect(find.text('No messages yet.'), findsOneWidget);
       expect(key('swarm-chat-skeleton'), findsNothing);
       expect(find.text(notOpen), findsNothing);
+    });
+  });
+
+  // A message link opens the chat at its message (phone_shell.dart). One the
+  // person cannot open says "not open" alike, whatever the reason, and shows
+  // nothing of the chat: no title, project, message or name.
+  group('opened from a message link', () {
+    const notOpen = 'This chat is not open to you.';
+    const secret = 'The secret plan';
+
+    void nothingLeaks(WidgetTester tester) {
+      expect(find.text(notOpen), findsOneWidget);
+      expect(key('swarm-chat-skeleton'), findsNothing);
+      for (final text in [secret, 'Fix login', 'Mobile', '#Mobile', 'Nova']) {
+        expect(find.textContaining(text), findsNothing, reason: text);
+      }
+    }
+
+    for (final (why, failure) in [
+      (
+        'an unknown id',
+        const SuperTabFailure('NOT_FOUND', 'No such chat.', statusCode: 404),
+      ),
+      (
+        'a private chat of others',
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      ),
+      (
+        'someone else\'s Buddy chat',
+        const SuperTabFailure('FORBIDDEN', 'Not yours.', statusCode: 403),
+      ),
+    ]) {
+      testWidgets('$why is not open, and shows nothing of it', (tester) async {
+        final fake = backend([message('m1', 1, text: secret)]);
+        fake.routes['/api/super-tabs/$tab/groups/g9'] = (_) => throw failure;
+        fake.routes['/api/super-tabs/$tab/conversations/g9/messages'] = (_) =>
+            throw failure;
+
+        await pump(tester, fake, conversation: 'g9', messageId: 'm1');
+
+        nothingLeaks(tester);
+      });
+    }
+
+    testWidgets('a chat of a Swarm the person is not in is not open', (
+      tester,
+    ) async {
+      final fake = backend([message('m1', 1, text: secret)]);
+      const other = 'tab-other';
+      fake.routes['/api/super-tabs/$other/parts'] = (_) =>
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Not yours.',
+            statusCode: 403,
+          );
+      fake.routes['/api/super-tabs/$other/conversations/g1/messages'] = (_) =>
+          throw const SuperTabFailure(
+            'FORBIDDEN',
+            'Not yours.',
+            statusCode: 403,
+          );
+
+      await pump(
+        tester,
+        fake,
+        swarmId: other,
+        conversation: 'g1',
+        messageId: 'm1',
+      );
+
+      nothingLeaks(tester);
+    });
+
+    testWidgets('a person removed from the Swarm while it is open loses it '
+        'at once: nothing of it stays', (tester) async {
+      final fake = backend([message('m1', 1, text: secret)]);
+      final host = await pump(tester, fake, messageId: 'm1');
+      expect(find.text(secret), findsOneWidget);
+
+      const refused = SuperTabFailure(
+        'FORBIDDEN',
+        'Not yours.',
+        statusCode: 403,
+      );
+      fake.routes['/api/super-tabs/$tab/changes'] = (_) => throw refused;
+      fake.routes['/api/super-tabs/$tab/parts'] = (_) => throw refused;
+      fake.routes[messages] = (_) => throw refused;
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      nothingLeaks(tester);
+    });
+
+    testWidgets('a lookup that fails is asked again at the next read, and '
+        'opens the chat at the message then', (tester) async {
+      final fake = backend([message('m1', 1, text: secret)]);
+      var lookups = 0;
+      final g9 = {
+        'group': part(
+          'g9',
+          9,
+          groupData('g9', title: 'Found later', lastMessageSequence: 5),
+        ),
+      };
+      fake.routes['/api/super-tabs/$tab/groups/g9'] = (_) {
+        lookups++;
+        if (lookups == 1) throw StateError('socket closed');
+        return g9;
+      };
+      fake.routes['/api/super-tabs/$tab/conversations/g9/messages'] = (_) => {
+        'messages': [
+          {...message('m5', 5, text: 'Found it'), 'conversationId': 'g9'},
+        ],
+        'next': null,
+      };
+      final host = await pump(
+        tester,
+        fake,
+        conversation: 'g9',
+        messageId: 'm5',
+        settle: false,
+      );
+      expect(lookups, 1);
+      expect(find.text(notOpen), findsNothing);
+
+      await host.session!.inbox.reader(tab)!.refresh();
+      await tester.pumpAndSettle();
+
+      expect(lookups, 2);
+      expect(find.text('Found it'), findsOneWidget);
     });
   });
 

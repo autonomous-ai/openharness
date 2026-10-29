@@ -13,6 +13,7 @@ import '../swarm/swarm_computers.dart';
 import '../swarm/swarm_conversation_page.dart';
 import '../swarm/swarm_dictation.dart';
 import '../swarm/swarm_home_root.dart';
+import '../swarm/swarm_message_link.dart';
 import '../swarm/swarm_profile.dart';
 import '../swarm/swarm_session.dart';
 import '../swarm/swarm_tabs.dart';
@@ -77,6 +78,8 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
 
   /// The centre's Swarm notices: the app's own centre carries them; a stand-in that does not
   /// (a test's) gets a silent one.
+  late final SwarmLinkChannel _links;
+
   late final SwarmNotices _swarmNotices =
       switch (widget.notifier.agentNotices.system) {
         final SwarmNotices notices => notices,
@@ -130,6 +133,9 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     )..foreground = state == null || _inFront(state);
     _swarmFiles = SwarmAttachmentKeeper(_swarm);
     _swarmNotices.openedSwarm.addListener(_openNoticedSwarm);
+    // A message link (Desktop's Copy link to message): one that launched the
+    // app or came before sign-in waits on the native side until now.
+    _links = SwarmLinkChannel(_openLinkedMessage)..listen();
     // Install tap callbacks and read the launch payload even when no new notice
     // arrives. Checking permission does not ask for it.
     unawaited(noticesEnabled(notices));
@@ -169,6 +175,7 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
       _openNoticedDevice,
     );
     _swarmNotices.openedSwarm.removeListener(_openNoticedSwarm);
+    _links.close();
     _home.dispose();
     _swarmFiles.dispose();
     _swarm.dispose();
@@ -355,6 +362,33 @@ class _PhoneShellState extends State<PhoneShell> with WidgetsBindingObserver {
     // Swarm off cancels its notices. A stale tap must not open a disabled UI.
     if (_swarm.session == null) return;
     _showNoticedChat(target);
+  }
+
+  /// A message link: Swarm Home, and over it the chat at that message. The
+  /// chat says "not open" for one the person cannot read, as for a notice.
+  void _openLinkedMessage(SwarmMessageLink link) {
+    if (!mounted) return;
+    if (_navigator.currentState == null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _openLinkedMessage(link),
+      );
+      WidgetsBinding.instance.ensureVisualUpdate();
+      return;
+    }
+    if (_swarm.session == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('Turn on Swarm in Settings to open this link.'),
+        ),
+      );
+      return;
+    }
+    _showNoticedChat((
+      swarmId: link.tabId,
+      conversationId: link.conversationId,
+      messageId: link.messageId,
+      decisionId: null,
+    ));
   }
 
   void _showNoticedChat(SwarmNoticeTarget target) {
