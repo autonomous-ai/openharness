@@ -76,6 +76,19 @@ void main() {
           ],
           'next': null,
         };
+    fake.routes['/api/super-tabs/$tab/conversations/g1/messages'] = (_) => {
+      'messages': [
+        {
+          'id': 'msg-g1-1',
+          'conversationId': 'g1',
+          'text': 'Header is in.',
+          'sequence': 3,
+          'author': {'kind': 'agent', 'id': 'agent-builder', 'name': 'Nova'},
+          'createdAt': '2026-10-29T02:50:00.000Z',
+        },
+      ],
+      'next': null,
+    };
     fake.routes[board] = (_) => leaderboardData(
       people: [
         scoreData(me, points: 1320, rank: 1),
@@ -120,6 +133,73 @@ void main() {
     projectId: project,
     tabs: SwarmProjectTab.homeC,
   );
+
+  /// The page on its Team tab.
+  Future<SwarmHost> team(WidgetTester tester, FakeSwarm fake) async {
+    final host = await pump(tester, fake, page);
+    await tester.tap(key('swarm-project-tab-team'));
+    await tester.pumpAndSettle();
+    return host;
+  }
+
+  /// The words of the row keyed [k], its rich text included.
+  String said(WidgetTester tester, String k) => [
+    for (final text in tester.widgetList<RichText>(
+      find.descendant(of: key(k), matching: find.byType(RichText)),
+    ))
+      text.text.toPlainText(),
+  ].join(' | ');
+
+  /// How a screen reader says the row keyed [k].
+  String heard(WidgetTester tester, String k) =>
+      tester.getSemantics(key(k)).label;
+
+  group('Team, its agents', () {
+    testWidgets('each in its state with the task it holds, the most urgent '
+        'first, with what needs a look counted', (tester) async {
+      await team(tester, backend());
+
+      expect(
+        said(tester, 'swarm-team-agents-caption'),
+        'Agents | 1 needs input · 1 working',
+      );
+      double y(String id) => tester.getTopLeft(key('swarm-member-$id')).dy;
+      expect(
+        [
+          for (final id in ['agent-juno', 'agent-builder', 'agent-ash'])
+            y(id) < y('agent-lead'),
+        ],
+        [true, true, true],
+      );
+      expect(y('agent-juno'), lessThan(y('agent-builder')));
+      expect(y('agent-builder'), lessThan(y('agent-ash')));
+      expect(
+        heard(tester, 'swarm-member-agent-juno'),
+        'Juno, Needs input · #2160 Saved views cache',
+      );
+      expect(
+        heard(tester, 'swarm-member-agent-builder'),
+        'Nova, Working · #2156 Buddy chat header',
+      );
+      expect(heard(tester, 'swarm-member-agent-ash'), 'Ash, Idle');
+      for (final id in ['agent-juno', 'agent-builder', 'agent-ash']) {
+        expect(
+          tester.getSize(key('swarm-member-$id')).height,
+          greaterThanOrEqualTo(minTouchTarget),
+          reason: id,
+        );
+      }
+    });
+
+    testWidgets('a row opens the task its agent holds', (tester) async {
+      await team(tester, backend());
+
+      await tester.tap(key('swarm-member-agent-builder'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Header is in.'), findsOneWidget);
+    });
+  });
 
   group('the project screen', () {
     testWidgets('its #name over the humans, the agents and who is working', (
