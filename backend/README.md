@@ -227,7 +227,7 @@ The product usage collections have distinct purposes:
 | --- | --- | --- |
 | `product_usage_preferences` | Account ID, enabled flag, revision | Saved account preference; no usage history |
 | `product_usage_totals` | UTC day, allowlisted metric, sum (plus DB primary key) | 396 days, approximately 13 months |
-| `product_usage_receipts` | Random report UUID and expiration date | Scheduled expiry 36 days from the report day |
+| `product_usage_receipts` | Random report UUID and expiration date | Scheduled expiry 4 days from the report day (36 until 2026-10-29) |
 | `product_usage_activity` | HMAC subject (`PRODUCT_USAGE_SUBJECT_KEY`), UTC day, surfaces, worked flag, sign-up day, staff flag, expiry | 10 days (TTL); deleted on opt-out and `/api/analytics/delete`; written only while sharing is on and the key is set |
 
 No individual report body or arrival timestamp is stored. Receipt insertion and increments share a
