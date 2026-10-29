@@ -285,10 +285,11 @@ class SuperTabController extends ChangeNotifier {
   DateTime? pushUntil;
 
   /// Told of a change since the last read began: one of its main parts, or a
-  /// machine's reading alone; the newest change time told, and the newest a
-  /// read under way was sent after.
+  /// machine's reading alone; and the change times told lately, to know a
+  /// push heard again ([_kToldTimes] of them).
   bool _toldMain = false, _toldMachine = false;
-  int _toldAt = -1, _readCovers = -1;
+  final _toldTimes = <int>{};
+  static const _kToldTimes = 64;
 
   bool get _pushing {
     final until = pushUntil;
@@ -296,9 +297,11 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// The server said this Swarm changed, at [at] when it names the commit's
-  /// time. A change its last read, or the read under way, already covers is
-  /// dropped: a phone hears each push once per machine socket (review of
-  /// #2121). The rest is read on the next allowed read: now if the old poll
+  /// time. Only an exact repeat is dropped: a time already told, or the one
+  /// the last read returned. A phone hears each push once per machine socket
+  /// (review of #2121). An older time is not a repeat: each server stamps a
+  /// commit from its own clock as the command starts, so a later commit can
+  /// carry an earlier time (re-check of #2121). The rest is read on the next allowed read: now if the old poll
   /// would have read by now, else on the tick that would ([_readGap]), so a
   /// busy Swarm reads no more often than before pushes. A machine's reading
   /// alone always waits for the tick. Not on screen while the reading pauses,
@@ -306,10 +309,8 @@ class SuperTabController extends ChangeNotifier {
   void told({required bool main, int? at}) {
     if (_disposed || accessRevoked || updateRequired) return;
     if (main && at != null) {
-      if (at <= lastChangedAt || (_refreshing != null && at <= _readCovers)) {
-        return;
-      }
-      _toldAt = max(_toldAt, at);
+      if (at == lastChangedAt || !_toldTimes.add(at)) return;
+      if (_toldTimes.length > _kToldTimes) _toldTimes.remove(_toldTimes.first);
     }
     if (main) {
       _toldMain = true;
@@ -1675,10 +1676,9 @@ class SuperTabController extends ChangeNotifier {
     loading = snapshot == null;
     if (!quiet) _changed();
     _lastFullRead = clock.now();
-    // Taken as the read starts: a newer push heard while it is out reads once
-    // more, on the next allowed read; one it covers is dropped.
+    // Taken as the read starts: a push heard while it is out reads once more,
+    // on the next allowed read, unless it repeats a time already told.
     _toldMain = _toldMachine = false;
-    _readCovers = _toldAt;
     final took = Stopwatch()..start();
     // The open conversation's messages, asked for beside the state
     // ([SuperTabReading.messagesWithState]); dropped if the state moves the

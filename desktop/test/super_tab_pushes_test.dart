@@ -283,6 +283,30 @@ void main() {
       });
     });
 
+    // Re-check of #2121: commit times come from each server's clock as its
+    // command starts, so a later commit can carry an earlier time. Only an
+    // exact repeat is a duplicate.
+    test('reads a later commit whose time is older than the last read', () {
+      fakeAsync((async) {
+        final server = ConversationServer()..append('Hello');
+        final reads = _Reads(server);
+        final c = _controller(reads)..start();
+        async.flushMicrotasks();
+        _pushes(c);
+        async.elapse(const Duration(seconds: 10));
+        reads.clear();
+        server.append('Committed a millisecond "earlier"');
+        c.told(main: true, at: c.lastChangedAt - 1);
+        async.flushMicrotasks();
+        expect(reads.states, 1);
+        expect(
+          c.messages('lead').last.text,
+          'Committed a millisecond "earlier"',
+        );
+        c.dispose();
+      });
+    });
+
     // Review of #2121, 7: a phone hears each push once per machine socket.
     test('drops a push its last or current read already covers', () {
       fakeAsync((async) {
