@@ -35,6 +35,10 @@ export const NAMED_INDEX = {
     /** A member's Swarms in id order: Swarm lists and Workspace removals. */
     members: { autonomousEnv: 1, memberIds: 1, _id: 1 },
   },
+  SuperTabDelivery: {
+    /** An agent's deliveries by status and age: its open ones, oldest first. */
+    agentOpen: { tabId: 1, agentId: 1, status: 1, createdAt: 1 },
+  },
 } as const
 export type NamedCollection = keyof typeof NAMED_INDEX
 export type NamedIndex<C extends NamedCollection> = keyof typeof NAMED_INDEX[C] & string

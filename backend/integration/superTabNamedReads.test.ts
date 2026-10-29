@@ -7,6 +7,7 @@ import { SuperTabStore } from '../src/superTabs/store.js'
 import { listGroupIndexes } from '../src/superTabs/parts/indexed.js'
 import { SwarmReads } from '../src/superTabs/read/service.js'
 import { SwarmWorkspaces } from '../src/superTabs/workspaceStore.js'
+import { agentOpenDeliveries } from '../src/superTabs/pageReads.js'
 import { planDatabase, plan, profiled, reads } from './plans.test-support.js'
 
 // Roadmap Phase 3 (database optimization, 2026-10-29): Prisma sends `in` and `has` as $expr, which the planner bounds by an
@@ -54,7 +55,7 @@ describe('the owner\'s grid poll', () => {
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     expect(rows[0]!.nreturned).toBe(mine.length)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(mine.length)
-    expect(rows[0]!.command?.hint, 'the read names its index').toBeTruthy()
+    expect(rows[0]!.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
   })
 })
 
@@ -83,7 +84,7 @@ describe('a person\'s Swarm list', () => {
     expect(rows[0]!.nreturned).toBe(returned)
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(returned)
     expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(returned + 1)
-    expect(rows[0]!.command?.hint, 'the read names its index').toBeTruthy()
+    expect(rows[0]!.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
   }
 
   it('the Swarms page reads only the person\'s Swarms, in id order, by the member index', async () => {
@@ -119,6 +120,46 @@ describe('a person\'s Swarm list', () => {
     expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
     // Bounded by the person's Swarms, whichever Workspace each is in.
     expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(mine.length)
-    expect(rows[0]!.command?.hint, 'the read names its index').toBeTruthy()
+    expect(rows[0]!.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
+  })
+})
+
+describe('an agent\'s open deliveries', () => {
+  const tabId = `tab-${randomUUID()}`, agentId = `${tabId}-agent`
+  const delivery = (id: string, fields: { agentId?: string; status: string; createdAt: number; conversationId?: string }) => ({ id: `${tabId}-${id}`, tabId,
+    conversationId: fields.conversationId ?? 'c1', messageId: `${tabId}-m-${id}`, agentId: fields.agentId ?? agentId, machineId: 'm1', membershipGeneration: 'g',
+    authorKind: 'person', authorId: owner.sub, authorGeneration: 'g', status: fields.status, createdAt: new Date(fields.createdAt) })
+  beforeAll(async () => {
+    await db.superTabDelivery.createMany({ data: [
+      // Its own finished deliveries, which a read bounded by the agent alone examines too.
+      ...Array.from({ length: 10 }, (_, i) => delivery(`done-${i}`, { status: i % 2 ? 'confirmed' : 'cancelled', createdAt: NOW - 100_000 + i })),
+      // Another agent's open ones.
+      ...Array.from({ length: 5 }, (_, i) => delivery(`theirs-${i}`, { agentId: `${tabId}-other`, status: 'queued', createdAt: NOW - 50_000 + i })),
+      delivery('claimed', { status: 'claimed', createdAt: NOW - 3000, conversationId: 'c2' }),
+      delivery('queued', { status: 'queued', createdAt: NOW - 1000 }),
+    ] })
+    // One stored before its optional fields existed: Prisma reads each as null.
+    await db.$runCommandRaw({ insert: 'SuperTabDelivery', documents: [{ _id: `${tabId}-old`, tabId, conversationId: 'c1', messageId: `${tabId}-m-old`, agentId,
+      machineId: 'm1', membershipGeneration: 'g', authorKind: 'agent', authorId: 'lead', authorGeneration: 'g', status: 'uncertain',
+      createdAt: { $date: new Date(NOW - 2000).toISOString() }, updatedAt: { $date: new Date(NOW - 2000).toISOString() } }] })
+  })
+
+  it('reads only its own open ones, oldest first, by the agent index', async () => {
+    let open: Awaited<ReturnType<typeof agentOpenDeliveries>> = []
+    const entries = await profiled(db, async () => { open = await db.$transaction(tx => agentOpenDeliveries(tx, tabId, agentId)) })
+    expect(open.map(d => d.id)).toEqual([`${tabId}-claimed`, `${tabId}-old`, `${tabId}-queued`])
+    const rows = reads(entries, 'SuperTabDelivery', ['tabId', 'agentId', 'status'])
+    expect(rows, JSON.stringify(plan(rows))).toHaveLength(1)
+    expect(rows[0]!.docsExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3)
+    expect(rows[0]!.keysExamined, JSON.stringify(plan(rows))).toBeLessThanOrEqual(3 + 3)
+    expect(rows[0]!.command?.hint, `the read names its index: ${JSON.stringify(plan(rows))}`).toBeTruthy()
+  })
+
+  it('returns each row as Prisma reads it, outside a transaction too', async () => {
+    const prisma = await db.superTabDelivery.findMany({ where: { tabId, agentId, status: { in: ['queued', 'claimed', 'uncertain'] } }, orderBy: { createdAt: 'asc' } })
+    expect(await agentOpenDeliveries(db, tabId, agentId)).toEqual(prisma)
+    const old = prisma.find(d => d.id === `${tabId}-old`)!
+    expect(old.nativeContextId).toBeNull()
+    expect(old.holdSince).toBeNull()
   })
 })

@@ -2,6 +2,8 @@ import type { Prisma, SuperTabDelivery } from '@prisma/client'
 import { ms } from './parts/light.js'
 import type { ReactionRow } from './reactions.js'
 import { agentOnly, type Author } from './model.js'
+import { readBy } from './parts/indexed.js'
+import { prismaRow } from './rawRows.js'
 
 type Transaction = Prisma.TransactionClient
 
@@ -28,6 +30,15 @@ export async function pageDeliveries(tx: Transaction, tabId: string, messageIds:
   return rows.map(row => ({ id: row._id as string, messageId: row.messageId as string, agentId: row.agentId as string, status: row.status as string,
     receipt: (row.receipt ?? null) as string | null, holdReason: (row.holdReason ?? null) as string | null, holdSince: date(row.holdSince),
     deliveredAt: date(row.deliveredAt), answeredAt: date(row.answeredAt), createdAt: date(row.createdAt)!, updatedAt: date(row.updatedAt)! }))
+}
+
+/** An agent's open deliveries, oldest first and each conversation's tied rows in its order: one indexed read, and the tied
+ *  messages' sequences only when there are ties. */
+export async function agentOpenDeliveries(tx: Transaction, tabId: string, agentId: string): Promise<SuperTabDelivery[]> {
+  // By the agent index (parts/indexed.ts): Prisma sent `status: { in }` as an $expr $or, planned as one scan per status.
+  const rows = await readBy(tx, 'SuperTabDelivery', 'agentOpen', [{ $match: { tabId, agentId, status: { $in: ['queued', 'claimed', 'uncertain'] } } },
+    { $sort: { createdAt: 1 } }, { $limit: 100 }])
+  return inConversationOrder(tx, tabId, rows.map(row => prismaRow<SuperTabDelivery>('SuperTabDelivery', row)))
 }
 
 /** An agent's open deliveries, read by creation time, with each conversation's tied rows put in its message order. One
