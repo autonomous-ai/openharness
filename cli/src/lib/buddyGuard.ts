@@ -19,7 +19,7 @@
  * Read, Grep, Glob and LS take paths there only, by real path, so a link out is out. Each part of a Bash word that could
  * be a path (itself, after "=" or ":", and after each letter of a short option, as -S/x or -fout/x glue a value on) is
  * refused when it is absolute, has a ".." part, or by its real path as the command runs leaves the folder: a link a pull
- * brings after launch included (review 3 of #2092; lib/swarmSkills.ts removes those there at launch). So are the read
+ * brings after launch included, and nothing in the folder is removed for it (review 3 of #2092, Lead). So are the read
  * commands' ways to follow links as they walk (grep -R/-S/-O, rg -L, ls -L), gh's -R/--repo (any repository its person
  * can read) and git's --no-index.
  * Its Super Tab commands are a Buddy's own (status, messages, message, decisions, post, propose, help) as the pane it runs

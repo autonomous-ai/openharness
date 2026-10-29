@@ -207,9 +207,11 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep) run without asking, each as one command with
   no pipes, redirects, `;`, `&&`, `$()` or globs. Everything else is refused without asking, including the read
   commands' own ways to write (git `--output`, `--ext-diff`, `-O`; gh `--web`; rg `--pre`, `--hostname-bin`), a
-  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out, or that
-  managed settings skip (`allowManagedHooksOnly`), leaves the call to dontAsk: it still runs the commands Claude Code
-  itself counts as read-only and refuses everything else, so nothing can write. Its Super Tab commands are a Buddy's
+  command run in the background and `tail -f`. A guard that cannot start refuses the call. One that times out leaves
+  the call to dontAsk: it still runs the commands Claude Code itself counts as read-only, inside the folder, and refuses
+  everything else, so nothing can write. A managed policy that runs only managed hooks (`allowManagedHooksOnly`) would
+  leave a Buddy in that same state, plus whatever the policy itself allows; that was not tested, as it is an
+  administrator's file. Its Super Tab commands are a Buddy's
   own (status, messages, message, decisions, post, propose and help), as the pane it runs in identifies it: never with
   `--agent`, `--port` or `--machine`. Known limit: a Buddy whose machine's Harness runs on a port other than the default
   (18473) cannot run these commands, since reaching that daemon takes `--port`.
@@ -217,8 +219,8 @@ any still starting, and stops their posts. Their chats stay for their owners to 
   project's git history, the project's GitHub issues and pull requests through the person's own `gh` sign-in, its
   own chat and the project chat. Nothing else on the machine: absolute paths and `..` are refused, glued to an option
   too (`-f/x`), and so are gh's `-R`/`--repo`, which would read any repository the person can, and git's `--no-index`.
-  A link out of the folder, committed or broken, is removed when the Buddy launches; one that arrives later, from a
-  pull, is refused by its real path as each command runs, and grep, rg and ls may not follow links as they walk.
+  Nothing in the folder is changed or removed for this: a link out of it, committed or brought later by a pull, or a
+  broken one, is refused by its real path as each command runs, and grep, rg and ls may not follow links as they walk.
 - A Claude Code Buddy reads only its own folder's settings and starts no MCP server, so nothing from the
   person's own Claude Code settings or committed to the project (hooks, permission rules, plugins, MCP servers) runs
   in it, and neither do the machine MCP servers Harness gives other agents: a hook a teammate commits would otherwise

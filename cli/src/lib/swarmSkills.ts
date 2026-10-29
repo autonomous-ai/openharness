@@ -6,7 +6,7 @@ import { isMessagesCommand } from '../engines/kit/messagesHook.js'
 import { isManagedHook } from '../engines/kit/notifyHooks.js'
 import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { isSwarmRole, isSwarmSkillMode, parseSwarmSkill, type SwarmRole, type SwarmSkill, type SwarmSkillGrant, type SwarmSkillMode } from './savedSkill.js'
 
@@ -671,14 +671,6 @@ function harnessClaudeHooks(): Record<string, unknown[]> {
  * Harness runtime folder (its skill and records) is left alone. A Codex Buddy runs in Codex's read-only sandbox instead,
  * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
  */
-/** Whether [path]'s real path is [root] or in it; a link to nothing is not. */
-function within(root: string, path: string): boolean {
-  try {
-    const real = realpathSync(path)
-    return real === root || real.startsWith(root + sep)
-  } catch { return false }
-}
-
 function lockBuddyFolder(root: string): void {
   const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
@@ -692,9 +684,6 @@ function lockBuddyFolder(root: string): void {
       const path = join(dir, entry.name)
       if (entry.isDirectory()) walk(path)
       else if (entry.isFile()) chmodSync(path, lstatSync(path).mode & 0o555)
-      // A link out of the folder, committed or broken, is removed: reading it would read its person's files elsewhere on
-      // the machine (review 3 of #2092). The guard judges each path by its real path as well, for one a pull brings later.
-      else if (entry.isSymbolicLink() && !within(root, path)) unlinkSync(path)
     }
   }
   walk(root)

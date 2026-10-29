@@ -628,23 +628,13 @@ describe('a Buddy\'s folder (Lead\'s ruling on the privacy review of #1992)', ()
     })
   })
 
-  it('removes every link out of the folder, and keeps the links within it (review 3 of #2092)', () => {
-    // The guard also judges each path by its real path as a command runs (lib/buddyGuard.ts), which covers a link a pull
-    // brings while the Buddy runs; at launch none is left to follow at all, a committed one included.
+  it('deletes nothing in the folder, links out of it included: the guard refuses those by their real paths (Lead, 10-29)', () => {
     const workspace = fixture(), outside = fixture()
     writeFileSync(join(outside, 'secret.txt'), 'secret\n')
-    mkdirSync(join(workspace, 'docs'))
-    writeFileSync(join(workspace, 'docs', 'a.md'), 'a\n')
-    symlinkSync(join(outside, 'secret.txt'), join(workspace, 'docs', 'secret.md'))
-    symlinkSync(outside, join(workspace, 'outside'))
+    symlinkSync(join(outside, 'secret.txt'), join(workspace, 'secret.md'))
     symlinkSync(join(workspace, 'gone'), join(workspace, 'broken'))
-    symlinkSync(join(workspace, 'docs', 'a.md'), join(workspace, 'readme.md'))
-    symlinkSync('docs', join(workspace, 'manual'))
     prepareSwarmSkill(workspace, { role: 'buddy', key: 'session' })
-    const left = (name: string) => { try { return lstatSync(join(workspace, name)).isSymbolicLink() } catch { return false } }
-    expect([left('docs/secret.md'), left('outside'), left('broken')]).toEqual([false, false, false])
-    expect([left('readme.md'), left('manual')]).toEqual([true, true])
-    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('secret\n')
+    expect([lstatSync(join(workspace, 'secret.md')).isSymbolicLink(), lstatSync(join(workspace, 'broken')).isSymbolicLink()]).toEqual([true, true])
   })
 
   it('locks the folder even when the skill cannot be prepared (re-check of #1992)', () => {
