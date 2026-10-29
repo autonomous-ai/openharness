@@ -167,6 +167,12 @@ class SuperTabConversation {
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       lastMainSequence = (row['lastMainSequence'] as num?)?.toInt(),
       reactionSeq = (row['reactionSeq'] as num?)?.toInt() ?? 0,
+      changedAt = row['changedAt'] is num
+          ? DateTime.fromMillisecondsSinceEpoch(
+              (row['changedAt'] as num).toInt(),
+              isUtc: true,
+            )
+          : null,
       assignment = row['assignment'] == null
           ? null
           : Map.unmodifiable(superTabMap(row['assignment'])),
@@ -221,6 +227,12 @@ class SuperTabConversation {
   /// Moves whenever a reaction here is added or taken back (backend
   /// reactions.ts): the messages shown are read again for their counts.
   final int reactionSeq;
+
+  /// When it last changed, a message included: its part's `changedAt`,
+  /// which the phone's reader adds to what it read
+  /// ([SuperTabParts.groupChangedAt]), as no state names it. Null where it
+  /// is not known: a state read some other way, or a Home kept from before.
+  final DateTime? changedAt;
   final Map<String, dynamic>? assignment;
 
   /// Whether its task waits on purpose or is stuck, as the server last found
