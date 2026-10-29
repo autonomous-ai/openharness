@@ -339,12 +339,12 @@ async function startOnce(input: Json, scoped: ScopedRequest, where: Where, open:
       const role = buddy ? 'buddy' : reviewer ? 'review' : 'dev', hosted = input.hostDispatch === true ? object(input.github) : null
       const facts = skilled && !hosted ? await projectFacts(scoped, request.conversationId, start.machineOwnerId) : null
       const mode = !skilled ? null : isSwarmSkillMode(start.skillMode) ? start.skillMode : facts?.mode ?? 'orchestration'
-      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token, and a Claude Buddy
-      // asks before anything but its Super Tab commands, which its folder's settings pre-approve (lib/swarmSkills.ts). A
-      // Codex Buddy reads in its read-only sandbox and asks before anything outside it: with full permissions it could push
-      // and open pull requests with its person's own GitHub login (Lead, 10-29).
+      // A Buddy never writes code (Lead's ruling, privacy review of #1992): never the GitHub App's token. A Claude Buddy runs
+      // past its folder's guard, which allows reads and its Super Tab commands, and the rest is refused without a prompt
+      // nobody answers (lib/buddyGuard.ts, Ken 10-29). A Codex Buddy reads in its read-only sandbox and asks before anything
+      // outside it: with full permissions it could push and open pull requests with its person's own GitHub login (Lead, 10-29).
       const github = buddy ? null : hosted ? (typeof hosted.requester === 'string' && hosted.requester ? { requester: hosted.requester } : null) : facts?.github ?? null
-      const asks = !buddy ? null : request.engine === 'claude' ? 'ask' : request.engine === 'codex' ? 'readOnlyAsk' : null
+      const asks = !buddy ? null : request.engine === 'claude' ? 'dontAsk' : request.engine === 'codex' ? 'readOnlyAsk' : null
       const payload: Json = { engine: request.engine, name: request.name, creationId, startedBy: 'agent', bypassPermission: !asks,
         ...(asks ? { permissionMode: asks } : permissionModeFlags(request.engine as AgentEngine, 'full') ? { permissionMode: 'full' } : {}),
         ...(mode ? { swarmRole: role, swarmSkillMode: mode } : {}),

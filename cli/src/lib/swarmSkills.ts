@@ -1,5 +1,7 @@
 /** Built into the CLI so contributed machines need no separately installed plugin. */
 import { ignoreHarnessRuntime } from './harnessRuntimeIgnore.js'
+import { BUDDY_GUARD_SOURCE, buddyGuardCommand } from './buddyGuard.js'
+import { managedNodePath } from './nodeRuntime.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -573,7 +575,7 @@ You are one person's Buddy for one project. You help them think a request throug
 
 ## Limits
 - Never assign work, start agents, change code or open pull requests. Your folder is for reading.
-- In the shell, run only harness super-tab commands: anything else waits for an approval nobody at your terminal gives. Read the code with your file tools.
+- Read the code with your file tools (Read, Grep, Glob). In the shell, run one plain command at a time, with no pipes, redirects, ;, &&, $() or globs, and only these: git grep, log, show, diff, blame and status; gh issue view and list; gh pr view, list and diff; ls, cat, rg, head, tail, wc and grep; and harness super-tab. Anything else is refused, or waits for an approval nobody may give: do not retry it; tell your owner what you could not do.
 - Say "I don't know" rather than guess, and point your owner to the PM in the project chat for anything you cannot answer.
 `
 
@@ -625,9 +627,14 @@ export function prepareSwarmSkill(workspace: string, saved: SwarmSkill): { file:
   return { file, instructions: `${swarmSkillUse(saved.role, mode)} Before working, read ${JSON.stringify(file)} with your file or shell tool.` }
 }
 
-/** What Claude Code may do in a Buddy's folder without asking (it launches in asking mode, superTabs/start.ts): its Super Tab
- *  commands, to read and post in its owner's chat. Editing is denied outright. */
-const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['Bash(harness super-tab:*)'], deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] } }
+/** Claude Code's settings in a Buddy's folder (it launches in dontAsk mode, superTabs/start.ts): its guard answers every
+ *  tool call, allowing only reads and its Super Tab commands (lib/buddyGuard.ts), and editing is denied outright. The
+ *  folder's local settings outrank the person's own, which may turn hooks off. */
+const buddyClaudeSettings = (guard: string) => ({
+  permissions: { defaultMode: 'dontAsk', deny: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] },
+  disableAllHooks: false,
+  hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: buddyGuardCommand(managedNodePath(), guard), timeout: 30 }] }] },
+})
 
 /**
  * A Buddy never changes code (Lead's ruling, privacy review of #1992): its own worktree gets Claude Code's settings above,
@@ -636,10 +643,12 @@ const BUDDY_CLAUDE_SETTINGS = { permissions: { defaultMode: 'default', allow: ['
  * asking before anything outside it (superTabs/start.ts), on its owner's own machine only (backend commands.ts buddy.create).
  */
 function lockBuddyFolder(root: string): void {
-  const settings = join(root, '.claude', 'settings.local.json')
+  const settings = join(root, '.claude', 'settings.local.json'), guard = join(root, '.claude', 'buddy-guard.mjs')
   mkdirSync(join(root, '.claude'), { recursive: true })
-  if (existsSync(settings)) chmodSync(settings, 0o600)
-  writeFileSync(settings, `${JSON.stringify(BUDDY_CLAUDE_SETTINGS, null, 2)}\n`, { mode: 0o600 })
+  // Both were made read-only by the last launch, and both are written again: a relaunch runs this release's guard.
+  for (const file of [settings, guard]) if (existsSync(file)) chmodSync(file, 0o600)
+  writeFileSync(guard, BUDDY_GUARD_SOURCE, { mode: 0o600 })
+  writeFileSync(settings, `${JSON.stringify(buddyClaudeSettings(guard), null, 2)}\n`, { mode: 0o600 })
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (dir === root && (entry.name === '.harness' || entry.name === '.git')) continue

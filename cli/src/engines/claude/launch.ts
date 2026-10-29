@@ -9,6 +9,8 @@ const permissionModes = {
   acceptEdits: ['--permission-mode', 'acceptEdits'],
   plan: ['--permission-mode', 'plan'],
   ask: ['--permission-mode', 'default'],
+  // A Buddy's (superTabs/start.ts): what its folder's guard does not allow is refused, never asked (lib/buddyGuard.ts).
+  dontAsk: ['--permission-mode', 'dontAsk'],
   full: ['--dangerously-skip-permissions'],
 }
 export const launch: EngineLaunch = {
