@@ -335,7 +335,12 @@ class _SwarmProjectPageState extends State<SwarmProjectPage> {
       projectId: project.id,
       header: false,
     ),
-    SwarmProjectTab.team => const SizedBox.shrink(),
+    SwarmProjectTab.team => SwarmProjectTeam(
+      session: session,
+      reader: reader,
+      projectId: project.id,
+      onOpen: _open,
+    ),
   };
 
   @override
