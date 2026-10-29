@@ -346,40 +346,54 @@ class _SwarmActivityViewState extends State<SwarmActivityView> {
         item.need is! SwarmDecisionNeed) {
       return;
     }
-    final decision = (item.need as SwarmDecisionNeed).decision;
-    final where = decision.projectName.isEmpty
-        ? ''
-        : ' in #${decision.projectName}';
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          'Approve?',
-          style: AppType.heading(color: AppPalette.textPrimary),
-        ),
-        content: Text(
-          'Sends “$option” to ${decision.askerName}$where: '
-          '${decision.question}\n\nYou can undo it for a few seconds.',
-          style: AppType.body(color: AppPalette.textSecondary),
-        ),
-        actions: [
-          SwarmButton(
-            key: const ValueKey('swarm-activity-approve-cancel'),
-            label: 'Cancel',
-            style: SwarmButtonStyle.link,
-            onPressed: () => Navigator.of(context).pop(false),
-          ),
-          SwarmButton(
-            key: const ValueKey('swarm-activity-approve-confirm'),
-            label: 'Approve',
-            style: SwarmButtonStyle.fill,
-            onPressed: () => Navigator.of(context).pop(true),
-          ),
-        ],
-      ),
-    );
-    if (yes == true && mounted) session.activity.approve(item);
+    final need = item.need as SwarmDecisionNeed;
+    final yes = await confirmSwarmApprove(context, need, option);
+    if (yes && mounted) session.activity.approve(item);
   }
+}
+
+/// Asks before [option] is sent as the answer to [need]: who asked, where,
+/// and the question, and that it can still be undone. True once the person
+/// confirms; the caller then holds the answer for Undo and sends it
+/// ([SwarmSession.hold]). Activity's Approve asks this.
+Future<bool> confirmSwarmApprove(
+  BuildContext context,
+  SwarmDecisionNeed need,
+  String option,
+) async {
+  final decision = need.decision;
+  final where = decision.projectName.isEmpty
+      ? ''
+      : ' in #${decision.projectName}';
+  final yes = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(
+        'Approve?',
+        style: AppType.heading(color: AppPalette.textPrimary),
+      ),
+      content: Text(
+        'Sends “$option” to ${decision.askerName}$where: '
+        '${decision.question}\n\nYou can undo it for a few seconds.',
+        style: AppType.body(color: AppPalette.textSecondary),
+      ),
+      actions: [
+        SwarmButton(
+          key: const ValueKey('swarm-activity-approve-cancel'),
+          label: 'Cancel',
+          style: SwarmButtonStyle.link,
+          onPressed: () => Navigator.of(context).pop(false),
+        ),
+        SwarmButton(
+          key: const ValueKey('swarm-activity-approve-confirm'),
+          label: 'Approve',
+          style: SwarmButtonStyle.fill,
+          onPressed: () => Navigator.of(context).pop(true),
+        ),
+      ],
+    ),
+  );
+  return yes ?? false;
 }
 
 /// A line over the rows, with what can be done about it.
