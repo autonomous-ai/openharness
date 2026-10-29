@@ -248,6 +248,28 @@ describe('the purge of a confidential session the Swarm ended', () => {
   })
 })
 
+// Security re-check 1 of 147777f54: with its record unreadable, a retry for a session already gone answered 'skipped', and its
+// close released the account. While the record cannot be read, no purge is answered: the close fails, the hold stays.
+describe('a purge while its record cannot be read', () => {
+  it('is refused, the session gone or not, so the close fails and the account stays held until a person clears it', async () => {
+    const home = dir(), file = join(home, 'super-tabs', 'team-purges.json')
+    mkdirSync(join(home, 'super-tabs'), { recursive: true })
+    writeFileSync(file, '{')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const record = purgeRecord(file)
+    const purge = vi.fn(async () => ({ ok: true }))
+    const refusal = { error: 'PURGE_RECORD_UNREADABLE',
+      detail: `This machine's record of purges still to finish could not be read and was kept aside at ${file}.unreadable. Its owner checks what it names, then deletes it.` }
+    for (const session of [() => null, (id: string) => ({ agentId: id, sessionId: 'pm-session', registeredAt: 5, engine: 'claude', cwd: CWD })]) {
+      expect(await createConfidentialPurge({ confidential: () => true, home, session, purge, record })('pm')).toEqual(refusal)
+    }
+    expect(purge).not.toHaveBeenCalled()
+    // Said once, where it was kept.
+    expect(warn.mock.calls.map(([line]) => String(line))).toEqual([`[super-tabs] the record of purges still to finish could not be read; kept aside at ${file}.unreadable until its owner clears it`])
+    warn.mockRestore()
+  })
+})
+
 describe('the record of purges still to finish', () => {
   it('keeps them across restarts, and says when it cannot be read, so the account stays held (teamApps.ts)', async () => {
     const file = join(dir(), 'team-purges.json')

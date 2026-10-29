@@ -45,8 +45,16 @@ export function purgeRecord(file: string) {
       let free = aside
       for (let n = 1; existsSync(free); n++) free = `${aside}.${n}`
       renameSync(file, free)
+      // Said once, where it was kept: its owner clears it by hand (the PR's risk note, re-check 1 of 147777f54).
+      console.warn(`[super-tabs] the record of purges still to finish could not be read; kept aside at ${free} until its owner clears it`)
       return new Map()
     }
+  }
+  const keptAside = (): string | null => {
+    if (existsSync(aside)) return aside
+    // No folder yet: no record was ever kept here, let alone kept aside.
+    const names = existsSync(dirname(file)) ? readdirSync(dirname(file)) : []
+    return names.filter(name => name.startsWith(`${basename(aside)}.`)).sort().map(name => join(dirname(file), name))[0] ?? null
   }
   const state = { held: load() }
   const save = () => {
@@ -57,7 +65,9 @@ export function purgeRecord(file: string) {
   return {
     pending: (): PurgeTarget[] => [...state.held.values()],
     get: (agentId: string): PurgeTarget | undefined => state.held.get(agentId),
-    unknown: (): boolean => existsSync(aside) || readdirSync(dirname(file)).some(name => name.startsWith(`${basename(aside)}.`)),
+    unknown: (): boolean => keptAside() !== null,
+    /** The first record kept aside, while one is there. */
+    keptAside,
     put(target: PurgeTarget): void { state.held.set(target.agentId, target); save() },
     drop(agentId: string): void { if (state.held.delete(agentId)) save() },
   }
@@ -212,6 +222,11 @@ export function createConfidentialPurge(deps: {
   record: PurgeRecord
 }): (agentId: string) => Promise<Record<string, unknown>> {
   return async agentId => {
+    // With its record unreadable, which purges are still to finish is not known: none is answered, not even a 'skipped' for a
+    // session already gone, so the close fails and the backend keeps the account held until a person clears the record.
+    const aside = deps.record.keptAside()
+    if (aside) return { error: 'PURGE_RECORD_UNREADABLE',
+      detail: `This machine's record of purges still to finish could not be read and was kept aside at ${aside}. Its owner checks what it names, then deletes it.` }
     const session = deps.session(agentId)
     let target = deps.record.get(agentId)
     if (!target) {
