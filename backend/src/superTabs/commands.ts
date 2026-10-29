@@ -1567,8 +1567,10 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       }
       if (command.type === 'agent.startFailed') {
         if (start.harnessId) fail('ALREADY_STARTED', 'This agent already started.')
+        // Only its first failure counts against its engine: the server may have timed it out before its host said so (liveness.ts).
+        const counted = !start.error
         start.error = command.error
-        const suspended = noteStartFailed(state, start, context.now)
+        const suspended = counted ? noteStartFailed(state, start, context.now) : null
         // A Product Manager's start says so in its project's conversation only when it stops trying (leadStart.ts).
         if (start.request.leadFor) {
           const ended = leadStartFailed(state, start, command.error, context.now)

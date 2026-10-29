@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyCommand, commandSchema, PAIR_CHAIN_LIMIT, swarmGridName, withoutCredentials, type Command, type CommandContext } from './commands.js'
 import { CREDENTIAL_MARKER, type CredentialKind } from './credentials.js'
+import { sweepLiveness } from './liveness.js'
 import { hostLocalGrid, machineSlots, removalPreview, swarmGridRow } from './machines.js'
 import { activeWork, agentRole, createSuperTab, visibleState, type Actor, type AgentConfiguration } from './model.js'
 import type { RouteDecision } from './routeRecord.js'
@@ -3447,6 +3448,21 @@ describe('an engine that cannot run on a contributed machine', () => {
     f.run({ type: 'agent.started', startId: 's2', harnessId: 'native-2', configuration: config }, owner, { contribution: { machineOwnerId: 'owner', contributorId: 'owner', hostGrant: null } })
     expect(fail('s3').mentions).toBeUndefined()
     expect(fail('s4').mentions).toEqual(['owner'])
+  })
+
+  // Review of 4ddd0a1e0: the server timed a start out, then its host reported it failed too; one flaky start suspended Codex.
+  it('counts a start once: a host failure after the server timed the same start out is not a second failure', () => {
+    const { f, fail } = setup()
+    const timedOut = f.state.starts![0]!
+    timedOut.dispatchedAt = 0
+    sweepLiveness(f.state, 3 * 60_000 + 1)
+    expect(timedOut.error).toBeTruthy()
+    const late = fail('s1')
+    expect(late.mentions).toBeUndefined()
+    expect(late.text).not.toContain('suspended')
+    expect(f.state.machines![0]!.engineSuspensions ?? {}).toEqual({})
+    // A different start that fails next is the second in a row.
+    expect(fail('s2').mentions).toEqual(['owner'])
   })
 
   it('is refused by the start check while suspended, signed out or out of quota, and a grid model there is not', () => {
