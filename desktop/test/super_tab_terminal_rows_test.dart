@@ -49,6 +49,8 @@ void main() {
               'harnessId': id,
               'contributorId': 'owner',
               'configuration': {'engine': 'claude'},
+              // Its prompt still waits: the backend clears this once it is answered.
+              if (id == 'builder') 'alerting': ['prompt'],
             },
         ];
         final group = (server.state['conversations'] as List)[1] as Map;
@@ -180,4 +182,95 @@ void main() {
       },
     );
   }
+
+  // Scholes, 10-29: his Buddy's "waiting at a prompt" line stayed after the
+  // prompt was answered, and a new one came under every message after it.
+  testWidgets(
+    'a prompt warning shows once, while its agent still waits, and goes once it is answered',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(900, 520));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final server = ConversationServer();
+      final builder = <String, dynamic>{
+        'id': 'builder',
+        'name': 'Builder',
+        'displayName': 'Sage',
+        'machineId': 'm',
+        'harnessId': 'builder',
+        'contributorId': 'owner',
+        'configuration': {'engine': 'claude'},
+        'alerting': ['prompt'],
+      };
+      server.state['agents'] = [builder];
+      final group = (server.state['conversations'] as List)[1] as Map;
+      group['agentIds'] = ['builder'];
+      String alert(String alert) {
+        server.append(
+          alert == 'prompt'
+              ? 'Sage is waiting at a prompt in its terminal.'
+              : 'Sage hit a usage limit. Routing skips it until 15:00 UTC.',
+          conversationId: 'offline',
+        );
+        server.messages.last['author'] = {
+          'kind': 'agent',
+          'id': 'builder',
+          'name': 'Builder',
+        };
+        server.messages.last['source'] = {
+          'kind': 'terminal-alert',
+          'agentId': 'builder',
+          'alert': alert,
+        };
+        return server.messages.last['id'] as String;
+      }
+
+      final first = alert('prompt');
+      server.append('Here is what I found.', conversationId: 'offline');
+      final limit = alert('limit');
+      final latest = alert('prompt');
+      final controller = server.controller(
+        initial: {
+          'tabId': 'tab',
+          'accountId': 'owner',
+          'selectedId': 'offline',
+        },
+      );
+      await controller.refresh();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SuperTabView(
+              controller: controller,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Finder row(String id) => find.byKey(ValueKey('super-message-$id'));
+
+      // Still waiting: only the newest warning, and the usage limit's own note.
+      expect(row(first), findsNothing);
+      expect(row(latest), findsOneWidget);
+      expect(row(limit), findsOneWidget);
+
+      // Answered: the backend clears the agent's alert, and its warning goes.
+      builder['alerting'] = <String>[];
+      server.revision++;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(row(latest), findsNothing);
+      expect(row(first), findsNothing);
+      expect(row(limit), findsOneWidget);
+      expect(find.text('Here is what I found.'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await controller.flush();
+      controller.dispose();
+    },
+  );
 }

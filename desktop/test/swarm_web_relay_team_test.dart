@@ -1,4 +1,8 @@
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
@@ -33,7 +37,36 @@ class _Daemon extends WsConn {
     Duration timeout = const Duration(seconds: 20),
   }) async {
     if (type == 'super_tabs') relayed.add(machineId);
+    if (type == 'agent_messages') relayed.add('$machineId:agent_messages');
     return {'value': <String, dynamic>{}};
+  }
+}
+
+/// The REST client, recording the files the app sends. Nothing leaves the
+/// test: on a computer the real one posts through its local daemon.
+class _Api extends ApiClient {
+  _Api() : super(config: AppConfig.dev, session: AuthSession());
+
+  final posted = <String>[];
+
+  @override
+  Future<Response<dynamic>> postForm(
+    String path,
+    FormData form, {
+    CancelToken? cancelToken,
+    ProgressCallback? onSendProgress,
+  }) async {
+    posted.add(path);
+    return Response(
+      requestOptions: RequestOptions(path: path),
+      statusCode: 200,
+      data: {
+        'success': true,
+        'data': {
+          'attachment': {'id': 'f1'},
+        },
+      },
+    );
   }
 }
 
@@ -171,5 +204,74 @@ void main() {
       ),
     );
     expect(relayed, isEmpty);
+  });
+
+  group('on a computer switched to a Harness Team account', () {
+    late _Api api;
+    final plainly = contains('This computer runs Swarm agents');
+
+    Future<Object?> upload() => app.superTabs.upload(
+      tabId: 'tab',
+      conversationId: 'buddy-chat',
+      name: 'shot.png',
+      mime: 'image/png',
+      bytes: Uint8List.fromList([1, 2, 3]),
+      cancel: CancelToken(),
+      onProgress: (_) {},
+    );
+
+    void computer(String sessionKind) {
+      native(_row('here', sessionKind: sessionKind));
+      app.api = api = _Api();
+    }
+
+    test('a file is sent from this computer\'s own machine as before', () async {
+      computer('computer');
+      await upload();
+      expect(api.posted, ['/api/super-tabs/tab/attachments']);
+    });
+
+    test('a file is refused here, plainly, and never sent', () async {
+      computer('team');
+      await expectLater(
+        upload(),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
+              .having((f) => f.message, 'message', plainly),
+        ),
+      );
+      expect(api.posted, isEmpty);
+    });
+
+    test('a profile picture is refused here, plainly, and never sent', () async {
+      computer('team');
+      await expectLater(
+        app.superTabs.avatarUpload(
+          tabId: 'tab',
+          png: Uint8List.fromList([1, 2, 3]),
+        ),
+        throwsA(
+          isA<SuperTabFailure>()
+              .having((f) => f.code, 'code', 'MACHINE_UNAVAILABLE')
+              .having((f) => f.message, 'message', plainly),
+        ),
+      );
+      expect(api.posted, isEmpty);
+    });
+
+    test('a shared-tabs read is refused plainly too, and never sent', () async {
+      computer('team');
+      online(_row('elsewhere', sessionKind: 'computer'));
+      await expectLater(
+        app.sharedTabs.request({'action': 'shares'}),
+        throwsA(
+          isA<WsRequestFailure>()
+              .having((f) => f.code, 'code', 'MACHINE_AWAY')
+              .having((f) => f.detail, 'detail', plainly),
+        ),
+      );
+      expect(relayed, isEmpty);
+    });
   });
 }

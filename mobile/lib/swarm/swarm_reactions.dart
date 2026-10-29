@@ -136,7 +136,7 @@ class _Count extends StatelessWidget {
 }
 
 /// Opens the reactions a message can carry in a sheet, with a light tap of
-/// the phone as a long-press gives: Desktop's six, the reader's own marked.
+/// the phone as a long-press gives: Desktop's seven, the reader's own marked.
 /// Answers the one picked, or null when the sheet closed without one.
 Future<SuperTabReactionEmoji?> showSwarmReactionPicker(
   BuildContext context, {
@@ -190,36 +190,43 @@ class _Picker extends StatelessWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
+                // Seven at 50 points are wider than a 375-point phone's
+                // sheet: each shares the row, never under a finger's 44.
                 for (final emoji in SuperTabReactionEmoji.values)
-                  Semantics(
-                    button: true,
-                    selected: mine.contains(emoji),
-                    label:
-                        '${emoji.key.replaceAll('_', ' ')}'
-                        '${mine.contains(emoji) ? ', yours' : ''}',
-                    excludeSemantics: true,
-                    onTap: () => Navigator.of(context).pop(emoji),
-                    child: GestureDetector(
-                      key: ValueKey('swarm-react-${emoji.key}'),
-                      behavior: HitTestBehavior.opaque,
+                  Flexible(
+                    child: Semantics(
+                      button: true,
+                      selected: mine.contains(emoji),
+                      label:
+                          '${emoji.key.replaceAll('_', ' ')}'
+                          '${mine.contains(emoji) ? ', yours' : ''}',
+                      excludeSemantics: true,
                       onTap: () => Navigator.of(context).pop(emoji),
-                      child: Container(
-                        width: 50,
-                        height: 50,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: mine.contains(emoji)
-                              ? accent.withValues(alpha: 0.18)
-                              : null,
-                          border: mine.contains(emoji)
-                              ? Border.all(color: accent)
-                              : null,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Text(
-                          emoji.glyph,
-                          style: const TextStyle(
-                            fontSize: AppIconSize.standalone,
+                      child: GestureDetector(
+                        key: ValueKey('swarm-react-${emoji.key}'),
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => Navigator.of(context).pop(emoji),
+                        child: Container(
+                          constraints: const BoxConstraints(
+                            maxWidth: 50,
+                            minHeight: 50,
+                            maxHeight: 50,
+                          ),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: mine.contains(emoji)
+                                ? accent.withValues(alpha: 0.18)
+                                : null,
+                            border: mine.contains(emoji)
+                                ? Border.all(color: accent)
+                                : null,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Text(
+                            emoji.glyph,
+                            style: const TextStyle(
+                              fontSize: AppIconSize.standalone,
+                            ),
                           ),
                         ),
                       ),

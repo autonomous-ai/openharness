@@ -40,7 +40,7 @@ export async function recentDecisions(tx: Tx, tabId: string, conversationIds: st
   return rows.map(row => ({ id: row._id as string, tabId: row.tabId as string, conversationId: row.conversationId as string,
     record: row.record as Prisma.JsonValue, final: (row.final ?? null) as Prisma.JsonValue, override: (row.override ?? null) as Prisma.JsonValue,
     assignmentId: (row.assignmentId ?? null) as string | null, outcome: (row.outcome ?? null) as string | null, run: (row.run ?? null) as Prisma.JsonValue,
-    outcomeAt: row.outcomeAt == null ? null : new Date(ms(row.outcomeAt)), createdAt: new Date(ms(row.createdAt)) }))
+    evidence: (row.evidence ?? null) as Prisma.JsonValue, outcomeAt: row.outcomeAt == null ? null : new Date(ms(row.outcomeAt)), createdAt: new Date(ms(row.createdAt)) }))
 }
 
 export async function writeRouteEffects(tx: Tx, tabId: string, effects: RouteDecisionEffect[], now: number): Promise<void> {

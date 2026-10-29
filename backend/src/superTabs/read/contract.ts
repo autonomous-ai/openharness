@@ -59,7 +59,12 @@ export interface Derived {
   agents: Record<string, { downSince: string | null; limitedUntil: string | null; workDecision: 'awaiting' | null; roleId: string | null }>
   /** Every contributed machine the reader can see. */
   /** `clientVersion`: the CLI version its daemon last connected with (routing reads a machine updated since its failed starts). */
-  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string }>
+  machines: Record<string, { availableSlots: number; teamWork: { allowed: true } | { allowed: false; reason: string; [key: string]: unknown }; clientVersion?: string
+    /** Engines suspended there now after failed starts, with why (engineHealth.ts); absent when none. */
+    suspendedEngines?: Record<string, string>
+    /** A person reading a teammate's machine: where New Project's Product Manager would run there by engine, the machine
+     *  (its Team account or itself), or why it cannot now (leadStart.ts leadChoices). Absent for their own machines. */
+    lead?: Record<string, { machineId: string } | { refused: string }> }>
   /** A Lead agent only. */
   otherProjectsWork?: OtherProjectWorkView[]
   /** A person only. */
@@ -141,10 +146,13 @@ export interface CommandReply {
   legacyRevision?: number
 }
 
-/** GET /api/super-tabs/list[?after=] */
+/** GET /api/super-tabs/list[?after=][&mentions=1] */
 export interface SwarmList {
   /** `workspaceId` names its Workspace (null before the migration); a Swarm whose Workspace the person left is not listed. */
-  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null }>
+  tabs: Array<{ id: string; name: string; ownerId: string; workspaceId: string | null; paused: boolean; lastChangedAt: number | null
+    /** With `?mentions=1`: the person's waiting tags in the Swarm and their digest, as the Swarm's own state counts them (a
+     *  Swarm whose count cannot be told here has neither). */
+    mentionsWaiting?: number; mentionsDigest?: string }>
   next: string | null
 }
 

@@ -27,6 +27,7 @@ class SuperTabMessageRow extends StatefulWidget {
     required this.message,
     required this.author,
     required this.onReturnToComposer,
+    this.card,
     required this.receipts,
     this.agent,
     this.person,
@@ -54,6 +55,10 @@ class SuperTabMessageRow extends StatefulWidget {
   });
 
   final SuperTabMessage message;
+
+  /// The live card [message] is (live_card.dart), drawn in place of its pull
+  /// request links; null for a plain message.
+  final Widget? card;
 
   /// The thread [message] is the root of, once it has a reply.
   final SuperTabThread? thread;
@@ -453,11 +458,12 @@ class _SuperTabMessageRowState extends State<SuperTabMessageRow> {
                                   padding: EdgeInsets.only(
                                     top: message.text.isEmpty ? 0 : 8,
                                   ),
-                                  child: SuperTabAttachmentChips(
+                                  child: SuperTabAttachments(
                                     message.attachments,
                                   ),
                                 ),
-                              SuperTabPullRequestLinks(message.text),
+                              widget.card ??
+                                  SuperTabPullRequestLinks(message.text),
                               if (widget.linkTarget case final resolve?)
                                 if (widget.onOpenLink case final open?)
                                   SuperTabMessageLinkPreviews(

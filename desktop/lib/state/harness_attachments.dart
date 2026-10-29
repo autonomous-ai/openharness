@@ -36,6 +36,30 @@ class HarnessAttachments extends ChangeNotifier {
   final void Function(String message)? onDeliveryProblem;
 
   final _files = <HarnessAttachment>[];
+  int _reading = 0;
+  bool _disposed = false;
+
+  /// Whether a picker, a drop or a paste is still reading files for this box.
+  /// An owner that would let go of an empty box waits while this is true, so
+  /// what the read brings is not lost.
+  bool get isReading => _reading > 0;
+
+  /// Runs [read], which ends by adding what it read here, and holds the box
+  /// until it is done.
+  Future<T> reading<T>(Future<T> Function() read) async {
+    _reading++;
+    try {
+      return await read();
+    } finally {
+      _reading--;
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   List<HarnessAttachment> get files => List.unmodifiable(_files);
   bool get isEmpty => _files.isEmpty;
@@ -48,6 +72,8 @@ class HarnessAttachments extends ChangeNotifier {
     Iterable<HarnessAttachment> files, {
     Iterable<String> oversized = const [],
   }) {
+    // A box given up with its conversation takes nothing more.
+    if (_disposed) return null;
     final tooLarge = [...oversized];
     var surplus = 0;
     for (final file in files) {

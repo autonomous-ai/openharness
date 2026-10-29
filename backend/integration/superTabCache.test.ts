@@ -100,6 +100,8 @@ describe('stamps after commit', () => {
     await swarmTransaction(db, tx => guardedWrite(tx, tabId, { op: 'update', kind: 'head', key: 'head', seen: head.version,
       data: { ...data, invitations: [{ id: 'i1', email: 'late@example.com', role: 'viewer', conversationId: 'lead', expiresAt: 1 }] },
       head: { groupCounter: head.groupCounter, visibilityEpoch: head.visibilityEpoch, sequenceBase: head.sequenceBase } }, parts.clock.next()))
+    // As a commit writes it (parts/commit.ts indexesOf): the sweep finds Swarms with invitations by this index.
+    await db.superTab.update({ where: { id: tabId }, data: { invitedEmails: { set: ['late@example.com'] } } })
     await sweepSwarms(db)
     expect(bumpsOf(tabId)).toEqual([['main'], ['main'], ['main']])
   })
