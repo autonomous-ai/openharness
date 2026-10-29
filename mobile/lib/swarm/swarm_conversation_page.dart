@@ -1012,7 +1012,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
                   0 when !_farBack.value || c.state == SwarmChatState.lost =>
                     const SizedBox.shrink(),
                   final count => Center(
-                    child: _NewPill(count: count, onTap: _toFoot),
+                    child: SwarmNewPill(count: count, onTap: _toFoot),
                   ),
                 },
               ),
@@ -2222,9 +2222,9 @@ class _Day extends StatelessWidget {
 
 /// How many messages arrived below while the person read back — or, with
 /// none ([count] 0), Jump to latest while they read far back (Swarm Home C);
-/// a tap goes down to the foot.
-class _NewPill extends StatelessWidget {
-  const _NewPill({required this.count, required this.onTap});
+/// a tap goes down to the foot. The chat's and a thread's.
+class SwarmNewPill extends StatelessWidget {
+  const SwarmNewPill({required this.count, required this.onTap});
 
   static const double _height = 36;
 

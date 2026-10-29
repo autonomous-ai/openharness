@@ -67,7 +67,9 @@ void main() {
           buddyChatData(
             chat,
             agentIds: ['agent-wren'],
-            lastMessageSequence: page.isEmpty ? 0 : page.last['sequence'] as int,
+            lastMessageSequence: page.isEmpty
+                ? 0
+                : page.last['sequence'] as int,
           ),
         ],
         agents: [
@@ -94,9 +96,9 @@ void main() {
           : null,
     };
     fake.routes['/api/super-tabs/$tab/conversations/g1/messages'] = (_) => {
-      'messages': [
-        for (var i = 1; i <= 40; i++) said(i, conversation: 'g1'),
-      ].reversed.toList(),
+      'messages': [for (var i = 1; i <= 40; i++) said(i, conversation: 'g1')]
+          .reversed
+          .toList(),
       'next': null,
     };
     return fake;
@@ -138,8 +140,7 @@ void main() {
   List<Object?> marksSent(FakeSwarm fake, [String conversation = chat]) => [
     for (final call in fake.calls)
       if (call.method == 'POST' &&
-          call.path ==
-              '/api/super-tabs/$tab/conversations/$conversation/read')
+          call.path == '/api/super-tabs/$tab/conversations/$conversation/read')
         call.body?['sequence'],
   ];
 
@@ -329,7 +330,9 @@ void main() {
     });
 
     testWidgets('a first read that fails says so with no Loading left and no '
-        "line, and is read again once, at the Swarm's next read", (tester) async {
+        "line, and is read again once, at the Swarm's next read", (
+      tester,
+    ) async {
       final fake = backend([for (var i = 1; i <= 4; i++) said(i)], mark: 2);
       final answer = fake.routes[messages]!;
       fake.routes[messages] = (_) =>
