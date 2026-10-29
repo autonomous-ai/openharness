@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
+import 'package:harness/state/app_state.dart';
+import 'package:harness/state/harness_activity.dart';
+import 'package:harness/widgets/harness_activity_mark.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
 
 import 'support/buddy_fixture.dart';
 import 'support/pm_chat_fixture.dart';
 import 'support/super_tab_fixture.dart';
+import 'swarm_state_test.dart' show createApp;
 
 /// Buddies (Ken's spec, 10-28): with the Swarm's setting on, a person's
 /// private agent per project takes Chat with PM's place in the sidebar.
@@ -228,6 +233,7 @@ void main() {
       ConversationServer server, {
       String account = 'peer',
       Brightness brightness = Brightness.light,
+      AppNotifier? app,
     }) async {
       await tester.binding.setSurfaceSize(const Size(1280, 800));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -239,6 +245,7 @@ void main() {
           home: Scaffold(
             body: SuperTabView(
               controller: c,
+              app: app,
               onInvite: () {},
               onAddAgent: (_) {},
               onOpenTerminal: (_) {},
@@ -335,6 +342,47 @@ void main() {
         );
         expect(find.text('Moss'), findsNothing);
         expect(find.textContaining('Claude on Studio'), findsNothing);
+        await close(tester, c);
+      },
+    );
+
+    testWidgets(
+      'the reader\'s Buddy row marks what it is doing, and offline once it is down',
+      (tester) async {
+        final app = createApp(connected: true);
+        addTearDown(app.dispose);
+        final server = buddySwarm();
+        giveBuddy(server, machineId: 'm');
+        app.stateOf('m')!
+          ..agents = [
+            const Agent(
+              id: 'h-wren',
+              name: 'Wren',
+              engine: 'claude',
+              terminalAvailable: true,
+            ),
+          ]
+          ..processingAgentIds.add('h-wren');
+        final c = await show(tester, server, app: app);
+        HarnessActivity mark() => tester
+            .widget<ActivityMark>(
+              find.descendant(
+                of: buddyEntry,
+                matching: find.byType(ActivityMark),
+              ),
+            )
+            .activity;
+        expect(mark(), HarnessActivity.working);
+
+        ((server.state['agents'] as List).last as Map)['downSince'] =
+            '2026-10-28T09:00:00Z';
+        await c.refresh();
+        await tester.pumpAndSettle();
+        expect(mark(), HarnessActivity.offline);
+        expect(
+          find.descendant(of: buddyEntry, matching: find.text('offline')),
+          findsOneWidget,
+        );
         await close(tester, c);
       },
     );

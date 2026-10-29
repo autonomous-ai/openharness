@@ -44,9 +44,14 @@ class HarnessPickerContext {
     required this.description,
     required this.action,
     required this.unavailable,
+    this.hidden,
   });
   final String title, description, action;
   final String? Function(SwarmDestination) unavailable;
+
+  /// Rows the picker never lists, whichever source they come from: a running
+  /// agent on this machine or one the Swarm shares.
+  final bool Function(SwarmDestination)? hidden;
 }
 
 /// The Machines picker's two runs of rows: the account's computers, then its phones and apps.
@@ -1639,12 +1644,19 @@ class SwarmSearchController extends ChangeNotifier {
         : history == null
         ? _cache.read(app, projects?.projects ?? const [], recent: recent)
         : [...history!.menuDestinations(app), ...closedWorkDestinations(app)];
-    final next = additionalDestinations.isEmpty
+    final merged = additionalDestinations.isEmpty
         ? base
         : <String, SwarmDestination>{
             for (final row in additionalDestinations) row.id: row,
             for (final row in base) row.id: row,
           }.values.toList();
+    final hidden = harnessContext?.hidden;
+    final next = hidden == null
+        ? merged
+        : [
+            for (final row in merged)
+              if (!hidden(row)) row,
+          ];
     final splitCurrent = split == null || app.isPaneSplitCurrent(split!);
     if (!force &&
         sessionFilter == SessionFilter.all &&
@@ -1698,7 +1710,12 @@ class SwarmSearchController extends ChangeNotifier {
   /// A contribution's permissions and membership can change without changing
   /// the native machine catalog. Keep the person's query and selection intact.
   void refreshAvailability() {
-    if (harnessContext != null) notifyListeners();
+    if (harnessContext == null) return;
+    if (harnessContext!.hidden != null) {
+      _refresh(force: true);
+    } else {
+      notifyListeners();
+    }
   }
 
   void _modelsChanged() {

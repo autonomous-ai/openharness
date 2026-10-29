@@ -739,6 +739,17 @@ void main() {
     expect(box.integration!.leadMachines!.single.freeAgents, 1);
   });
 
+  test('a server without availableSlots reads slots minus running', () async {
+    final f = SuperTabLaunchFixture();
+    // Eight slots, three harnesses running (a Buddy among them still holds
+    // its slot): five can start, which is what the person is told.
+    final pool = studioPool(running: 3)..remove('availableSlots');
+    f.connection.server.state['machines'] = [pool];
+    f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Company');
+    final box = await f.box(newProject: true);
+    expect(box.integration!.leadMachines!.single.freeAgents, 5);
+  });
+
   for (final (change, message) in [
     ('fills up', 'Mac Studio has no free agents. Choose another machine.'),
     ('goes offline', 'Mac Studio is offline. Choose another machine.'),

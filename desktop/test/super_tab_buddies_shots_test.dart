@@ -38,8 +38,10 @@ void main() {
       machineId: 'studio',
       machineOwnerId: 'owner',
     );
-    ((server.state['agents'] as List).last as Map)['downSince'] =
-        '2026-10-28T09:00:00Z';
+    // The reader's own web Buddy is the one that is down.
+    (server.state['agents'] as List).cast<Map>().firstWhere(
+      (a) => a['id'] == 'moss',
+    )['downSince'] = '2026-10-28T09:00:00Z';
     server.append(
       'I want people to keep editing when the network drops.',
       conversationId: 'buddy-peer-lead',
