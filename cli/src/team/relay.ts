@@ -390,7 +390,34 @@ export async function prepareCodexHome(dir: string, grant: TeamRelayGrant, deps:
     const file = join(dir, 'models_cache.json'), next = `${file}.harness-${process.pid}`
     writeFileSync(next, JSON.stringify({ fetched_at: new Date(deps.now()).toISOString(), client_version: version, models }), { mode: 0o600 })
     renameSync(next, file)
+    dropUnofferedModel(join(dir, 'config.toml'), new Set(models.flatMap(m => typeof (m as { slug?: unknown })?.slug === 'string' ? [(m as { slug: string }).slug] : [])))
   } catch { /* The relay or ChatGPT did not answer: Codex keeps the list it had. */ }
+}
+
+/**
+ * A default model saved in the team account's Codex config that the owner's account does not offer is taken out, so Codex
+ * starts on the owner's default. Codex saves the model a /model switch picks there, and a switch made while the account
+ * knew only Codex's built-in models saved gpt-5.5, which ChatGPT refuses for the owner. Codex 0.164 then opens on a
+ * "Meet GPT-6 Sol" choice before its session starts, which nobody in a team account answers: every Codex start on Mac
+ * Auto's waited 3 minutes and failed (2026-10-29). Only a top-level `model` line is touched, and only against a list that
+ * was read; a model the owner is offered stays.
+ */
+export function dropUnofferedModel(config: string, offered: ReadonlySet<string>): boolean {
+  if (!offered.size) return false
+  let text: string
+  try { text = readFileSync(config, 'utf8') } catch { return false }
+  const lines = text.split('\n')
+  const firstTable = lines.findIndex(line => /^\s*\[/.test(line))
+  const top = firstTable < 0 ? lines.length : firstTable
+  const index = lines.slice(0, top).findIndex(line => /^\s*model\s*=/.test(line))
+  if (index < 0) return false
+  const saved = /^\s*model\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/.exec(lines[index]!)
+  if (saved && offered.has(saved[1] ?? saved[2] ?? '')) return false
+  lines.splice(index, 1)
+  const next = `${config}.harness-${process.pid}`
+  writeFileSync(next, lines.join('\n'), { mode: 0o600 })
+  renameSync(next, config)
+  return true
 }
 
 /** The version of the Codex the team account installed for itself (team/script.ts TEAM_ENGINES_INSTALL, in ~/.local). */
