@@ -128,6 +128,29 @@ in once its composer is free, never over a draft, with `tell`'s limits. Then `ha
 after a start: `wait` does not return on the answer to the work before. An agent uses `harness tell` instead, for a
 harness it started.
 
+`harness route [--machine <name>] [--send] [--json] -- <words>` is the person's ⌘B for such a program (a lamp that
+heard a request): which of a machine's harnesses in a pane the words belong to, or new work. It reads that machine's
+harnesses as `ps` does (name, the person's last asks, what each is about) and asks this machine's router
+(`services/router.ts`, Jev; the [design](design/2026-10-09-auto-router.md)), so no device need be paired and
+nothing is asked of the backend beyond Jev's own route. `--json` answers `{"decided":"session", "id", "name",
+"machine", "confidence", "reason"}` (Jev's odds and its trace: names and odds, never the words) or
+`{"decided":"new", "reason"}`; new work is the caller's to start with `harness new`. When the router cannot be asked
+it answers `ROUTER_UNAVAILABLE` (exit 1): nothing was decided, and the caller acts on nothing.
+
+- **`--send`** types the words into the harness picked exactly as `harness reply` does: idle only, through its
+  machine's mailbox. The answer adds `"sent": {"state": "queued"}`, or `{"error": "NOT_IDLE" | "NOT_RUNNING"}` with
+  nothing sent. Exit 0 once decided, sent or not: read `sent`.
+- **`NOT_IDLE`** means it is still on the last words, or waits for the person. Wait for it (`harness wait`, the
+  answer's `next`) and send them with `harness reply`, or say so. Never start new work for them: a follow-up ("how is
+  it going?") would become a second harness.
+- **A follow-up that names nothing** ("and the other one?") goes where this computer's last words for that machine
+  went within ten minutes: the `Told` line `reply` and `route --send` write in this computer's own ledger
+  (`Ledger.lastToldBy`). Each computer keeps its own, so one lamp's follow-up never steers another's.
+- **The caller policy is `reply`'s:** the person's `programs-reply` switch for the whole command, deciding included
+  (exit 5 while it is off), and never an agent in a pane (`NOT_YOURS`).
+- **Cost and time:** one decision is about $0.00017 and 0.4 to 0.7 s on Harness's key (bounded at 8 s), capped per
+  account at 30 a minute and 1,000 a day.
+
 `harness watch <name>` follows one harness for a program that acts on it: a line each time it changes, one JSON
 object a line with `--json`, until it stops or is gone (exit 4) or `--timeout` passes (exit 124; `0`, the default,
 follows it as long as it lives). It decides as `wait` does: the maker's state for a cloud harness; the daemon's
