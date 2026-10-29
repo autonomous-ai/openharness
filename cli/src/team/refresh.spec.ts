@@ -55,6 +55,22 @@ describe('a Harness Team account on a build too old for its owner\'s subscriptio
     expect(d.run).toHaveBeenCalledTimes(2)
   })
 
+  it('on Windows, runs the build the team account\'s own cli\\current names, which only that account can read', async () => {
+    // The version folder setup laid down may be gone: the Windows updater writes new ones and prunes old ones.
+    const windows = { node: 'C:\\Users\\harnessteam\\.harness\\runtime\\node-v22.23.2-win32-x64\\node.exe',
+      cli: 'C:\\Users\\harnessteam\\.harness\\cli\\0.4.97\\cli.js', home: 'C:\\Users\\harnessteam', statusFile: 'C:\\s.json' } as TeamConfig
+    const d = deps({ config: () => windows, platform: 'win32' })
+    await refreshTeamAccount(d)
+    // Separate words, none with a space or a quote, so the spawn joins them as cmd.exe reads them back.
+    expect(d.run).toHaveBeenCalledWith('team', ['cmd.exe', '/d', '/v:on', '/c', 'set', '/p', 'V=<C:\\Users\\harnessteam\\.harness\\cli\\current', '&',
+      windows.node, 'C:\\Users\\harnessteam\\.harness\\cli\\!V!\\cli.js', 'update', '--force'], 'C:\\Users\\harnessteam')
+    // A path with a space could not be passed so: it is said, and nothing runs.
+    const spaced = deps({ config: () => ({ ...windows, home: 'C:\\Users\\Harness Team' }), platform: 'win32' })
+    await refreshTeamAccount(spaced)
+    expect(spaced.run).not.toHaveBeenCalled()
+    expect(spaced.log).toHaveBeenCalledWith(expect.stringContaining('could not update the Harness Team account'))
+  })
+
   it('asks nothing when there is no team account, it is current, or its machine is not this Mac\'s', async () => {
     for (const over of [{ config: () => null }, { status: () => signedOut(2_000, true) }, { machineId: () => 'elsewhere' }] as Array<Partial<TeamRefreshDeps>>) {
       const d = deps(over)
