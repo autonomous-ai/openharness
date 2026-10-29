@@ -317,7 +317,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
 
   /// Places Swarm Home C's New messages line once, from what the chat's
   /// first read brought and how far the person had read it
-  /// ([SwarmReadMarks.markOf]; nothing here is read until then, so that is
+  /// ([SwarmReadMarks.readThrough]; nothing here is read until then, so that is
   /// how far as it opened) ([swarmFirstUnread]). It stays there however the
   /// chat and its marks move on. Without one, everything shown is read. A
   /// line above the screen opens the chat at it ([_openAtLine]), unless a
@@ -329,7 +329,7 @@ class _SwarmConversationPageState extends State<SwarmConversationPage>
     _lineDecided = true;
     final at = swarmFirstUnread(
       c.messages,
-      c.reader.readMarks?.markOf(c.id),
+      c.reader.readMarks?.readThrough(c.id),
       accountId: c.reader.accountId,
       hasOlder: c.hasOlder,
     );

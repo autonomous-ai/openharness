@@ -10,7 +10,7 @@ import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/theme/app_theme.dart' show AppColors;
 
 import 'model.dart';
-import 'swarm_approve.dart';
+import 'swarm_activity_page.dart' show confirmSwarmApprove;
 import 'swarm_home_rows.dart';
 import 'swarm_inbox.dart';
 import 'swarm_need_rows.dart';

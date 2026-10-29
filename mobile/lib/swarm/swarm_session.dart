@@ -7,6 +7,9 @@ import '../core/local_key_value_store.dart';
 import '../notify/system_notices.dart';
 import '../phone/voice_input_controller.dart';
 import '../settings/experimental_features.dart';
+import 'swarm_activity.dart';
+import 'swarm_buddy_list.dart';
+import 'swarm_chat_peeks.dart';
 import 'swarm_choices.dart';
 import 'swarm_dictation.dart';
 import 'swarm_face.dart';
@@ -54,6 +57,20 @@ class SwarmSession extends ChangeNotifier {
 
   final String accountId;
   final SwarmInbox inbox;
+
+  /// The project and Buddy chats read for Activity and Buddies, a few at a
+  /// time ([SwarmChatPeeks]).
+  final peeks = SwarmChatPeeks();
+
+  /// Activity, in place of Needs you: its filters, counts and handled rows.
+  /// Made when a screen first asks for it.
+  SwarmActivity get activity => _activity ??= SwarmActivity(this);
+  SwarmActivity? _activity;
+
+  /// Buddies: the person's own Buddy in each project, with its chat's last
+  /// message. Made when a screen first asks for it.
+  SwarmBuddyList get buddyList => _buddyList ??= SwarmBuddyList(this);
+  SwarmBuddyList? _buddyList;
 
   /// What the person chose for Home on this phone: the projects pinned and
   /// the one Swarm shown. A Swarm the account no longer has takes its own.
@@ -156,6 +173,8 @@ class SwarmSession extends ChangeNotifier {
     if (inbox.loaded) {
       home.keepOnly({for (final swarm in inbox.swarms) swarm.id});
     }
+    // What was read of a Swarm off the list, or out of reach, leaves memory.
+    peeks.keepOnly([for (final swarm in inbox.swarms) ?inbox.reader(swarm.id)]);
     _announcer.settle(inbox.needs);
     // Answered somewhere else meanwhile, or out of the list while the Swarm
     // is read again: nothing is sent, and a card that comes back says so.
@@ -178,6 +197,9 @@ class SwarmSession extends ChangeNotifier {
       held.timer.cancel();
     }
     _held.clear();
+    _activity?.dispose();
+    _buddyList?.dispose();
+    peeks.dispose();
     inbox.removeListener(_needsChanged);
     _announcer.clear();
     inbox.dispose();

@@ -178,7 +178,7 @@ class SwarmNeedLine extends StatelessWidget {
 const _titleHeight = 1.3;
 
 /// An open need: its glyph in the warning colour, who asks and where — a tap
-/// there opens where it was asked, when [onOpen] is given — then [body] and
+/// there or on [body] opens where it was asked, when [onOpen] is given — then [body] and
 /// [actions].
 class _NeedCard extends StatelessWidget {
   const _NeedCard({
@@ -214,6 +214,10 @@ class _NeedCard extends StatelessWidget {
       ),
       style: AppType.label(color: AppPalette.textPrimary, height: _titleHeight),
     );
+    final bodyText = Text.rich(
+      _mentions(body),
+      style: AppType.body(color: AppPalette.textPrimary, height: 1.4),
+    );
     return Padding(
       padding: const EdgeInsets.all(AppSpace.l),
       child: Row(
@@ -246,13 +250,15 @@ class _NeedCard extends StatelessWidget {
                   header,
                 if (body.isNotEmpty) ...[
                   const SizedBox(height: 6),
-                  Text.rich(
-                    _mentions(body),
-                    style: AppType.body(
-                      color: AppPalette.textPrimary,
-                      height: 1.4,
-                    ),
-                  ),
+                  if (onOpen case final open?)
+                    GestureDetector(
+                      key: ValueKey('swarm-need-body-${need.key}'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: open,
+                      child: bodyText,
+                    )
+                  else
+                    bodyText,
                 ],
                 const SizedBox(height: 14),
                 actions,

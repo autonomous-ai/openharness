@@ -9,7 +9,7 @@ import 'package:harness_mobile/shared/widgets/skeleton.dart';
 import 'package:harness_mobile/swarm/swarm_conversation_page.dart';
 import 'package:harness_mobile/swarm/swarm_mark.dart';
 import 'package:harness_mobile/swarm/swarm_home_rows.dart';
-import 'package:harness_mobile/swarm/swarm_needs_page.dart';
+import 'package:harness_mobile/swarm/swarm_activity_page.dart';
 import 'package:harness_mobile/swarm/swarm_page.dart';
 import 'package:harness_mobile/swarm/swarm_project_page.dart';
 import 'package:harness_mobile/swarm/swarm_request.dart';
@@ -260,7 +260,7 @@ void main() {
       tester,
     ) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmNeedsPage());
+      await pump(tester, fake, const SwarmActivityPage(focus: 'decision:d1'));
 
       await tester.tap(key('swarm-option-d1-0'));
       await tester.pump();
@@ -277,7 +277,11 @@ void main() {
       'again',
       (tester) async {
         final fake = backend();
-        final host = await pump(tester, fake, const SwarmNeedsPage());
+        final host = await pump(
+          tester,
+          fake,
+          const SwarmActivityPage(focus: 'decision:d1'),
+        );
         await tester.tap(key('swarm-option-d1-0'));
         await tester.pump();
         expect(find.text('Sending “Yes”'), findsOneWidget);
@@ -314,7 +318,7 @@ void main() {
       tester,
     ) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmNeedsPage());
+      await pump(tester, fake, const SwarmActivityPage(focus: 'decision:d1'));
 
       await tester.tap(key('swarm-option-d1-1'));
       await tester.pump(const Duration(seconds: 2));
@@ -337,7 +341,7 @@ void main() {
         fake.routes['/api/super-tabs/$tab/commands'] = (_) => lost
             ? throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.')
             : {'result': <String, dynamic>{}};
-        await pump(tester, fake, const SwarmNeedsPage());
+        await pump(tester, fake, const SwarmActivityPage(focus: 'decision:d1'));
 
         await tester.tap(key('swarm-option-d1-1'));
         await tester.pump(const Duration(seconds: 4));
@@ -362,9 +366,7 @@ void main() {
 
     testWidgets('a tag is marked done from its row', (tester) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmNeedsPage());
-      await tester.tap(key('swarm-need-row-mention:m1'));
-      await tester.pumpAndSettle();
+      await pump(tester, fake, const SwarmActivityPage(focus: 'mention:m1'));
 
       await tester.tap(key('swarm-done-m1'));
       await tester.pumpAndSettle();
@@ -376,11 +378,9 @@ void main() {
       tester,
     ) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmNeedsPage());
+      await pump(tester, fake, const SwarmActivityPage(focus: 'mention:m1'));
       final confirmed = Completer<Object?>();
       fake.routes['/api/super-tabs/$tab/commands'] = (_) => confirmed.future;
-      await tester.tap(key('swarm-need-row-mention:m1'));
-      await tester.pumpAndSettle();
 
       await tester.tap(key('swarm-done-m1'));
       await tester.pump();
@@ -397,11 +397,9 @@ void main() {
 
     testWidgets('a Done that fails says so on its row', (tester) async {
       final fake = backend();
-      await pump(tester, fake, const SwarmNeedsPage());
+      await pump(tester, fake, const SwarmActivityPage(focus: 'mention:m1'));
       fake.routes['/api/super-tabs/$tab/commands'] = (_) =>
           throw const SuperTabFailure('MACHINE_UNAVAILABLE', 'No computer.');
-      await tester.tap(key('swarm-need-row-mention:m1'));
-      await tester.pumpAndSettle();
 
       await tester.tap(key('swarm-done-m1'));
       await tester.pumpAndSettle();
@@ -420,8 +418,10 @@ void main() {
     testWidgets('a need opens the conversation it was asked in', (
       tester,
     ) async {
-      await pump(tester, backend(), const SwarmNeedsPage());
-      await tester.tap(find.text('Nova needs you'));
+      await pump(tester, backend(), const SwarmActivityPage());
+      await tester.tap(
+        key('swarm-activity-row-work:$tab:g1:attempt-g1:needs_human'),
+      );
       await tester.pumpAndSettle();
       expect(
         find.byType(SwarmConversationPage),
@@ -437,6 +437,23 @@ void main() {
 
       expect(find.byType(SwarmConversationPage), findsOneWidget);
       expect(find.text('Which name should the flag have?'), findsOneWidget);
+    });
+
+    testWidgets('a tag opens the conversation from its text too', (
+      tester,
+    ) async {
+      await pump(
+        tester,
+        backend(),
+        const SwarmActivityPage(focus: 'mention:m1'),
+      );
+
+      await tester.tap(
+        find.textContaining('Can you check the copy?', findRichText: true),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SwarmConversationPage), findsOneWidget);
     });
 
     testWidgets('with Swarm off, says where to turn it on', (tester) async {

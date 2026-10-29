@@ -183,19 +183,24 @@ void main() {
   });
 
   test("how far a chat is read is the higher of the server's mark and the "
-      "phone's, and none before the marks count", () async {
+      "phone's, none before the phone's are read back, nor once access is "
+      'lost', () async {
     final r = rig();
-    expect(r.marks.markOf(work), isNull, reason: 'nothing read back yet');
+    expect(r.marks.readThrough(work), isNull, reason: 'nothing read back yet');
     await r.reader.refresh();
     await settle();
-    expect(r.marks.markOf(work), 4, reason: 'the first read on this phone');
+    expect(
+      r.marks.readThrough(work),
+      4,
+      reason: 'the first read on this phone',
+    );
 
     moveOn(r.swarm, work, 9);
     await r.reader.refresh();
     await settle();
-    expect(r.marks.markOf(work), 4, reason: 'a new message is not read');
+    expect(r.marks.readThrough(work), 4, reason: 'a new message is not read');
     r.marks.markRead(work, 6);
-    expect(r.marks.markOf(work), 6);
+    expect(r.marks.readThrough(work), 6);
 
     r.reader.snapshot = SuperTabSnapshot.fromJson({
       ...headData(),
@@ -207,10 +212,18 @@ void main() {
       ],
       'readMarks': {work: 8},
     });
-    expect(r.marks.markOf(work), 8, reason: "the server's, read elsewhere");
+    expect(
+      r.marks.readThrough(work),
+      8,
+      reason: "the server's, read elsewhere",
+    );
 
     r.reader.revoke();
-    expect(r.marks.markOf(work), isNull, reason: 'access lost forgets them');
+    expect(
+      r.marks.readThrough(work),
+      isNull,
+      reason: 'access lost forgets them',
+    );
   });
 
   test("the server's marks come with the Swarm's reads, as on Desktop "

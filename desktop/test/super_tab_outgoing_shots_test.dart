@@ -89,6 +89,10 @@ void main() {
       await send('@Builder check the arm64 build');
       await tester.pumpAndSettle();
       await shot('refused');
+      server.reject = false;
+      await tester.tap(find.text('Retry'));
+      await tester.pumpAndSettle();
+      await shot('confirmed');
       await tester.pumpWidget(const SizedBox());
       await c.flush();
     }, skip: shots == null);
