@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // The account's feeds a per-user socket starts (WebSocket roadmap, Phase 1 item 4). Prod, 2026-10-29: about 121
 // web-ws connects a minute living a median 0.4 s, nearly all daemon relays, and each one read the account's machine
 // list and devices, subscribed a status channel per machine and four per-user channels, and armed a 30 s device
-// re-read, none of which a relay ever reads. With WEB_WS_LAZY_FEEDS on, a socket that says it is a relay, a link or a
+// re-read, none of which a relay ever reads. A socket that says it is a relay, a link or a
 // group sync starts them only when it asks (`machines_watch`, `devices_watch`); every other socket is as before.
 const m = vi.hoisted(() => ({
   auth: vi.fn(), upgrade: vi.fn(), presence: vi.fn(), online: vi.fn(), attach: vi.fn(), machineFindUnique: vi.fn(),
@@ -29,7 +29,6 @@ vi.mock('./machineLifecycle.js', () => ({ ensureMachineReady: vi.fn(async () => 
 vi.mock('./webAccountPushes.js', () => ({ relayWebDocumentPushes: m.documents }))
 vi.mock('./hub.js', () => ({ attachHubClient: m.attach, trackSocketLiveness: () => () => {} }))
 
-import { env } from '../config/env.js'
 import { handleWebUpgrade } from './webWs.js'
 
 const owner = { sub: 'owner', email: 'owner@example.com', role: 'user', autonomousEnv: 'prod' }
@@ -65,7 +64,6 @@ const feeds = () => ({
 const all = { machines: true, devices: true, machineList: true, documents: true, e2eePair: true }
 const none = { machines: false, devices: false, machineList: false, documents: false, e2eePair: false }
 
-const before = env.WEB_WS_LAZY_FEEDS
 beforeEach(() => {
   vi.clearAllMocks()
   vi.useRealTimers()
@@ -79,11 +77,9 @@ beforeEach(() => {
   m.lifecycle.mockResolvedValue('running')
   for (const sub of [m.subscribeStatus, m.subscribeDeviceStatus, m.subscribeMachineList, m.subscribeE2eePair, m.documents]) sub.mockResolvedValue(() => {})
 })
-afterEach(() => { env.WEB_WS_LAZY_FEEDS = before; vi.useRealTimers() })
+afterEach(() => { vi.useRealTimers() })
 
-describe('with WEB_WS_LAZY_FEEDS on', () => {
-  beforeEach(() => { env.WEB_WS_LAZY_FEEDS = 'on' })
-
+describe('the account\'s feeds', () => {
   it.each(['relay', 'link', 'group-sync'])('a %s socket starts none of the account\'s feeds', async client => {
     await opens(`&client=${client}`)
     expect(feeds()).toEqual(none)
@@ -166,21 +162,6 @@ describe('with WEB_WS_LAZY_FEEDS on', () => {
     await flush()
     expect(unsub).toHaveBeenCalledOnce()
   })
-})
-
-describe('with WEB_WS_LAZY_FEEDS off (the default)', () => {
-  beforeEach(() => { env.WEB_WS_LAZY_FEEDS = 'off' })
-
-  it.each(['relay', 'link', 'group-sync', 'mobile'])('a %s socket starts them all, as before', async client => {
-    await opens(`&client=${client}`)
-    expect(feeds()).toEqual(all)
-  })
-})
-
-// The test run sets no WEB_WS_LAZY_FEEDS, so what the module read is the default.
-it('defaults to off', () => {
-  expect(process.env.WEB_WS_LAZY_FEEDS).toBeUndefined()
-  expect(before).toBe('off')
 })
 
 // The ack's node_status said `running` for an online machine whatever `machine_nodes` held, and read it on every

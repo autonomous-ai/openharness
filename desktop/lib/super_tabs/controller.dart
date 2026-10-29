@@ -10,9 +10,9 @@ import '../logging/app_log.dart';
 import '../state/harness_attachments.dart';
 import 'attachment_upload.dart';
 import 'avatar_upload.dart';
-import 'identity.dart';
+import 'message_link.dart';
 import 'model.dart';
-import 'pm_chat.dart';
+import 'buddy_chat.dart';
 import 'project_github.dart';
 import 'parts.dart';
 import 'reading.dart';
@@ -354,9 +354,14 @@ class SuperTabController extends ChangeNotifier {
   final _messages = <String, List<SuperTabMessage>>{};
 
   /// Originals of replies quoted from outside the pages read, one message
-  /// each, never part of the list: null when it is gone. Asked for once.
+  /// each, never part of the list: null when it is gone or refused.
   final _quoted = <String, Map<String, SuperTabMessage?>>{};
-  final _quoting = <String, Set<String>>{};
+
+  /// The originals asked for, with how many reads of each failed (not refused).
+  final _quoting = <String, Map<String, int>>{};
+  final _quoteRetries = <Timer>{};
+  static const _quoteTries = 3;
+  static const _quoteRetryAfter = Duration(seconds: 3);
 
   /// Where each conversation's older history continues: the oldest message
   /// read, as the backend's page cursor names it (section 4.6). Null at the
@@ -434,7 +439,7 @@ class SuperTabController extends ChangeNotifier {
     _changed();
   }
 
-  /// Open decisions the reader set aside in Chat with PM (Not now, Hide):
+  /// Open decisions the reader set aside in their Buddy chat (Not now, Hide):
   /// saved on this computer for this reader, so they stay folded after a
   /// restart. A decision asked later is not among them, so it shows.
   final _decisionsAside = <String>{};
@@ -570,11 +575,17 @@ class SuperTabController extends ChangeNotifier {
     if (known != null && known.containsKey(messageId)) {
       return (message: known[messageId]);
     }
-    if ((_quoting[id] ??= {}).add(messageId)) {
+    if (!(_quoting[id] ??= {}).containsKey(messageId)) {
+      _quoting[id]![messageId] = 0;
       scheduleMicrotask(() => _readQuoted(id, messageId));
     }
     return null;
   }
+
+  /// Whether the original [messageId] of [id] could not be read after every
+  /// try, so it is told apart from one still being read.
+  bool quoteGaveUp(String id, String messageId) =>
+      (_quoting[id]?[messageId] ?? 0) >= _quoteTries;
 
   /// What the backend last said of each project's GitHub access (backend github/projectAccess.ts), and when.
   final Map<String, ({SuperTabProjectGitHub value, DateTime at})> _github = {};
@@ -661,10 +672,14 @@ class SuperTabController extends ChangeNotifier {
   }
 
   /// Reads one message of [id] only: the backend checks the reader may read
-  /// that conversation, as for its pages. A failed read leaves the quote
-  /// saying the original isn't loaded.
+  /// that conversation, as for its pages. A refusal is recorded as the message
+  /// being gone; any other failure is read again after 3 s and 6 s, then left
+  /// ([quoteGaveUp]).
   Future<void> _readQuoted(String id, String messageId) async {
-    if (_disposed || accessRevoked || snapshot?.conversation(id) == null) {
+    if (_disposed ||
+        accessRevoked ||
+        snapshot?.conversation(id) == null ||
+        _quoting[id]?.containsKey(messageId) != true) {
       return;
     }
     try {
@@ -675,7 +690,7 @@ class SuperTabController extends ChangeNotifier {
       if (_disposed ||
           accessRevoked ||
           snapshot?.conversation(id) == null ||
-          _quoting[id]?.contains(messageId) != true) {
+          _quoting[id]?.containsKey(messageId) != true) {
         return;
       }
       final rows = (answer['messages'] as List)
@@ -688,7 +703,31 @@ class SuperTabController extends ChangeNotifier {
       // A row the list never lists is no original to quote either.
       (_quoted[id] ??= {})[messageId] = rows.where(_listed).firstOrNull;
       _changed();
-    } catch (_) {}
+    } catch (failure) {
+      _quoteFailed(id, messageId, failure);
+    }
+  }
+
+  void _quoteFailed(String id, String messageId, Object failure) {
+    final asked = _quoting[id];
+    if (_disposed || asked == null || !asked.containsKey(messageId)) return;
+    if (failure is SuperTabFailure &&
+        const {'FORBIDDEN', 'NOT_FOUND'}.contains(failure.code)) {
+      (_quoted[id] ??= {})[messageId] = null;
+      _changed();
+      return;
+    }
+    final tries = asked[messageId] = asked[messageId]! + 1;
+    if (tries >= _quoteTries) {
+      _changed();
+      return;
+    }
+    late final Timer retry;
+    retry = Timer(_quoteRetryAfter * tries, () {
+      _quoteRetries.remove(retry);
+      unawaited(_readQuoted(id, messageId));
+    });
+    _quoteRetries.add(retry);
   }
 
   List<SuperTabMessage> messages(String id) => List.unmodifiable(
@@ -1200,29 +1239,24 @@ class SuperTabController extends ChangeNotifier {
     return !_disposed && snapshot?.conversation(id) != null;
   }
 
-  /// The signed-in person's private chat with [projectId]'s Product Manager:
-  /// that project's private conversation whose audience is them alone.
-  SuperTabConversation? pmChat(String projectId) =>
-      _indexed()?.pmChats[projectId];
-
   /// [projectId]'s conversations, open and closed, in the snapshot's order.
   List<SuperTabConversation> projectConversations(String projectId) =>
       _indexed()?.byProject[projectId] ?? const [];
 
-  /// [snapshot]'s conversations by project, and each project's [pmChat],
+  /// [snapshot]'s conversations by project, and each project's [buddyChat],
   /// worked out once per snapshot: the sidebar asks for them on every
   /// rebuild, and a snapshot is replaced, never changed, when the Swarm moves.
   ({
     SuperTabSnapshot of,
     Map<String, List<SuperTabConversation>> byProject,
-    Map<String, SuperTabConversation> pmChats,
+    Map<String, SuperTabConversation> buddyChats,
   })?
   _index;
 
   ({
     SuperTabSnapshot of,
     Map<String, List<SuperTabConversation>> byProject,
-    Map<String, SuperTabConversation> pmChats,
+    Map<String, SuperTabConversation> buddyChats,
   })?
   _indexed() {
     final snapshot = this.snapshot;
@@ -1231,13 +1265,11 @@ class SuperTabController extends ChangeNotifier {
       return index;
     }
     final byProject = <String, List<SuperTabConversation>>{};
-    final pmChats = <String, SuperTabConversation>{};
+    final buddyChats = <String, SuperTabConversation>{};
     for (final g in snapshot.conversations) {
       byProject.putIfAbsent(g.projectId, () => []).add(g);
-      if (!g.isBuddyChat &&
-          g.audience?.length == 1 &&
-          g.audience!.single == accountId) {
-        pmChats.putIfAbsent(g.projectId, () => g);
+      if (g.isBuddyChat && g.buddyOwnerId == accountId) {
+        buddyChats.putIfAbsent(g.projectId, () => g);
       }
     }
     return _index = (
@@ -1246,24 +1278,16 @@ class SuperTabController extends ChangeNotifier {
         for (final MapEntry(:key, :value) in byProject.entries)
           key: List.unmodifiable(value),
       },
-      pmChats: pmChats,
+      buddyChats: buddyChats,
     );
   }
 
-  /// Whether the Swarm has Buddies on: each person's Buddy chats take Chat
-  /// with PM's place (spec: Buddies, 10-28).
-  bool get buddiesOn => snapshot?.buddiesEnabled == true;
-
-  /// The signed-in person's chat with their Buddy in [projectId]. It stays
-  /// after the Buddy is removed, so adding one again reopens its history.
-  SuperTabConversation? buddyChat(String projectId) => snapshot?.conversations
-      .where(
-        (g) =>
-            g.isBuddyChat &&
-            g.projectId == projectId &&
-            g.buddyOwnerId == accountId,
-      )
-      .firstOrNull;
+  /// The signed-in person's chat with their Buddy in [projectId], where the
+  /// PM's private lines to them land too: Buddies replaced Chat with PM in
+  /// every Swarm (Ken, 10-29). It is there before any Buddy is
+  /// ([openBuddyChat]), and stays after one is removed.
+  SuperTabConversation? buddyChat(String projectId) =>
+      _indexed()?.buddyChats[projectId];
 
   /// The signed-in person's Buddy in [projectId]; null when they have none.
   SuperTabAgent? buddy(String projectId) => snapshot?.agents
@@ -1275,7 +1299,8 @@ class SuperTabController extends ChangeNotifier {
   /// The newest start of the reader's Buddy in [projectId]: under way while
   /// it has neither a harness nor an error, failed with an error.
   Map<String, dynamic>? buddyStart(String projectId) {
-    final chat = buddyChat(projectId)?.id;
+    // The index itself: the sidebar has asked [buddyChat] once already.
+    final chat = _indexed()?.buddyChats[projectId]?.id;
     return snapshot?.buddyStarts.reversed.where((start) {
       final request = superTabMap(start['request']);
       return superTabMap(request['buddyOf'])['personId'] == accountId &&
@@ -1307,11 +1332,14 @@ class SuperTabController extends ChangeNotifier {
   Future<bool> removeBuddy(String projectId) async =>
       await command({'type': 'buddy.remove', 'projectId': projectId}) != null;
 
-  /// Whether [group] is out of the app: with Buddies on there is no private
-  /// channel to the PM (Ken, 10-28), so no private chat but a Buddy chat is
-  /// listed or opened, the reader's old Chat with PM included.
+  /// Whether [group] is out of the app: there is no private channel to the
+  /// PM (Ken, 10-29), so no private chat but a Buddy chat is listed or opened,
+  /// the reader's old Chat with PM that an older server still sends included.
   bool hiddenByBuddies(SuperTabConversation group) =>
-      buddiesOn && group.audience != null && !group.isBuddyChat;
+      group.audience != null && !group.isBuddyChat;
+
+  /// Where opening conversation [id] lands: itself, unless the app hides it.
+  String landsOn(String id) => _shownFor(id);
 
   /// Where conversation [id] opens: a chat [hiddenByBuddies] opens its
   /// project's chat, where the PM is talked to; any other opens itself.
@@ -1328,7 +1356,7 @@ class SuperTabController extends ChangeNotifier {
   /// How many of [group]'s messages from others came after the reader's read
   /// mark: exact once the messages held reach back to the mark
   /// ([_heldSinceRead]), else a lower bound, one at least, while more are read
-  /// ([_readUnreadPmChats]).
+  /// ([_readUnreadBuddyChats]).
   int unreadCount(SuperTabConversation group) {
     if (!unread(group)) return 0;
     final readAt = _readAt[group.id] ?? 0;
@@ -1351,38 +1379,36 @@ class SuperTabController extends ChangeNotifier {
             !hasOlder(group.id));
   }
 
-  /// The unread messages in the reader's own PM chats, for the Swarm badge.
-  int get pmUnread => buddiesOn
-      ? 0
-      : [
-          for (final project in snapshot?.projects ?? const <SuperTabProject>[])
-            if (pmChat(project.id) case final chat?) unreadCount(chat),
-        ].fold(0, (a, b) => a + b);
+  /// The unread messages in the reader's own Buddy chats, the PM's private
+  /// lines among them, for the Swarm badge.
+  int get buddyUnread => [
+    for (final project in snapshot?.projects ?? const <SuperTabProject>[])
+      if (buddyChat(project.id) case final chat?) unreadCount(chat),
+  ].fold(0, (a, b) => a + b);
 
-  /// Reads each PM chat whose count is still open ([_pmCountOpen]), page by
+  /// Reads each Buddy chat whose count is still open ([_countOpen]), page by
   /// page, so the count is exact up to [kCountCap]; nothing once every chat's
   /// count is known.
-  void _readUnreadPmChats() {
-    if (buddiesOn) return;
+  void _readUnreadBuddyChats() {
     for (final project in snapshot?.projects ?? const <SuperTabProject>[]) {
-      final chat = pmChat(project.id);
-      if (chat == null || !_pmCountOpen(chat) || !_pmCounting.add(chat.id)) {
+      final chat = buddyChat(project.id);
+      if (chat == null || !_countOpen(chat) || !_counting.add(chat.id)) {
         continue;
       }
       unawaited(
-        _countPmChat(chat.id).whenComplete(() {
-          _pmCounting.remove(chat.id);
+        _countChat(chat.id).whenComplete(() {
+          _counting.remove(chat.id);
         }),
       );
     }
   }
 
-  final _pmCounting = <String>{};
+  final _counting = <String>{};
 
-  /// A PM chat off screen, unread, under [kCountCap] and not held back to its
+  /// A Buddy chat off screen, unread, under [kCountCap] and not held back to its
   /// read mark: past the cap the badge says "99+" whatever the rest holds, so
   /// a device with no read mark never reads the whole history.
-  bool _pmCountOpen(SuperTabConversation chat) =>
+  bool _countOpen(SuperTabConversation chat) =>
       chat.id != selectedId &&
       unread(chat) &&
       unreadCount(chat) < kCountCap &&
@@ -1391,10 +1417,10 @@ class SuperTabController extends ChangeNotifier {
   /// Newer pages until the newest message is held, then older ones back to
   /// the read mark; stops when a read brings nothing (no more, or it failed:
   /// the next state read tries again).
-  Future<void> _countPmChat(String id) async {
+  Future<void> _countChat(String id) async {
     while (!_disposed) {
       final chat = snapshot?.conversation(id);
-      if (chat == null || !_pmCountOpen(chat)) return;
+      if (chat == null || !_countOpen(chat)) return;
       final held = _messages[id];
       final before = (held?.firstOrNull?.sequence, held?.lastOrNull?.sequence);
       final newer =
@@ -1432,51 +1458,99 @@ class SuperTabController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Set by the Swarm view on screen: opens a project's PM chat in front of
-  /// whatever covers the conversation, Notifications or a terminal.
-  Future<bool> Function(String projectId)? pmChatOpener;
+  /// A message the reader asked to open by its link ([openMessageLink]), until
+  /// the Swarm view on screen takes it.
+  ({String conversationId, String messageId})? messageRequest;
 
-  /// Opens the [currentProjectId]'s PM chat, through the view on screen
-  /// ([pmChatOpener]) when there is one, else [openPmChat].
-  Future<bool> openCurrentPmChat() async {
-    final project = currentProjectId;
-    return project != null && await (pmChatOpener ?? openPmChat)(project);
+  /// Asks the Swarm view to open [link]'s message, in the view on screen or
+  /// the one shown next. A link to another Swarm is not this one's to open.
+  bool openMessageLink(SwarmMessageLink link) {
+    if (link.tabId != tabId) return false;
+    messageRequest = (
+      conversationId: link.conversationId,
+      messageId: link.messageId,
+    );
+    notifyListeners();
+    return true;
   }
 
-  /// Opens [pmChat], creating it on first use: chat only, for this person
-  /// alone, named after them, with the project's Lead in it. The create is one
-  /// fixed request per person, membership and project, so a second click or
-  /// another window gets the same conversation back from the server's receipt,
-  /// while a person who left and rejoined, whom the old chat no longer admits,
-  /// gets a new one.
-  Future<bool> openPmChat(String projectId) async {
-    // With Buddies on, the reader's way to talk privately is their Buddy:
-    // there is no new Chat with PM (spec: Buddies, 10-28).
-    if (buddiesOn) {
-      final chat = buddyChat(projectId);
-      return chat != null && await select(chat.id);
+  /// Conversations a link named that the Swarm did not hold, when each was
+  /// last asked for by id (the backend decides who may read it) and which are
+  /// being asked for now. A refusal is asked again after a minute, in case the
+  /// reader has since been let in.
+  final _linkGroupAsked = <String, DateTime>{};
+  final _linkGroupReading = <String>{};
+  static const _linkGroupRetry = Duration(minutes: 1);
+
+  /// What [link] points at for this reader: null when it is not a message they
+  /// may read (another Swarm, a conversation the backend will not give them, a
+  /// message gone); `message` null while it is being read. A conversation the
+  /// Swarm does not hold (a closed one) is asked for by id, once a minute at
+  /// most, so a link reveals nothing the backend does not already let them read.
+  ({SuperTabMessage? message})? linkTarget(SwarmMessageLink link) {
+    final id = link.conversationId;
+    if (link.tabId != tabId || accessRevoked || snapshot == null) return null;
+    if (snapshot!.conversation(id) == null) {
+      if (_linkGroupReading.contains(id)) return (message: null);
+      final asked = _linkGroupAsked[id];
+      if (asked != null && clock.now().difference(asked) < _linkGroupRetry) {
+        return null;
+      }
+      _linkGroupAsked[id] = clock.now();
+      _linkGroupReading.add(id);
+      unawaited(
+        loadGroup(id).whenComplete(() {
+          _linkGroupReading.remove(id);
+          _changed();
+        }),
+      );
+      return (message: null);
     }
-    if (pmChat(projectId) case final chat?) return select(chat.id);
+    // A chat the app hides (an old Chat with PM, with Buddies on) is not one
+    // a link can open, so it is not previewed either.
+    if (landsOn(id) != id) return null;
+    final held = messages(id).where((m) => m.id == link.messageId).firstOrNull;
+    final read = held != null ? (message: held) : quoted(id, link.messageId);
+    // Still being read, unless every try failed.
+    if (read == null) {
+      return quoteGaveUp(id, link.messageId) ? null : (message: null);
+    }
+    final message = read.message;
+    // A waiting notice is never announced, so it is not previewed either.
+    return message == null || message.source['kind'] == 'delivery-hold'
+        ? null
+        : (message: message);
+  }
+
+  /// Set by the Swarm view on screen: opens a project's Buddy chat in front
+  /// of whatever covers the conversation, Notifications or a terminal.
+  Future<bool> Function(String projectId)? buddyChatOpener;
+
+  /// Opens the [currentProjectId]'s Buddy chat, through the view on screen
+  /// ([buddyChatOpener]) when there is one, else [openBuddyChat].
+  Future<bool> openCurrentBuddyChat() async {
+    final project = currentProjectId;
+    return project != null && await (buddyChatOpener ?? openBuddyChat)(project);
+  }
+
+  /// Opens the reader's [buddyChat] in [projectId], opening it on the server
+  /// first when they have none: every person has one in each project before
+  /// any Buddy (backend buddy.chat), so the PM's private lines never drop.
+  /// The request is one per person, membership and project, so a second click
+  /// or another window gets the same chat back.
+  Future<bool> openBuddyChat(String projectId) async {
+    if (buddyChat(projectId) case final chat?) return select(chat.id);
     final me = snapshot?.people.where((p) => p.id == accountId).firstOrNull;
-    final email = me?.email;
     final result = await command({
-      'type': 'conversation.create',
+      'type': 'buddy.chat',
       'projectId': projectId,
-      'title': email == null || email.isEmpty
-          ? kChatWithPm
-          : superTabPersonName(email),
-      'brief': '',
-      'checks': <dynamic>[],
-      'audience': {
-        'personIds': [accountId],
-      },
-    }, operationId: _pmChatOperation(projectId, me?.generation));
+    }, operationId: _buddyChatOperation(projectId, me?.generation));
     final id = result?['conversationId'];
     return id is String && await select(id);
   }
 
-  String _pmChatOperation(String projectId, String? generation) {
-    final id = 'pm-chat-$projectId-$accountId-${generation ?? ''}';
+  String _buddyChatOperation(String projectId, String? generation) {
+    final id = 'buddy-chat-$projectId-$accountId-${generation ?? ''}';
     // The backend's operation ids are at most 160 characters.
     return id.length > 160 ? id.substring(0, 160) : id;
   }
@@ -1496,9 +1570,9 @@ class SuperTabController extends ChangeNotifier {
     if (id == selectedId && !devicesSelected) return true;
     _acted();
     final group = snapshot!.conversation(id)!;
-    // A workgroup is shown under its project, so its project opens. A Chat with
-    // PM has its own row under Direct messages and leaves projects as they were.
-    if (!snapshot!.isProjectLead(id) && pmChat(group.projectId)?.id != id) {
+    // A workgroup is shown under its project, so its project opens. A Buddy
+    // chat has its own row under Buddies and leaves projects as they were.
+    if (!snapshot!.isProjectLead(id) && !group.isBuddyChat) {
       expandedProjects.add(group.projectId);
       unawaited(loadDormant(group.projectId));
       if (group.closed) closedOpenProjects.add(group.projectId);
@@ -1655,7 +1729,7 @@ class SuperTabController extends ChangeNotifier {
       // Every state read, a quiet one too: a count a failed read left open is
       // finished; one that is known reads nothing.
       _dropLeft();
-      _readUnreadPmChats();
+      _readUnreadBuddyChats();
       _partsReadAt = clock.now();
       error = null;
       await (selectedId == earlyId && messagesRead != null
@@ -2587,6 +2661,9 @@ class SuperTabController extends ChangeNotifier {
     _poll?.cancel();
     _graceEnd?.cancel();
     _draftSave?.cancel();
+    for (final retry in _quoteRetries) {
+      retry.cancel();
+    }
     for (final files in _attachments.values) {
       files.dispose();
     }

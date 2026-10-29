@@ -304,8 +304,9 @@ export async function prepareLaunchOverrides(
     if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
       overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
     }
-    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again.
-    const machineMcp = machineMcpLaunchArgs(engine, source.cwd ?? null)
+    // The person's machine MCP servers (lib/machineMcp.ts, #1872), in the slot `agent_create` gave them, read again. Never
+    // a Buddy's (core/agents/create.ts).
+    const machineMcp = source.swarmSkill?.role === 'buddy' ? [] : machineMcpLaunchArgs(engine, source.cwd ?? null)
     if (machineMcp.length) overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...machineMcp] }
     // What Harness tells the agent rides every relaunch, in the slot `agent_create` gave it: last. Read again each
     // time, with the person's switches and settings as they are now.

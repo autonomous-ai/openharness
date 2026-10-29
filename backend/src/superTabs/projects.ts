@@ -119,10 +119,19 @@ export function readConversation(state: SuperTabState, actor: Actor, conversatio
  *  (2026-10-26); this is the one place that decides it (design section 4.8). */
 export const PRIVATE_VISIBLE_TO_OWNERS = false
 
-/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a private
- *  conversation's listed people (at the generation they were listed with) and the project's Lead, nobody else. A Buddy
- *  chat leaves out the Lead too, and a Buddy reads only its project's chat and its own chat (buddies.ts). */
+/** A Chat with PM from before Buddies replaced it (Ken, 10-29): a private conversation that is no Buddy chat. Nobody opens
+ *  one any more, and nobody reads one, the PM and its person included; its rows stay in the database. */
+export const isClosedPmChat = (group: Pick<Conversation, 'kind' | 'audience'>): boolean => !!group.audience && !isBuddyChat(group)
+
+/** Who reads a conversation: the Leads conversation's people and Leads; a project conversation's readers; and a Buddy
+ *  chat's owner and Buddy (buddies.ts), the PM never. A closed Chat with PM is nobody's. */
 export function canReadGroup(state: SuperTabState, actor: Actor, group: Conversation): boolean {
+  return !isClosedPmChat(group) && readsRecordsIn(state, actor, group)
+}
+
+/** Whether [actor] reads what was asked in [group] (decisions.ts): as canReadGroup, and in a closed Chat with PM still its
+ *  person, at the generation they were listed with, and the project's Lead, so a decision asked there before stays theirs. */
+export function readsRecordsIn(state: SuperTabState, actor: Actor, group: Conversation): boolean {
   if (isLeads(group)) return actor.kind === 'person' ? state.people.some(p => p.id === actor.userId) : !!ledProject(state, actor.agentId)
   const project = groupProject(state, group)
   if (!canReadProject(state, actor, project)) return false

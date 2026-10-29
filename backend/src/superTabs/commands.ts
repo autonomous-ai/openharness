@@ -12,9 +12,9 @@ import { routingOverrideSchema } from './routingPolicy.js'
 import { agentTarget, askedInSchema, broken, MAX_RULES, RULE_MESSAGE_MS, ruleSchema, ruleTextSchema, startTarget, unmet, type RunTarget } from './rules.js'
 import { MAX_ATTACHMENTS, type Attachment } from './attachments.js'
 import { checkMentions, MAX_MENTIONS, type MentionTarget } from './mentions.js'
-import { ANSWERED_NOTICE, answerDecision, DELEGATED_NOTICE, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
+import { answerDecision, askDecisions, checkAsker, decisionChoices, decisionQuestion, MAX_OPEN_DECISIONS, MAX_QUESTIONS, type DecisionTarget } from './decisions.js'
 import { TERMINAL_KEYS, terminalAlert, terminalRequest, terminalResult, toLead, type TerminalRequest } from './terminal.js'
-import { loseTasks, renewLease, renewOwnTask } from './liveness.js'
+import { loseTasks, recordTaskState, renewLease, renewOwnTask } from './liveness.js'
 import { ABANDONED, failureNotice, MACHINE_REMOVED } from './startFailure.js'
 import { digestStartsAfter, knownTimeZone } from './digest.js'
 import { credentialResult, redactCredentials, type CredentialKind } from './credentials.js'
@@ -28,7 +28,7 @@ import { shipNotice, shippedAt } from './ship.js'
 import { openReview, openReviewOf, projectPullRequest, verdictPending } from './autoReview.js'
 import { avatarChoice, setAgentAvatar, setMemberAvatar, setStatus, statusSchema, type AvatarUpload } from './profile.js'
 import { agentKind, agentProjectId, audienceOf, agentSetRole, canReadProject, deleteProject, isConfidential, markConfidential, onTeamAccount, requireSingleRegistration, groupProject, inviteLanding, ledProject, manageProject, MAX_ROLES, mutableProjects, placeRules, projectMembers, projectOf, projectRules, projectsOf, readAgent, readConversation, readProject, roleVersion, sameProject, sharedWithLeads, SKILL_SET_NAMES, skillSetOf, type ProjectRole, type RoleKind, type SwarmProject } from './projects.js'
-import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
+import { BUDDY_REQUIREMENTS, buddyChatId, buddyReady, isBuddy, isBuddyChat, MAX_PROPOSAL_ASKS, MAX_PROPOSAL_ATTACHMENTS, openBuddyChat, PROPOSAL_ASK_MS, proposalText, requireBuddyCommand } from './buddies.js'
 import { CODEX_BUDDY_REFUSAL } from './buddyContract.js'
 import { LEAD_NAME, leadJoined, leadStartFailed, leadStarting, requestLead, WAITING_TEXT } from './leadStart.js'
 
@@ -96,7 +96,6 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('tab.pause'), paused: z.boolean() }).strict(),
   z.object({ type: z.literal('tab.routingPolicy'), policy: routingOverrideSchema.nullable() }).strict(),
   z.object({ type: z.literal('tab.tidy'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
-  z.object({ type: z.literal('tab.buddies'), enabled: z.boolean(), askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.set'), projectId: id.optional(), rule: ruleSchema, text: ruleTextSchema, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('rule.remove'), projectId: id.optional(), ruleId: id, askedIn: askedInSchema.optional() }).strict(),
   z.object({ type: z.literal('project.create'), name: title, visibility: z.enum(['public', 'private']), brief: z.string().trim().max(8000).default('') }).strict(),
@@ -129,7 +128,6 @@ export const commandSchema = z.discriminatedUnion('type', [
     .refine(c => !c.task || renderWorkTask(c.task).length <= 8000, 'Keep the rendered task within 8,000 characters.'),
   z.object({ type: z.literal('conversation.rename'), conversationId: id, title }).strict(),
   z.object({ type: z.literal('conversation.archive'), conversationId: id, archived: z.boolean() }).strict(),
-  z.object({ type: z.literal('conversation.audience'), conversationId: id, personIds: z.array(id).max(200) }).strict(),
   z.object({ type: z.literal('conversation.requester'), conversationId: id, personId: id.nullable() }).strict(),
   // The Lead's record that a request's pull request merged (leaderboard/record.ts recordMerged); `mergedAt` for a backfill.
   z.object({ type: z.literal('conversation.merged'), conversationId: id, pullRequestUrl: z.string().max(400).regex(PULL_REQUEST_URL),
@@ -142,6 +140,10 @@ export const commandSchema = z.discriminatedUnion('type', [
     scope: z.string().trim().min(1).max(4000), priority: z.enum(['low', 'normal', 'high']),
     attachmentIds: z.array(id).max(MAX_PROPOSAL_ATTACHMENTS, `Attach at most ${MAX_PROPOSAL_ATTACHMENTS} files to a proposal.`).optional() }).strict(),
   z.object({ type: z.literal('buddy.remove'), projectId: id }).strict(),
+  // A person's own Buddy chat in a project, opened before any Buddy is (buddies.ts openBuddyChat).
+  z.object({ type: z.literal('buddy.chat'), projectId: id }).strict(),
+  // The PM's private line to one person, in their Buddy chat of its project: Buddies replaced Chat with PM (Ken, 10-29).
+  z.object({ type: z.literal('person.tell'), personId: id, text: z.string().trim().min(1).max(32_000) }).strict(),
   // A person's own Buddy in a project, on a machine of the Swarm (buddies.ts).
   z.object({ type: z.literal('buddy.create'), projectId: id, machineId: id, engine: swarmEngine, model: z.string().trim().min(1).max(200).optional() }).strict(),
   z.object({ type: z.literal('agent.startDispatch'), startId: id }).strict(),
@@ -438,7 +440,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   const leaving = command.type === 'member.remove' && actor.kind === 'person' && command.userId === actor.userId
   author(state, actor, !leaving)
   const buddy = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
-  if (buddy) requireBuddyCommand(buddy, command, state.conversations, !!state.buddies)
+  if (buddy) requireBuddyCommand(buddy, command, state.conversations)
   // An invitation's group is only where the person lands, and invite.create replaces a deleted one (inviteLanding).
   if ('conversationId' in command && command.type !== 'invite.create') {
     const group = readConversation(state, actor, command.conversationId)
@@ -447,8 +449,7 @@ export function authorizeCommandAccess(state: SuperTabState, actor: Actor, comma
   if ('projectId' in command && command.projectId) readProject(state, actor, command.projectId)
   if ('agentId' in command) readAgent(state, actor, command.agentId)
   if (command.type === 'agent.start') readConversation(state, actor, command.request.conversationId)
-  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy'
-    || command.type === 'tab.buddies') && command.askedIn) {
+  if ((command.type === 'rule.set' || command.type === 'rule.remove' || command.type === 'project.skills' || command.type === 'tab.tidy') && command.askedIn) {
     readConversation(state, actor, command.askedIn.conversationId)
   }
   if ('startId' in command && command.type !== 'route.modelResult') {
@@ -585,6 +586,16 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       ...(attachments?.length ? { attachments } : {}), ...(mentions?.length ? { mentions } : {}) })
     result.messageId = operationId
   }
+  /** The project Lead's own route, start, assignment or post on a task, with its time (liveness.ts reads it). It rides on the
+   *  write each of them makes to the group anyway. */
+  const leadActed = (conversationId: string, kind: NonNullable<Conversation['leadAction']>['kind']) => {
+    const group = state.conversations.find(c => c.id === conversationId)
+    if (!group || group.kind || group.audience || actor.kind !== 'agent') return
+    const project = groupProject(state, group)
+    if (project.leadConversationId !== group.id && conversation(state, project.leadConversationId).leadId === actor.agentId) {
+      group.leadAction = { kind, at: context.now }
+    }
+  }
   /** An agent starts or assigns only what the route chose; a person may still do either by hand. */
   /** A private conversation is chat only (design section 4.8). */
   const chatOnly = (conversationId: string) => {
@@ -650,12 +661,12 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     return project
   }
-  /** No private channel to the PM while Buddies are on (Ken's spec, 10-28): a Chat with PM keeps its history, read only. */
-  const pmChatClosed = (pmChat: boolean) => {
-    if (state.buddies && pmChat) {
-      fail('PM_CHAT_READ_ONLY', 'Chat with PM is read-only while Buddies are on. Talk to the PM in the project chat, or brainstorm with your Buddy.', 403)
-    }
-  }
+  /** No private channel to the PM: Buddies replaced Chat with PM (Ken, 10-29). A closed one is nobody's to read or post in
+   *  (projects.ts isClosedPmChat); an app from before still sends this to open one. */
+  const pmChatClosed = (): never =>
+    fail('PM_CHAT_CLOSED', actor.kind === 'agent'
+      ? 'Chat with PM is closed: to tell one person something privately, send person.tell; it lands in their Buddy chat.'
+      : 'Chat with PM is closed: talk to the PM in the project chat, or brainstorm with your Buddy, where the PM\'s private lines reach you.', 403)
   /** A Swarm-wide switch is the Swarm owner's, or a Lead's passing on a chat message the Swarm owner wrote in the last day,
    *  as rules are. */
   const swarmOwnerAsked = (askedIn: { conversationId: string; messageId: string } | undefined, what: string) => {
@@ -1122,18 +1133,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       else state.tidy = false
       break
     }
-    case 'tab.buddies': {
-      swarmOwnerAsked(command.askedIn, 'turns Buddies on or off')
-      if (command.enabled) state.buddies = true
-      else {
-        delete state.buddies
-        // Off means no Buddy runs: each one's session closes, one still starting never joins, and its chat stays for its
-        // owner to read (privacy review of #1992).
-        for (const target of state.agents.filter(isBuddy)) removeAgent(target)
-        for (const start of state.starts ?? []) if (start.request.buddyOf && !start.harnessId && !start.error) start.error = 'Buddies were turned off in this Swarm.'
-      }
-      break
-    }
     case 'tab.routingPolicy':
       if (actor.kind !== 'person' || actor.userId !== state.ownerId) fail('OWNER_REQUIRED', 'Only the Super Tab owner can change its routing policy.', 403)
       if (command.policy && Object.keys(command.policy).length) state.routingPolicy = command.policy
@@ -1166,16 +1165,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       controls(state, actor, project.leadConversationId)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       requirable(command.task)
-      if (command.audience) {
-        pmChatClosed(true)
-        // A private conversation is chat only: no task, checks or review, so private work never reaches other Leads.
-        if (command.task || command.checks.length || command.reviewOf || command.requesterId || command.proposalMessageId) {
-          fail('AUDIENCE_CHAT_ONLY', 'A private conversation is chat only.', 400)
-        }
-        if (actor.kind === 'person' && !command.audience.personIds.includes(actor.userId)) {
-          fail('AUDIENCE_SELF', 'Open a private conversation with yourself in it.', 403)
-        }
-      } else if (actor.kind === 'agent' && (!brief || !command.checks.length)) {
+      if (command.audience) pmChatClosed()
+      if (actor.kind === 'agent' && (!brief || !command.checks.length)) {
         fail('BRIEF_REQUIRED', 'Delegated work needs a brief and acceptance checks.', 400)
       }
       const leadId = conversation(state, project.leadConversationId).leadId
@@ -1196,7 +1187,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       state.conversations.push({ id: operationId, ...(state.projects ? { projectId: project.id } : {}),
         number, title: command.title, leadId, agentIds: leadId ? [leadId] : [],
         archived: false, brief, ...(command.task ? { task: command.task } : {}), ...(command.reviewOf ? { reviewOf: command.reviewOf } : {}),
-        ...(command.audience ? { audience: audienceOf(state, project, command.audience.personIds) } : {}),
         assignment: null, lastMessageSequence: 0,
         checks: command.checks.map((c, i) => ({ ...c, id: stableId(operationId, String(i)), evidence: null, passedBy: null })),
       })
@@ -1209,18 +1199,17 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'decision.ask': {
       const group = open(state, command.conversationId)
-      pmChatClosed(!!group.audience && !isBuddyChat(group))
       effects.decisions = askDecisions(state, group, command.personId, command.questions,
         { operationId, askerAgentId: checkAsker(state, actor, group), assignmentId: null })
       result.decisionIds = effects.decisions.map(d => d.id)
       break
     }
     case 'decision.answer': {
-      const { answer, recipients, source, line } = answerDecision(state, actor, context.decision,
+      const { answer, noticeIn, notice, recipients, source, line } = answerDecision(state, actor, context.decision,
         { choice: command.choice, note: command.note ?? null, delegate: command.delegate === true })
       effects.decisionAnswer = answer
       recordDecision(conversation(state, context.decision!.conversationId), context.decision!, context.now, answer.delegated === true)
-      if (recipients.length) message(context.decision!.conversationId, answer.delegated ? DELEGATED_NOTICE : ANSWERED_NOTICE, recipients, null, source)
+      if (recipients.length) message(noticeIn, notice, recipients, null, source)
       if (line) effects.messages.push({ id: stableId(operationId, 'delegated'), replyTo: null, recipients: [], ...line })
       result.decisionId = answer.id
       break
@@ -1256,14 +1245,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       appendPullRequestUrls(group, [command.pullRequestUrl])
       recordMerged(group, mergedAt)
       if (!linked || group.ledger!.shippedAt !== shippedAt) message(group.id, `Merged ${command.pullRequestUrl}`, [], null, SYSTEM_ROW)
-      break
-    }
-    case 'conversation.audience': {
-      // Who may read it already passed (readConversation): only its listed people and the project's Lead get here.
-      const group = open(state, command.conversationId)
-      if (isBuddyChat(group)) fail('BUDDY_CHAT_FIXED', 'A Buddy chat stays its owner\'s and their Buddy\'s: nobody else is added to it.', 403)
-      if (!group.audience) fail('AUDIENCE_FIXED', 'A shared conversation stays shared. Open a private conversation instead.', 400)
-      group.audience = audienceOf(state, groupProject(state, group), command.personIds)
       break
     }
     case 'conversation.archive': {
@@ -1379,7 +1360,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (!pool) requireTeamWork(state, request.machineId, grant.contributorId, home, context.now, context.teamMachines, context.otherWorkspaceMachines)
       state.starts.push({ ...(pool ? { poolGeneration: pool.generation } : {}), ...(command.routeDecisionId ? { routeDecisionId: command.routeDecisionId } : {}), id: operationId, creationId: `super-${operationId}`, actorKey: actorKey(actor),
         contributorId: contributor.id, membershipGeneration: contributor.generation, machineOwnerId: grant.machineOwnerId,
-        hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null })
+        hostGrant: grant.hostGrant ?? null, request, harnessId: null, dispatched: false, error: null, requestedAt: context.now })
+      leadActed(command.request.conversationId, 'start')
       result.startId = operationId
       let personChose = false
       if (command.routeDecisionId) {
@@ -1401,7 +1383,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'buddy.propose': {
       const self = actor.kind === 'agent' ? state.agents.find(a => a.id === actor.agentId && isBuddy(a)) : undefined
       if (!self) fail('BUDDY_ONLY', 'Only a Buddy sends a proposal, for its owner.', 403)
-      if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       const owner = state.people.find(p => p.id === self.buddyOf!.personId && p.generation === self.buddyOf!.generation)
         ?? fail('BUDDY_OWNER_GONE', 'Your owner left this Swarm.', 403)
       const chat = conversation(state, command.conversationId)
@@ -1438,9 +1419,22 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (target) removeAgent(target)
       break
     }
+    case 'buddy.chat': {
+      if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person opens their own Buddy chat.', 403)
+      result.conversationId = openBuddyChat(state, readProject(state, actor, command.projectId).id, person(state, actor.userId)).id
+      break
+    }
+    case 'person.tell': {
+      const project = actor.kind === 'agent' ? ledProject(state, actor.agentId) : undefined
+      if (!project) fail('TELL_FORBIDDEN', 'Only a project\'s Lead sends a person a private line, in its own project.', 403)
+      const to = state.people.find(p => p.id === command.personId) ?? fail('INVALID_PERSON', 'Tell a person in this Swarm.', 400)
+      if (!canReadProject(state, { kind: 'person', userId: to.id, email: to.email }, project)) fail('INVALID_PERSON', `${to.email} cannot read this project.`, 400)
+      // To nobody: the person reads it; their Buddy, if they have one, is not asked to answer for them.
+      message(openBuddyChat(state, project.id, to).id, command.text)
+      break
+    }
     case 'buddy.create': {
       if (actor.kind !== 'person') fail('BUDDY_PERSON', 'A person adds their own Buddy.', 403)
-      if (!state.buddies) fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (state.paused) fail('PAUSED', 'New work is paused in this Super Tab.')
       // Codex runs a command its rules files allow outside its sandbox without asking, and those are the person's own and
       // Harness's, shared by all their Codex sessions: a Buddy could run harness new or send, or anything they once told
@@ -1464,16 +1458,14 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       if (pool.contributorId !== me.id || grant.machineOwnerId !== me.id || pool.hostMachineId || pool.observation?.sessionKind === 'team') {
         fail('BUDDY_OWN_MACHINE', 'A Buddy runs only on your own machine. Pick one of yours from the Swarm\'s Machines list.', 403)
       }
-      const contributor = person(state, grant.contributorId)
-      let chat = state.conversations.find(c => c.id === chatId)
-      if (!chat) {
-        const number = nextConversationNumber(state)
-        state.groupCounter = number
-        chat = { id: chatId, kind: 'buddy', ...(state.projects ? { projectId: project.id } : {}), number, title: `${who}'s Buddy`, leadId: null, agentIds: [],
-          archived: false, brief: '', checks: [], assignment: null, lastMessageSequence: 0, audience: audienceOf(state, project, [me.id]) }
-        state.conversations.push(chat)
+      // Harness cannot yet tell a Buddy's window from another agent's on Windows (security review of #2093): its machine
+      // refused every agent's Swarm command while one ran there. None is added on Windows until a real caller check exists
+      // (Lead's ruling, 10-29); the machine's own refusal stays as the backstop.
+      if (pool.observation?.resources.os === 'Windows') {
+        fail('BUDDY_WINDOWS', 'A Buddy cannot run on a Windows machine yet. Pick one of your Macs or Linux machines from the Swarm\'s Machines list.', 403)
       }
-      chat.archived = false
+      const contributor = person(state, grant.contributorId)
+      openBuddyChat(state, project.id, me)
       // Never moved to the Mac's Team account, as a teammate's project otherwise is (machines.ts teamStartRequest).
       const request: AgentStartRequest = { conversationId: chatId, machineId: pool.machineId, engine: command.engine,
         ...(command.model ? { model: command.model } : {}), name: `${who}'s Buddy`, cwd: projectFolder(pool, project), worktree: true,
@@ -1494,7 +1486,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     case 'agent.startFailed': {
       const start = state.starts?.find(s => s.id === command.startId) ?? fail('NOT_FOUND', 'This agent start is unavailable.', 404)
       if (start.actorKey !== actorKey(actor)) fail('FORBIDDEN', 'Only the initiating lead can complete this start.', 403)
-      if (start.request.buddyOf && !state.buddies && command.type !== 'agent.startFailed') fail('BUDDIES_OFF', 'Buddies are off in this Swarm. Its owner can turn them on.', 403)
       if (person(state, start.contributorId).generation !== start.membershipGeneration) fail('FORBIDDEN', 'This contribution was withdrawn.', 403)
       controls(state, actor, start.request.conversationId)
       if (command.type === 'agent.startDispatch') {
@@ -1783,7 +1774,6 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
     }
     case 'message.send': {
       const group = postable(state, actor, command.conversationId)
-      pmChatClosed(!!group.audience && !isBuddyChat(group))
       const ids = [...new Set(command.attachmentIds ?? [])]
       const attachments = ids.map(id => context.attachments?.find(a => a.id === id) ?? fail('ATTACHMENT_UNAVAILABLE', 'Upload this file again before sending it.', 400))
       if (!command.text && !attachments.length) fail('TEXT_REQUIRED', 'Write a message or attach a file.', 400)
@@ -1822,6 +1812,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       message(group.id, command.text, recipients, command.replyTo, command.agentOnly ? AGENT_ONLY : undefined, attachments, mentions)
       recordPost(state, group, actor, { replyTo: command.replyTo, text: command.text, reply: context.reply, openTags: context.openTags }, context.now)
       if (actor.kind === 'agent') renewOwnTask(group, actor.agentId, context.now)
+      leadActed(group.id, 'post')
       break
     }
     case 'delivery.resolve': {
@@ -1877,6 +1868,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
         pick: { id: chosen.id, title: chosen.title },
         alternatives: decision.candidates.filter(c => c.id !== chosen.id).map(c => ({ id: c.id, title: c.title })),
       })
+      leadActed(command.conversationId, 'route')
       break
     }
     case 'route.modelResult': {
@@ -1964,6 +1956,7 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       group.assignment = { id: operationId, agentId: worker.id, status: 'working', configuration: structuredClone(worker.configuration),
         execution: { machineId: worker.machineId, harnessId: worker.harnessId, machineOwnerId: worker.machineOwnerId }, result: null }
       renewLease(group.assignment, context.now)
+      leadActed(group.id, 'assign')
       recordRun(state, group, group.assignment, worker, context.now)
       group.checks.forEach(c => { c.evidence = null; c.passedBy = null })
       result.assignmentId = operationId
@@ -2015,6 +2008,8 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       const changed = assignment.status !== command.status || assignment.result !== command.result || !!command.ask, previous = assignment.status
       assignment.status = command.status
       assignment.result = command.result
+      if (command.ask) assignment.askedOf = command.ask.personId
+      else if (command.status !== 'needs_human') delete assignment.askedOf
       recordStatus(group, assignment, previous, context.now, changed ? operationId : null, asked)
       if (['done', 'stopped'].includes(command.status)) finishWorker(state, assignment.agentId, group)
       // Finished work shows the worker recovered from a task it lost before.
@@ -2113,6 +2108,11 @@ export function applyCommand(original: SuperTabState, actor: Actor, input: Comma
       break
     }
   }
+  // The state of the task this command touched, in its own write (liveness.ts recordTaskState).
+  const touched = 'conversationId' in command ? command.conversationId : command.type === 'agent.start' ? command.request.conversationId
+    : 'startId' in command ? state.starts?.find(s => s.id === command.startId)?.request.conversationId : undefined
+  const task = typeof touched === 'string' ? state.conversations.find(c => c.id === touched) : undefined
+  if (task) recordTaskState(state, task, context.now)
   if (command.type === 'conversation.create' || command.type === 'work.define' || command.type === 'work.assign') {
     alertOverlaps(conversation(state, command.type === 'conversation.create' ? result.conversationId as string : command.conversationId))
   }

@@ -162,7 +162,13 @@ class SuperTabConversation {
       lastMessageSequence = (row['lastMessageSequence'] as num?)?.toInt() ?? 0,
       assignment = row['assignment'] == null
           ? null
-          : Map.unmodifiable(superTabMap(row['assignment']));
+          : Map.unmodifiable(superTabMap(row['assignment'])),
+      liveness = row['liveness'] is Map
+          ? Map.unmodifiable(superTabMap(row['liveness']))
+          : null,
+      leadAction = row['leadAction'] is Map
+          ? Map.unmodifiable(superTabMap(row['leadAction']))
+          : null;
   final String id, projectId, title, brief;
 
   /// What the backend calls it apart from a workgroup: `leads` for the Product
@@ -195,6 +201,14 @@ class SuperTabConversation {
   final List<String> pullRequestUrls;
   final int lastMessageSequence;
   final Map<String, dynamic>? assignment;
+
+  /// Whether its task waits on purpose or is stuck, as the server last found
+  /// it (`state`, `why`, `since`, `personId`); absent while it is working,
+  /// and from older backends (task_status.dart).
+  final Map<String, dynamic>? liveness;
+
+  /// The Product Manager's last action on its task (`kind`, `at`).
+  final Map<String, dynamic>? leadAction;
 }
 
 class SuperTabRole {
@@ -280,7 +294,6 @@ class SuperTabSnapshot {
       mentionsDigest = row['mentionsDigest'] as String?,
       decisionsWaiting = (row['decisionsWaiting'] as num?)?.toInt() ?? 0,
       decisionsDigest = row['decisionsDigest'] as String?,
-      buddiesEnabled = row['buddies'] == true,
       buddyStarts = List.unmodifiable([
         for (final start
             in row['starts'] is List ? row['starts'] as List : const [])
@@ -311,15 +324,18 @@ class SuperTabSnapshot {
   final Map<String, dynamic>? project;
   final bool paused;
 
-  /// The Swarm's Buddies setting: off unless its owner turned it on, and off
-  /// from a backend before Buddies.
-  final bool buddiesEnabled;
-
   /// The starts of Buddies, oldest first: a Buddy's add is under way while
   /// its start has neither a harness nor an error.
   final List<Map<String, dynamic>> buddyStarts;
   final List<SuperTabPerson> people;
   final List<SuperTabAgent> agents;
+
+  /// The agents the Swarm lists and counts: its PM, Devs and Reviewers. A
+  /// Buddy is personal, so no list or count shows one, its person's included;
+  /// they see it in their Buddies section ([SuperTabController.buddy]).
+  late final List<SuperTabAgent> teamAgents = List.unmodifiable(
+    agents.where((a) => !a.isBuddy),
+  );
   final List<Map<String, dynamic>> machines;
   final List<SuperTabConversation> conversations;
   late final List<SuperTabProject> projects;

@@ -7,6 +7,7 @@ import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/buddies.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/identity.dart';
+import 'package:harness/super_tabs/view.dart';
 
 import 'super_tab_launch_test.dart' show SuperTabLaunchFixture, tabId;
 import 'support/capture.dart';
@@ -163,4 +164,57 @@ void main() {
       await close(tester, f, c);
     });
   }
+
+  testWidgets(
+    "the Buddy chat's Start bar offers this Mac too, for a person with no machine in the Swarm (merge review of #2090)",
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final f = SuperTabLaunchFixture();
+      f.app.bindSuperTab(f.app.activeSwarmId, tabId, 'Pilot');
+      f.connection.server.state['machines'] = <dynamic>[];
+      final c = await f.app.superTabs.open(tabId);
+      await c.refresh();
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: grid.buildAppTheme(brightness: Brightness.light),
+          home: Scaffold(
+            body: SuperTabView(
+              controller: c,
+              app: f.app,
+              onInvite: () {},
+              onAddAgent: (_) {},
+              onOpenTerminal: (_) {},
+              machineName: (_) => 'Team Mac',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // What the shortcut does: the Buddy chat, even with no Buddy.
+      expect(await c.openCurrentBuddyChat(), isTrue);
+      await tester.pumpAndSettle();
+
+      final start = find.byKey(const ValueKey('super-buddy-start'));
+      expect(
+        find.descendant(
+          of: start,
+          matching: find.text('None of your machines is in this Swarm yet.'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: start,
+          matching: find.textContaining('Add one of yours'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(find.descendant(of: start, matching: addThisMac));
+      await tester.pumpAndSettle();
+      expect(find.text('Add machine'), findsWidgets);
+      await close(tester, f, c);
+    },
+  );
 }

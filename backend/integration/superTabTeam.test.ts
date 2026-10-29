@@ -751,8 +751,9 @@ describe('a project\'s Product Manager on a teammate\'s Team machine', () => {
     expect(row.observers.map((o: { email: string }) => o.email)).toEqual([owner.email])
     // Security review 2 of #2089: the Mac owner's own sign-in, ordinary tools, cannot act as the Team machine's host or as
     // its Product Manager: no reading the chats it reads, no claiming its deliveries, no posting as it.
-    const chat = String((await run(f.tab, { type: 'conversation.create', title: 'Chat with PM', brief: '', checks: [], audience: { personIds: [owner.sub] } })).result.conversationId)
-    await run(f.tab, { type: 'message.send', conversationId: chat, text: 'Only for the PM: the launch slips a week.', replyTo: null, recipientIds: [] })
+    // People talk to the PM in its project's conversation (Chat with PM is closed on main): what it reads there, it reads.
+    const chat = String(created.conversationId)
+    await run(f.tab, { type: 'message.send', conversationId: chat, text: 'For the PM: the launch slips a week.', replyTo: null, recipientIds: [] })
     await expect(store.messages(person, f.tab, chat, {}, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
     await expect(store.deliveries(person, f.tab, pm)).rejects.toMatchObject({ code: 'TEAM_HOST_ONLY', status: 403 })
     await expect(store.execute(person, f.tab, { operationId: randomUUID(), command: { type: 'message.send', conversationId: chat, text: 'as the PM',

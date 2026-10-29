@@ -253,7 +253,7 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     // links to the tab by the first and follows the second. Ids only: anything else is dropped, not trusted.
     const superTabId = typeof r.superTabId === 'string' && CARD_ID.test(r.superTabId) ? r.superTabId : undefined
     const projectId = typeof r.projectId === 'string' && CARD_ID.test(r.projectId) ? r.projectId : undefined
-    // And the conversation it has open (its Lead's, its Chat with PM or a group), which the round dial's face follows.
+    // And the conversation it has open (its Lead's, the person's Buddy chat or a group), which the round dial's face follows.
     const conversationId = typeof r.conversationId === 'string' && CARD_ID.test(r.conversationId) ? r.conversationId : undefined
     swarms.push({ id: r.id, name: r.name.slice(0, 80), agentIds, panes, ...(superTabId ? { superTabId } : {}), ...(projectId ? { projectId } : {}),
       ...(conversationId ? { conversationId } : {}) })

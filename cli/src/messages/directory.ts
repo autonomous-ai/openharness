@@ -5,9 +5,10 @@
  * Each tab's own flag, which the backend still answers for older windows, is not read: the tab's switch was a chat
  * icon beside its × that was easy to hit by mistake, and the owner made it one setting of the account (2026-10-12).
  *
- * Read every 15 seconds while this computer is signed in with Agent Messages on (`start`, `stop`: service.ts runs it
- * only then), again on the account's `desk_changed`, and fresh before a send. An unreadable directory never clears
- * what was read: a failed read keeps the last one, and before any read nothing may be sent.
+ * Read on the account's `desk_changed` and `machines_changed` (service.ts), fresh before a send, and on its own every
+ * SAFETY_NET_MS while this computer is signed in with Agent Messages on (`start`, `stop`: service.ts runs it only then),
+ * for a push that was missed. An unreadable directory never clears what was read: a failed read keeps the last one,
+ * and before any read nothing may be sent.
  *
  * The tabs shared across accounts are merged in (`extra`, sharedDirectory.ts): at every read, and whenever a roster
  * changes (`rebuild`), so another account's harness is in a tab here as soon as its roster is held.
@@ -24,7 +25,12 @@ export interface Member { machineId: string; agentId: string; accountId?: string
 export interface DirectoryTab { id: string; name: string; named: boolean; panes: Member[]; sharedTabId?: string; leader?: { machineId: string; agentId: string } | null }
 export interface Directory { revision: number; machines: ReadonlyMap<string, string | null>; tabs: DirectoryTab[] }
 
-export const POLL_MS = 15_000
+/** The read with no push: a missed one. It was every 15 s, a backend read from every signed-in daemon that almost always
+ *  found nothing new (WebSocket roadmap, Phase 2.4); every input of the answer is pushed (backend lib/agentMessages.ts
+ *  reads the desk, the machines and the tabs' settings, each written with `desk_changed` or `machines_changed`). */
+export const SAFETY_NET_MS = 5 * 60_000
+/** How often the timer looks: a read that failed, or none yet, is tried again this soon, as the old poll did. */
+export const RETRY_MS = 15_000
 /** A read this recent is fresh enough for a send. */
 export const FRESH_MS = 2_000
 
@@ -79,6 +85,9 @@ export class MessageDirectory {
   private readAt = -Infinity
   private reading: Promise<Directory | null> | null = null
   private timer: ReturnType<typeof setInterval> | null = null
+  /** The timer's looks since the last good read, by the timer or a push; and whether the last read failed. */
+  private quietLooks = 0
+  private failed = false
   private wasOn = true
   constructor(private readonly deps: DirectoryDeps) {}
   private now(): number { return this.deps.now?.() ?? Date.now() }
@@ -93,13 +102,15 @@ export class MessageDirectory {
     if (!force && this.value && this.now() - this.readAt < FRESH_MS) return Promise.resolve(this.value)
     return this.reading ??= this.deps.read().then((raw) => {
       const next = parseDirectory(raw)
+      this.failed = !next
       if (next) {
         this.read = next
         this.readAt = this.now()
+        this.quietLooks = 0
         this.settle(next)
       }
       return this.value
-    }, () => this.value).finally(() => { this.reading = null })
+    }, () => { this.failed = true; return this.value }).finally(() => { this.reading = null })
   }
 
   /** The shared tabs changed (a roster taken, a tab left): merged again into the last read, with no read of its own. */
@@ -120,8 +131,14 @@ export class MessageDirectory {
   start(): void {
     if (this.timer) return
     void this.refresh(true)
-    this.timer = setInterval(() => { void this.refresh(true) }, POLL_MS)
+    this.timer = setInterval(() => this.look(), RETRY_MS)
     this.timer.unref?.()
+  }
+
+  /** Counted in looks, not by the clock: a good read holds the next one off for SAFETY_NET_MS. */
+  private look(): void {
+    if (this.read && !this.failed && ++this.quietLooks * RETRY_MS < SAFETY_NET_MS) return
+    void this.refresh(true)
   }
 
   stop(): void {
