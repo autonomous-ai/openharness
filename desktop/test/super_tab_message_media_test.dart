@@ -5,7 +5,9 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/super_tabs/attachment_viewer.dart';
 import 'package:harness/super_tabs/controller.dart';
 import 'package:harness/super_tabs/view.dart';
@@ -213,5 +215,88 @@ void main() {
       );
     }
     await close(tester, c);
+  });
+
+  group('code', () {
+    late List<String> copied;
+    setUp(() {
+      copied = [];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            if (call.method == 'Clipboard.setData') {
+              copied.add((call.arguments as Map)['text'] as String);
+            }
+            return null;
+          });
+    });
+    tearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    testWidgets('a code block is monospace, named, and Copy copies it', (
+      tester,
+    ) async {
+      final c = await show(
+        tester,
+        text: 'Try this:\n\n```main.dart\nfinal x = 1;\nprint(x);\n```',
+      );
+
+      final code = find.text('final x = 1;\nprint(x);');
+      expect(code, findsOneWidget);
+      expect(
+        tester.widget<Text>(code).style?.fontFamily,
+        grid.AppType.mono().fontFamily,
+      );
+      expect(find.text('main.dart'), findsOneWidget);
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(copied, ['final x = 1;\nprint(x);']);
+      expect(find.text('Code copied'), findsOneWidget);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await close(tester, c);
+    });
+
+    testWidgets('a block with no language still has Copy', (tester) async {
+      final c = await show(tester, text: '```\nls -la\n```');
+
+      expect(find.text('ls -la'), findsOneWidget);
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(copied, ['ls -la']);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await close(tester, c);
+    });
+
+    testWidgets('a long block folds with Show more, and Copy takes it all', (
+      tester,
+    ) async {
+      final lines = [for (var i = 1; i <= 30; i++) 'line $i'];
+      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
+
+      expect(find.text(lines.take(12).join('\n')), findsOneWidget);
+      expect(find.textContaining('line 13'), findsNothing);
+      await tester.tap(find.text('Show more'));
+      await tester.pump();
+      expect(find.text(lines.join('\n')), findsOneWidget);
+      await tester.tap(find.text('Show less'));
+      await tester.pump();
+      expect(find.textContaining('line 13'), findsNothing);
+
+      await tester.tap(find.text('Copy'));
+      await tester.pump();
+      expect(copied, [lines.join('\n')]);
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await close(tester, c);
+    });
+
+    testWidgets('a short block has no Show more', (tester) async {
+      final lines = [for (var i = 1; i <= 12; i++) 'line $i'];
+      final c = await show(tester, text: '```\n${lines.join('\n')}\n```');
+
+      expect(find.text(lines.join('\n')), findsOneWidget);
+      expect(find.text('Show more'), findsNothing);
+      await close(tester, c);
+    });
   });
 }

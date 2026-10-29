@@ -38,9 +38,6 @@
   "desktop/lib/super_tabs/message_row.dart": {
     "edge-insets": 5
   },
-  "desktop/lib/super_tabs/message_text.dart": {
-    "edge-insets": 1
-  },
   "desktop/lib/super_tabs/notifications.dart": {
     "edge-insets": 8
   },
